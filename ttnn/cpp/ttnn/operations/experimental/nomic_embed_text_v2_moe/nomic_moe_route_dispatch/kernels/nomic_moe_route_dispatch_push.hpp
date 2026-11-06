@@ -22,7 +22,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ckernel.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "nomic_moe_route_dispatch_w_layout.hpp"
 
 namespace route_dispatch {
@@ -49,8 +48,9 @@ constexpr uint32_t kNumExperts = 8;
 constexpr uint32_t kHeaderStarts = 0;
 constexpr uint32_t kHeaderTotals = kNumExperts;
 constexpr uint32_t kHeaderEnd = 2 * kNumExperts;
-constexpr uint32_t kHeaderStaging = kHeaderEnd + 1;     // L1 address of the untilized shard (cb_x_rows)
+constexpr uint32_t kHeaderStaging = kHeaderEnd + 1;  // L1 address of the untilized shard (cb_x_rows)
 // Published by the reader before the table lands (Perf R3.3: a selecting writer scans the table itself).
+// kHeaderTableFlag: read by a coordinator token core's writer only (the coordinator sends the table, nothing lands).
 constexpr uint32_t kHeaderReaderCounts = kHeaderEnd + 2;    // 2 words: the reader's byte-lane counts
 constexpr uint32_t kHeaderTable = kHeaderReaderCounts + 2;  // L1 address of the count table
 constexpr uint32_t kHeaderTableFlag = kHeaderTable + 1;     // 1 once the table has landed
@@ -58,7 +58,9 @@ constexpr uint32_t kHeaderTableFlag = kHeaderTable + 1;     // 1 once the table 
 constexpr uint32_t kScanFlag = 8;
 constexpr uint32_t kHeaderScanReader = kHeaderTableFlag + 1;
 constexpr uint32_t kHeaderScanWriter = kHeaderScanReader + kScanFlag + 1;
-constexpr uint32_t kHeaderWords = kHeaderScanWriter + kScanFlag + 1;
+// Set by the reader once the untilized shard is in cb_x_rows (it waits for it after the assign, not before the table)
+constexpr uint32_t kHeaderStagingReady = kHeaderScanWriter + kScanFlag + 1;
+constexpr uint32_t kHeaderWords = kHeaderStagingReady + 1;
 constexpr uint32_t kRankShift = 4;
 constexpr uint32_t kExpertMask = (1u << kRankShift) - 1;
 // Reader -> writer select handshake page (cb_select_go): the slot page address.
@@ -134,6 +136,42 @@ inline void wait_flag(const volatile tt_l1_ptr uint32_t* flag) {
     invalidate_l1_cache();
 }
 
+// The count table as ONE posted multicast to the grid (source excluded): num_groups count rows, then a valid row whose
+// first word the coordinator sets to 1 (every receiver clears it at kernel start). A receiver waits for its NIU0
+// posted-write slave counter (landing accounting) AND the valid word: a peer that already has the table may push a row
+// here before the multicast lands, and that push alone moves the counter. The valid word is the last word of the one
+// packet, so the rows before it have landed once it reads 1.
+// No path reservation: a reserved broadcast waits until every router of the tree has granted it, ~400 cycles on the
+// 11x10 grid. The NoC leaves deadlock freedom of unreserved broadcasts to software: NOC0 carries two (W channel 0 and
+// this table), both from the coordinator's reader on one command buffer and VC, so they leave in order and never hold
+// parts of each other's tree. No kernel_lib helper multicasts posted or unreserved. 8x512 21.6 -> 21.35 us
+// (perf_experiments/r41_table_mcast).
+inline uint64_t table_mcast_dst(uint32_t addr, uint32_t coords_arg, uint32_t num_cores) {
+    const uint32_t first = get_common_arg_val<uint32_t>(coords_arg);
+    const uint32_t last = get_common_arg_val<uint32_t>(coords_arg + num_cores - 1);
+    return get_noc_multicast_addr(coord_x(first), coord_y(first), coord_x(last), coord_y(last), addr, noc_index);
+}
+
+inline void send_table(uint64_t dst, uint32_t addr, uint32_t bytes, uint32_t num_dests) {
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_index, dst, addr, bytes);
+    while (!noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+    }
+    ncrisc_noc_fast_write<noc_mode>(
+        noc_index, write_cmd_buf, addr, dst, bytes, NOC_MULTICAST_WRITE_VC, true, false, num_dests, false, true);
+}
+
+inline uint32_t table_land_base() { return NOC_STATUS_READ_REG(0, NIU_SLV_POSTED_WR_REQ_RECEIVED); }
+
+inline volatile tt_l1_ptr uint32_t* table_valid_word(uint32_t table_addr, uint32_t num_groups, uint32_t row_bytes) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_addr + num_groups * row_bytes);
+}
+
+inline void wait_table(uint32_t base, const volatile tt_l1_ptr uint32_t* valid) {
+    while (NOC_STATUS_READ_REG(0, NIU_SLV_POSTED_WR_REQ_RECEIVED) - base < 1) {
+    }
+    wait_flag(valid);
+}
+
 // Region header from the scanned table: starts / totals / end, and the first row per expert of a RISC whose tokens
 // follow `prior` (byte-lane counts of the earlier tokens of the core) in the group's token order.
 inline void assign_regions(
@@ -153,101 +191,121 @@ inline void assign_regions(
 }
 
 // W slices (G of ht fp32 tiles), faces 0 / 2 only in the compact layout of nomic_moe_route_dispatch_w_layout.hpp.
-// Slices go out on RISC c % slice_nocs (0: reader / NOC0, 1: writer / NOC1; host W_SLICE_NOCS). Full-grid multicasts
-// on one NoC serialize per command, not per byte, so every slice of a NoC goes out as ONE multicast from the sender
-// of its first slice (channel c % slice_nocs, core w_sender_top - channel). Every receiver waits on the RISC whose
-// NoC carries its slice.
+// Slices go out on RISC c % slice_nocs (0: reader / NOC0, 1: writer / NOC1; host W_SLICE_NOCS); every slice of a NoC
+// from the sender of its first slice (channel c % slice_nocs, core w_sender_top - channel), then the channel's flag
+// (semaphore sem_w_flag0 + channel, every core). Every receiver waits on the RISC whose NoC carries its slice.
+//
+// Raw multicasts, not the Mcast helper: unreserved (a reserved broadcast waits for every router of the tree to grant
+// it, ~400 cycles on the 11x10 grid) and the flag rides the same command buffer and VC right behind the data, so it
+// lands after the data on each receiver with no barrier between them. Deadlock freedom of unreserved broadcasts is
+// left to software: one broadcast source a NoC (NOC1: W channel 1; NOC0: the coordinator's reader, which sends W
+// channel 0 and later the count table on one command buffer and VC). No kernel_lib helper multicasts unreserved.
+// The data's burst chunks are linked and the flag closes the sequence: unlinked chunks each re-arbitrate the tree
+// (G = 1, 48 KB in 16 KB bursts: W landed ~950 cycles later, l1_interleaved 2x512 / 4x256 +4.6% / +5.3%).
+// Perf R4.2, perf_experiments/r42_w_arrival.
 constexpr uint32_t kFp32TileBytes = 4096;
 constexpr uint32_t kMaxSlices = 3;
 constexpr uint32_t kReaderRisc = 0;
 constexpr uint32_t kWriterRisc = 1;
-constexpr std::string_view kWeightCt[kMaxSlices] = {"w0_ct_offset", "w1_ct_offset", "w2_ct_offset"};
-constexpr std::string_view kWeightRt[kMaxSlices] = {"w0_rt_offset", "w1_rt_offset", "w2_rt_offset"};
 constexpr uint32_t kPartialFaceOffsets[] = {0, 2 * kWFaceBytes};  // faces 0 and 2 (columns 0..15) of an fp32 tile
+constexpr uint32_t kWEntryBytes = 2 * kWFaceBytes;                // faces 0 / 2 of one K tile
+
+// The whole grid (coords_arg: its cores' packed NoC coordinates in core order), in `noc`'s routing order.
+inline uint64_t grid_mcast_dst(uint8_t noc, uint32_t coords_arg, uint32_t num_cores, uint32_t addr) {
+    const uint32_t first = get_common_arg_val<uint32_t>(coords_arg);
+    const uint32_t last = get_common_arg_val<uint32_t>(coords_arg + num_cores - 1);
+    return noc == 0 ? get_noc_multicast_addr(coord_x(first), coord_y(first), coord_x(last), coord_y(last), addr, noc)
+                    : get_noc_multicast_addr(coord_x(last), coord_y(last), coord_x(first), coord_y(first), addr, noc);
+}
+
+// Non-posted (the posted-write slave counters count only pushes / count rows), unreserved, source excluded; every
+// burst chunk carries `linked`.
+inline void w_mcast(uint8_t noc, uint64_t dst, uint32_t src, uint32_t bytes, uint32_t num_dests, bool linked) {
+    while (bytes > 0) {
+        const uint32_t chunk = bytes > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : bytes;
+        DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst, src, chunk);
+        while (!noc_cmd_buf_ready(noc, write_cmd_buf)) {
+        }
+        ncrisc_noc_fast_write<noc_mode>(
+            noc, write_cmd_buf, src, dst, chunk, NOC_MULTICAST_WRITE_VC, true, linked, num_dests, false, false);
+        src += chunk;
+        dst += chunk;
+        bytes -= chunk;
+    }
+}
 
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
-template <uint32_t C, uint32_t G, uint32_t slice_nocs, uint32_t risc>
-FORCE_INLINE void send_weight_channel(const Noc& noc, uint32_t channel, uint32_t addr, uint32_t bytes) {
-    if constexpr (C < slice_nocs && C < G) {
-        if constexpr (C == risc) {
-            if (channel == C) {
-                constexpr auto pipe = dataflow_kernel_lib::McastArgs<
-                    get_named_compile_time_arg_val(kWeightCt[C]),
-                    get_named_compile_time_arg_val(kWeightRt[C])>();
-                pipe.sender(noc).send(addr, addr, bytes);
-                return;
-            }
-        }
-        send_weight_channel<C + 1, G, slice_nocs, risc>(noc, channel, addr, bytes);
-    }
-}
-
-template <uint32_t C, uint32_t G, uint32_t slice_nocs, uint32_t risc>
-FORCE_INLINE void receive_weight_channel(const Noc& noc, uint32_t channel) {
-    if constexpr (C < slice_nocs && C < G) {
-        if constexpr (C == risc) {
-            if (channel == C) {
-                constexpr auto pipe = dataflow_kernel_lib::McastArgs<
-                    get_named_compile_time_arg_val(kWeightCt[C]),
-                    get_named_compile_time_arg_val(kWeightRt[C])>();
-                pipe.receiver(noc).receive();
-                return;
-            }
-        }
-        receive_weight_channel<C + 1, G, slice_nocs, risc>(noc, channel);
-    }
-}
-
 // receive_weight_slice on the RISC whose NoC carries slice `member`: it is cb_router_weight's producer on this core
 // (one producer a core; the other RISC never touches the CB). A core that sent the slice itself does not wait.
 template <uint32_t G, uint32_t slice_nocs, uint32_t risc>
 FORCE_INLINE void receive_weight_slice(
-    const Noc& noc, CircularBuffer& router_weight, uint32_t weight_tiles, uint32_t member, bool sent_here) {
+    CircularBuffer& router_weight, uint32_t weight_tiles, uint32_t member, uint32_t sem_w_flag0, bool sent_here) {
     const uint32_t channel = member % slice_nocs;
     if (channel != risc) {
         return;
     }
     router_weight.reserve_back(weight_tiles);
     if (!sent_here) {
-        receive_weight_channel<0, G, slice_nocs, risc>(noc, channel);
+        Semaphore<>(sem_w_flag0 + channel).wait(1);
     }
     router_weight.push_back(weight_tiles);
 }
 
 // The sender core of channel `channel` (core w_sender_top - channel): faces 0 / 2 of every slice the channel carries,
-// read from DRAM into their compact slots (consecutive), then one multicast. Both RISCs of the sender core read, each
-// over its own NoC (one RISC issuing every 1 KB read was the bound, perf_experiments/r32_w_early): the RISC off the
-// channel's NoC reads the first half of the K tile pairs and raises sem_w_local; the RISC on it reads the rest, waits
-// for the flag and multicasts. Both RISCs of a sender core must call this.
+// read from DRAM into their compact slots (consecutive), then multicast. Both RISCs of the sender core read, each over
+// its own NoC (one RISC issuing every 1 KB read was the bound, perf_experiments/r32_w_early): the RISC off the
+// channel's NoC reads the first half of the K tile pairs and raises sem_w_local; the RISC on it reads the rest, then
+// multicasts the channel and its flag. Both RISCs of a sender core must call this. The multicaster leaves its acks to
+// the kernel's final write barrier unless `ack_now`.
 template <uint32_t G, uint32_t ht, uint32_t slice_nocs, uint32_t risc, typename Accessor>
 FORCE_INLINE void deliver_weight_slice(
-    const Noc& noc, const Accessor& weight, uint32_t weight_base, uint32_t channel, uint32_t sem_w_local) {
+    const Noc& noc,
+    const Accessor& weight,
+    uint32_t weight_base,
+    uint32_t channel,
+    uint32_t sem_w_local,
+    uint32_t sem_w_flag0,
+    uint32_t coords_arg,
+    uint32_t num_cores,
+    bool ack_now) {
     static_assert(slice_nocs == 1 || slice_nocs == 2, "W slices go out on the reader's NoC, or alternate over both");
     static_assert(ht % 2 == 0, "W is read in pairs of K tiles");
     if (channel >= slice_nocs) {
         return;
     }
+    const uint8_t noc_id = noc.get_noc_id();
     const bool mcaster = channel == risc;
-    const uint32_t slices = w_channel_slices(channel, G, slice_nocs);
-    const uint32_t entries = slices * ht;    // (slot, K tile) of the channel, slot-major
+    const uint32_t entries = w_channel_slices(channel, G, slice_nocs) * ht;  // (slot, K tile), slot-major
     const uint32_t split = entries / 4 * 2;  // the first half of the pairs: the other RISC's share
-    const uint32_t channel_addr = weight_base + w_slot(channel, G, slice_nocs) * ht * 2 * kWFaceBytes;
+    const uint32_t channel_addr = weight_base + w_slot(channel, G, slice_nocs) * ht * kWEntryBytes;
     for (uint32_t entry = mcaster ? split : 0; entry < (mcaster ? entries : split); ++entry) {
         const uint32_t slot = entry / ht;
         const uint32_t tile = entry % ht;
         const uint32_t dst = channel_addr + (slot * 2 * ht + w_face_tile(0, ht, tile)) * kWFaceBytes;
-        const uint64_t src = weight.get_noc_addr((channel + slot * slice_nocs) * ht + tile, 0, noc.get_noc_id());
-        noc_async_read(src, dst, kWFaceBytes, noc.get_noc_id());
-        noc_async_read(src + 2 * kWFaceBytes, dst + 2 * kWFaceBytes, kWFaceBytes, noc.get_noc_id());
+        const uint64_t src = weight.get_noc_addr((channel + slot * slice_nocs) * ht + tile, 0, noc_id);
+        noc_async_read(src, dst, kWFaceBytes, noc_id);
+        noc_async_read(src + 2 * kWFaceBytes, dst + 2 * kWFaceBytes, kWFaceBytes, noc_id);
     }
-    noc.async_read_barrier();
     Semaphore<> other_half(sem_w_local);
     if (!mcaster) {
+        noc.async_read_barrier();
         other_half.set(1);
         return;
     }
+    const uint64_t dst = grid_mcast_dst(noc_id, coords_arg, num_cores, 0);
     other_half.wait(1);
-    send_weight_channel<0, G, slice_nocs, risc>(noc, channel, channel_addr, slices * ht * 2 * kWFaceBytes);
+    noc.async_read_barrier();
+    w_mcast(noc_id, dst | channel_addr, channel_addr, entries * kWEntryBytes, num_cores - 1, true);
+    // The flag's source: this core's own cell (the multicast excludes its source). A blocking load of the word just
+    // stored returns once the store reached L1, before the NoC reads it.
+    const uint32_t flag_addr = get_semaphore(sem_w_flag0 + channel);
+    volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_addr);
+    *flag = 1;
+    (void)ckernel::load_blocking(flag);
+    w_mcast(noc_id, dst | flag_addr, flag_addr, 4, num_cores - 1, false);
+    if (ack_now) {
+        noc.async_write_barrier();
+    }
 }
 #endif
 
@@ -417,61 +475,77 @@ constexpr uint32_t kPushArgFirstPiece = 2;
 constexpr uint32_t kPushPieceWords = 5;
 constexpr uint32_t kRowsAll = 0;
 
-struct PushPiece {
-    uint32_t piece;
-    uint32_t src;
-    uint32_t dst;
-    uint32_t bytes;
-    uint32_t rows;  // kRowsAll, or 1 + the parity of the rows this member pushes (two members split the piece)
-};
-
-// The RISC's push pieces (host _push_args); returns their count.
-template <uint32_t k>
-inline uint32_t load_push_pieces(uint32_t pieces_arg, PushPiece (&pieces)[k]) {
-    const uint32_t num_pieces = get_arg_val<uint32_t>(pieces_arg + kPushArgPieces);
-    for (uint32_t i = 0; i < num_pieces; ++i) {
-        const uint32_t arg = pieces_arg + kPushArgFirstPiece + i * kPushPieceWords;
-        pieces[i] = {
-            get_arg_val<uint32_t>(arg),
-            get_arg_val<uint32_t>(arg + 1),
-            get_arg_val<uint32_t>(arg + 2),
-            get_arg_val<uint32_t>(arg + 3),
-            get_arg_val<uint32_t>(arg + 4)};
-    }
-    return num_pieces;
-}
-
 // Posted writes: the owner proves landing (owner_land_count), so the source needs no ack. At most bytes_in_flight of
 // pushes not yet sent by the NIU: past a bytes threshold the NoC tips into congestion collapse (measured on
 // nomic_moe_dispatch; uncapped posted pushes end 1-2k cycles later, r32_owner_land). The cap is counted in writes of
 // this RISC's average piece, so a member with more, smaller writes keeps as many bytes in flight as the others.
-// Credits: the sent counter is read only when the last reading's credits are spent. The per-write path keeps its
-// state in registers: the piece loop is unrolled over k, and the issued-write count stays local until finish() adds
-// it to the posted-write counter once.
-template <uint32_t w, uint32_t k, uint32_t num_cores, uint32_t bytes_in_flight, uint32_t cmd_bufs>
+// Credits: the sent counter is read only when the last reading's credits are spent.
+// The per-write software paces the push (Perf R4.1: zero credit stalls), so it is kept minimal: the destination
+// (owner coordinate register value, block address, VC command buffer) of each piece is computed once per output tile
+// row and cached per walk stream (one entry per expert: a RISC's rows of an expert ascend through its region, so a
+// stream changes tile row at most once every 32 rows), the piece loop is unrolled over the host's max pieces a member
+// pushes, and the row parity filter compiles out unless some piece is split by parity.
+// The diet alone delivers unfairly (faster issue, slower last landing). Each write's static VC is keyed on the owner's
+// index relative to this core, (owner - self) & 1 -> VC 1 / VC 3, which spreads one source's writes over two VCs by
+// destination and keeps the diet a win on every shape measured (Perf R4.3, r43_push_vc_rel: 8x512 -3.7..-5.3%; a
+// global key such as owner & 1 or owner & 3 regressed other shapes, r42_push_vc). Each VC has its own command buffer,
+// programmed once in start(), so a write adds no register store for its VC.
+template <uint32_t w, uint32_t k, uint32_t max_pieces, bool row_parity, uint32_t num_cores, uint32_t bytes_in_flight>
 class RowPusher {
-    static_assert(cmd_bufs == 1 || cmd_bufs == 2, "pushes use the write and the write-reg command buffers");
-    static constexpr uint32_t kCmdBufs[2] = {write_cmd_buf, write_reg_cmd_buf};
+    static_assert(max_pieces >= 1 && max_pieces <= k, "a member pushes at most k pieces a row");
+    static constexpr uint32_t kVcCmdBufs[2] = {write_cmd_buf, write_reg_cmd_buf};
+    static constexpr uint32_t kPushVcs[2] = {1, 3};
+    static constexpr uint32_t kRowBytes = w * kTileRowBytes;
 
 public:
+    static constexpr uint32_t kPadStream = kNumExperts;  // pad rows; streams 0..7 are the experts' slot rows
+    static constexpr uint32_t kStreams = kNumExperts + 1;
+
+    // A stream's current output tile row: per piece, the owner's NOC_RET_ADDR_COORDINATE value and the address of
+    // the row-0 slice in the owner's block (shard s = tile_row * k + piece on core s % num_cores, block s / num_cores).
+    struct Stream {
+        uint32_t tile_row;
+        uint32_t coord[max_pieces];
+        uint32_t dst[max_pieces];
+        uint32_t cmd_buf[max_pieces];  // the command buffer of the write's VC
+    };
+
     // pieces_arg: the RISC's push RT args (host _push_args): first staged tile, piece count, then k pieces of
     // (piece, src offset in the staged row, dst offset in the piece, bytes, rows).
-    RowPusher(uint32_t pieces_arg, uint32_t gathered_base, uint32_t coords_arg) :
-        gathered_base_(gathered_base), coords_arg_(coords_arg) {
-        num_pieces_ = load_push_pieces(pieces_arg, pieces_);
+    // streams: kStreams entries, owned by the caller (an array member would keep the whole pusher in memory, the
+    // per-write scalars included, since the streams are indexed at run time).
+    RowPusher(uint32_t pieces_arg, uint32_t gathered_base, uint32_t coords_arg, Stream* streams, uint32_t self) :
+        streams_(streams), gathered_base_(gathered_base), coords_arg_(coords_arg), self_(self) {
+        num_pieces_ = get_arg_val<uint32_t>(pieces_arg + kPushArgPieces);
         uint32_t bytes = 0;
-        for (uint32_t i = 0; i < num_pieces_; ++i) {
-            bytes += pieces_[i].bytes;
+#pragma GCC unroll 4
+        for (uint32_t i = 0; i < max_pieces; ++i) {
+            if (i >= num_pieces_) {
+                break;
+            }
+            const uint32_t arg = pieces_arg + kPushArgFirstPiece + i * kPushPieceWords;
+            piece_[i] = get_arg_val<uint32_t>(arg);
+            src_[i] = get_arg_val<uint32_t>(arg + 1);
+            dst_[i] = get_arg_val<uint32_t>(arg + 2);
+            bytes_[i] = get_arg_val<uint32_t>(arg + 3);
+            rows_[i] = get_arg_val<uint32_t>(arg + 4);
+            bytes += bytes_[i];
         }
         const uint32_t writes = bytes > 0 ? bytes_in_flight * num_pieces_ / bytes : 0;
         writes_in_flight_ = writes > 0 ? writes : 1;
+        for (uint32_t stream = 0; stream < kStreams; ++stream) {
+            streams_[stream].tile_row = ~0u;
+        }
     }
+
+    bool idle() const { return num_pieces_ == 0; }
 
     // Programs the write command buffer's fixed fields; call before a run of push() with no other write between.
     void start() {
-        for (uint32_t buf = 0; buf < cmd_bufs; ++buf) {
+        static_assert(kVcCmdBufs[0] != kVcCmdBufs[1], "one command buffer a push VC");
+        for (uint32_t vc = 0; vc < 2; ++vc) {
             ncrisc_noc_write_set_state<true, false>(
-                noc_index, kCmdBufs[buf], get_noc_addr(my_x[noc_index], my_y[noc_index], 0), 0, NOC_UNICAST_WRITE_VC);
+                noc_index, kVcCmdBufs[vc], get_noc_addr(my_x[noc_index], my_y[noc_index], 0), 0, kPushVcs[vc]);
         }
         // Posted writes issued earlier on this NIU but not yet sent would make the in-flight count wrap.
         noc_async_posted_writes_flushed(noc_index);
@@ -479,58 +553,114 @@ public:
         issued_ = 0;
     }
 
-    // One row slice (src_row: its staging address) to output row `row`.
-    __attribute__((always_inline)) inline void push(uint32_t src_row, uint32_t row) {
+    // One row slice (src_row: its staging address) to output row `row` of walk stream `stream`.
+    __attribute__((always_inline)) inline void push(uint32_t src_row, uint32_t row, uint32_t stream) {
+#ifdef ABLATE_PUSH_PIECES  // /perf-measure: the per-piece address math and writes stubbed (the slot walk kept)
+        asm volatile("" ::"r"(src_row), "r"(row), "r"(stream));
+        return;
+#endif
+        Stream& s = streams_[stream];
         const uint32_t tile_row = row / kTile;
-        const uint32_t row_dst = gathered_base_ + (row % kTile) * w * kTileRowBytes;
-#pragma GCC unroll 3
-        for (uint32_t i = 0; i < k; ++i) {
+        if (s.tile_row != tile_row) [[unlikely]] {
+            refill(s, tile_row);
+        }
+        const uint32_t row_offset = (row % kTile) * kRowBytes;
+#pragma GCC unroll 4
+        for (uint32_t i = 0; i < max_pieces; ++i) {
             if (i >= num_pieces_) {
                 break;
             }
-            const PushPiece& piece = pieces_[i];
-            if (piece.rows != kRowsAll && (row & 1) + 1 != piece.rows) {
-                continue;
-            }
-            const uint32_t shard = tile_row * k + piece.piece;
-            const uint32_t block = shard / num_cores;
-            const uint32_t coord = get_common_arg_val<uint32_t>(coords_arg_ + (shard - block * num_cores));
-            const uint32_t dst = row_dst + block * w * kBf16TileBytes + piece.dst;
-            if (credits_ == 0) {
-                uint32_t outstanding;
-                while (
-                    (outstanding = sent_base_ + issued_ - NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT)) >=
-                    writes_in_flight_) {
+            if constexpr (row_parity) {
+                if (rows_[i] != kRowsAll && (row & 1) + 1 != rows_[i]) {
+                    continue;
                 }
-                credits_ = writes_in_flight_ - outstanding;
             }
-            --credits_;
-#ifdef ABLATE_PUSH_WRITES
-            asm volatile("" ::"r"(dst), "r"(coord));
-            continue;
-#endif
-            ++issued_;
-            // Stateful one-packet write: only the target coordinate, addresses and length change per write.
-            // Round robin over cmd_bufs command buffers (2 measured slower than 1 on 8x512: the poll is not the cost).
-            const uint32_t cmd_buf = kCmdBufs[issued_ % cmd_bufs];
-            while (!noc_cmd_buf_ready(noc_index, cmd_buf)) {
-            }
-            NOC_CMD_BUF_WRITE_REG(
-                noc_index,
-                cmd_buf,
-                NOC_RET_ADDR_COORDINATE,
-                static_cast<uint32_t>(get_noc_addr(coord_x(coord), coord_y(coord), 0) >> NOC_ADDR_COORD_SHIFT) &
-                    NOC_COORDINATE_MASK);
-            ncrisc_noc_write_with_state<DM_DEDICATED_NOC, true, false, false, true>(
-                noc_index, cmd_buf, src_row + piece.src, dst, piece.bytes);
+            write(s.cmd_buf[i], s.coord[i], src_row + src_[i], s.dst[i] + row_offset, bytes_[i]);
         }
     }
 
     // Accounts the issued writes in the counter a posted-write flush waits on.
-    void finish() const { noc_posted_writes_num_issued[noc_index] += issued_; }
+    void finish() {
+        noc_posted_writes_num_issued[noc_index] += issued_;
+#ifdef ABLATE_MEASURE_STALLS
+        DeviceTimestampedData("push_writes", issued_);
+        DeviceTimestampedData("push_stall_credit", stall_credit_);
+        DeviceTimestampedData("push_stalls_credit", stalls_credit_);
+        DeviceTimestampedData("push_stall_cmdbuf", stall_cmd_);
+#endif
+    }
 
 private:
-    PushPiece pieces_[k]{};
+    __attribute__((always_inline)) inline void refill(Stream& s, uint32_t tile_row) {
+        s.tile_row = tile_row;
+#pragma GCC unroll 4
+        for (uint32_t i = 0; i < max_pieces; ++i) {
+            if (i >= num_pieces_) {
+                break;
+            }
+            const uint32_t shard = tile_row * k + piece_[i];
+            const uint32_t block = shard / num_cores;
+            const uint32_t coord = get_common_arg_val<uint32_t>(coords_arg_ + (shard - block * num_cores));
+            s.coord[i] =
+                static_cast<uint32_t>(get_noc_addr(coord_x(coord), coord_y(coord), 0) >> NOC_ADDR_COORD_SHIFT) &
+                NOC_COORDINATE_MASK;
+            s.dst[i] = gathered_base_ + block * w * kBf16TileBytes + dst_[i];
+            const uint32_t owner = shard - block * num_cores;
+            s.cmd_buf[i] = kVcCmdBufs[(owner + num_cores - self_) & 1];
+        }
+    }
+
+    __attribute__((always_inline)) inline void write(
+        uint32_t cmd_buf, uint32_t coord, uint32_t src, uint32_t dst, uint32_t bytes) {
+        if (credits_ == 0) {
+            uint32_t outstanding;
+#ifdef ABLATE_MEASURE_STALLS
+            outstanding = sent_base_ + issued_ - NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT);
+            if (outstanding >= writes_in_flight_) {
+                const uint32_t t0 = clk();
+                ++stalls_credit_;
+#endif
+                while (
+                    (outstanding = sent_base_ + issued_ - NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT)) >=
+                    writes_in_flight_) {
+                }
+#ifdef ABLATE_MEASURE_STALLS
+                stall_credit_ += clk() - t0;
+            }
+#endif
+            credits_ = writes_in_flight_ - outstanding;
+        }
+        --credits_;
+#ifdef ABLATE_PUSH_WRITES
+        asm volatile("" ::"r"(cmd_buf), "r"(dst), "r"(coord), "r"(src), "r"(bytes));
+        return;
+#endif
+        ++issued_;
+        // Stateful one-packet write: only the target coordinate, addresses and length change per write.
+#ifdef ABLATE_MEASURE_STALLS
+        if (!noc_cmd_buf_ready(noc_index, cmd_buf)) {
+            const uint32_t t0 = clk();
+            while (!noc_cmd_buf_ready(noc_index, cmd_buf)) {
+            }
+            stall_cmd_ += clk() - t0;
+        }
+#endif
+        while (!noc_cmd_buf_ready(noc_index, cmd_buf)) {
+        }
+        NOC_CMD_BUF_WRITE_REG(noc_index, cmd_buf, NOC_RET_ADDR_COORDINATE, coord);
+        ncrisc_noc_write_with_state<DM_DEDICATED_NOC, true, false, false, true>(noc_index, cmd_buf, src, dst, bytes);
+    }
+
+#ifdef ABLATE_MEASURE_STALLS
+    static uint32_t clk() { return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+    uint32_t stall_credit_ = 0, stalls_credit_ = 0, stall_cmd_ = 0;
+#endif
+    Stream* streams_;
+    uint32_t piece_[max_pieces]{};
+    uint32_t src_[max_pieces]{};
+    uint32_t dst_[max_pieces]{};
+    uint32_t bytes_[max_pieces]{};
+    uint32_t rows_[max_pieces]{};
     uint32_t num_pieces_ = 0;
     uint32_t writes_in_flight_ = 1;
     uint32_t credits_ = 0;
@@ -538,6 +668,7 @@ private:
     uint32_t issued_ = 0;
     uint32_t gathered_base_;
     uint32_t coords_arg_;
+    uint32_t self_;
 };
 
 // select_block for tokens [token_lo, token_hi) of the core, from the code tiles of softmax8 (top-2 decided on the
@@ -583,6 +714,19 @@ inline uint64_t select_tokens(
         const uint32_t half_end = (token | 15) + 1;
         const uint32_t group_end = half_end < token_hi ? half_end : token_hi;
         uint32_t offset = token_row_offset(token);
+        // The code words are freshly invalidated L1 lines (one a token row) and the select is load-latency bound, not
+        // emit bound: 8 independent loads in flight before the emits (Perf R4.2, perf_experiments/r42_select_chain).
+        for (; token + 8 <= group_end; token += 8, offset += 16 * 8) {
+            uint32_t codes[8];
+#pragma GCC unroll 8
+            for (uint32_t i = 0; i < 8; ++i) {
+                codes[i] = code_words[offset + 16 * i];
+            }
+#pragma GCC unroll 8
+            for (uint32_t i = 0; i < 8; ++i) {
+                emit(token + i, codes[i]);
+            }
+        }
         for (; token + 1 < group_end; token += 2, offset += 32) {  // two loads in flight before the stores
             const uint32_t first = code_words[offset];
             const uint32_t second = code_words[offset + 16];
@@ -652,10 +796,10 @@ __attribute__((always_inline)) inline void push_pad_rows(
     uint32_t unit,
     uint32_t num_units,
     uint32_t staging,
-    uint32_t risc_tokens) {
+    uint32_t risc_tokens,
+    uint32_t& j) {
     uint32_t pad = unit;     // next pad of this unit
     uint32_t run_first = 0;  // pad index of the current run's first row
-    uint32_t j = 0;
     for (uint32_t run = 0; run <= kNumExperts; ++run) {
         uint32_t lo, hi;
         if (run < kNumExperts) {
@@ -668,19 +812,45 @@ __attribute__((always_inline)) inline void push_pad_rows(
             hi = rows;
         }
         const uint32_t run_end = run_first + (hi - lo);
-        for (; pad < run_end; pad += num_units, ++j) {
-            pusher.push(staging + (j % risc_tokens) * row_slice_bytes, lo + (pad - run_first));
+        for (; pad < run_end; pad += num_units) {
+            pusher.push(staging + j * row_slice_bytes, lo + (pad - run_first), Pusher::kPadStream);
+            j = j + 1 == risc_tokens ? 0 : j + 1;
         }
         run_first = run_end;
     }
 }
 
+// Slot rows of tokens [lo, hi): each packed slot becomes its output row base[expert] + rank, stored back into the
+// slot page when keep_rows (combine_index is written from it).
+template <bool keep_rows, uint32_t row_slice_bytes, uint32_t tokens_per_shard, typename Pusher>
+__attribute__((always_inline)) inline void push_slot_rows(
+    Pusher& pusher,
+    volatile tt_l1_ptr uint32_t* rows_page,
+    const uint32_t (&base)[kNumExperts],
+    uint32_t src,
+    uint32_t lo,
+    uint32_t hi) {
+    for (uint32_t t = lo; t < hi; ++t, src += row_slice_bytes) {
+        const uint32_t first = rows_page[t];
+        const uint32_t second = rows_page[tokens_per_shard + t];
+        const uint32_t first_expert = first & kExpertMask;
+        const uint32_t second_expert = second & kExpertMask;
+        const uint32_t first_row = base[first_expert] + (first >> kRankShift);
+        const uint32_t second_row = base[second_expert] + (second >> kRankShift);
+        if constexpr (keep_rows) {  // combine_index source (leader only)
+            rows_page[t] = first_row;
+            rows_page[tokens_per_shard + t] = second_row;
+        }
+        pusher.push(src, first_row, first_expert);
+        pusher.push(src, second_row, second_expert);
+    }
+}
+
 // Pushes the slot rows and the pad rows of the RISC's tokens [token_lo, token_hi) (local to the core), whose row
-// slices start at `staging`. Each packed slot becomes its output row base[expert] + rank, stored back into the
-// slot page when keep_rows (combine_index is written from it). rows_page: the slot page (k-major slots, then the
-// header). The RISC pushes the pads of units [first_unit, first_unit + owned_units) of num_units, pad j of a unit
-// carrying the RISC's token token_lo + j % (token_hi - token_lo). The slot walk starts at token
-// token_lo + walk_offset % (token_hi - token_lo) and wraps (perf lamp L7: cores out of lockstep on the owners).
+// slices start at `staging`. rows_page: the slot page (k-major slots, then the header). The RISC pushes the pads of
+// units [first_unit, first_unit + owned_units) of num_units, pad j of a unit carrying the RISC's token
+// token_lo + j % (token_hi - token_lo). The slot walk starts at token token_lo + walk_offset % (token_hi - token_lo)
+// and wraps (perf lamp L7: cores out of lockstep on the owners).
 // noinline: the pusher stays a local of this frame, so its state is never reloaded around the NoC register stores.
 template <uint32_t stage_tiles, uint32_t tokens_per_shard, typename Pusher>
 __attribute__((noinline)) void push_rows_block(
@@ -697,31 +867,40 @@ __attribute__((noinline)) void push_rows_block(
     uint32_t owned_units,
     uint32_t num_units,
     uint32_t walk_offset,
-    bool keep_rows) {
+    bool keep_rows,
+    uint32_t self) {
     constexpr uint32_t row_slice_bytes = stage_tiles * kTileRowBytes;
 #ifdef ABLATE_PUSH  // /perf-measure: the whole push (software and writes) stubbed
     return;
 #endif
-    Pusher pusher(pieces_arg, gathered_base, coords_arg);
+    typename Pusher::Stream streams[Pusher::kStreams];
+    Pusher pusher(pieces_arg, gathered_base, coords_arg, streams, self);
     pusher.start();
+    if (pusher.idle()) {  // no pieces: only the leader's combine_index rows to store
+        if (keep_rows) {
+            push_slot_rows<true, row_slice_bytes, tokens_per_shard>(
+                pusher, rows_page, base, staging, token_lo, token_hi);
+        }
+        pusher.finish();
+        return;
+    }
     const uint32_t risc_tokens = token_hi - token_lo;
     const uint32_t walk_start = token_lo + walk_offset % risc_tokens;
-    for (uint32_t step = 0, t = walk_start; step < risc_tokens; ++step, t = t + 1 == token_hi ? token_lo : t + 1) {
-        const uint32_t src = staging + (t - token_lo) * row_slice_bytes;
-        const uint32_t first = rows_page[t];
-        const uint32_t second = rows_page[tokens_per_shard + t];
-        const uint32_t first_row = base[first & kExpertMask] + (first >> kRankShift);
-        const uint32_t second_row = base[second & kExpertMask] + (second >> kRankShift);
-        if (keep_rows) {  // combine_index source (leader only)
-            rows_page[t] = first_row;
-            rows_page[tokens_per_shard + t] = second_row;
-        }
-        pusher.push(src, first_row);
-        pusher.push(src, second_row);
+    const uint32_t walk_src = staging + (walk_start - token_lo) * row_slice_bytes;
+    if (keep_rows) {
+        push_slot_rows<true, row_slice_bytes, tokens_per_shard>(
+            pusher, rows_page, base, walk_src, walk_start, token_hi);
+        push_slot_rows<true, row_slice_bytes, tokens_per_shard>(pusher, rows_page, base, staging, token_lo, walk_start);
+    } else {
+        push_slot_rows<false, row_slice_bytes, tokens_per_shard>(
+            pusher, rows_page, base, walk_src, walk_start, token_hi);
+        push_slot_rows<false, row_slice_bytes, tokens_per_shard>(
+            pusher, rows_page, base, staging, token_lo, walk_start);
     }
     for (uint32_t unit = first_unit; unit < first_unit + owned_units; ++unit) {
+        uint32_t j = 0;
         push_pad_rows<row_slice_bytes>(
-            pusher, rows_page + 2 * tokens_per_shard, rows, unit, num_units, staging, risc_tokens);
+            pusher, rows_page + 2 * tokens_per_shard, rows, unit, num_units, staging, risc_tokens, j);
     }
     pusher.finish();
 }
@@ -745,11 +924,20 @@ inline void write_combine_index(
     }
 }
 
+// Static VC of the combine_weights DRAM writes. The row pushes are on VC 1 (= NOC_UNICAST_WRITE_VC) and VC 3
+// (RowPusher), every other unicast write on NOC_UNICAST_WRITE_VC; a 4 KB write held at a DRAM endpoint on VC 1 blocks
+// the pushes queued behind it in the routers on its path (head-of-line). The idle member's weights writes land mid-push
+// and stalled the pushers behind them for 1-1.6k cycles (cmd-buf-ready stalls), which set the push makespan (Perf R4.1,
+// r41_push_balance). Carve-out: with DRAM `dispatched` the weights stay on NOC_UNICAST_WRITE_VC: there VC 2 measured
+// 2x512 +3.3..6.8%, 4x256 +1.7..2.2%, 4x512 +0.9..3.0% (the tail is the DRAM block writes, not the push).
+template <bool out_dram>
+constexpr uint32_t kWeightsVc = out_dram ? NOC_UNICAST_WRITE_VC : 2;
+
 // write_combine_weights_block, one tile (column 0 = the selection's weights) per call: tile `write` of the core's
 // k-major tiles, staged rps tiles a choice at `tiles_base`. A member writes tiles first, first + step, ...: the
 // leader all, or (WEIGHTS_SPREAD) every G-th, alternated over the two DM RISCs when both hold tokens so the 1 MB of
 // DRAM writes travels on both NoCs.
-template <uint32_t rps, uint32_t t_pad, typename Accessor>
+template <uint32_t rps, uint32_t t_pad, bool out_dram, typename Accessor>
 inline void write_weight_tiles(
     const Noc& noc,
     const Accessor& combine_weights,
@@ -761,12 +949,13 @@ inline void write_weight_tiles(
     for (uint32_t write = first; write < 2 * core_tiles; write += step) {
         const uint32_t choice = write / core_tiles;
         const uint32_t tile = write - choice * core_tiles;
-        noc.async_write(
+        noc.async_write<NocOptions::CUSTOM_VC>(
             CoreLocalMem<uint32_t>(tiles_base + (choice * rps + tile) * kFp32TileBytes),
             combine_weights,
             kFp32TileBytes,
             {},
-            {.page_id = choice * (t_pad / kTile) + first_token / kTile + tile});
+            {.page_id = choice * (t_pad / kTile) + first_token / kTile + tile},
+            {.vc = kWeightsVc<out_dram>});
     }
 }
 

@@ -445,3 +445,413 @@ The four l1_interleaved rows that read positive were re-measured with 9-call med
 - Leads: (1) the push is still ~12-15k cycles and NoC-delivery bound; shortest-NoC routing and more pushing cores both measured slower, so what is left is fewer bytes on the links (none found) or a destination schedule that the R3.2 reorders did not cover. (2) The slowest pushers (readers at (2,3), (2,6)) end 1-2k after the rest; nobody has explained why those two. (3) The ~480-cycle table multicast latency and the ~1.6k softmax -> select chain remain on the pre-push path.
 
 All ideas measured: 2 graduated, 2 regressions (not graduated); 8x512 23.6-24.0 -> 21.6 us; no measured regression on the 28-row guard set.
+
+## Perf R4.1 - Fan-out perf tournament (continuation round 1 of 3)
+- Date: 2026-11-06
+- Focus: LOOSE_CASES `8x512_perf` (nd_norm x, `dispatched` in L1, default compute config HiFi4 / fp32 DEST / approx off, model L1 occupancy). Blackhole p100a, AICLK 1350 MHz. SUPPORTED unchanged.
+
+### Measured breakdown (8x512, before; HEAD e2633f6861a)
+Whole op 9-call medians 21557 / 21651 ns. Zone dumps: `perf_experiments/zones_8x512_r41_before.txt`, `zones_8x512_r41_ablate_push_writes.txt`, `zones_8x512_r41_ablate_push_pieces.txt`, `zones_8x512_r41_ablate_push.txt`, `zones_8x512_r41_final.txt`. Scripts and per-core CSVs are in `perf_experiments/r41_breakdown/` (`prof.sh`, `many.sh`, `guard.sh`, `percore.py`).
+Path in cycles (p50): select ends 10.5k / 10.85k; table lands 12.30k / 12.37k; assign ends 13.0k / 13.1k; push 13.05k -> 25.0k p50 / 28.3k max; tilize ends 31.0k max.
+Cumulative push ablation, whole op / pushing-RISC push zone:
+
+| stubbed | whole op | push zone |
+|---|---|---|
+| nothing | 23.0 us | 12.0k p50 / 14.4k max |
+| issue only (`ABLATE_PUSH_WRITES`) | 17.7 us | 7.2k, every pushing RISC within 7.1-7.4k |
+| issue and per-piece address math, slot walk kept (`ABLATE_PUSH_PIECES`, new) | 15.9 us | walk 2.43k (3.17k on leaders) |
+| whole push (`ABLATE_PUSH`) | 13.8 us | |
+
+On 8x512 every pushing RISC issues 131-132 writes of 768 B.
+
+**The brief's contradiction, resolved.** The stall probe (`ABLATE_MEASURE_STALLS`, new: `DeviceTimestampedData` from `RowPusher`) shows zero credit-cap stalls on every pushing RISC and 0.2-1.5k cycles of command-buffer-ready stalls, so the push does not wait on its own in-flight cap. It costs about 7.2k cycles of software (walk ~2.4k plus address math and credits ~4.7k, ~36 cycles a write) and ~4.8k of NoC register issue.
+
+Even so, the push is not issue bound in the sense that cutting issue shortens it. Three subagents made issue 1.7-4.7k faster per RISC (below), and each time the slowest pushers and the owners' last landing moved *later*. The software rate is pacing injection below the point where delivery becomes unfair. The landing floor (~13.2k after push start, the R3.2 replay floor) is where the push sits today.
+
+**The stragglers.** The per-RISC push spread (11.7-14.4k) correlates 0.97-0.98 with command-buffer-ready stall time, and it comes in one burst between writes 48 and 64 (`r41_push_balance`). That burst lines up with the idle member's combine_weights DRAM writes (G = 3: member 1 pushes nothing and writes its 3 x 4 KB tiles a core mid-push). Those writes shared the static unicast VC with the pushes, so a 4 KB write held at a DRAM endpoint blocked the pushes queued behind it. Which RISCs straggle depends on the session; (2,3) / (2,6) were not special.
+
+Ranked: push 12-15k (paced at its delivery floor; stragglers set by head-of-line blocking), select end -> push start 2.5k (table multicast ~650, assign ~680), tail 2.7k. W arrival (3.3k) and softmax were not re-floated (tried in R3.1 / R3.2).
+
+### Portfolio and verdicts (`perf_experiments/r41_<idea>/`; whole-op ns against the unchanged op in the same session)
+| idea | verdict | baseline -> candidate (8x512) | domain / notes |
+|---|---|---|---|
+| `r41_push_walk`: per-stream destination cache (no division or common-arg L1 load per write), pusher state in registers, piece loop specialized on the host's max pieces per member | REGRESSION | 21613 / 21726 -> 23877 / 23791; on top of the two graduations below: 20868 / 20857 -> 23127 / 22915 | ~131 -> 64 instructions a token. rd_push p50 11.95k -> 7.3k but max 12.9k -> 14.3k, wr max 13.8k -> 16.8k. 4x512 +4.4%, DRAM out -2.6%, small shapes flat. In-flight caps of 768-3072 B and stagger 16 / 40 did not recover the baseline |
+| `r41_push_issue`: length set once, coordinate write skipped when unchanged, host pre-encoded coordinate register values, credit cap removed | NULL | best (`coord_pre+len_once`) 21698 -> 21521, inside the noise band; `no_cap` 23151 / 23379; `coord_pre+no_cap` 24011 | a skipped register store costs more (compare + branch) than the store; only 14 of 131 writes repeat a coordinate. The cap never stalls, yet removing it moves the slowest pusher +2.4-3.5k: it acts as a pacer |
+| `r41_push_fused`: run-ordered push (each expert's rows as one contiguous run), coordinate per tile row, 3-4 register stores a write; `cursor` (token order, per-expert cursors) | REGRESSION | 21599-21813 -> fused 26578, cursor 24246-24470; cursor with min-issue-interval pacing 23192-26399 | owners' last landing 27.9k -> 30.8k (cursor) / 32.9k (fused). 2x512 +5.2%, 4x256 +9.2% (cursor) |
+| `r41_push_balance`: explain the stragglers; combine_weights DRAM writes on static VC 2 | WIN, graduated (with a DRAM-out carve-out) | 21.65-21.79 us -> 21.17-21.19 us; push max 13.5k -> 12.6k | 6x512 -2.5%, 6x512 DRAM out -2.0%, 2x512 / 4x256 / dram_interleaved flat. Nulls / regressions: pushes on VC 2 instead (same gain), idle member skipping its walk 22.2-22.6 us, idle member's weights before the table 23.0 us, after its land wait 24.1 us, all weights on NOC0 26.0 us, idle member writing the group's weights 22.3-27.4 us |
+| `r41_table_mcast`: count table as one posted multicast without path reservation, detected on each receiver's NIU0 posted-write slave counter | WIN, graduated | 21661 / 21572 -> 21348 / 21346; table lands 12.14k -> 11.75k, push start 12.88k -> 12.44k | everywhere: 2x512 -3.2%, 4x256 -2.8%, 6x512 -1.4%, DRAM out -0.6%, dram_interleaved -0.7%, l1_interleaved flat (noisy row). Path reservation alone was the cost: posted with reservation is flat (21658). Nulls: assign without 64-bit shifts / rebalanced scan (flat), two rectangles (slower) |
+
+### Graduated (commit e1dd8e95f6a)
+- **Count table** (`r41_table_mcast`) is now the only table path. `send_table` in push.hpp sends one posted `ncrisc_noc_fast_write` multicast to the grid rectangle with `multicast_path_reserve = false`; `table_mcast_dst` builds the rectangle before the row wait. Every non-coordinator core waits on its NIU0 `NIU_SLV_POSTED_WR_REQ_RECEIVED` (`wait_table`), token core or not, and advances `land_base` by 1. A posted write that lands after its target core exits would land after the next program's counter snapshot, so every receiver must wait for it.
+  - The writer polls NIU0 itself; a coordinator token core keeps `kHeaderTableFlag`.
+  - Deleted: the table `McastArgs` channel (host channel, its semaphore and runtime args) and the reader's helper send / receive.
+  - Deadlock argument (BH NoC doc: unreserved broadcasts make deadlock freedom software's job): broadcasts use their own VC class. A reserved broadcast acquires its whole tree or backs off and retries, so it never holds a partial tree. This is the only unreserved broadcast in tt-metal, and the op's W multicasts landed thousands of cycles earlier. The `--dev` NoC sanitizer passed.
+- **combine_weights DRAM writes on VC 2** (`r41_push_balance`): `write_weight_tiles` uses `NocOptions::CUSTOM_VC` with `kWeightsVc<out_dram>`. `out_dram` moved into the common named compile-time args, so the reader sees it too.
+  - **Carve-out (earned by measurement):** with DRAM `dispatched` the weights stay on `NOC_UNICAST_WRITE_VC` (the same path as before). On DRAM out, VC 2 alone measured 2x512 +3.3% / +6.8% and 4x256 +1.7% / +2.2% against HEAD (two sessions, 9-call medians). Table-only against both changes: 4x512 -3.0% / -0.9%, 8x512 -1.1% / -0.5%, 6x512 +1.0% / +0.4%, 8x384 / 8x256 flat. On that placement the tail is the DRAM block writes, not the push.
+- Instrumentation: zones unchanged. New `ABLATE_PUSH_PIECES` (push() returns at once; the land wait is skipped like the other push ablations) and `ABLATE_MEASURE_STALLS` (per-RISC `push_writes`, `push_stall_credit`, `push_stalls_credit`, `push_stall_cmdbuf` as `DeviceTimestampedData`). Both compile out unless their define is set.
+- Combination check: the push-walk diet stays a regression on top of both graduations (8x512 20.86 -> 22.9-23.1 us). The VC fix removes the head-of-line stalls but not the delivery bound that faster issue runs into.
+- Whole op 8x512: 9-call medians 21557 / 21651 (HEAD) -> 20884 / 20930 / 20936 (-3.2..-3.4%). Profiled call (`zones_8x512_r41_final.txt`): table lands 11.6k, push 12.3k -> 24.0k p50 / 27.3k max, tilize ends 30.0k max (was 12.3k / 13.05k -> 25.0k / 28.3k / 31.0k).
+- Golden `eval/golden_tests/nomic_moe_route_dispatch/`: 144/144, also under `--dev`. Unit + precision baseline 21/21 under `--dev`.
+
+### Guard set (all 28 perf rows, one profiled run each, HEAD e2633f6861a vs e1dd8e95f6a; device ns, last call)
+| row | before | after | delta |
+|---|---|---|---|
+| test_perf_row[8x512_perf] | 21682 | 20936 | -3.4% |
+| test_perf_row[6x512_perf] | 19896 | 19238 | -3.3% |
+| test_perf_row[8x384_perf] | 19593 | 18587 | -5.1% |
+| test_perf_row[4x512_perf] | 16605 | 15054 | -9.3% |
+| test_perf_row[8x256_perf] | 15664 | 14986 | -4.3% |
+| test_perf_row[2x512_perf] | 11908 | 11505 | -3.4% |
+| test_perf_row[4x256_perf] | 11873 | 11417 | -3.8% |
+| test_perf_row_dram_out[8x512_perf] | 67659 | 68105 | +0.7% |
+| test_perf_row_dram_out[6x512_perf] | 52750 | 52144 | -1.1% |
+| test_perf_row_dram_out[8x384_perf] | 50593 | 50161 | -0.9% |
+| test_perf_row_dram_out[4x512_perf] | 37989 | 38616 | +1.7% |
+| test_perf_row_dram_out[8x256_perf] | 38776 | 38297 | -1.2% |
+| test_perf_row_dram_out[2x512_perf] | 24439 | 23771 | -2.7% |
+| test_perf_row_dram_out[4x256_perf] | 23943 | 23593 | -1.5% |
+| interleaved_in[8x512 dram_interleaved] | 46616 | 45466 | -2.5% |
+| interleaved_in[8x512 l1_interleaved] | 43226 | 43256 | +0.1% |
+| interleaved_in[6x512 dram_interleaved] | 34191 | 33404 | -2.3% |
+| interleaved_in[6x512 l1_interleaved] | 33646 | 31783 | -5.5% |
+| interleaved_in[8x384 dram_interleaved] | 33884 | 33206 | -2.0% |
+| interleaved_in[8x384 l1_interleaved] | 33770 | 30674 | -9.2% |
+| interleaved_in[4x512 dram_interleaved] | 27976 | 26281 | -6.1% |
+| interleaved_in[4x512 l1_interleaved] | 26479 | 21479 | -18.9% |
+| interleaved_in[8x256 dram_interleaved] | 25587 | 25001 | -2.3% |
+| interleaved_in[8x256 l1_interleaved] | 20331 | 21412 | +5.3% |
+| interleaved_in[2x512 dram_interleaved] | 22144 | 20931 | -5.5% |
+| interleaved_in[2x512 l1_interleaved] | 19356 | 17668 | -8.7% |
+| interleaved_in[4x256 dram_interleaved] | 19440 | 18978 | -2.4% |
+| interleaved_in[4x256 l1_interleaved] | 16455 | 16094 | -2.2% |
+
+The positive rows were re-measured with 9-call medians in two alternating HEAD / final sessions:
+
+| row | HEAD | final |
+|---|---|---|
+| DRAM out 8x512 | 68126 / 68091 | 68122 / 67710 |
+| DRAM out 4x512 | 38397 / 38381 | 38130 / 38319 |
+| l1_interleaved 8x256 | 23390 / 23507 | 22337 / 22648 |
+
+All three are flat or faster; the l1_interleaved row swings about +/-10% call to call. No carve-out beyond the DRAM-out VC choice was earned. Every production row stays below its `stock_ns` (8x512: 20.9 vs 45.6 us).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `McastArgs` / `ttnn.Mcast` (count table) | capability | the helper always sets `NOC_CMD_PATH_RESERVE` on its multicast and signals with a separate flag multicast or semaphore. It cannot send a posted, unreserved multicast whose landing receivers detect on their posted-write slave counter, and path reservation costs ~400 cycles on the 11x10 grid before any data leaves | 21661 / 21572 (whole op 8x512, 9-call medians; posted but still reserved: 21658, flat) | 21348 / 21346 | `kernels/nomic_moe_route_dispatch_push.hpp` (`send_table`, `wait_table`), `kernels/nomic_moe_route_dispatch_reader.cpp` (`receive_or_send_table`) |
+
+- The VC 2 change is not a bypass: it uses `Noc::async_write<NocOptions::CUSTOM_VC>`.
+- Recorded as options, not graduated (all bit-exact, DM only, no precision trade):
+  - `r41_push_issue` `coord_pre+len_once` (flat).
+  - `r41_push_walk` cache + register state (-2.6% on DRAM out 8x512 in one run, +10% on the focus row).
+  - Pacing by minimum issue interval (`r41_push_fused`, all slower).
+- Leads for the next round:
+  1. Make delivery fair at a higher issue rate. Faster issue is worth up to ~4-5k cycles of push on the median RISC, but every attempt so far lost it to the slowest owners' landing. A destination schedule that spreads the hot owners in time, or a per-owner rate limit, is what would turn the walk / issue diets into wins.
+  2. The pushers' own post-push weights writes (~2/3 MB) now set the NCRISC tail together with the tilize (`wr_final_barrier`).
+  3. Assign (~600-700 cycles) is not load-count bound; the remaining pre-push chain is softmax -> select -> table (~1.1k after the select now).
+
+All ideas measured: 2 graduated (one with a measured DRAM-out carve-out), 1 null, 2 regressions. 8x512: 21.6 -> 20.9 us. No measured regression on the 28-row guard set.
+
+## Perf R4.2 - Fan-out perf tournament (continuation round 2 of 3)
+- Date: 2026-11-06
+- Focus: LOOSE_CASES `8x512_perf` (nd_norm x, `dispatched` in L1, default compute config HiFi4 / fp32 DEST / approx off). Blackhole p100a, AICLK 1350 MHz. SUPPORTED unchanged.
+
+### Measured breakdown (8x512, before; HEAD aac14b6cb1b)
+- Whole op, 9-call medians: 20830 / 20959 ns.
+- Zone dumps: `perf_experiments/zones_8x512_r42_before.txt`, `perf_experiments/r42_breakdown/zones_head_sm.txt`. The second carries the new `cmp_wait_pass` zone.
+- Scripts are in `perf_experiments/r42_breakdown/`: `prof.sh`, `many.sh`, `guard.sh`, `percore.py`.
+
+Path in cycles (p50):
+
+| stage | cycles |
+|---|---|
+| W lands (`cmp_wait_w` end, TRISC_0) | 3.35k |
+| matmul ends | 5.2k |
+| softmax ends (TRISC_1) | 9.24k |
+| select ends | 10.4k / 10.8k |
+| table lands | 11.8k |
+| assign ends | 12.45k / 12.57k |
+| push | 12.5k -> 24.2k p50 / 26.1k max |
+| tilize ends | 28.8k max |
+
+The brief's push contradiction (stubbed writes still 7.2k) was already resolved in R4.1. The push is software-paced at its delivery floor: faster issue makes delivery unfair.
+
+**Softmax was occupancy-ambiguous, so it was split.** The new `cmp_wait_pass` zone sits around each pass's partials wait. Measured:
+- Peer waits are 20-140 cycles a pass.
+- Each pass is ~1.22k cycles of real work on TRISC_1, plus ~470 cycles of init before the first pass.
+- Each member runs 3 passes (2 on member 2).
+
+**Critical-path probe.** `ABLATE_DELAY_SOFTMAX` (new) adds 500 cycles a pass with `riscv_wait` on MATH. It moved the whole op by +1045 ns, which is ~94% of the 1.5k cycles injected. The softmax is on the critical path end to end.
+
+Ranked:
+
+| stage | cycles | note |
+|---|---|---|
+| push | 11.7k p50 / 13.7k max | near the 12.2k balanced replay floor; stragglers |
+| softmax | 4.1k | critical, SFPU work |
+| W arrival | 3.35k | two sender RISC zones of ~2.4k |
+| last pass -> push start | 3.1k | serial |
+| tail after the last landing | 2.3k | 1.76k tilize at ~29 cycles a tile; not floated |
+
+`noc_estimate` is not built in this tree. The push gate is still the R3.2 replay floor.
+
+### Portfolio and verdicts (`perf_experiments/r42_<idea>/`)
+| idea | verdict | baseline -> candidate (8x512) | domain / notes |
+|---|---|---|---|
+| `r42_softmax_pass`: per-pass overhead and band diet. Options: FACEIO (copy / pack only the pass's 1 KB face through 16x16-tile views), FUSEDCOPY (G contributor faces under one unpack <-> math handshake), DIET (r3 band diet), HOIST (SFPU init before the matmul) | WIN, graduated (all four) | pass 1204 -> 915 cycles; `cmp_softmax` window 4229 -> 3272; whole op 22911 -> 21719 (subagent session, median of 3). Menu, all bit-identical: FACEIO 1091; DIET 1146; FACEIO+DIET 21975 ns; +HOIST 1027 cycles / 22093 ns; FACEIO+FUSEDCOPY 998 cycles / 21896 ns | Everywhere. G = 3 / 2 / 1 and rps 1-4 rows faster or flat: 4x512 -5.2%, 2x512 -6.4%, G = 1 dram_interleaved 8x512 -1.7%, ragged flat. G = 1 uses DIET + HOIST only. Precision: no option trades precision |
+| `r42_push_vc`: the push's posted writes spread over static unicast VCs by destination (on the current pusher and on the r41 walk diet) | NULL / REGRESSION, not graduated | Current pusher: every spread is +1.6..+9% (VC changes cost a NOC_CTRL store a write; fair delivery but every pusher ~0.9k slower). Diet + owner&3 -> VC 0-3: 20837-20929 -> ~19.9k (-4.5%) | No static mapping holds across shapes. Diet + owner&3: 6x512 +4.7%, 8x256 +13.9%, dram_interleaved 8x512 +3.2..+4.3%. Diet + owner%3 -> VC 0/1/3: 6x512 +11..+14%, 4x512 +7..+13%. Recorded as an option. Untested lead: a key relative to the source, `(owner - self) & 3` |
+| `r42_w_arrival`: attribute the W sender's 2.4k, then unreserved raw multicast with the flag behind the data, and the other RISC's half sent as soon as it lands | WIN, graduated in a changed form (below) | `cmp_wait_w` end 3340 -> 2958; whole op 21053 -> 20801 (19-call pooled) | Attribution: read issue ~40 cycles a KB (not CPU-bound); read latency 450-650; a reserved multicast at 27-30 B/cycle. NOC1 is shared with `wr_stage_gather`. Nulls: W first in the kernel 21019, slice 1 partly on NOC0 21084, 8 KB / 4 KB commands slower, per-block arrival (trids) flat / slower, holding the gather 25214 |
+| `r42_select_chain`: the 9.4k -> 12.5k chain; `ld8` (8 code-word loads in flight in `select_tokens`) + `xl` (staging waited after the assign, writer gated by a header flag) | WIN, graduated (`ld8 + xl`) | Isolated: 20966-21044 -> 20650-20699 (-1.5%). On top of the softmax / W graduations: A/B 20343 / 20371 / 20231 -> 20250 / 20199 / 20265 (-0.4%) | Everywhere measured: 2x512 / 4x256 / DRAM out / dram_interleaved flat. Attribution: member 0's untilize (x_rows at 11.84k) gated its table wait; the select is L1-load-latency bound (~28-36 cycles a token, same for a count-only loop). Nulls / regressions: `as` (scan sums in registers), `pump` (-200 cycles of chain, flat whole op), count-only select (+1.6%), deferred rank (+2.3..+4%) |
+
+### Graduated (commits ad7784c23ed, e1e5e875b94)
+- **Softmax pass** (`r42_softmax_pass`), the only path:
+  - G > 1: copy_init / pack_init on the new 16x16-tile views `CB_PARTIAL_FACES` (26, UnpackToDestFp32) and `CB_CODE_FACES` (27). `route_dispatch_fused_copy::unpack_contributors` / `contributors_ready` put the half's face of each contributor into face 0 of DEST tiles 0..G-1. `face0_only<G>` runs the band. `pack_tile<true>` packs only the code face into its place in the pass's `cb_code_stage` page.
+  - Every G: `band` is the r3 diet band, and `softmax8::init()` runs before the matmul.
+  - Deleted: the old band, `share_faces`, the full-tile copies and pack, and the reciprocal init.
+  - **m1 rule change:** the m1 lanes are now those with x == 1 rather than y == rcp. A lane whose x is one fp32 ulp below 1 can round to y == rcp. The old rule read that as a tie at m1; the new one makes it the m2 lane. The two experts are the same; only their order can differ, and only when two logits are within ~1e-7. Outputs were bit-identical on every perf row, golden and unit case.
+- **W delivery** (`r42_w_arrival`, changed form), the only path. `deliver_weight_slice` replaces the `ttnn.Mcast` W channels with a raw multicast, which is:
+  - unreserved;
+  - sent as ONE multicast once both read halves landed;
+  - split into burst chunks that are all `linked`, with the flag (semaphores `SEM_W_FLAGS = (4, 5)`) closing the linked sequence on the same command buffer and VC.
+
+  Receivers wait on the flag. The reader-side sender leaves its acks to `rd_final_barrier`.
+  - Why linked: the subagent's unlinked form regressed G = 1, which multicasts 48 KB in 16 KB bursts. Each unlinked chunk re-arbitrates the tree, and W landed ~950 cycles later on l1_interleaved 2x512 (`cmp_wait_w` 5.11k -> 6.06k; linked 5.22k). Measured 20-call medians: l1_interleaved 2x512 +4.6% and 4x256 +5.3%.
+  - A reserved-on-G = 1 carve-out was measured and is not needed. Unreserved + linked everywhere (V2) beat reserved + linked on G = 1 (V1) on every row (`perf_experiments/r42_breakdown/w_linked_ab.txt`).
+  - The early-half split was dropped: it was flat on 8x512 (20264 / 20167 vs 20232 / 20143) and slower on l1_interleaved 6x512.
+  - Deleted: the host `ttnn.Mcast` channels for W, `send_weight_channel`, `receive_weight_channel`, and the `mcast_args.hpp` includes.
+- **Select chain** (`r42_select_chain`, `ld8 + xl`), the only path:
+  - `select_tokens` loads 8 code words before 8 emits.
+  - The reader publishes `x_rows.get_read_ptr()` before the table wait. It waits for the untilize after its assign and sets `kHeaderStagingReady` (`REGION_WORDS` 40 -> 41).
+  - The writer waits on that flag in the new `wr_wait_staging` zone.
+- Instrumentation:
+  - New zones: `cmp_wait_pass` (each softmax pass's partials wait) and `wr_wait_staging`. `rd_wait_xrows` moved with its wait.
+  - New probe: `ABLATE_DELAY_SOFTMAX` (+500 cycles a pass on MATH; compiles out unless set).
+- Whole op 8x512, 9-call medians, alternating sessions: HEAD 20850 / 20900 -> final 20281 / 20219 (-2.9..-3.3%). Start of round: 20830 / 20959.
+- Profiled call (`zones_8x512_r42_final.txt`):
+
+  | stage | before | after |
+  |---|---|---|
+  | W lands | 3.35k | 3.04k |
+  | softmax ends | 9.24k | 8.27k |
+  | select ends | 10.4k / 10.8k | 9.65k / 9.76k |
+  | table lands | 11.8k | 11.0k |
+  | push starts | 12.5k | 11.76k |
+  | push max ends | 26.1k | 25.5k |
+  | tilize ends | 28.8k | 28.2k |
+
+- Golden `eval/golden_tests/nomic_moe_route_dispatch/`: 144/144, also under `--dev` (NoC sanitizer on the unreserved multicast). Unit + precision baseline: 21/21 under `--dev`.
+
+### Guard set (all 28 perf rows, one profiled run each, aac14b6cb1b vs final; device ns, last call)
+| row | before | after | delta |
+|---|---|---|---|
+| test_perf_row[8x512_perf] | 20974 | 20417 | -2.7% |
+| test_perf_row[6x512_perf] | 19031 | 18655 | -2.0% |
+| test_perf_row[8x384_perf] | 18689 | 18367 | -1.7% |
+| test_perf_row[4x512_perf] | 15095 | 14239 | -5.7% |
+| test_perf_row[8x256_perf] | 15270 | 14227 | -6.8% |
+| test_perf_row[2x512_perf] | 11584 | 11353 | -2.0% |
+| test_perf_row[4x256_perf] | 11419 | 11139 | -2.5% |
+| test_perf_row_dram_out[8x512_perf] | 67921 | 67848 | -0.1% |
+| test_perf_row_dram_out[6x512_perf] | 52610 | 52022 | -1.1% |
+| test_perf_row_dram_out[8x384_perf] | 50939 | 50124 | -1.6% |
+| test_perf_row_dram_out[4x512_perf] | 38684 | 38775 | +0.2% |
+| test_perf_row_dram_out[8x256_perf] | 38705 | 38119 | -1.5% |
+| test_perf_row_dram_out[2x512_perf] | 23639 | 23686 | +0.2% |
+| test_perf_row_dram_out[4x256_perf] | 23448 | 23061 | -1.7% |
+| interleaved_in[8x512 dram_interleaved] | 46035 | 45469 | -1.2% |
+| interleaved_in[8x512 l1_interleaved] | 41161 | 44689 | +8.6% |
+| interleaved_in[6x512 dram_interleaved] | 33356 | 33328 | -0.1% |
+| interleaved_in[6x512 l1_interleaved] | 31559 | 32224 | +2.1% |
+| interleaved_in[8x384 dram_interleaved] | 33044 | 32759 | -0.9% |
+| interleaved_in[8x384 l1_interleaved] | 30203 | 28576 | -5.4% |
+| interleaved_in[4x512 dram_interleaved] | 26224 | 26064 | -0.6% |
+| interleaved_in[4x512 l1_interleaved] | 23582 | 20393 | -13.5% |
+| interleaved_in[8x256 dram_interleaved] | 24541 | 25207 | +2.7% |
+| interleaved_in[8x256 l1_interleaved] | 24066 | 22856 | -5.0% |
+| interleaved_in[2x512 dram_interleaved] | 20748 | 20681 | -0.3% |
+| interleaved_in[2x512 l1_interleaved] | 17778 | 17798 | +0.1% |
+| interleaved_in[4x256 dram_interleaved] | 18919 | 18913 | -0.0% |
+| interleaved_in[4x256 l1_interleaved] | 16016 | 15808 | -1.3% |
+
+Single profiled calls on l1_interleaved swing +/-10%. Every l1_interleaved row was re-measured with 20-call medians in two alternating sessions (`r42_breakdown/l1_interleaved_ab_final.txt`, final / base):
+
+| row | final | base |
+|---|---|---|
+| 8x512 | 44477 / 42817 | 42959 / 43466 |
+| 6x512 | 31747 / 32016 | 31867 / 31795 |
+| 8x384 | 31962 / 31762 | 31547 / 31176 |
+| 4x512 | 24283 / 23801 | 23919 / 23383 |
+| 2x512 | 17912 / 17770 | 17896 / 17977 |
+| 4x256 | 15887 / 15852 | 15970 / 16003 |
+| 8x256 | 22901 / 23136 | 22396 / 22274 |
+
+- **Unresolved, recorded rather than carved out:** l1_interleaved 8x256 reads +2.4% over six final sessions (22.2-23.1k) against a steady base (22.25-22.40k). 8x384 / 4x512 read ~+1.6%.
+  - Removing the softmax change or the select change does not restore base beyond the session spread (`-softmax` 22739 / 22004, `-select` 22896 / 22754, final 23078 / 22165).
+  - The profiled call shows no slower stage. On this placement the W sender's DRAM reads swing 7.5k-11.2k cycles under x-read contention, and the final call was faster there (24304 vs 25351 ns).
+  - No change is identified to carve out.
+- The dram_interleaved 8x256 single-call +2.7% was flat in 9-call medians earlier in the round (24810 / 24703 vs 24528 / 24802).
+- Every production row stays below its `stock_ns` (8x512: 20.3 vs 45.6 us).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `McastArgs` / `ttnn.Mcast` (W slices) | capability | The helper always sets `NOC_CMD_PATH_RESERVE` and signals with a separate barrier + semaphore multicast. It cannot send an unreserved multicast, and it cannot make a flag write the terminator of a linked data sequence on the same command buffer / VC with no barrier. Path reservation costs ~400 cycles on the 11x10 grid, and per-chunk reservation of a multi-burst payload costs ~950 cycles at 48 KB | 21053 (whole op 8x512, 9-call medians, helper path) | 20801 (subagent's unreserved form); final linked form flat against that on 8x512 (20232 / 20143 vs 20264 / 20167) and -0.6..-0.8% on l1_interleaved 2x512 / 4x256 vs the helper | `kernels/nomic_moe_route_dispatch_push.hpp` (`w_mcast`, `deliver_weight_slice`, `receive_weight_slice`) |
+| `copy_tile` (contributor faces of a softmax pass) | capability | Each `copy_tile` is a full unpack <-> math round trip: mailbox dest address, MATH_DONE / UNPACK_TO_DEST semaphores, config restore. That is ~90 cycles of math per 1 KB face. There is no call that unpacks several tiles (or faces) to DEST under one handshake. The raw sequence must end by re-enabling the SrcA address swizzle (`SETC16(SRCA_SET_Base_ADDR32, 0x4)`), which only the stock `unpack_to_dest_tile_done` shows; without it a later untilize silently corrupts every row | pass 1027 cycles / whole op 22093 ns (FACEIO + DIET + HOIST with `copy_tile`) | pass 915 cycles / 21719 ns | `kernels/nomic_moe_route_dispatch_fused_copy.hpp`, `kernels/nomic_moe_route_dispatch_compute.cpp` (softmax pass loop) |
+| `_llk_math_eltwise_unary_sfpu_params_` (VectorMode) | capability | No VectorMode runs one face. Since R4.2 a pass's input is a single face in face 0 of G DEST tiles; the R3.1 bypass (`share_faces`) is now `face0_only` | not measured separately (R3.1 pair: 29.5-29.7 us -> 26.75-27.08 us) | see the softmax row above | `kernels/nomic_moe_route_dispatch_softmax8.hpp` (`face0_only`) |
+
+- The softmax band itself stays raw SFPI (Perf 1 bypass row, unchanged gap).
+- The select / staging change uses no helper.
+- Options recorded, not graduated (no precision trade in any of them): push VC spreading (above), `pump` (-200 cycles of chain, flat whole op), FACEIO without FUSEDCOPY.
+- Leads for the next round:
+  1. The push is now the whole middle: 11.76k -> 23.5k p50 / 25.5k max. The r42_push_vc data shows the walk diet + VC spreading reaching ~19.9k on 8x512. A mapping that holds on 6x512 / 4x512 / 8x256 (`(owner - self) & 3` untested) would graduate it.
+  2. W arrival is now capped by NOC1 contention from `wr_stage_gather` (ch1 lands ~300 cycles after ch0).
+  3. Softmax 3 x 915 cycles: overlapping pass i+1's unpack with pass i's SFPU (~200 cycles a pass) needs a raw DEST-half handoff.
+  4. The l1_interleaved 8x256 +2.4% above.
+
+All ideas measured: 3 graduated (W in a changed form, with no carve-out), 1 null / regression (push VC). 8x512: 20.85-20.90 -> 20.22-20.28 us. No regression on the 28-row guard set beyond the unresolved l1_interleaved 8x256 reading above.
+
+## Perf R4.3 - Fan-out perf tournament (continuation round 3 of 3)
+- Date: 2026-11-06
+- Focus: LOOSE_CASES `8x512_perf` (nd_norm x, `dispatched` in L1, default compute config HiFi4 / fp32 DEST / approx off). Blackhole p100a, AICLK 1350 MHz. SUPPORTED unchanged.
+
+### Measured breakdown (8x512, before; HEAD dd8177be0f5)
+- Whole op, 9-call median: 20292 ns. Profiled call 21946 ns.
+- Zone dumps: `perf_experiments/zones_8x512_r43_before.txt`, `zones_8x512_r43_ablate_push_writes.txt`, `zones_8x512_r43_ablate_push_pieces.txt`, `zones_8x512_r43_ablate_push.txt`. Scripts in `perf_experiments/r43_breakdown/` (`prof.sh`, `many.sh`, `guard.sh`, `percore.py`).
+- The steering brief's push contradiction was already resolved in R4.1. The ablation on HEAD reproduces it:
+
+  | stubbed (cumulative) | whole op (profiled) | push zone p50 |
+  |---|---|---|
+  | nothing | 21946 ns | 11.8k |
+  | NoC issue (`ABLATE_PUSH_WRITES`) | 16727 ns | 7.2k, every RISC 7.0-7.3k |
+  | + per-piece address math (`ABLATE_PUSH_PIECES`) | 14540 ns | 2.45k (slot walk) |
+  | whole push (`ABLATE_PUSH`) | 12466 ns | |
+
+  So ~7.2k cycles of the push are software on the DM RISCs, and the spread between RISCs is entirely NoC-side.
+
+Path in cycles (p50):
+
+| stage | cycles |
+|---|---|
+| W lands (TRISC_0) | 3.06k |
+| matmul ends | 4.95k |
+| softmax ends | 8.27k |
+| select ends | 9.67k |
+| table lands | 10.88k |
+| assign ends | 11.53k |
+| push | 11.6k -> 23.4k p50 / 26.4k max |
+| last owner landing | 27.3k |
+| tilize ends | 29.6k max |
+
+- Straggler in this dump: the reader of (2,6) (push 14.8k vs 11.8k median). Its own land wait ended 90 cycles after its push, so its tilize was gated by its own push. Across 40 later calls (`r43_land_decouple`) the critical owner always waited on the chip's last push instead, so this was not the common case.
+- Ranked: push 12-15k (software paced; faster issue delivers unfairly, R4.1), softmax 3.3k (critical, R4.2 probe), matmul 1.85k, select -> push 1.9k, tail 2.3k (fast tilize already in use).
+
+### Portfolio and verdicts (`perf_experiments/r43_<idea>/`; whole-op ns against the real op in the same session)
+| idea | verdict | baseline -> candidate (8x512) | domain / notes |
+|---|---|---|---|
+| `r43_push_vc_rel`: r41 walk diet + per-write static VC keyed on the destination relative to the source | WIN, graduated (`(owner - self) & 1` -> VC 1 / VC 3, one command buffer per VC) | 20109-20240 -> 19160-19357 (-3.7..-5.3%, 3 sessions) | Faster on all 9 shapes tested: 4x512 -3.5..-4.5%, 8x256 -1.3..-2.8%, dram_interleaved 8x512 -4.1..-4.3%, DRAM out 8x512 -3.7%. Options: `(owner - self) % 3` over VCs 0/1/3 (6x512 -8%, 4x512 flat, dram_interleaved outlier calls); `(owner - self) & 3` flat; global keys (`owner & 1` +3.3%, `owner & 3` regresses 6x512 / 8x256); route keys (column / row / hop class) -3.2..+10%; per-write NOC_CTRL store instead of per-VC buffers -3.6%; in-flight cap 2-8 KB no effect. Stall counters: 0 credit stalls, cmd-buf stall max 218 -> 31 cycles a RISC |
+| `r43_softmax_overlap`: next pass's contributor unpack into the other DEST half while the current band runs | WIN, graduated (OVL) | `cmp_softmax` 3290 -> 2990 cycles; whole op (subagent) 21618 -> 21356 profiled median | Bit-identical. Attribution of one pass: band 735-750 cycles (32 `SFPSHFT2` rotates cost 2 cycles each, ~256 a pass), unpack + handshake 177, transitions ~80; the code-face pack was already overlapped. OVL0 (first pass unpacked under the matmul tail) is wrong on hardware (4004 / 8192 slots differ: unpack to DEST while the FPU runs). OVL0B (same after the drain) exact but slower. G = 1 unchanged |
+| `r43_land_decouple`: compute polls the NIU posted-write counters itself, tilize no longer waits on the owner's own push | NULL | 20160 / 20309 -> 20243 / 20239; 20333 / 20334 -> 20185 / 20164 | Correct (golden 144/144 under `--dev`); TRISC can read the NIU status registers. In 30 profiled calls the critical owner's land wait ends 150-300 cycles after the last push anywhere, never on its own push |
+| `r43_half_mm`: 32x16 in1 / half-output router matmul on the per-tile path | NULL | 20262 -> 20218 (`w32x16`), `half` 20225 / 20313, `rt2` 20348 | Bit-identical, flat on 9 shapes. Probe: 2000 cycles injected on MATH -> +394 ns (~58% transmission). Halving the MVMULs does not move the unpack zone (1805 -> 1805): the stage is per-pair unpack / handshake bound (~56 cycles a pair, ~40 with math stubbed) |
+| `r43_push_steal`: the core's DM RISC that finishes its push first takes the partner's remaining tokens / pads from the back | REGRESSION | 20202-20319 -> 20455-20596 (claim chunk 16, best) | 6x512 -7.4..-8.1% (a core's two RISCs are 3-7k apart there from cmd-buf stalls), 8x512 dram_interleaved -4.7%, but 2x512 +4.6..+6.0%, 4x256 +4.3..+5.2%, 4x512 +1.9..+3.9%: ~520 cycles a RISC of fixed protocol cost, little stolen on 8x512 (0-17 items a call). Grant / claim protocols, chunk 4-16, all bit-exact |
+
+### Graduated
+- **Push walk diet + relative VC key** (`r43_push_vc_rel`, commit 4d09f98a6b2), the only push path:
+  - `RowPusher` caches each walk stream's destination (owner coordinate register value, block address, VC command buffer) per output tile row. One stream per expert plus one for the pads. The piece loop is unrolled over the host's max pieces a member pushes (`push_max_pieces`), and the row-parity filter compiles out unless a piece is split by parity (`push_row_parity`).
+  - The VC is `(owner - self) & 1` -> VC 1 on `write_cmd_buf`, VC 3 on `write_reg_cmd_buf`. Both buffers are programmed once in `start()`, so a write adds no register store.
+  - Deleted: the round-robin `cmd_bufs` path and the `push_cmd_bufs` host knob (`PUSH_CMD_BUFS`), `PushPiece` / `load_push_pieces`, and the per-write division and common-arg load.
+  - Why it holds now when the diet alone regressed (R4.1, R4.2): the relative key spreads one source's writes over two VCs by destination. Global owner keys regressed other shapes.
+  - 8x512 9-call medians: 20292 -> 19167.
+- **Softmax pass overlap** (`r43_softmax_overlap` OVL, commit 969ca02bf3c), the only G > 1 pass path:
+  - `contributors_ready` is split into `contributors_send` (first pass: drain, current half to the unpacker) and `contributors_wait` (token + zero-flag clear).
+  - `pass_marker` posts MATH_DONE behind the previous commit. `face0_only<G, 2>(hook)` runs `send_next_half` after two of the four row bands: it waits for the marker and for the packer to release, then mails the other half's address to the unpacker.
+  - Deleted: `contributors_ready` and the hook-less `face0_only`.
+  - Alternating sessions on top of the VC change, 9-call medians: 19199 / 19209 -> 19007 / 19052 (-0.8..-1.0%). 4x512 13728 -> 13292, 8x256 14037 -> 13725.
+- Instrumentation: zones unchanged; both new paths run inside the existing `rd_push` / `wr_push` and `cmp_softmax` / `cmp_wait_pass` zones. `ABLATE_PUSH_PIECES` / `ABLATE_PUSH_WRITES` / `ABLATE_MEASURE_STALLS` keep working on the new pusher. Re-run on the final op (`zones_8x512_r43_final_ablate_push_*.txt`): issue stubbed 15006 ns, push zone p50 5.0k (was 7.2k); per-piece math stubbed 13348 ns, walk 1.87k (was 2.45k). The push zone is 8.4k p50 with the writes, so ~3.4k is NoC issue.
+- Golden `eval/golden_tests/nomic_moe_route_dispatch/`: 144/144 after each graduation, and under `--dev` (NoC sanitizer) at the end. Unit + precision baseline 21/21 under `--dev`.
+- Whole op 8x512, 9-call medians: 20292 (start of round) -> 19007 / 19052 (-6.1..-6.3%).
+- Profiled call (`zones_8x512_r43_final.txt`):
+
+  | stage | before | after |
+  |---|---|---|
+  | softmax ends | 8.27k | 7.98k |
+  | push | 11.6k -> 23.4k p50 / 26.4k max | 11.3k -> 19.8k p50 / 23.1k max |
+  | last owner landing | 27.3k | 24.0k |
+  | tilize ends (max) | 29.6k | 26.3k |
+
+### Guard set (all 28 perf rows, one profiled run each, dd8177be0f5 vs final; device ns, last call)
+| row | before | after | delta |
+|---|---|---|---|
+| test_perf_row[8x512_perf] | 20280 | 19066 | -6.0% |
+| test_perf_row[6x512_perf] | 18752 | 18493 | -1.4% |
+| test_perf_row[8x384_perf] | 18042 | 18090 | +0.3% |
+| test_perf_row[4x512_perf] | 14430 | 13659 | -5.3% |
+| test_perf_row[8x256_perf] | 14461 | 13533 | -6.4% |
+| test_perf_row[2x512_perf] | 11363 | 11276 | -0.8% |
+| test_perf_row[4x256_perf] | 11179 | 11338 | +1.4% |
+| test_perf_row_dram_out[8x512_perf] | 68187 | 64173 | -5.9% |
+| test_perf_row_dram_out[6x512_perf] | 51445 | 51700 | +0.5% |
+| test_perf_row_dram_out[8x384_perf] | 50536 | 49524 | -2.0% |
+| test_perf_row_dram_out[4x512_perf] | 37116 | 37085 | -0.1% |
+| test_perf_row_dram_out[8x256_perf] | 38235 | 37919 | -0.8% |
+| test_perf_row_dram_out[2x512_perf] | 23391 | 23560 | +0.7% |
+| test_perf_row_dram_out[4x256_perf] | 23553 | 23138 | -1.8% |
+| interleaved_in[8x512 dram_interleaved] | 45548 | 43367 | -4.8% |
+| interleaved_in[8x512 l1_interleaved] | 44113 | 41615 | -5.7% |
+| interleaved_in[6x512 dram_interleaved] | 33199 | 31147 | -6.2% |
+| interleaved_in[6x512 l1_interleaved] | 33210 | 30449 | -8.3% |
+| interleaved_in[8x384 dram_interleaved] | 33219 | 31043 | -6.6% |
+| interleaved_in[8x384 l1_interleaved] | 31553 | 30304 | -4.0% |
+| interleaved_in[4x512 dram_interleaved] | 26166 | 24808 | -5.2% |
+| interleaved_in[4x512 l1_interleaved] | 24031 | 23647 | -1.6% |
+| interleaved_in[8x256 dram_interleaved] | 24716 | 24606 | -0.4% |
+| interleaved_in[8x256 l1_interleaved] | 21379 | 22983 | +7.5% |
+| interleaved_in[2x512 dram_interleaved] | 20701 | 19979 | -3.5% |
+| interleaved_in[2x512 l1_interleaved] | 18110 | 17010 | -6.1% |
+| interleaved_in[4x256 dram_interleaved] | 18921 | 18974 | +0.3% |
+| interleaved_in[4x256 l1_interleaved] | 16008 | 15952 | -0.3% |
+
+Positive and neighbouring rows were re-measured with 9-call medians in two alternating base / final sessions (`r43_breakdown/ab_*.txt`):
+
+| row | base | final |
+|---|---|---|
+| L1 4x256 | 11164 / 11152 | 11059 / 11090 |
+| L1 8x256 | 14176 / 14330 | 13604 / 13709 |
+| L1 2x512 | 11219 / 11285 | 11205 / 11176 |
+| L1 6x512 | 18650 / 18647 | 18438 / 18484 |
+| l1_interleaved 4x256 | 15821 / 15845 | 16047 / 15970 |
+| l1_interleaved 8x256 | 23035 / 23238 | 22573 / 22340 |
+| l1_interleaved 2x512 | 17761 / 17832 | 16864 / 16890 |
+| l1_interleaved 6x512 | 32844 / 30628 | 30157 / 28967 |
+| DRAM out 4x256 | 23328 / 23616 | 23213 / 23259 |
+| DRAM out 8x256 | 37788 / 37953 | 37185 / 37444 |
+| DRAM out 2x512 | 23336 / 23488 | 23425 / 23119 |
+| DRAM out 6x512 | 52112 / 52031 | 51684 / 51604 |
+
+- **Recorded, not carved out:** l1_interleaved 4x256 reads +0.7% in four alternating sessions (base 15821-15947, final 15904-16047; `ab_l1i_4x256.txt`). That is ~110 ns, below the ~1.5% band used for carve-outs in earlier rounds. Every other row on that placement is 1-8% faster. It is a G = 1 row, so the push change is the one that applies there. A guard on it would fence a single shape.
+- The single-call +7.5% on l1_interleaved 8x256 is that row's known +/-10% swing; 9-call medians read -2..-4%.
+- Every production row stays below its `stock_ns` (8x512: 19.0 vs 45.6 us).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `copy_tile` / `math_unpack_to_dest_math_ready` + `set_dst_write_addr` (contributor unpack to DEST, softmax pass) | capability | The stock unpack-to-DEST handshake drains MATH / SFPU and can target only the DEST half math currently holds. Nothing lets math hand the unpacker the *other* half's address while its SFPU work on the current half is still queued, so pass i+1's unpack cannot overlap pass i's band. The raw form needs a MATH_DONE marker behind the previous commit and a MATH_PACK == 0 wait before mailing the address | stock path not re-measured this round (it cannot overlap; R4.2: `copy_tile` 22093 vs fused 21719). Non-overlapped raw handshake (R4.2 `contributors_ready`): 19199 / 19209 (whole op 8x512, 9-call medians) | 19007 / 19052 | `kernels/nomic_moe_route_dispatch_fused_copy.hpp` (`contributors_send`, `contributors_wait`, `pass_marker`, `send_next_half`), `kernels/nomic_moe_route_dispatch_softmax8.hpp` (`face0_only` hook), `kernels/nomic_moe_route_dispatch_compute.cpp` (softmax pass loop) |
+
+- The push VC change is not a new bypass: `RowPusher` was already raw NoC (stateful `ncrisc_noc_write_set_state` / `ncrisc_noc_write_with_state`), and the change sets a different static VC per command buffer through the same calls. For the record, no kernel_lib NoC helper keeps per-VC command-buffer state for a stream of one-packet writes.
+- `r43_land_decouple` read the NIU counters from TRISC in its experiment copy; nothing from it graduated.
+- Options recorded, not graduated (none trade precision; every variant was bit-exact at HiFi4 / fp32 DEST / approx off):
+  - push VC `(owner - self) % 3` over VCs 0/1/3 (6x512 -8%, 4x512 flat);
+  - push steal (6x512 -7.4..-8.1%, small shapes +4..6%);
+  - `w32x16` / `half` / `rt2` matmul (flat).
+- Leads for the next round:
+  1. Push steal on 6x512: a core's two RISCs end 3-7k apart there from cmd-buf stalls on one NoC. A protocol without the ~520 cycles a RISC of fixed cost (claim set-up plus the failed end steal) would keep the 6x512 / interleaved-input wins without the small-shape regressions.
+  2. The softmax band's 32 `SFPSHFT2` rotates (~256 cycles a pass) come from experts across SFPU lanes; experts on DEST rows would need a different matmul output layout.
+  3. The router matmul stage is per-pair unpack / handshake bound (~56 cycles a pair), not FPU bound.
+  4. The tail (last landing -> tilize end, ~2.3k) is the chip's last push landing plus the owner's fast tilize; the critical owner does not wait on its own push.
+
+All ideas measured: 2 graduated (no carve-out), 2 null, 1 regression. 8x512: 20.29 -> 19.01-19.05 us. No material regression on the 28-row guard set; l1_interleaved 4x256 +0.7% recorded above.
+
+## R4 review fixes
+- Count table carries a per-call valid word; receivers wait for the NIU0 counter and the word, so a peer's early push cannot pass for the table.
+- W channel 0 goes out from the coordinator's reader: both unreserved NOC0 broadcasts leave one command buffer and VC in order.
+- Host guard against a writer-sent W slice on a token core restored.
+- Measured flat against R4: 28-row guard set, positive single-call rows re-measured with 9-call medians (-0.6..+0.7%). Golden 144/144 (also --dev), unit 49/49.

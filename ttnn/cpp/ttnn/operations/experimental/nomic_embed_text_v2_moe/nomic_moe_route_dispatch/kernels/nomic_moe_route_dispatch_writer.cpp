@@ -32,7 +32,8 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t push_bytes_in_flight = get_named_compile_time_arg_val("push_bytes_in_flight");
     constexpr uint32_t push_stagger_tokens = get_named_compile_time_arg_val("push_stagger_tokens");
-    constexpr uint32_t push_cmd_bufs = get_named_compile_time_arg_val("push_cmd_bufs");
+    constexpr uint32_t push_max_pieces = get_named_compile_time_arg_val("push_max_pieces");
+    constexpr bool push_row_parity = get_named_compile_time_arg_val("push_row_parity") != 0;
     constexpr uint32_t stage_tiles = get_named_compile_time_arg_val("stage_tiles");
     constexpr bool push_gather = get_named_compile_time_arg_val("push_gather") != 0;
     constexpr uint32_t G = get_named_compile_time_arg_val("hidden_split");
@@ -74,6 +75,7 @@ void kernel_main() {
     const bool writes_weights = get_arg_val<uint32_t>(13) != 0;
     constexpr uint32_t kPushArgs = 14;
 
+    const uint32_t table_base = table_land_base();
     Noc noc;
     constexpr uint32_t kCoordsArg = 0;
     // Common runtime args: the NoC coordinates of the grid cores, then W's address and page size.
@@ -91,7 +93,11 @@ void kernel_main() {
             weight,
             CircularBuffer(get_named_compile_time_arg_val("cb_router_weight")).get_write_ptr(),
             w_sender_top - core_idx,
-            get_named_compile_time_arg_val("sem_w_local"));
+            get_named_compile_time_arg_val("sem_w_local"),
+            get_named_compile_time_arg_val("sem_w_flag0"),
+            kCoordsArg,
+            num_cores,
+            true);  // a writer-sent slice's sender holds no tokens: nothing else waits on this RISC
     }
     if (is_token) {
         const auto combine_index = TensorAccessor(combine_index_args, combine_index_addr, combine_index_page);
@@ -104,7 +110,11 @@ void kernel_main() {
             MaybeDeviceZoneScope("wr_wait_w");
             CircularBuffer router_weight(get_named_compile_time_arg_val("cb_router_weight"));
             receive_weight_slice<G, w_slice_nocs, kWriterRisc>(
-                noc, router_weight, get_named_compile_time_arg_val("weight_tiles"), member, false);
+                router_weight,
+                get_named_compile_time_arg_val("weight_tiles"),
+                member,
+                get_named_compile_time_arg_val("sem_w_flag0"),
+                false);
         };
 
         // ---- gather_stage_block (whole-piece push): the staged tile range of every tile row, from this core's and
@@ -263,7 +273,17 @@ void kernel_main() {
             // half of the table rows here, in parallel with the reader's lower half (Perf R3.3).
             {
                 MaybeDeviceZoneScope("wr_wait_table");
-                wait_flag(header + kHeaderTableFlag);
+                if (core_idx != get_named_compile_time_arg_val("coordinator")) {
+                    // The reader cleared the valid word before it published this page.
+                    wait_table(
+                        table_base,
+                        table_valid_word(
+                            header[kHeaderTable],
+                            get_named_compile_time_arg_val("num_groups"),
+                            get_named_compile_time_arg_val("table_row_bytes")));
+                } else {
+                    wait_flag(header + kHeaderTableFlag);
+                }
             }
             {
                 MaybeDeviceZoneScope("wr_assign");
@@ -282,11 +302,15 @@ void kernel_main() {
             }
             const uint32_t staging = header[kHeaderStaging] + reader_tokens * stage_tiles * kTileRowBytes;
             {
+                MaybeDeviceZoneScope("wr_wait_staging");
+                wait_flag(header + kHeaderStagingReady);
+            }
+            {
                 MaybeDeviceZoneScope("wr_push");
                 push_rows_block<
                     stage_tiles,
                     tokens_per_shard,
-                    RowPusher<w, k, num_cores, push_bytes_in_flight, push_cmd_bufs>>(
+                    RowPusher<w, k, push_max_pieces, push_row_parity, num_cores, push_bytes_in_flight>>(
                     kPushArgs,
                     gathered_base,
                     kCoordsArg,
@@ -300,7 +324,8 @@ void kernel_main() {
                     1,
                     2 * num_groups,
                     group * push_stagger_tokens,
-                    member == 0);
+                    member == 0,
+                    core_idx);
             }
             // ---- combine_weights column 0 of the writer's tiles (the ones it writes below), after its push: off the
             // table -> push chain (Perf R3.3). Those tiles also hold the reader's halves, which this RISC's select
@@ -347,7 +372,7 @@ void kernel_main() {
                     weights_args,
                     get_common_arg_val<uint32_t>(kCoordsArg + num_cores + 2),
                     get_common_arg_val<uint32_t>(kCoordsArg + num_cores + 3));
-                write_weight_tiles<rps, get_named_compile_time_arg_val("t_pad")>(
+                write_weight_tiles<rps, get_named_compile_time_arg_val("t_pad"), out_dram>(
                     noc,
                     combine_weights,
                     CircularBuffer(get_named_compile_time_arg_val("cb_weight_tiles")).get_write_ptr(),

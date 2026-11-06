@@ -19,7 +19,9 @@
 // Raw NoC for the intra-group partial exchange, the count gather (posted rows counted on the coordinator's
 // NIU_SLV_POSTED_WR_REQ_RECEIVED: no kernel_lib helper counts landed posted writes; replacing write barrier +
 // Semaphore::up per row measured 8x512 24.0 -> 23.4 us, Perf R3.3 r33_table_assign) and the row pushes: the Mcast
-// helper is one-to-many (op_design.md, Helpers considered and rejected). select_block / assign_rows_block are scalar
+// helper is one-to-many (op_design.md, Helpers considered and rejected). The count table is one raw posted, unreserved
+// multicast (send_table in push.hpp: the Mcast helper reserves the path and signals with a flag, ~450 cycles later on
+// every receiver; Perf R4.1 r41_table_mcast). select_block / assign_rows_block are scalar
 // RISC code.
 
 #include <cstdint>
@@ -32,11 +34,9 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "nomic_moe_route_dispatch_push.hpp"
 
-using namespace dataflow_kernel_lib;
 using namespace route_dispatch;
 
 namespace {
@@ -57,7 +57,8 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t push_bytes_in_flight = get_named_compile_time_arg_val("push_bytes_in_flight");
     constexpr uint32_t push_stagger_tokens = get_named_compile_time_arg_val("push_stagger_tokens");
-    constexpr uint32_t push_cmd_bufs = get_named_compile_time_arg_val("push_cmd_bufs");
+    constexpr uint32_t push_max_pieces = get_named_compile_time_arg_val("push_max_pieces");
+    constexpr bool push_row_parity = get_named_compile_time_arg_val("push_row_parity") != 0;
     constexpr bool push_gather = get_named_compile_time_arg_val("push_gather") != 0;
     constexpr uint32_t stage_tiles = get_named_compile_time_arg_val("stage_tiles");
     static_assert(push_gather || stage_tiles == ht, "a member stages its own slice unless it gathers whole pieces");
@@ -150,6 +151,13 @@ void kernel_main() {
     // Posted-write slave counts before any push lands here: pushes start only after the count table, thousands of
     // cycles after every core's launch.
     uint32_t land_base = owner_land_count();
+    const uint32_t table_base = table_land_base();
+    volatile tt_l1_ptr uint32_t* table_valid = table_valid_word(scratch_base, num_groups, table_row_bytes);
+    if (core_idx != coordinator) {
+        // Cleared long before the table can land: it goes out only after every group's select.
+        *table_valid = 0;
+    }
+    static_assert(noc_index == 0, "the count table goes out on NOC0: receivers wait on NIU0");
 
     const bool is_coordinator = core_idx == coordinator;
     const bool is_weight_sender = core_idx <= w_sender_top && core_idx + G > w_sender_top;
@@ -159,7 +167,15 @@ void kernel_main() {
     if (is_weight_sender) {
         MaybeDeviceZoneScope("rd_w_send");
         deliver_weight_slice<G, ht, w_slice_nocs, kReaderRisc>(
-            noc, weight, weight_base, sender_slice, get_named_compile_time_arg_val("sem_w_local"));
+            noc,
+            weight,
+            weight_base,
+            sender_slice,
+            get_named_compile_time_arg_val("sem_w_local"),
+            get_named_compile_time_arg_val("sem_w_flag0"),
+            kCoordsArg,
+            num_cores,
+            false);
     }
 
     // Zero the landed-pass counters before round 1 lets compute start: peers send code flags once our partials
@@ -205,26 +221,29 @@ void kernel_main() {
 
     // exchange_counts (table half): the coordinator waits for every group's row and multicasts the table; the
     // other token cores receive it. A coordinator that is a token core sends after its own count row.
-    const auto receive_or_send_table = [&](bool token_core) {
-        constexpr auto table_channel = McastArgs<
-            get_named_compile_time_arg_val("table_ct_offset"),
-            get_named_compile_time_arg_val("table_rt_offset")>();
+    const auto receive_or_send_table = [&]() {
         if (is_coordinator) {
             MaybeDeviceZoneScope("rd_table_send");
+            const uint64_t table_dst = table_mcast_dst(scratch_base, kCoordsArg, num_cores);
             {
                 MaybeDeviceZoneScope("rd_table_rows");
                 // The count rows are the only posted writes landing here before the table goes out (pushes start
                 // after it); a leader coordinator's own row is already in place.
-                const uint32_t rows_in = num_groups - (token_core && member == 0 ? 1 : 0);
+                const uint32_t rows_in = num_groups - (is_token && member == 0 ? 1 : 0);
                 while (owner_land_count() - land_base < rows_in) {
                 }
                 invalidate_l1_cache();
                 land_base += rows_in;
             }
-            table_channel.sender(noc).send(scratch_base, scratch_base, num_groups * table_row_bytes);
-        } else if (token_core) {
+            *table_valid = 1;
+            (void)ckernel::load_blocking(table_valid);  // the store reached L1 before the NoC reads the table
+            send_table(table_dst, scratch_base, (num_groups + 1) * table_row_bytes, num_cores - 1);
+        } else {
+            // Every receiver waits, token core or not: a posted write landing after its target core exits would land
+            // after the next program's counter snapshot.
             MaybeDeviceZoneScope("rd_wait_table");
-            table_channel.receiver(noc).receive();
+            wait_table(table_base, table_valid);
+            land_base += 1;
         }
     };
     static_assert(packed_row_words == 4, "a count-table row is 8 u16 counts");
@@ -244,7 +263,11 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("rd_wait_w");
             receive_weight_slice<G, w_slice_nocs, kReaderRisc>(
-                noc, router_weight, weight_tiles, member, is_weight_sender && sender_slice == member % w_slice_nocs);
+                router_weight,
+                weight_tiles,
+                member,
+                get_named_compile_time_arg_val("sem_w_flag0"),
+                is_weight_sender && sender_slice == member % w_slice_nocs);
         }
 
         // ---- exchange_partials_block, receive side: the writer sends each own partial tile to every peer as compute
@@ -371,12 +394,10 @@ void kernel_main() {
         // counts, the table address), so a selecting writer scans the landed table itself; the table-landed flag
         // follows the receive (Perf R3.3) ----
         volatile tt_l1_ptr uint32_t* header = slot_page + top_k * tokens_per_shard;
-        uint32_t staging = 0;
-        if (stages) {
-            MaybeDeviceZoneScope("rd_wait_xrows");
-            x_rows.wait_front(rps * stage_tiles);
-            staging = x_rows.get_read_ptr();
-        }
+        // The staging address now (nothing pops cb_x_rows); the untilize is waited for after the assign (Perf R4.2:
+        // member 0's untilize runs after its last softmax pass and gated the table wait).
+        const uint32_t staging = stages ? x_rows.get_read_ptr() : 0;
+        header[kHeaderStagingReady] = 0;
         header[kHeaderStaging] = staging;
         header[kHeaderReaderCounts] = static_cast<uint32_t>(reader_counts);
         header[kHeaderReaderCounts + 1] = static_cast<uint32_t>(reader_counts >> 32);
@@ -387,7 +408,7 @@ void kernel_main() {
         drain_stores(drain_word);
         slot_rows.push_back(1);
         // ---- count table: gathered on the coordinator, multicast to the grid ----
-        receive_or_send_table(true);
+        receive_or_send_table();
         header[kHeaderTableFlag] = 1;
 
         // ---- assign_rows_block, part 2: region starts and the reader's first row per expert. With a selecting
@@ -410,6 +431,11 @@ void kernel_main() {
             }
             assign_regions(header, totals, before, 0, reader_base);
         }
+        if (stages) {
+            MaybeDeviceZoneScope("rd_wait_xrows");
+            x_rows.wait_front(rps * stage_tiles);
+        }
+        header[kHeaderStagingReady] = 1;
 
         // ---- push_rows_block: the reader's tokens [0, reader_tokens) ----
         // Push units: 2 * group (the reader's tokens), 2 * group + 1 (the writer's, taken here when it has none).
@@ -418,7 +444,7 @@ void kernel_main() {
             push_rows_block<
                 stage_tiles,
                 tokens_per_shard,
-                RowPusher<w, k, num_cores, push_bytes_in_flight, push_cmd_bufs>>(
+                RowPusher<w, k, push_max_pieces, push_row_parity, num_cores, push_bytes_in_flight>>(
                 kPushArgs,
                 gathered_base,
                 kCoordsArg,
@@ -432,7 +458,8 @@ void kernel_main() {
                 writer_selects ? 1 : 2,
                 2 * num_groups,
                 group * push_stagger_tokens,
-                member == 0);
+                member == 0,
+                core_idx);
         }
         // ---- write_combine_index_block, write_combine_weights_block: right after the pushes, in the other cores'
         // push shadow (the owners prove landing themselves; nothing here waits on the pushes) ----
@@ -455,11 +482,11 @@ void kernel_main() {
         if (weight_writes > 0) {
             MaybeDeviceZoneScope("rd_weights_issue");
             drain_stores(drain_word);
-            write_weight_tiles<rps, t_pad>(
+            write_weight_tiles<rps, t_pad, get_named_compile_time_arg_val("out_dram") != 0>(
                 noc, combine_weights, weight_base_tiles, first_token, core_tiles, weights_first, weights_step);
         }
     } else {
-        receive_or_send_table(false);
+        receive_or_send_table();
     }
 
     if (is_coordinator) {
@@ -480,7 +507,7 @@ void kernel_main() {
 
     // ---- owner_land: this core's blocks are complete once 32 * num_blocks push writes have landed here ----
     if (num_blocks > 0) {
-#if !defined(ABLATE_PUSH) && !defined(ABLATE_PUSH_WRITES)
+#if !defined(ABLATE_PUSH) && !defined(ABLATE_PUSH_WRITES) && !defined(ABLATE_PUSH_PIECES)
         MaybeDeviceZoneScope("rd_wait_land");
         while (owner_land_count() - land_base < kTile * num_blocks) {
         }

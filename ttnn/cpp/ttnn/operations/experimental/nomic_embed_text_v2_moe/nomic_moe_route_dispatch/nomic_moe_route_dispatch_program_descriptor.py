@@ -33,7 +33,7 @@ from .nomic_moe_route_dispatch import (
     NUM_EXPERTS,
     PUSH_BYTES_IN_FLIGHT,
     PUSH_STAGGER_TOKENS,
-    PUSH_CMD_BUFS,
+    ROWS_ALL,
     WEIGHTS_SPREAD,
     TILE,
     TOP_K,
@@ -63,6 +63,9 @@ CB_OWN_PARTIAL_WEST = 22  # compute -> writer: the same signal (the writer sends
 CB_W_FACES = 23  # 1 KB-page view of CB_ROUTER_WEIGHT: the matmul's in1 (faces-only tiles sit on 1 KB boundaries)
 CB_CODE_STAGE = 24  # compute -> DM, one code tile a pass (its face goes to the group's cb_scores)
 CB_CODE_FLAGS = 25  # per-member landed-pass counters + flag-write source constants
+CB_PARTIAL_FACES = 26  # 16x16-tile view of CB_PARTIALS: a softmax pass copies one face a contributor
+CB_CODE_FACES = 27  # 16x16-tile view of CB_CODE_STAGE: a softmax pass packs one face
+FACE_VIEWS = {CB_PARTIALS: CB_PARTIAL_FACES, CB_CODE_STAGE: CB_CODE_FACES}
 CODE_FLAGS_BYTES = 16 * (3 + 8)  # kMaxSlices counters + up to 2 * MAX_ROWS_PER_SHARD pass constants, 16 B each
 W_FACE_BYTES = 1024
 W_CB_TILES = HIDDEN_TILES // 2  # faces 0 and 2 of every W tile
@@ -77,14 +80,15 @@ def max_passes(p) -> int:
 
 # Partial tiles of contributor c landed on this member (one counter a contributor, written by c's writer)
 SEM_PARTIALS = (0, 1, 2)
+SEM_W_FLAGS = (4, 5)  # W channel c landed on this core (kernels: deliver_weight_slice raw multicast flag)
 SEM_W_LOCAL = 3  # a W sender core: the RISC off the channel's NoC has read its half of the channel's DRAM reads
 MAX_SEMAPHORES = 16
 
 L1_ALIGN = 64  # scratch sections start on a DRAM-write-compatible boundary
 TABLE_ROW_BYTES = 16  # 8 u16 counts
 # slot-rows header: starts[8], totals[8], regions_end, staging address, reader counts[2], table address, table flag,
-# two table-scan blocks of 9 words (kernels: kHeader*)
-REGION_WORDS = 40
+# two table-scan blocks of 9 words, staging-ready flag (kernels: kHeader*)
+REGION_WORDS = 41
 
 READER_NOC = ttnn.NOC.NOC_0
 WRITER_NOC = ttnn.NOC.NOC_1
@@ -126,8 +130,9 @@ def slot_rows_bytes(p: Plan) -> int:
 
 
 def scratch_layout(p: Plan) -> tuple[int, int, int]:
-    """(drain offset, expert_counts staging offset, total bytes) of the reader scratch; the table is at 0."""
-    drain = _round_up(p.num_groups * TABLE_ROW_BYTES, L1_ALIGN)
+    """(drain offset, expert_counts staging offset, total bytes) of the reader scratch; the table (num_groups count
+    rows, then a valid row) is at 0."""
+    drain = _round_up((p.num_groups + 1) * TABLE_ROW_BYTES, L1_ALIGN)  # + the table's valid row
     counts = drain + L1_ALIGN
     return drain, counts, counts + L1_ALIGN
 
@@ -206,6 +211,7 @@ def _noc_coords(device):
 def _compute_config(config, approx):
     unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
     unpack_modes[CB_PARTIALS] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    unpack_modes[CB_PARTIAL_FACES] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute = ttnn.ComputeConfigDescriptor(
         math_fidelity=config.math_fidelity,
         fp32_dest_acc_en=True,
@@ -240,6 +246,18 @@ def create_program_descriptor(
                 [ttnn.CBFormatDescriptor(buffer_index=CB_W_FACES, data_format=dtype, page_size=W_FACE_BYTES)]
                 if index == CB_ROUTER_WEIGHT
                 else []
+            )
+            + (
+                [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=FACE_VIEWS[index],
+                        data_format=dtype,
+                        page_size=W_FACE_BYTES,
+                        tile=ttnn.TileDescriptor(16, 16),
+                    )
+                ]
+                if index in FACE_VIEWS
+                else []
             ),
         )
         for index, dtype, page, pages in _cb_specs(p)
@@ -251,7 +269,8 @@ def create_program_descriptor(
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_DISPATCHED, dispatched, core_ranges=grid))
 
     semaphores = [
-        ttnn.SemaphoreDescriptor(id=sem, core_ranges=grid, initial_value=0) for sem in [*SEM_PARTIALS, SEM_W_LOCAL]
+        ttnn.SemaphoreDescriptor(id=sem, core_ranges=grid, initial_value=0)
+        for sem in [*SEM_PARTIALS, SEM_W_LOCAL, *SEM_W_FLAGS]
     ]
 
     # ---------------- per-core roles ----------------
@@ -310,20 +329,23 @@ def create_program_descriptor(
     coords = _noc_coords(device)
 
     common_named = [
+        ("out_dram", int(p.out_dram)),
         ("hidden_tiles", p.hidden_tiles),
         ("rows_per_shard", p.rows_per_shard),
         ("hidden_split", G),
         ("push_bytes_in_flight", PUSH_BYTES_IN_FLIGHT),
         ("push_stagger_tokens", PUSH_STAGGER_TOKENS),
-        ("push_cmd_bufs", PUSH_CMD_BUFS),
         ("push_gather", int(p.push_gather)),
         ("stage_tiles", p.stage_tiles),
         ("cb_stage_tiles", CB_STAGE_TILES),
         ("block_width_tiles", p.block_width_tiles),
         ("pieces_per_row", p.pieces_per_row),
+        ("push_max_pieces", max(len(parts) for _, parts in p.member_push)),
+        ("push_row_parity", int(any(part[4] != ROWS_ALL for _, parts in p.member_push for part in parts))),
         ("num_cores", NUM_CORES),
         ("coordinator", COORDINATOR),
         ("num_groups", p.num_groups),
+        ("table_row_bytes", TABLE_ROW_BYTES),
         ("rows", p.rows),
         ("num_experts", NUM_EXPERTS),
         ("top_k", TOP_K),
@@ -340,6 +362,7 @@ def create_program_descriptor(
         ("w_sender_top", W_SENDER_TOP),
         ("w_slice_nocs", W_SLICE_NOCS),
         ("sem_w_local", SEM_W_LOCAL),
+        ("sem_w_flag0", SEM_W_FLAGS[0]),
         ("cb_code_stage", CB_CODE_STAGE),
         ("cb_code_flags", CB_CODE_FLAGS),
     ]
@@ -355,7 +378,6 @@ def create_program_descriptor(
         ("drain_offset", drain_offset),
         ("counts_offset", counts_offset),
         ("x_interleaved", int(p.x_interleaved)),
-        ("table_row_bytes", TABLE_ROW_BYTES),
         *[(f"sem_partials{c}", sem) for c, sem in enumerate(SEM_PARTIALS)],
     ]
     reader_ct = []
@@ -382,7 +404,7 @@ def create_program_descriptor(
         + ttnn.TensorAccessorArgs(weight).get_compile_time_args()
         + ttnn.TensorAccessorArgs(combine_weights).get_compile_time_args(),
         named_compile_time_args=common_named
-        + [("out_dram", int(p.out_dram)), ("cb_dispatched", CB_DISPATCHED), ("hidden_tiles_total", HIDDEN_TILES)]
+        + [("cb_dispatched", CB_DISPATCHED), ("hidden_tiles_total", HIDDEN_TILES)]
         + [("weights_stride", G if WEIGHTS_SPREAD else 1), ("t_pad", p.t_pad), ("cb_weight_tiles", CB_WEIGHT_TILES)]
         + [("cb_own_partial_west", CB_OWN_PARTIAL_WEST), ("cb_partials", CB_PARTIALS)]
         + [(f"sem_partials{c}", sem) for c, sem in enumerate(SEM_PARTIALS)],
@@ -414,6 +436,8 @@ def create_program_descriptor(
         ("cb_gathered_rows", CB_GATHERED_ROWS),
         ("cb_dispatched", CB_DISPATCHED),
         ("cb_code_stage", CB_CODE_STAGE),
+        ("cb_partial_faces", CB_PARTIAL_FACES),
+        ("cb_code_faces", CB_CODE_FACES),
     ]
     approx = bool(compute_kernel_config.math_approx_mode)
     compute = ttnn.KernelDescriptor(
@@ -426,27 +450,11 @@ def create_program_descriptor(
         config=_compute_config(compute_kernel_config, approx),
     )
 
-    # ---------------- multicast channels (W slices, count table) ----------------
+    # A writer-sent W channel's sender must not hold tokens: its writer acks the whole multicast before its own work
+    # and would wait for its own (source-excluded) slice.
+    for channel in range(1, min(G, W_SLICE_NOCS)):
+        assert W_SENDER_TOP - channel not in token_core_of, "writer-sent W slice on a token core"
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
-    semaphore_id = SEM_W_LOCAL + 1
-    # (prefix, sender core, sent by the writer): one W channel a NoC, carrying every slice c with c % W_SLICE_NOCS
-    # equal to its index (odd slices on the writer's NoC).
-    channels = [(f"w{c}", W_SENDER_TOP - c, c % W_SLICE_NOCS == 1) for c in range(min(G, W_SLICE_NOCS))]
-    channels += [("table", COORDINATOR, False)]
-    for prefix, sender, by_writer in channels:
-        # A writer-sent slice's sender must not hold tokens: its writer would wait for its own (source-excluded) multicast.
-        assert not by_writer or sender not in token_core_of, "writer-sent W slice on a token core"
-        channel = ttnn.Mcast(
-            device,
-            ttnn.McastConfig(noc=WRITER_NOC if by_writer else READER_NOC, handshake=False),
-            grid,
-            NUM_CORES,
-            ttnn.McastFixedSenderConfig(sender_index=sender),
-            ttnn.McastCoreOrder.RowMajor,
-        )
-        channel.attach(descriptor, prefix, [writer] if by_writer else [reader], semaphore_id)
-        semaphore_id = channel.next_semaphore_id()
-    assert semaphore_id <= MAX_SEMAPHORES, f"{semaphore_id} semaphores a core"
     descriptor.kernels = [reader, writer, compute]
     _check_address_slots(descriptor, p, x, weight, dispatched, combine_index, combine_weights, expert_counts)
     return descriptor
