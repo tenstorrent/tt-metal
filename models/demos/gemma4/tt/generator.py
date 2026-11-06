@@ -682,6 +682,31 @@ def _g4_dram_bottom_up_bytes(view) -> int:
     return total
 
 
+TOKEN_READ_SHARD0_ENV = "GEMMA4_TOKEN_READ_SHARD0"
+# Mesh shapes where the one-shard decode readback is the default (measured: see token_read_shard0_default).
+TOKEN_READ_SHARD0_DEFAULT_SHAPES = ((1, 4),)
+
+
+def token_read_shard0_default(mesh_device) -> bool:
+    """Whether a decode step's output (the sampler's tokens, or the logits of a host-sampled step) is read back from
+    device 0's replica alone (item 3a of the gemma4_12b_qb2 port) instead of the whole replicated mesh tensor.
+
+    Under TP the decode logits are all-gathered inside the model and the device sampler's tokens are replicated, so
+    every chip holds the same bytes and ``Gemma4Model.process_output_decode`` consumes shard 0 only; a read of the
+    mesh tensor first pins one fresh host buffer per shard (PinnedMemoryCache::try_pin, 1-4 ms per read at TP 4..8),
+    the one-shard read pins one. ``GEMMA4_TOKEN_READ_SHARD0=1|0`` overrides. Policy when unset: on for the mesh
+    shapes in ``TOKEN_READ_SHARD0_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates
+    intact; the 12B 1x4 QB2 block is the measured basis), off elsewhere (the Galaxy (1,8) line awaits its own A/B).
+    Never on the lane engine (each lane's chip holds its own rows) or under a row-sharded sampler
+    (``sampling_dp > 1``), whatever the env says: ``_g4_shard0_read_ok``.
+    """
+    env = os.environ.get(TOKEN_READ_SHARD0_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    return shape in TOKEN_READ_SHARD0_DEFAULT_SHAPES
+
+
 class ChunkedPrefillPageTableGuardMixin:
     """Gemma4 prefill guards + async decode continuity (no ``tt_transformers`` edits).
 
@@ -2930,6 +2955,43 @@ class ChunkedPrefillPageTableGuardMixin:
             ttnn.copy_host_to_device_tensor(host_tt, feedback)
             wrote = True
         return wrote
+
+    def _g4_shard0_read_ok(self, model) -> bool:
+        """Whether ``model``'s decode outputs are the same on every chip, so one shard is the whole answer."""
+        mesh = getattr(model, "mesh_device", None)
+        if mesh is None or not hasattr(mesh, "get_num_devices") or mesh.get_num_devices() <= 1:
+            return False
+        if getattr(model, "_lane_sharded", False) or int(getattr(model, "sampling_dp", 1) or 1) > 1:
+            return False
+        return token_read_shard0_default(mesh)
+
+    def read_decode_output(self, tt_out, async_read=False, sample_rows=None):
+        """``Generator.read_decode_output`` reading device 0's replica of each rank's decode output (the tokens or
+        the logits; log probs stay on the shared path) when ``token_read_shard0_default`` says so. The host tensor is
+        then a one-shard tensor, which ``Gemma4Model.process_output_decode`` reads as it is; the events under
+        ``async_read`` are recorded per rank as the shared reader does."""
+        outputs = list(tt_out) if isinstance(tt_out, (list, tuple)) else None
+        if (
+            sample_rows is not None
+            or outputs is None
+            or len(outputs) != len(self.model)
+            or not all(
+                isinstance(out[0] if isinstance(out, tuple) else out, ttnn.Tensor) and self._g4_shard0_read_ok(model)
+                for out, model in zip(outputs, self.model)
+            )
+        ):
+            return super().read_decode_output(tt_out, async_read, sample_rows)
+        host_outputs, read_events = [], []
+        for out, model in zip(outputs, self.model):
+            main = out[0] if isinstance(out, tuple) else out
+            host = ttnn.get_device_tensors(main)[0].cpu(blocking=not async_read)
+            if isinstance(out, tuple):
+                log_probs = out[1]
+                host = (host, log_probs.cpu(blocking=not async_read) if log_probs is not None else None)
+            host_outputs.append(host)
+            if async_read:
+                read_events.append(ttnn.record_event(model.mesh_device, 0))
+        return (host_outputs, read_events) if async_read else host_outputs
 
     def sample_decode_on_device(
         self,

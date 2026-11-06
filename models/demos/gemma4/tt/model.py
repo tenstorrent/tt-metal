@@ -3044,7 +3044,7 @@ class Gemma4Model:
                 _ls = self._lane_slots
                 torch_out = torch.cat([t.reshape(-1)[:_ls] for t in _lane_shards()], dim=0)
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
-                torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)
+                torch_out = ttnn.to_torch(_first_shard(tt_out)).reshape(-1)
             else:
                 torch_out = ttnn.to_torch(tt_out).reshape(-1)
             return torch_out[:B]
@@ -3053,10 +3053,18 @@ class Gemma4Model:
             _ls = self._lane_slots
             torch_out = torch.cat([t[:, :, :_ls, :] for t in _lane_shards()], dim=2)
         elif self.mesh_config is not None and self.mesh_config.tp > 1:
-            torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            torch_out = ttnn.to_torch(_first_shard(tt_out))
         else:
             torch_out = ttnn.to_torch(tt_out)
         return _decode_logits_rows(torch_out[:, :, :B, : self.vocab_size], B, S)
+
+
+def _first_shard(tt_out):
+    """Shard 0 of a mesh tensor; a one-shard host tensor (the GEMMA4_TOKEN_READ_SHARD0 readback) as it is."""
+    try:
+        return ttnn.get_device_tensors(tt_out)[0]
+    except Exception:  # noqa: BLE001 - a single-shard host tensor
+        return tt_out
 
 
 def _decode_logits_rows(logits, B, S=1):
