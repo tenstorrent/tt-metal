@@ -16,6 +16,17 @@ def largest_divisor_at_most(value, limit):
     return max(divisor for divisor in range(1, min(value, limit) + 1) if value % divisor == 0)
 
 
+def ff1_exceeds_l1_budget(device, rows_t, cols_t):
+    """Whether a core's ff1 output, a block of rows_t x (4 * cols_t) bfloat8_b tiles, is too big for its L1.
+
+    ff1's output is 4x wider than the hidden block it comes from and is the largest activation a core holds,
+    alongside that block, the residual and the matmul buffers. The limit is a quarter of a core's L1.
+    """
+    ff1_output_bytes = rows_t * cols_t * 4 * ttnn.tile_size(ttnn.bfloat8_b)
+    l1_bytes_per_core = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    return ff1_output_bytes > l1_bytes_per_core // 4
+
+
 def update_model_config(config, batch_size, device):
     TILE_HEIGHT = 32
     device_grid = device.compute_with_storage_grid_size()
@@ -47,10 +58,7 @@ def update_model_config(config, batch_size, device):
     # The sharded layout keeps each core's 4x-wide ff1 output next to its input and the residual in L1.
     # Past a quarter of a core's L1, as on a grid of a few cores, every activation stays in DRAM instead and
     # the ops pick their own program configs.
-    BFLOAT8_B_TILE_BYTES = 1088
-    ff1_output_bytes_per_core = seqL_t__y * dim_t__x * 4 * BFLOAT8_B_TILE_BYTES
-    l1_bytes_per_core = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
-    in_dram = ff1_output_bytes_per_core > l1_bytes_per_core // 4
+    in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x)
     if in_dram:
         memory_configs = {
             "interleaved": ttnn.DRAM_MEMORY_CONFIG,
