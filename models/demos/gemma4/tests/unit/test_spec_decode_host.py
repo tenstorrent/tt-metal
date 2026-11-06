@@ -913,6 +913,7 @@ def test_auto_draft_len_batched_env_override_wins(monkeypatch, expect_error):
     _policy_the_cost_table_is_consumed_as_measured(expect_error)
     _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length()
     _policy_prose_dwells_on_its_record_and_random_text_stays_plain()
+    _policy_a_short_runs_credit_is_shrunk_toward_its_fresh_pool()
 
 
 @pytest.mark.usefixtures("_no_draft_len_env")
@@ -1672,12 +1673,14 @@ def _bare_decoder(n_layers=3):
     spec._srv_uploaded = {}
     spec._srv_last = None
     spec._srv_seeded = {}
+    spec._srv_sampled_verify, spec._srv_sampler = False, None  # GEMMA4_SPEC_SAMPLED_VERIFY off
+    spec._srv_greedy_plans = {}
     spec.target = SimpleNamespace(layers=list(range(n_layers)))
     return spec
 
 
 def _rail_allocates_nothing_after_capture(
-    monkeypatch, expect_error, *, sharded_verify=False, lean_seed=False, one_upload=False
+    monkeypatch, expect_error, *, sharded_verify=False, lean_seed=False, one_upload=False, sampled_verify=False
 ):
     """The serving rail on a recording ttnn: every device buffer a refresh, a reseed or a replay touches exists
     after serving_prepare, for every record and rung, first-time row sets, seed-column patterns and positions
@@ -1691,10 +1694,17 @@ def _rail_allocates_nothing_after_capture(
     ``lean_seed`` runs it under GEMMA4_SPEC_LEAN_SEED: every seed forward (the eager seed of serving_prepare, the
     seed trace's body) asks for the hidden alone, while the verify check's plain forward keeps its logits.
     ``one_upload`` runs it under GEMMA4_SPEC_ONE_UPLOAD: a replay uploads its small inputs as the two staging
-    tensors alone and the body's scatter stage leaves every persistent input holding the replay's values."""
+    tensors alone and the body's scatter stage leaves every persistent input holding the replay's values.
+    ``sampled_verify`` runs it under GEMMA4_SPEC_SAMPLED_VERIFY: every body ends with the device sampler's stage
+    over the verify logits (top-k, the TP gather under ``sharded_verify`` or the split concat otherwise, the
+    chunk's seeds, one sampling into the shape's persistent draw output), a sampled replay uploads only its
+    parameter and seed rows and hands back the draws for its sampled packed rows, and a greedy replay neither
+    uploads seeds nor reads the draws."""
     import weakref
 
     import models.demos.gemma4.tt.spec_decode as spec_decode_module
+    import models.demos.gemma4.tt.spec_sampling as spec_sampling_module
+    from models.demos.gemma4.tt.spec_sampling import SpecVerifySampler, _top1_mask, serving_sampling_rows
 
     class _Buf:
         made = [0]
@@ -1715,6 +1725,7 @@ def _rail_allocates_nothing_after_capture(
             self.freed = True
 
     allocated, ops, h2d, replays, forwards = [], [], [], [], []
+    events = []  # ("h2d", address) | ("replay", trace id) | ("d2h",) in call order: the replay's ordering
 
     def forbidden(name):
         def call(*args, **kwargs):
@@ -1732,6 +1743,7 @@ def _rail_allocates_nothing_after_capture(
         assert dev.on_device and not dev.freed and not host.on_device
         dev.host = host.host.clone()
         h2d.append(dev.address)
+        events.append(("h2d", dev.address))
 
     def op(host, dtype=None, address=None):
         out = _Buf(host, dtype, on_device=True)
@@ -1743,10 +1755,44 @@ def _rail_allocates_nothing_after_capture(
     def gone(ref):
         return ref() is None or ref().freed
 
+    def _value(b):
+        # a binary op's second operand: a device tensor or a python scalar
+        return b.host if isinstance(b, _Buf) else b
+
     def pad(t, pads, value=0.0):
         # content-preserving (the published logits' columns are checked on the host side)
         flat = [int(x) for lo_hi in reversed(pads) for x in lo_hi]
         return op(torch.nn.functional.pad(t.host, flat, value=value), t.dtype)
+
+    # the device sampler's stage (GEMMA4_SPEC_SAMPLED_VERIFY): top-k keeps the k highest columns (padded to k when
+    # the row is narrower, as a real vocab slice never is), the draw of a packed row is its first candidate's
+    # global index, written into the preallocated output; every seed / sampling call is recorded
+    seeded, draws = [], []
+    topk_dtype = object()
+
+    def topk(t, k=32, dim=-1, stable=False):
+        width = int(t.host.shape[-1])
+        values, indices = torch.sort(t.host.float(), dim=-1, descending=True)
+        values, indices = values[..., : min(k, width)], indices[..., : min(k, width)]
+        if width < k:
+            values = torch.nn.functional.pad(values, (0, k - width), value=-1e9)
+            indices = torch.nn.functional.pad(indices, (0, k - width), value=0)
+        return op(values, t.dtype), op(indices.to(torch.int64), topk_dtype)
+
+    def manual_seed(seeds, user_ids=None, sub_core_grids=None):
+        assert seeds.on_device and not seeds.freed and seeds.address in prepared, "seeds come from a prepared row"
+        assert user_ids is not None and user_ids.on_device
+        seeded.append((seeds.address, seeds.host.reshape(-1).tolist()))
+
+    def sampling(values, indices, k=None, p=None, temp=None, sub_core_grids=None, output_tensor=None):
+        for t in (k, p, temp):
+            assert t.on_device and not t.freed and t.address in prepared, "parameters come from prepared rows"
+        assert output_tensor is not None and output_tensor.address in prepared, "the draw output is prepared"
+        assert tuple(values.host.shape) == tuple(indices.host.shape) and values.host.shape[2] == 32
+        draw = indices.host[0, 0, :, 0].to(torch.int64).reshape(1, 1, 1, 32)
+        output_tensor.host = draw.clone()
+        draws.append((output_tensor.address, k.host.reshape(-1).tolist(), draw.reshape(-1).tolist()))
+        return output_tensor
 
     tp = 8
     vocab_padded = 128  # the fake lm_head width; vocab (96) columns are read, the padding columns dropped
@@ -1778,11 +1824,11 @@ def _rail_allocates_nothing_after_capture(
         Tensor=type("Tensor", (), {}),
         from_torch=from_torch,
         copy_host_to_device_tensor=copy_host_to_device_tensor,
-        execute_trace=lambda mesh, tid, cq_id=0, blocking=False: replays.append(tid),
+        execute_trace=lambda mesh, tid, cq_id=0, blocking=False: (replays.append(tid), events.append(("replay", tid))),
         release_trace=lambda mesh, tid: None,
         synchronize_device=lambda mesh: None,
         get_device_tensors=device_tensors,
-        to_torch=lambda t: t.host,
+        to_torch=lambda t: (events.append(("d2h",)), t.host)[1],
         to_memory_config=lambda t, cfg: t,
         pad=pad,
         assign=assign,
@@ -1791,6 +1837,21 @@ def _rail_allocates_nothing_after_capture(
         concat=lambda ts, dim: op(torch.cat([t.host for t in ts], dim=dim), ts[0].dtype),
         permute=lambda t, dims: op(t.host.permute(*dims).contiguous(), t.dtype),
         slice=lambda t, starts, ends: op(t.host[tuple(slice(a, b) for a, b in zip(starts, ends))].clone(), t.dtype),
+        # the sampler stage's ops (recording fakes; the draw itself is device-tested)
+        topk=topk,
+        typecast=lambda t, dtype, **kw: op(t.host.clone(), dtype),
+        add=lambda a, b, dtype=None, **kw: op(a.host + _value(b), dtype if dtype is not None else a.dtype),
+        # the top-1 tie-break's elementwise ops and reduces (content-preserving on these tie-free logits)
+        max=lambda t, dim=3, keepdim=True, **kw: op(t.host.amax(dim=dim, keepdim=keepdim), t.dtype),
+        min=lambda t, dim=3, keepdim=True, **kw: op(t.host.amin(dim=dim, keepdim=keepdim), t.dtype),
+        eq=lambda a, b, **kw: op((a.host == _value(b)).to(a.host.dtype), a.dtype),
+        lt=lambda a, b, **kw: op((a.host < _value(b)).to(a.host.dtype), a.dtype),
+        abs=lambda t, **kw: op(t.host.abs(), t.dtype),
+        multiply=lambda a, b, **kw: op(a.host * _value(b), a.dtype),
+        untilize=lambda t, use_multicore=False: op(t.host.clone(), t.dtype),
+        split=lambda t, size, dim: [op(c.clone(), t.dtype) for c in torch.split(t.host, size, dim=dim)],
+        manual_seed=manual_seed,
+        sampling=sampling,
         begin_trace_capture=lambda mesh, cq_id=0: traces.append(len(traces) + 1) or traces[-1],
         end_trace_capture=lambda mesh, tid, cq_id=0: None,
         BufferType=SimpleNamespace(TRACE=object()),
@@ -1800,6 +1861,13 @@ def _rail_allocates_nothing_after_capture(
         },
     )
     monkeypatch.setattr(spec_decode_module, "ttnn", fake)
+    monkeypatch.setattr(spec_sampling_module, "ttnn", fake)
+    # the sharded candidates' TP gather: every chip contributes its (identical, in this fake) slice
+    monkeypatch.setattr(
+        spec_sampling_module,
+        "ccl_allgather",
+        lambda t, mesh_config, ccl_manager, dim=3, memory_config=None: op(torch.cat([t.host] * tp, dim=dim), t.dtype),
+    )
     prepared, copies = set(), []
     shapes = [(1, 5), (5, 5), (8, 3), (16, 1)]
     ladder = [2048, 8192, 32768, 131072, 263168]  # the 12B ladder
@@ -1854,6 +1922,20 @@ def _rail_allocates_nothing_after_capture(
         {},
     )  # the gathered drafter argmax (the sharded one is device-tested)
     spec._srv_sharded_verify_argmax = sharded_verify  # GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX
+    # GEMMA4_SPEC_SAMPLED_VERIFY: the sampler is built from the target's device sampler (its user-id row, its
+    # sub-core grid, its invalid-vocab mask), as serving_prepare builds it
+    spec._srv_sampled_verify = sampled_verify
+    spec._srv_greedy_plans = {}  # the all-greedy plans a replay without sampled rows uploads, one per shape
+    spec.target.sampling = SimpleNamespace(
+        tt_sampling=SimpleNamespace(
+            user_ids_tt_tensor=from_torch(torch.arange(32), device=object(), dtype=fake.uint32),
+            _sampling_sub_core_grids=None,
+            tt_invalid_vocab_mask=None,
+            max_top_k=32,
+            _allow_topk_sampling=True,
+        )
+    )
+    spec._srv_sampler = SpecVerifySampler(spec) if sampled_verify else None
     spec._srv_check_steps, spec._srv_checked, spec._srv_check_last = 1, {}, []  # GEMMA4_SPEC_VERIFY_CHECK=1
     spec._srv_measuring = False
     spec._srv_pool_v = spec._srv_pool_s = spec._srv_logits = spec._srv_backbone = None
@@ -1927,6 +2009,20 @@ def _rail_allocates_nothing_after_capture(
         assert sharded_calls == []
     prepared = {buf.address for buf in allocated}
     assert all(gone(ref) for ref in ops), "the eager bodies' transients are freed before they return"
+    if sampled_verify:
+        # every shape's parameter rows, seed rows and draw outputs, and the eager bodies' offset constant,
+        # exist now; every eager body ran its sampler stage (one seed + one sampling per chunk, the greedy rows)
+        for S in spec._srv_shape_bufs.values():
+            samp = S["sampler"]
+            assert samp["chunks"] == (S["B"] * S["P"] + 31) // 32
+            assert all(t.address in prepared for key in ("k", "p", "temp", "seeds", "sidx", "gcol") for t in samp[key])
+        width = (32 * tp) if sharded_verify else 32
+        assert list(spec._srv_sampler._offsets) == [(width, vocab_padded // tp if sharded_verify else vocab_padded, 32)]
+        assert all(t.address in prepared for t in spec._srv_sampler._offsets.values())
+        assert len(seeded) == len(draws) == n_bodies and all(k == [1] * 32 for _a, k, _d in draws)
+        seeded.clear(), draws.clear()
+    else:
+        assert all(S["sampler"] is None for S in spec._srv_shape_bufs.values()) and seeded == [] and draws == []
     outputs = {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()}
     # the real capture binds only the record's own handles; an allocation inside it would be the one the
     # decode-trace guard counted at the first served request (30 x 128 B + 10 x 64 B on the 12B Galaxy)
@@ -1934,6 +2030,10 @@ def _rail_allocates_nothing_after_capture(
     spec.serving_capture()
     assert spec._srv_captured and allocated == [] and all(gone(ref) for ref in ops)
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
+    if sampled_verify:
+        # the capture pass ran every body (eagerly, on this fake) with the sampler stage on prepared rows only
+        assert len(seeded) == len(draws) == n_bodies
+        seeded.clear(), draws.clear()
     # the records take the first 20 trace ids, then one seed trace per shape (577308f7637)
     assert [rec["id"] for rec in spec._srv_records.values()] == traces[:20] and len(traces) == 20 + len(shapes)
     assert list(spec._srv_seed_traces) == list(shapes) and list(spec._srv_seed_traces.values()) == traces[20:]
@@ -2029,6 +2129,77 @@ def _rail_allocates_nothing_after_capture(
     partials = [key for key in costs if key[0] == "partial"]
     assert all(costs[key][1] < costs[("step", key[1], key[2])][1] for key in partials)
     assert all(key[1][0] > 1 for key in partials), "a one-row shape has no partial replay"
+    if sampled_verify:
+        # the greedy replays above uploaded the greedy parameter rows once per shape and never a seed row, and
+        # read no draws; a sampled replay uploads its parameter rows and the seed rows of its sampled chunks
+        # into the prepared buffers, the body's seeds are the plan's, and the result hands back the draw on
+        # every sampled packed row and the argmax id (the recording argmax: the packed row index) elsewhere
+        seed_rows = {t.address for S in spec._srv_shape_bufs.values() for t in S["sampler"]["seeds"]}
+        assert seed_rows.isdisjoint(h2d) and draws == [], "greedy replays: no seeds uploaded, no draws read"
+        samp_shape, samp_rows, samp_positions = (5, 5), [3, 9, 14, 20], [40, 7, 1000, 12]
+        samp_rec = spec._srv_records[(samp_shape, ladder[0])]  # positions up to 1000: the 2048 rung
+        sampling_params = SimpleNamespace(
+            temperature=[0.0] * wire_rows, top_k=[1] * wire_rows, top_p=[1.0] * wire_rows, seed=[None] * wire_rows
+        )
+        sampling_params.temperature[9], sampling_params.top_k[9], sampling_params.top_p[9] = 0.7, 40, 0.9
+        sampling_params.seed[9] = 42
+        sampling_params.temperature[20] = 1.0  # unseeded
+        plan = serving_sampling_rows(samp_shape, samp_rows, samp_positions, sampling_params)
+        assert plan.any_sampled and plan.sampled[6:12] == [True] * 6 and plan.sampled[18:24] == [True] * 6
+        assert plan.sampled[:6] == [False] * 6 and plan.sampled[12:18] == [False] * 6
+        samp_table = torch.zeros(5, spec._srv_blocks, dtype=torch.int32)
+        spec.serving_reseed(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table)
+        h2d.clear(), seeded.clear(), events.clear()
+        result = spec.serving_step(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table, [None] * 4, plan)
+        samp = spec._srv_shape_bufs[samp_shape]["sampler"]
+        assert samp["chunks"] == 1 and set(h2d) <= prepared and samp["seeds"][0].address in h2d
+        assert samp["seeds"][0].host.reshape(-1).tolist() == plan.seeds
+        assert samp["k"][0].host.reshape(-1).tolist() == plan.top_k
+        # the top-1 tie-break mask follows the plan's k rows (1.0 on the k == 1 rows) and went up with them
+        assert samp["gcol"][0].address in h2d and torch.equal(samp["gcol"][0].host, _top1_mask(plan.top_k))
+        # the order of one sampled replay: every upload (the seed rows among them) before the trace, the draw read
+        # after it
+        kinds = [event[0] for event in events]
+        replay_at = kinds.index("replay")
+        assert events.index(("h2d", samp["seeds"][0].address)) < replay_at, "the seed rows went up after the replay"
+        assert all(kind != "h2d" for kind in kinds[replay_at:]), "an upload after the replay"
+        assert "d2h" in kinds[replay_at + 1 :], "no readback after the replay"
+        # a replay is a trace id on this fake (no body runs): the draws read back are the shape's persistent
+        # draw output, which the last eager body of the record wrote
+        assert draws == [] and seeded == []
+        draw = samp["sidx"][0].host.reshape(-1).tolist()
+        for i in range(4):
+            for j in range(6):
+                r = i * 6 + j
+                expected = draw[r] if plan.sampled[r] else r
+                assert int(result.argmax_ids[i, j]) == expected, (i, j, plan.sampled[r])
+        # the same replay again with no plan: the greedy rows, no seed upload, no draw read
+        h2d.clear(), draws.clear()
+        result = spec.serving_step(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table, [None] * 4)
+        assert samp["seeds"][0].address not in h2d and draws == []
+        assert result.argmax_ids.tolist() == [[i * 6 + j for j in range(6)] for i in range(4)]
+        # the parameter rows and the mask follow a change of the k rows and only that: the greedy replay re-uploaded
+        # them (its k rows differ from the sampled plan's); a repeat of it uploads nothing
+        assert samp["k"][0].address in h2d and samp["gcol"][0].address in h2d
+        assert torch.equal(samp["gcol"][0].host, _top1_mask([1] * 32))
+        h2d.clear()
+        spec.serving_step(samp_shape, samp_rows, [1, 2, 3, 4], samp_positions, samp_table, [None] * 4)
+        assert samp["k"][0].address not in h2d and samp["gcol"][0].address not in h2d and draws == []
+        # a plan for another shape is refused before anything is uploaded
+        with expect_error(ValueError, "the sampling plan is for"):
+            spec.serving_step((1, 5), [0], [1], [5], torch.zeros(1, spec._srv_blocks, dtype=torch.int32), [None], plan)
+    else:
+        with expect_error(ValueError, "is off"):
+            spec.serving_step(
+                (1, 5),
+                [0],
+                [1],
+                [5],
+                torch.zeros(1, spec._srv_blocks, dtype=torch.int32),
+                [None],
+                serving_sampling_rows((1, 5), [0], [5], None),
+            )
+    assert allocated == [] and all(gone(ref) for ref in ops)
     forwards.clear()
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
     assert all(
@@ -2061,6 +2232,11 @@ def _rail_allocates_nothing_after_capture(
     assert all(S[key].freed for S in bufs for key in ("seed_tok", "seed_pu", "seed_pi", "v_pos", "v_pos_rows"))
     if one_upload:
         assert all(S["staged"][key].freed for S in bufs for key in ("u32", "i32"))
+    if sampled_verify:
+        assert all(
+            t.freed for S in bufs for key in ("k", "p", "temp", "seeds", "sidx", "gcol") for t in S["sampler"][key]
+        )
+        assert spec._srv_sampler is None
     assert not spec._srv_frozen
     assert all(rec[key].freed for rec in recs for key in ("verify_x", "vidx"))
 
@@ -2083,6 +2259,9 @@ def test_capture_and_step_refuse_to_run_out_of_order(monkeypatch, expect_error):
     _rail_allocates_nothing_after_capture(
         monkeypatch, expect_error, sharded_verify=True, lean_seed=True, one_upload=True
     )
+    # GEMMA4_SPEC_SAMPLED_VERIFY over the gathered logits (the split top-k) and over the TP shards (the gather)
+    _rail_allocates_nothing_after_capture(monkeypatch, expect_error, sampled_verify=True)
+    _rail_allocates_nothing_after_capture(monkeypatch, expect_error, sampled_verify=True, sharded_verify=True)
 
 
 def test_refresh_installs_one_host_table_per_layer_as_int64_rows():
@@ -3608,3 +3787,326 @@ def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=N
     calib.flush_window()
     assert calib.describe() == "reseeds 0 | prefills 0 | calibrated: none"
     assert calib.describe(window=False).startswith("plain[b=8]: 2 steps, 16 tokens, 1 clean")
+
+
+# -- GEMMA4_SPEC_SAMPLED_VERIFY: the host plan of a sampled replay (spec_sampling.py) -------------------------------
+
+
+def test_sampling_rows_plan_encodes_the_plain_paths_parameters_and_seeds_per_column():
+    """A sampled row's P packed rows carry its device-encoded parameters (inverse temperature, top-k clamped to
+    [1, 32], top-p) and, seeded, the plain decode's device seed for every absolute position (counter = position
+    + 1, salt 0); an unseeded row draws fresh entropy per column; greedy rows, padding rows and the chunk padding
+    carry the greedy triple (temp 1, k 1, p 0) and the idle seed; the row's own parameters are kept as given."""
+    from models.common.sampling.generator import _hash_request_seed_to_device_seed
+    from models.demos.gemma4.tt.spec_sampling import (
+        SPEC_SAMPLED_IDLE_SEED,
+        greedy_sampling_rows,
+        row_is_sampled,
+        row_sampling_params,
+        serving_chunks,
+        serving_sampling_rows,
+    )
+
+    sampling = SimpleNamespace(
+        temperature=torch.tensor([0.0, 0.7, 0.0, 1.0, 0.0]),
+        top_k=torch.tensor([1, 40, 1, 0, 1]),
+        top_p=torch.tensor([1.0, 0.9, 1.0, 1.0, 1.0]),
+        seed=[None, 42, None, -1, None],
+    )
+    assert row_sampling_params(sampling, 1) == pytest.approx((0.7, 40, 0.9, 42))  # float32 on the wire
+    assert row_sampling_params(sampling, 3) == (1.0, 0, 1.0, None)  # the plugin's -1 sentinel reads as unseeded
+    assert row_sampling_params(sampling, 0) == (0.0, 1, 1.0, None)
+    assert row_sampling_params(None, 7) == (0.0, 1, 1.0, None)
+    assert [row_is_sampled(sampling, r) for r in range(5)] == [False, True, False, True, False]
+    fresh = iter(range(700, 800))
+    plan = serving_sampling_rows((5, 5), [1, 0, 3], [10, 20, 30], sampling, fresh_seed=lambda: next(fresh))
+    assert (plan.B, plan.P, plan.chunks, plan.rows) == (5, 6, 1, 32) and serving_chunks(5, 6) == 1
+    assert plan.row_params[0] == pytest.approx((0.7, 40, 0.9, 42))
+    assert plan.row_params[1:] == [(0.0, 1, 1.0, None), (1.0, 0, 1.0, None)]
+    assert plan.sampled == [True] * 6 + [False] * 6 + [True] * 6 + [False] * 14
+    # row 0 (slot 1): 1 / 0.7, k 40 -> 32, p 0.9, seeds hash(42, 10 + j + 1)
+    assert plan.temperature[:6] == pytest.approx([1 / 0.7] * 6, rel=1e-6) and plan.top_k[:6] == [32] * 6
+    assert plan.top_p[:6] == pytest.approx([0.9] * 6, rel=1e-6)
+    assert plan.seeds[:6] == [_hash_request_seed_to_device_seed(42, 11 + j, 0) for j in range(6)]
+    # row 1 (slot 0, greedy): the greedy triple, the idle seed
+    assert plan.temperature[6:12] == [1.0] * 6 and plan.top_k[6:12] == [1] * 6 and plan.top_p[6:12] == [0.0] * 6
+    assert plan.seeds[6:12] == [SPEC_SAMPLED_IDLE_SEED] * 6
+    # row 2 (slot 3, unseeded): temperature 1, k 0 -> 32 (no restriction), fresh seeds per column
+    assert plan.temperature[12:18] == [1.0] * 6 and plan.top_k[12:18] == [32] * 6
+    assert plan.seeds[12:18] == list(range(700, 706))
+    # the chunk padding past the shape's rows
+    assert plan.temperature[18:] == [1.0] * 14 and plan.top_k[18:] == [1] * 14
+    assert plan.seeds[18:] == [SPEC_SAMPLED_IDLE_SEED] * 14  # the device SKIP sentinel: those cores stay untouched
+    k, p, temp, seeds = plan.chunk(0)
+    assert (k, p, temp, seeds) == (plan.top_k, plan.top_p, plan.temperature, plan.seeds)
+    assert plan.params_key(0) == (tuple(plan.top_k), tuple(plan.top_p), tuple(plan.temperature))
+    # a greedy plan has no sampled row and one chunk per 32 packed rows
+    greedy = greedy_sampling_rows((16, 1))
+    assert not greedy.any_sampled and greedy.chunks == 1 and greedy.rows == 32 and greedy.row_params == []
+    assert greedy_sampling_rows((16, 3)).chunks == 2
+    # more live rows than the shape holds, or positions out of step with the rows, are refused
+    with pytest.raises(ValueError, match="exceed B"):  # allow-pytest.raises (pure)
+        serving_sampling_rows((2, 5), [0, 1, 2], [1, 2, 3], sampling)
+    with pytest.raises(ValueError, match="positions for"):  # allow-pytest.raises (pure)
+        serving_sampling_rows((2, 5), [0, 1], [1], sampling)
+
+
+def test_select_verify_ids_takes_the_draw_on_sampled_rows_and_the_argmax_elsewhere():
+    from models.demos.gemma4.tt.spec_sampling import greedy_sampling_rows, select_verify_ids, serving_sampling_rows
+
+    sampling = SimpleNamespace(temperature=[0.0, 0.9], top_k=[1, 5], top_p=[1.0, 0.8], seed=[None, 3])
+    plan = serving_sampling_rows((2, 2), [0, 1], [4, 9], sampling)
+    argmax = torch.tensor([[10, 11, 12], [13, 14, 15]])
+    draws = [100 + r for r in range(32)]
+    assert select_verify_ids(plan, argmax, draws).tolist() == [[10, 11, 12], [103, 104, 105]]
+    # an all-greedy plan hands the argmax back untouched (and never reads the draws)
+    assert select_verify_ids(greedy_sampling_rows((2, 2)), argmax, None).tolist() == argmax.tolist()
+    assert select_verify_ids(plan, argmax.reshape(-1).tolist(), draws).shape == (2, 3)
+
+
+def test_lane_sampling_frame_groups_rows_per_column_and_selects_in_call_order():
+    """On the lane engine the plan is the frame of every column's: the global rows grouped per lane in the call's
+    lane-major order, each column's ``SamplingRowsPlan`` over its own rows and anchors (an idle column takes the
+    greedy plan), the rows' own parameters kept in call order; the selection takes a column's draws on its
+    sampled packed rows and the record's argmax elsewhere, lane by lane in the call's order."""
+    from models.demos.gemma4.tt.lane_prefill import lane_row_groups
+    from models.demos.gemma4.tt.spec_sampling import (
+        SPEC_SAMPLED_IDLE_SEED,
+        LaneSamplingPlan,
+        greedy_sampling_frame,
+        select_verify_ids_frame,
+        serving_sampling_frame,
+    )
+
+    lanes, slots = 4, 32
+    sampling = SimpleNamespace(
+        temperature=[0.0] * 128, top_k=[1] * 128, top_p=[1.0] * 128, seed=[None] * 128
+    )  # the global slot space
+    for slot, temp, seed in ((3, 0.8, 11), (70, 1.0, None), (100, 0.5, 7)):
+        sampling.temperature[slot], sampling.top_k[slot], sampling.top_p[slot], sampling.seed[slot] = (
+            temp,
+            20,
+            0.9,
+            seed,
+        )
+    rows, positions = [1, 3, 70, 100], [10, 20, 30, 40]  # lanes 0, 0, 2, 3 (lane 1 idle)
+    fresh = iter(range(500, 600))
+    plan = serving_sampling_frame((2, 2), rows, positions, sampling, lanes, slots, fresh_seed=lambda: next(fresh))
+    assert isinstance(plan, LaneSamplingPlan) and (plan.B, plan.P, plan.lanes, plan.chunks) == (2, 3, 4, 1)
+    assert plan.any_sampled and [p.any_sampled for p in plan.plans] == [True, False, True, True]
+    # call order: row 1 greedy, row 3 sampled (seeded), row 70 sampled (unseeded), row 100 sampled (seeded)
+    assert plan.row_params[0] == (0.0, 1, 1.0, None) and plan.row_params[1] == pytest.approx((0.8, 20, 0.9, 11))
+    assert plan.row_params[2] == (1.0, 20, 0.9, None) and plan.row_params[3] == pytest.approx((0.5, 20, 0.9, 7))
+    # lane 0 holds rows 1 and 3 in order: packed rows 0-2 greedy, 3-5 sampled
+    assert plan.plans[0].sampled[:6] == [False] * 3 + [True] * 3 and plan.plans[0].top_k[3:6] == [20] * 3
+    # lane 1 is idle: the greedy plan; lane 2's one row is the unseeded request (fresh seeds per column)
+    assert plan.plans[1].sampled == [False] * 32 and plan.plans[1].seeds == [SPEC_SAMPLED_IDLE_SEED] * 32
+    assert plan.plans[2].sampled[:3] == [True] * 3 and plan.plans[2].seeds[:3] == [500, 501, 502]
+    assert plan.plans[3].sampled[:3] == [True] * 3 and plan.plans[3].seeds[3:] == [SPEC_SAMPLED_IDLE_SEED] * 29
+    groups = lane_row_groups(rows, lanes, slots)
+    assert groups == [[0, 1], [], [2], [3]]
+    argmax = torch.arange(lanes * 2 * 3).reshape(lanes, 2, 3)  # every column's record argmax [lanes, B, P]
+    draws = [[1000 + lane * 100 + r for r in range(32)] for lane in range(lanes)]
+    out = select_verify_ids_frame(plan, argmax, draws, groups)
+    assert out.tolist() == [
+        [0, 1, 2],  # row 1 (lane 0, packed rows 0-2): the argmax
+        [1003, 1004, 1005],  # row 3 (lane 0, packed rows 3-5): lane 0's draws
+        [1200, 1201, 1202],  # row 70 (lane 2, packed rows 0-2): lane 2's draws
+        [1300, 1301, 1302],  # row 100 (lane 3): lane 3's draws
+    ]
+    # the greedy frame: no sampled row on any column, nothing to select
+    greedy = greedy_sampling_frame((2, 2), lanes)
+    assert isinstance(greedy, LaneSamplingPlan) and not greedy.any_sampled and greedy.row_params == []
+    assert select_verify_ids_frame(greedy, argmax, None, groups).tolist() == [
+        [0, 1, 2],
+        [3, 4, 5],
+        [12, 13, 14],
+        [18, 19, 20],
+    ]
+    # one column is serving_sampling_rows' business; a frame of the wrong lane count is refused
+    with pytest.raises(ValueError, match="lanes > 1"):  # allow-pytest.raises (pure)
+        serving_sampling_frame((2, 2), rows, positions, sampling, 1, slots)
+    with pytest.raises(ValueError, match="positions for"):  # allow-pytest.raises (pure)
+        serving_sampling_frame((2, 2), rows, positions[:-1], sampling, lanes, slots)
+    with pytest.raises(ValueError, match="LaneSamplingPlan of 4 lanes"):  # allow-pytest.raises (pure)
+        select_verify_ids_frame(plan.plans[0], argmax, draws, groups)
+
+
+def test_the_lane_sampler_uploads_lane_frames_and_reads_every_columns_draws(monkeypatch):
+    """On the lane engine the sampler's buffers hold one column's rows per chip (stacked and lane-sharded at the
+    allocation), an upload is the lane frame of every column's parameter / tie-break / seed rows (parameters only
+    when a column's rows changed, seeds when any column has a sampled row, never on a greedy frame) and the draws
+    come back per column."""
+    import models.demos.gemma4.tt.spec_sampling as spec_sampling_module
+    from models.demos.gemma4.tt.spec_sampling import (
+        SPEC_SAMPLED_IDLE_SEED,
+        SpecVerifySampler,
+        _top1_mask,
+        greedy_sampling_frame,
+        serving_sampling_frame,
+        serving_sampling_rows,
+    )
+
+    class _Buf:
+        def __init__(self, host, dtype, layout, lane_dim=None, on_device=False):
+            self.host, self.dtype, self.layout, self.lane_dim, self.on_device = host, dtype, layout, lane_dim, on_device
+            self.freed = False
+
+        def deallocate(self, force=False):
+            self.freed = True
+
+    uploads = []  # (buffer, host frame) in order
+
+    fake = SimpleNamespace(
+        uint32="u32",
+        bfloat16="bf16",
+        int32="i32",
+        ROW_MAJOR_LAYOUT="rm",
+        TILE_LAYOUT="tile",
+        copy_host_to_device_tensor=lambda host, dev: uploads.append((dev, host.host.clone()))
+        or setattr(dev, "host", host.host.clone()),
+    )
+    monkeypatch.setattr(spec_sampling_module, "ttnn", fake)
+    lanes = 4
+    decoder = SimpleNamespace(
+        _srv_lanes=lanes,
+        _tp=2,
+        _srv_frozen=False,
+        target=SimpleNamespace(
+            mesh_config=object(),
+            ccl_manager=object(),
+            sampling=SimpleNamespace(
+                tt_sampling=SimpleNamespace(
+                    user_ids_tt_tensor=object(),
+                    _sampling_sub_core_grids=None,
+                    tt_invalid_vocab_mask=None,
+                    max_top_k=32,
+                    _allow_topk_sampling=True,
+                )
+            ),
+        ),
+        _pv_from_torch=lambda t, dtype, layout="rm", device=True: _Buf(t.clone(), dtype, layout, on_device=device),
+        _srv_from_torch=lambda t, dtype, layout="rm", lane_dim=None, device=True: _Buf(
+            torch.cat([t] * lanes, dim=int(lane_dim)), dtype, layout, lane_dim, on_device=device
+        ),
+        _srv_frame_from_torch=lambda frame, dtype, layout="rm", lane_dim=0, device=False: _Buf(
+            frame.clone(), dtype, layout, lane_dim, on_device=device
+        ),
+        _srv_lane_read_u32=lambda t, n: t.host.reshape(lanes, -1)[:, :n].to(torch.int64),
+        _free_tensor_tree=lambda t: None,
+    )
+    sampler = SpecVerifySampler(decoder)
+    assert sampler.lanes == lanes
+    S = sampler.alloc(2, 3)
+    # one column's rows per chip: the frame of 4 columns, lane-sharded along the rows' dim
+    assert (S["k"][0].host.shape, S["k"][0].lane_dim) == ((lanes * 32,), 0)
+    assert (S["gcol"][0].host.shape, S["gcol"][0].lane_dim, S["gcol"][0].layout) == ((1, 1, lanes * 32, 1), 2, "tile")
+    assert (S["sidx"][0].host.shape, S["sidx"][0].lane_dim) == ((1, 1, 1, lanes * 32), 3)
+    sampling = SimpleNamespace(temperature=[0.0] * 128, top_k=[1] * 128, top_p=[1.0] * 128, seed=[None] * 128)
+    sampling.temperature[3], sampling.top_k[3], sampling.seed[3] = 0.8, 20, 11
+    sampling.temperature[100], sampling.top_k[100], sampling.seed[100] = 0.5, 5, 7
+    rows, positions = [1, 3, 70, 100], [10, 20, 30, 40]
+    plan = serving_sampling_frame((2, 2), rows, positions, sampling, lanes, 32)
+    sampler.upload(S, plan)
+    kinds = [dev for dev, _ in uploads]
+    assert kinds == [S["k"][0], S["p"][0], S["temp"][0], S["gcol"][0], S["seeds"][0]]
+    k_frame = uploads[0][1]
+    assert k_frame.shape == (lanes * 32,) and k_frame.tolist() == [v for p in plan.plans for v in p.top_k]
+    assert k_frame[3:6].tolist() == [20] * 3 and k_frame[32:64].tolist() == [1] * 32  # lane 0's row 3; lane 1 idle
+    assert k_frame[96:99].tolist() == [5] * 3  # lane 3's row 100
+    gcol = uploads[3][1]
+    assert gcol.shape == (1, 1, lanes * 32, 1) and torch.equal(
+        gcol, torch.cat([_top1_mask(p.top_k) for p in plan.plans], dim=2)
+    )
+    seeds = uploads[4][1]
+    assert seeds.tolist() == [v for p in plan.plans for v in p.seeds]
+    assert seeds[32:64].tolist() == [SPEC_SAMPLED_IDLE_SEED] * 32  # the idle column's cores stay untouched
+    # the same parameters again: seeds only (a sampled row draws every replay)
+    uploads.clear()
+    sampler.upload(S, plan)
+    assert [dev for dev, _ in uploads] == [S["seeds"][0]]
+    # a greedy frame re-uploads the parameter rows and the mask, never seeds
+    uploads.clear()
+    sampler.upload(S, greedy_sampling_frame((2, 2), lanes))
+    assert [dev for dev, _ in uploads] == [S["k"][0], S["p"][0], S["temp"][0], S["gcol"][0]]
+    # the draws come back per column (each lane's first chip); the one-column readback is refused here
+    S["sidx"][0].host = torch.arange(lanes * 32).reshape(1, 1, 1, lanes * 32)
+    frame = sampler.read_frame(S)
+    assert len(frame) == lanes and frame[2][:3] == [64, 65, 66] and frame[3][31] == 127
+    with pytest.raises(ValueError, match="one-column readback"):  # allow-pytest.raises (pure)
+        sampler.read(S, 6)
+    # one column's plan on the lane engine is refused by name
+    with pytest.raises(ValueError, match="LaneSamplingPlan"):  # allow-pytest.raises (pure)
+        sampler.upload(S, serving_sampling_rows((2, 2), [1], [10], sampling))
+
+
+def _policy_a_short_runs_credit_is_shrunk_toward_its_fresh_pool(expect_error=None):
+    """A run of one or two samples reading below its pool does not price a record a fresh pool measured over
+    hundreds of steps: the credit is the run's samples shrunk toward the pool's credit until the run has
+    ``RUN_SHRINK_SAMPLES`` of its own (the one step of a probe to the next draft length read 3.0 tokens a row
+    against a pool of 4.3 and held the 12B QB2 at the plain step for a 40-question run where the record measured
+    1.45x, 2026-11-04). A short run reading above its pool decides at once (prose after random text); a run that
+    is long enough speaks for itself; without a fresh measured pool the run's own samples are the credit;
+    between runs the pool's credit is unchanged."""
+    from models.demos.gemma4.tt.spec_policy import RUN_SHRINK_SAMPLES
+
+    plain, width = 28.0, 32768
+    policy = _served(SpecPolicy(SpecPolicyConfig.from_env({}), 5), widths=(width,))
+    rows = [policy.new_row() for _ in range(5)]
+    cal = policy.calibration
+    big, small = ("step", (5, 5), width), ("step", (5, 3), width)
+    for _ in range(199):  # the (5,5) pool: 199 clean steps at 4.3 tokens a row
+        cal.note_step(big, 83.0, 4.3 * 5, True, 83.0, 5, None)
+        for r in rows:
+            policy.observe(r, 3, 5)
+    cal.end_run()
+    assert cal.tokens_per_row(big) == pytest.approx(4.3)  # between runs: the last run's whole mean
+    for _ in range(40):  # the batch moved to the (5,3): 40 clean steps at 3.2
+        cal.note_step(small, 70.0, 3.2 * 5, True, 70.0, 5, None)
+        for r in rows:
+            policy.observe(r, 2, 3)
+    # one brief switch to the (5,5) whose single counted step read 3.0: a run of one
+    cal.note_step(big, 83.0, 3.0 * 5, False, 83.0, 5, "switch")
+    assert cal.run_samples(big) == 1
+    shrunk = (3.0 + 4.3 * (RUN_SHRINK_SAMPLES - 1)) / RUN_SHRINK_SAMPLES
+    assert cal.tokens_per_row(big) == pytest.approx(shrunk, rel=1e-3)
+    costs = {(5, 5): 83.0, (5, 3): 70.0}
+    cands = [
+        RecordCandidate(s, width, c, 0.0, tokens_per_row=cal.tokens_per_row(("step", s, width)))
+        for s, c in costs.items()
+    ]
+    ranked = rank_records(policy._tag_runs(cands), rows, plain)
+    assert ranked[0].shape == (5, 5) and ranked[0].gain == pytest.approx(shrunk * plain / 83.0, rel=1e-3)
+    assert ranked[0].gain >= policy.config.min_gain  # the record a fresh pool measured at 1.45x stays entered
+    policy.last_k = 3
+    choice = policy.decide(cands, rows, plain, 5)
+    assert choice is not None and choice.shape == (5, 5) and choice.reason == "gain"
+    # the run's own samples take over once it has RUN_SHRINK_SAMPLES of them
+    for _ in range(RUN_SHRINK_SAMPLES - 1):
+        cal.note_step(big, 83.0, 3.0 * 5, True, 83.0, 5, None)
+    assert cal.run_samples(big) == RUN_SHRINK_SAMPLES and cal.tokens_per_row(big) == pytest.approx(3.0)
+    # a short run reading ABOVE its pool is the credit at once (the regime change the run exists to catch)
+    cal.end_run()
+    cal.note_step(small, 70.0, 3.9 * 5, False, 70.0, 5, "switch")
+    assert cal.run_samples(small) == 1 and cal.tokens_per_row(small) == pytest.approx(3.9)
+    # a run a reseed opened (a trial, a retry, an entry: its first counted step is a clean one) reads its own
+    # steps however low, so random text is declined at once as before
+    cal.end_run()
+    cal.note_step(big, 83.0, 1.0 * 5, True, 83.0, 5, None)
+    assert cal.run_samples(big) == 1 and cal.tokens_per_row(big) == pytest.approx(1.0)
+    # a pool too stale to stand in leaves a short run's own sample as the credit
+    stale = Calibration(8, pool_stale=4)
+    for _ in range(10):
+        stale.note_step(big, 83.0, 4.3 * 5, True, 83.0, 5, None)
+    stale.end_run()
+    for _ in range(6):
+        stale.note_step(("plain", 32768), plain, 5, True, plain, 5, None)
+    stale.note_step(big, 83.0, 3.0 * 5, False, 83.0, 5, "switch")
+    assert stale.tokens_per_row(big) == pytest.approx(3.0)
+    # a pool below min_samples does not stand in either
+    thin = Calibration(8, pool_stale=1000)
+    for _ in range(3):
+        thin.note_step(big, 83.0, 4.3 * 5, True, 83.0, 5, None)
+    thin.end_run()
+    thin.note_step(big, 83.0, 3.0 * 5, False, 83.0, 5, "switch")
+    assert thin.tokens_per_row(big) == pytest.approx(3.0)

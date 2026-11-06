@@ -51,14 +51,17 @@ on Blackhole only.
 
 ## Recorded smoke results
 
-These runs were performed on a BH P100 with tt-metal commit
-`725bec70b29abddd84e78cb57dbd387eb0f1aee8`, with the commands above:
+These runs used the commands above:
 
-| Variant | BEV size | Encoder layers | Device FPS |
+| Variant | BEV size | Encoder layers | p100a Device FPS |
 | --- | ---: | ---: | ---: |
-| tiny | 50 | 3 | 13.61 |
-| small | 150 | 3 | 2.55 |
-| base | 200 | 6 | 1.31 |
+| tiny | 50 | 3 | 44.12 |
+| small | 150 | 3 | 13.03 |
+| base | 200 | 6 | 4.89 |
+
+| Card | Enabled Tensix cores | Compute grid | DRAM channels | Commit |
+| --- | ---: | ---: | ---: | --- |
+| p100a | 120 | 11x10 | 7 | [`7f2bbaed256`](https://github.com/tenstorrent/tt-metal/commit/7f2bbaed256b18458dbd4d70fce7dcd87fc6d3c4) |
 
 Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
 with random weights and validate end-to-end execution only; they are not statistically characterized

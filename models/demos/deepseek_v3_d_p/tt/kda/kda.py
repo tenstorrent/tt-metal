@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
@@ -242,6 +243,12 @@ class ttKDA:
             self.active_seq_len_local * self.config.v_dim * output_element_bytes,
             KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
         )
+        self._fused_output_reduce_scatter = (
+            self.tensor_parallel_size > 1
+            and self.gated_rms_output_dtype == ttnn.bfloat16
+            and self.weights.output_projection.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
+            and self.weights.output_projection.shape[-1] % (ttnn.TILE_SIZE * self.tensor_parallel_size) == 0
+        )
         # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
         self.partial_output_memory_config = (
             l1_when_it_fits(
@@ -322,6 +329,29 @@ class ttKDA:
             packer_l1_acc=True,
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+        if self._fused_output_reduce_scatter:
+            self.fused_output_projection_compute_config = ttnn.ComputeConfigDescriptor(
+                math_fidelity=program_config.output_projection_math_fidelity
+            )
+            # a ring splits each device's output block over two halves, so it needs at least two tiles
+            block_tiles = (self.active_seq_len_local // ttnn.TILE_SIZE) * (
+                self.weights.output_projection.shape[-1] // (ttnn.TILE_SIZE * self.tensor_parallel_size)
+            )
+            ring = (
+                block_tiles >= 2
+                and self.tp_ccl_topology == ttnn.Topology.Ring
+                and per_axis_topology()[self.tensor_parallel_axis] == ttnn.Topology.Ring
+                and ttnn.get_usable_topology(
+                    self.weights.output_projection, ttnn.Topology.Ring, self.tensor_parallel_axis
+                )
+                == ttnn.Topology.Ring
+            )
+            self._fused_output_ccl_kwargs = dict(
+                cluster_axis=self.tensor_parallel_axis,
+                scatter_dim=-1,
+                topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
+                num_links=min(self._tp_num_links, 2),
+            )
 
     @property
     def _convolution_width(self) -> int:
@@ -502,6 +532,14 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        if self._fused_output_reduce_scatter:
+            return ttnn.experimental.matmul_reduce_scatter_prefill(
+                output,
+                weights.output_projection,
+                **self._fused_output_ccl_kwargs,
+                compute_kernel_config=self.fused_output_projection_compute_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         output = ttnn.linear(
             output,
             weights.output_projection,
