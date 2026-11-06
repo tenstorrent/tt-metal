@@ -94,7 +94,7 @@
         "device_cost_reason": "Current planning estimate only; .25h short replay box, or0 for operator-excluded local credential provisioning."
       },
       "status": "not_run",
-      "reason": "Validity first; no real task timings for ranking speed.",
+      "reason": "C2 confirmed by actual workloads; next usefulC4 replay awaits4 distinct faithfully retained histories. Current valid SWE has2; Terminal native retention prepared for next normal rung. No fabricated histories or redundant C2 rerun.",
       "prediction_reconciliation": {
         "at": "2026-11-06T08:19:21.396893+00:00",
         "original_unavailable_fields": {
@@ -106,7 +106,9 @@
       "confirm": {
         "method": "Distinct real histories replayed with pool counters and measured per-user call time, then normal rung",
         "success": "Choose concurrency fitting pool/host and reduce projected release time without changed outputs"
-      }
+      },
+      "plan": "runs/agent-capacity-and-contention/plan.md",
+      "box_hours": 0.25
     },
     {
       "problem": "source-only-packaging",
@@ -1508,7 +1510,54 @@
         "success": "Complete coverage or explicit missing evidence; no device-time or generation-only inference."
       },
       "box_hours": 0,
-      "status": "running"
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "calls": 91,
+        "query_window_seconds": 643.4552664756775,
+        "tool_window_seconds": 5.513179779052734,
+        "suite_seconds": 374.9880950450897,
+        "exact_api_time": null,
+        "device_time": null
+      },
+      "evidence": "runs/swe-valid-runtime-analysis/result.json"
+    },
+    {
+      "problem": "ci-disk-admission-basis",
+      "owner": "ci_release_route",
+      "goal": "Resolve stock CI task-storage admission evidence without adding checks or modifying workflow.",
+      "plan": "runs/ci-disk-admission-basis/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "release_preflight"
+      ],
+      "confirm": {
+        "method": "Source trace filesystem, declared task storage and reserve against observed free; missing values explicit.",
+        "success": "Proven admission basis or concrete unsupported control/evidence, no fabricated reserve."
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": {
+        "declared_storage_gib": {
+          "swe_smoke": 20,
+          "swe_nightly": 50,
+          "terminal_smoke": 20,
+          "terminal_nightly": 100
+        },
+        "docker_filesystem_free": null,
+        "task_admission_reserve": null,
+        "result": "Stock evidence does not prove inequality; operator clarification requested, no added admission checks."
+      },
+      "evidence": "runs/ci-disk-admission-basis/RESULT.md"
     }
   ],
   "rankings": [
@@ -3422,6 +3471,150 @@
         }
       ],
       "reason": "Environment and phase-collection validity problems solved by actual normal rung. Remaining release-route and checker validity precede loop investigation and capacity speed work; speed savings remain guesses, no credit from changed task trajectories."
+    },
+    {
+      "after": "ci-disk-admission-investigation",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Missing task-storage reserve evidence is preflight validity; host-only source investigation precedes speed claims and does not delay rungs."
+    },
+    {
+      "after": "swe-valid-runtime-analysis-complete",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Validity issues still first.91calls have complete usage and query/tool windows, not exact generation share; no release speed credit inferred. Capacity is first speed candidate but awaits sufficient distinct native histories."
+    },
+    {
+      "after": "ci-disk-source-investigation-ended",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Disk preflight remains validity issue pending operator evidence/exception. No fabricated reserve or speculative speed credit; rungs continue."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

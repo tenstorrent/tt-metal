@@ -122,5 +122,13 @@
     "reason": "Bothtasksdownloadedpackages; suspectedstockagentbase-vs-testbedenvironment mismatch",
     "evidence": "runs/swe-network-validity/AUTOFIX.md",
     "retry_run_id": 42200513517
+  },
+  "disk_admission_question": {
+    "asked_at": "2026-11-06T11:40:38.748608+00:00",
+    "status": "pending_operator",
+    "question": "Accept unchanged stockCI setup/cleanup with observed free-space but unknown Docker filesystem/reserve, or provide existing evidence?",
+    "basis": "agentic-serving Stage order requires task storage+reserve vs free; device instructions prohibit new admission checks",
+    "evidence": "runs/ci-disk-admission-basis/RESULT.md",
+    "blocks": "final disk preflight only; normal rungs continue"
   }
 }

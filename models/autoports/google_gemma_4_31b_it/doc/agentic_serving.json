@@ -3,7 +3,7 @@
     "target_concurrency": 2,
     "working_set_tokens": 107585,
     "typical_context_tokens": 31755,
-    "source": "Measured150 saved API usage rows from2 real SWE histories atC2/B8; medianprompt31755, maximumobservedprompt+completion107585. Scoresquarantined;11missingDjangocalls; conditional observedworkload, not capacitybound. doc/agentic_evals/runs/real-history-capacity/workload-result.json",
+    "source": "Conservative observed stress target107585/typical31755 retained from prior quarantined real SWE workload; valid smoke per-suite measurements recorded separately below. No unsupported capacity claim.",
     "measured_by_eval": {
       "r1_gpqa_diamond": {
         "target_concurrency": 2,
@@ -18,13 +18,13 @@
       },
       "swe_bench_verified": {
         "target_concurrency": 2,
-        "working_set_tokens": 107585,
-        "typical_context_tokens": 31755,
-        "recorded_calls": 150,
-        "attempted_calls": 161,
-        "prompt_p95": 94242,
-        "source": "doc/agentic_evals/runs/real-history-capacity/workload-result.json",
-        "limits": "No continuous simultaneouspeakoccupancy; quarantinedscore; notrepresentativepopulation; missing11calls."
+        "working_set_tokens": 35998,
+        "typical_context_tokens": 22420,
+        "recorded_calls": 91,
+        "completed_tasks": 2,
+        "prompt_p95": 34072.5,
+        "source": "doc/agentic_evals/runs/swe-valid-runtime-analysis/result.json",
+        "limits": "Valid2-task smoke, not population or higher capacity bound. Earlier107585token stress retained separately."
       },
       "terminal_bench_2_1": {
         "planned_clients": 2,
@@ -36,6 +36,16 @@
         "source": "doc/agentic_evals/runs/terminal-smoke-runtime-analysis/result.json",
         "coverage": "47/47 saved calls; raw native requests not retained, no C4 capacity claim"
       }
+    },
+    "prior_quarantined_stress_workload": {
+      "target_concurrency": 2,
+      "working_set_tokens": 107585,
+      "typical_context_tokens": 31755,
+      "recorded_calls": 150,
+      "attempted_calls": 161,
+      "prompt_p95": 94242,
+      "source": "doc/agentic_evals/runs/real-history-capacity/workload-result.json",
+      "limits": "No continuous simultaneouspeakoccupancy; quarantinedscore; notrepresentativepopulation; missing11calls."
     }
   },
   "batch_sizes": [

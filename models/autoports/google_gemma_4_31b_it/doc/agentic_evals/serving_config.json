@@ -296,7 +296,17 @@
       "limitation": "No continuouslysimultaneouspeakresidency orhighercapacityclaim",
       "latest_valid_score": 0,
       "latest_valid_audit": "runs/smoke2-swe-activation-repair/audit.json",
-      "prior_workload_score_quarantined": true
+      "prior_workload_score_quarantined": true,
+      "latest_valid_workload": {
+        "target_concurrency": 2,
+        "working_set_tokens": 35998,
+        "typical_context_tokens": 22420,
+        "recorded_calls": 91,
+        "completed_tasks": 2,
+        "prompt_p95": 34072.5,
+        "source": "doc/agentic_evals/runs/swe-valid-runtime-analysis/result.json",
+        "limits": "Valid2-task smoke, not population or higher capacity bound. Earlier107585token stress retained separately."
+      }
     }
   },
   "cache_routing": {

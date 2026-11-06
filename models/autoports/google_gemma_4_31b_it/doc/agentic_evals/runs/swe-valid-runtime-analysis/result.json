@@ -1,0 +1,190 @@
+{
+  "run_id": 42200513517,
+  "basis": "Valid activation smoke only; original contaminated trajectories remain separate stress evidence, not scored-workload estimates.",
+  "device_hours": 0,
+  "predicted_device_hours": 0,
+  "release_hours_saved": null,
+  "suite_seconds": 374.9880950450897,
+  "aggregate_agent_seconds": 650.5874676704407,
+  "agent_overlap_seconds": 307.64981484413147,
+  "agent_union_seconds": 342.9376528263092,
+  "suite_outside_agent_union_seconds": 32.05044221878052,
+  "all_calls": 91,
+  "coverage": {
+    "usage_and_native_query_tool_windows": 1.0,
+    "exact_client_api_latency": 0.0,
+    "device_generation_latency": 0.0
+  },
+  "aggregate_query_phase_windows": {
+    "min": 1.3984899520874023,
+    "p50": 3.6220755577087402,
+    "p95_linear": 21.824737310409546,
+    "max": 44.07439708709717,
+    "sum": 643.4552664756775
+  },
+  "aggregate_tool_phase_windows": {
+    "min": 0.0035207271575927734,
+    "p50": 0.004756927490234375,
+    "p95_linear": 0.3446587324142456,
+    "max": 0.42871642112731934,
+    "sum": 5.513179779052734
+  },
+  "aggregate_prompt_tokens": {
+    "min": 2206,
+    "p50": 22420,
+    "p95_linear": 34072.5,
+    "max": 35925,
+    "sum": 1884700
+  },
+  "aggregate_completion_tokens": {
+    "min": 30,
+    "p50": 98,
+    "p95_linear": 652.5,
+    "max": 1272,
+    "sum": 17939
+  },
+  "aggregate_total_tokens": {
+    "min": 2418,
+    "p50": 22469,
+    "p95_linear": 34318.5,
+    "max": 35998,
+    "sum": 1902639
+  },
+  "reasoning_tokens_sum": 10684,
+  "tasks": [
+    {
+      "task": "django__django-11265",
+      "calls": 47,
+      "messages": 97,
+      "agent_seconds": 307.64981484413147,
+      "query_phase_window_seconds": {
+        "min": 1.3984899520874023,
+        "p50": 3.6220755577087402,
+        "p95_linear": 19.571954822540267,
+        "max": 32.76588702201843,
+        "sum": 303.5397906303406
+      },
+      "tool_phase_window_seconds": {
+        "min": 0.0035207271575927734,
+        "p50": 0.004760026931762695,
+        "p95_linear": 0.3478046655654907,
+        "max": 0.42871642112731934,
+        "sum": 3.1749541759490967
+      },
+      "post_submission_tail_seconds": 0.9350700378417969,
+      "exact_api_seconds": null,
+      "exact_tool_execution_seconds": null,
+      "input_tokens": {
+        "min": 2206,
+        "p50": 23596,
+        "p95_linear": 35450.2,
+        "max": 35925,
+        "sum": 1047557
+      },
+      "output_tokens": {
+        "min": 30,
+        "p50": 113,
+        "p95_linear": 566.4999999999993,
+        "max": 971,
+        "sum": 8448
+      },
+      "total_tokens": {
+        "min": 2418,
+        "p50": 23803,
+        "p95_linear": 35522.4,
+        "max": 35998,
+        "sum": 1056005
+      },
+      "reasoning_tokens_sum": 4758,
+      "all_finish_tool_calls": true,
+      "trial_seconds": 332.20438504219055,
+      "verifier_seconds": 5.0687830448150635,
+      "history_sha256": "d780c172337ea184c70e69a759756e945413313aab00f0c5c62eb647b051c844",
+      "source": "smoke2-swe-activation-repair/collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T111257/django__django-11265__HSZ9dBa/agent/mini-swe-agent.trajectory.json"
+    },
+    {
+      "task": "pylint-dev__pylint-7080",
+      "calls": 44,
+      "messages": 91,
+      "agent_seconds": 342.9376528263092,
+      "query_phase_window_seconds": {
+        "min": 1.4807817935943604,
+        "p50": 3.294238328933716,
+        "p95_linear": 25.858208930492413,
+        "max": 44.07439708709717,
+        "sum": 339.9154758453369
+      },
+      "tool_phase_window_seconds": {
+        "min": 0.0035369396209716797,
+        "p50": 0.00469660758972168,
+        "p95_linear": 0.28366454839706423,
+        "max": 0.3618741035461426,
+        "sum": 2.3382256031036377
+      },
+      "post_submission_tail_seconds": 0.6839513778686523,
+      "exact_api_seconds": null,
+      "exact_tool_execution_seconds": null,
+      "input_tokens": {
+        "min": 9698,
+        "p50": 20413.0,
+        "p95_linear": 26483.8,
+        "max": 26898,
+        "sum": 837143
+      },
+      "output_tokens": {
+        "min": 39,
+        "p50": 87.5,
+        "p95_linear": 762.1000000000004,
+        "max": 1272,
+        "sum": 9491
+      },
+      "total_tokens": {
+        "min": 9932,
+        "p50": 21217.0,
+        "p95_linear": 26553.4,
+        "max": 26937,
+        "sum": 846634
+      },
+      "reasoning_tokens_sum": 5926,
+      "all_finish_tool_calls": true,
+      "trial_seconds": 374.8690929412842,
+      "verifier_seconds": 13.326496839523315,
+      "history_sha256": "a59ec024acde981fb10182762ddfc30f35802bd1ddf8ad4104c2746abd20e9a8",
+      "source": "smoke2-swe-activation-repair/collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T111257/pylint-dev__pylint-7080__h9DadJx/agent/mini-swe-agent.trajectory.json"
+    }
+  ],
+  "time_basis": {
+    "query_phase": "Previous tool message timestamp\u2192assistant extra.timestamp; first window starts Harbor agent_execution. Includes model/API work plus interstep host serialization, request preparation, model cost/action parsing; first includes launcher/setup inside agent phase. Upper bound on individual client API call, not exact latency.",
+    "tool_phase": "Assistant timestamp\u2192following tool timestamp; includes add-message/save overhead, tool execution and observation formatting. Final submission is control-flow marker, not ordinary shell runtime.",
+    "source": "mini-swe-agent2.2.8 src/minisweagent/models/litellm_model.py query lines80-92; models/utils/actions_toolcall.py format_toolcall_observation_messages lines75-100; agents/default.py step/query/execute_actions lines98-125.",
+    "clock": "Client epoch time.time timestamps, checked nondecreasing; integer server response.created excluded from latency calculation.",
+    "overlap": "Two task intervals overlap. Sum of query/tool seconds is agent-lane work and is not suite/device wall."
+  },
+  "limits": {
+    "request_seconds": 3600,
+    "agent_seconds": 21600,
+    "completion_tokens": 32768,
+    "context_tokens": 262144,
+    "tool_default_seconds": 30,
+    "limit_hit_observed": false,
+    "finish_reasons": "all91tool_calls"
+  },
+  "history_availability": {
+    "genuine_distinct_tasks": 2,
+    "tasks": [
+      "django__django-11265",
+      "pylint-dev__pylint-7080"
+    ],
+    "four_distinct_histories_available": false,
+    "next_source": "Wait for validated nightly5; count actual new task identities only. Do not clone histories or count multiple turn prefixes as distinct tasks.",
+    "tokenization_note": "Native response messages include reasoning/tool calls. Exact serving chat-template reconstruction and replay admission are separate work; no capacity claim from token counts alone."
+  },
+  "phase_evidence_reference": "../swe-phase-accounting-confirmation/result.json (owned by separate effort; not copied/recomputed here)",
+  "missing_fields": [
+    "Direct client query start/end or elapsed API latency.",
+    "Exact tool subprocess start/end separate from serialization/formatting.",
+    "TTFT, inter-token latency, device-only generation time, separate prefill/decode/queue/network time.",
+    "Four distinct valid task histories before nightly completion."
+  ],
+  "reconciliation": "Per-call prompt/output sums equal task result counters; query+tool+post-submission tail equals each agent interval within1microsecond; agent sum-overlap=agent union."
+}

@@ -51,6 +51,31 @@
       "usage_percent": 72,
       "evidence": "bringup/artifacts/stage12-terminal-lifecycle-live.log:580",
       "limitation": "Stockcleanupfilesystem free; no separateDockerfilesystem reserve measured. Notfuture-run guarantee."
+    },
+    "ci_observations": [
+      {
+        "run_id": 42190891568,
+        "runner": "qb2-120-p05t02",
+        "at": "2026-11-06T09:58:34Z",
+        "free_space_reported_GB": 980,
+        "usage_percent": 72,
+        "evidence": "bringup/artifacts/stage12-terminal-lifecycle-live.log:580",
+        "limitation": "Stockcleanupfilesystem free; no separateDockerfilesystem reserve measured. Notfuture-run guarantee."
+      },
+      {
+        "run_id": 42200513517,
+        "runner": "qb2-120-p05t02",
+        "at": "2026-11-06T11:07:09Z",
+        "free_space_reported_GB": 953,
+        "usage_percent": 73,
+        "evidence": "bringup/artifacts/stage12-swe-activation-live.log:580",
+        "limitation": "Stock cleanup filesystem report; Docker image filesystem mapping/reserve not established."
+      }
+    ],
+    "stock_model_disk_policy": {
+      "source": "tt-inference-server workflows/model_spec.py:775-794; workflows/setup_host.py:491-514",
+      "formula": "Non-repacked param_count*2+20 GiB; repacked param_count*3+20 GiB",
+      "scope": "Model weights/cache download minimum, not task-container admission reserve; check may bypass for configured host weights. Do not substitute for unknown Docker reserve."
     }
   },
   "admission": {
@@ -71,7 +96,7 @@
   "release_route": {
     "ok": false,
     "harness_main_commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
-    "reason": "Authorized stockQB2CI GPQA route demonstrated full60autoport and valid2taskscore; Docker tool-suite environment validity pending. Dryrun/release not yet started.",
+    "reason": "Stock QB2CI route has valid full60 autoport scores for all three suites. Final frozen dry-run stop/evidence control unresolved; release not started.",
     "authorized": true,
     "device": "qb2-ci"
   },

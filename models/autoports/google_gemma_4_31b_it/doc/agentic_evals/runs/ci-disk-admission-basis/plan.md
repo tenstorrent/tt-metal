@@ -1,0 +1,3 @@
+# CI disk admission evidence
+
+Goal: establish what stock CI disk observations and admission policy actually prove. Confirmation: identify reported filesystem, Docker/task storage location, declared task disk demand and any actual task admission reserve, compare only commensurate evidence. Unknowns remain unknown. Budget0 device hours; source/log inspection only, no CI dispatch, workflow changes or admission probes. Plan: inspect operator inputs and saved stock workflow; correlate cleanup log df output with Docker setup; inspect harness disk policy and task storage metadata; record once in RESULT.md.

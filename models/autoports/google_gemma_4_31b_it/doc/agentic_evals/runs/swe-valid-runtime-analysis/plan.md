@@ -1,0 +1,3 @@
+# Valid SWE runtime attribution
+
+Use only completed activation-repair smoke42200513517 trajectories and its audit. Reconcile all91 native API calls, usage totals, latency percentiles/extremes, prompt+completion sizes and agent/tool residuals. Distinguish overlapping task timelines and client request wall from generation/device time. Replace contaminated estimates only with measured matching workload facts; no isolated speed claim. Two genuine task histories exist; four distinct histories require eligible nightly artifacts, never cloning. Device/predicted0h, no speed credit. No device/dispatch/central edits. Cross-reference phase confirmation only, never duplicate its evidence.
