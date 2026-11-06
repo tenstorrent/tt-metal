@@ -63,7 +63,8 @@ void bind_sort_operation(nb::module_& mod) {
                 * - UINT16, UINT32
                   - TILE, ROW_MAJOR
 
-            Input values must not be NaN.
+            Input values must not be NaN, so replace or mask NaNs before sorting. ``torch.sort``, by contrast, sorts NaN
+            as larger than any number.
 
         Memory Support:
             - Interleaved: DRAM and L1
