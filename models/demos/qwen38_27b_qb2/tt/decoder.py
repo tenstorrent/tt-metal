@@ -114,6 +114,13 @@ class Qwen38Decoder(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # The batch-1 Q/K norms use subblock_w=8, which needs bf16 accumulation.
+        self.qk_norm_ckc = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+        )
         if mesh_device.get_num_devices() != 1 and not replicated_mesh:
             raise ValueError("Optimized decoder requires a single-device mesh")
         if (hf_config.hidden_size, hf_config.intermediate_size) != (5120, 17408):
@@ -760,6 +767,7 @@ class Qwen38Decoder(LightweightModule):
                 epsilon=self.eps,
                 memory_config=norm_memory,
                 program_config=norm_config,
+                compute_kernel_config=self.qk_norm_ckc,
             )
             k = ttnn.rms_norm(
                 k,
@@ -767,6 +775,7 @@ class Qwen38Decoder(LightweightModule):
                 epsilon=self.eps,
                 memory_config=norm_memory,
                 program_config=norm_config,
+                compute_kernel_config=self.qk_norm_ckc,
             )
         else:
             # Batch shards span height; RMSNorm rejects height sharding and a

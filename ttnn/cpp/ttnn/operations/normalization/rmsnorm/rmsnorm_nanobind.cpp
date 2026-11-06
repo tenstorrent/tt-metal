@@ -53,7 +53,10 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`, which uses
                 :func:`ttnn.rmsnorm_default_compute_config` (HiFi4, math_approx_mode=False, fp32_dest_acc_en=True).
-                On Quasar: math_approx_mode=True, fp32_dest_acc_en=False.
+                On Quasar, with a ROW_MAJOR weight or bias, or with a sharded subblock_w above 4, it uses
+                math_approx_mode=True, fp32_dest_acc_en=False.
+                :func:`ttnn.rms_norm_pre_all_gather` and :func:`ttnn.rms_norm_post_all_gather` default to
+                math_approx_mode=True, fp32_dest_acc_en=False; pass the same config to all three for matching results.
                 Fields that trade accuracy for speed:
 
                 - fp32_dest_acc_en: True accumulates in FP32 (more accurate, can be slower). False accumulates in
