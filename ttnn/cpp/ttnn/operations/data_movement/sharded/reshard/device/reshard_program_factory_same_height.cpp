@@ -57,7 +57,11 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
-    auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    auto remote_cores = remote_tensor.mesh_buffer()
+                            .device_local_config()
+                            .sharding_args.buffer_distribution_spec()
+                            .value()
+                            .cores_with_data();
 
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
     const uint32_t element_size = tt::datum_size(data_format);

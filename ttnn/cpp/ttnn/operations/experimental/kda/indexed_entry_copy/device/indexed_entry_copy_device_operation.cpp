@@ -43,7 +43,7 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
     const auto& destination_shape = destination.logical_shape();
     TT_FATAL(
         source.layout() == destination.layout() && source.tensor_spec().tile() == destination.tensor_spec().tile() &&
-            source.buffer()->page_size() == destination.buffer()->page_size(),
+            source.mesh_buffer().page_size() == destination.mesh_buffer().page_size(),
         "{}: source and destination must share layout, tile and page size",
         kOperation);
     TT_FATAL(

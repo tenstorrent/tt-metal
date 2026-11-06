@@ -131,9 +131,9 @@ void NpHaloScatterMeshWorkloadFactory::override_runtime_arguments(
     const NpHaloScatterParams& /*op*/,
     const NpHaloScatterInputs& tensor_args,
     Tensor& tensor_return_value) {
-    const uint32_t x_addr = tensor_args.interior_src.buffer()->address();
-    const uint32_t compact_addr = tensor_args.compact_buffer.buffer()->address();
-    const uint32_t dst_addr = tensor_return_value.buffer()->address();
+    const uint32_t x_addr = tensor_args.interior_src.mesh_buffer().address();
+    const uint32_t compact_addr = tensor_args.compact_buffer.mesh_buffer().address();
+    const uint32_t dst_addr = tensor_return_value.mesh_buffer().address();
 
     for (auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(coordinate_range);

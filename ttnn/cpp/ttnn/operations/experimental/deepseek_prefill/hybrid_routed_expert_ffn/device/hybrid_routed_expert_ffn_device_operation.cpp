@@ -84,7 +84,7 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
         op.hybrid_token_threshold,
         t.l1_arena.has_value() ? "present" : "absent");
     TT_FATAL(
-        op.l1_arena_addr == (t.l1_arena.has_value() ? t.l1_arena->buffer()->address() : 0),
+        op.l1_arena_addr == (t.l1_arena.has_value() ? t.l1_arena->mesh_buffer().address() : 0),
         "hybrid routed expert overlapped with combine: the hashed L1 arena address 0x{:x} is not the arena's",
         op.l1_arena_addr);
     // Combine's untilizers read the routed expert's output as bfloat8_b tiles, as combine does back to back.

@@ -306,7 +306,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteRMShardedInputProgramFactory:
     // ---- Per-core runtime args ----
     auto per_core = get_slice_write_runtime_args_rm_sharded_input(
         input, output, output_tensor_start, output_tensor_end, iter_cores, max_read_size);
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     ProgramRunArgs run_args;
     KernelRunArgs reader_run{.kernel = SW_READER};

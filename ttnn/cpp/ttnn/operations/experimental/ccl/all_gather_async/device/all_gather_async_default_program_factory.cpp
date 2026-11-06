@@ -120,7 +120,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     // Tensor Info
     TT_FATAL(input_tensor.is_allocated(), "Input tensor buffer is null");
     TT_FATAL(output_tensor.is_allocated(), "Output tensor buffer is null");
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor.mesh_buffer().num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
     auto* mesh_device = input_tensor.device();
@@ -146,7 +146,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     }
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, reverse_order) per link
-    uint32_t output_data_size_bytes = output_tensor.buffer()->size();
+    uint32_t output_data_size_bytes = output_tensor.mesh_buffer().device_local_size();
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(default_workers(
         *mesh_device,
         sub_device_id,
@@ -189,7 +189,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     }
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer().page_size();
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(

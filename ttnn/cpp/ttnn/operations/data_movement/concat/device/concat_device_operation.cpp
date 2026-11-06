@@ -579,7 +579,8 @@ Tensor concat_impl(
     if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
         for (const auto& input_tensor : input_tensors) {
             TT_FATAL(
-                (input_tensor.padded_shape()[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() ==
+                (input_tensor.padded_shape()[dim] * input_tensor.element_size()) %
+                        input_tensor.mesh_buffer().alignment() ==
                     0,
                 "Current concat implementation requires aligned last dim when concatting on last dim");
         }

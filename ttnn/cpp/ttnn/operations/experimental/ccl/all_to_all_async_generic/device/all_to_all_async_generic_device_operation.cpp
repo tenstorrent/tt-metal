@@ -120,7 +120,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
         num_links,
         available_core_count);
 
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
     const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.rank();
     const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -128,7 +128,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(operation_attributes.in_dim >= 0 && operation_attributes.in_dim < rank, "in_dim out of range");
     TT_FATAL(operation_attributes.out_dim >= 0 && operation_attributes.out_dim < rank, "out_dim out of range");
 
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
+    TT_FATAL(page_size % input_tensor.mesh_buffer().alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
     // A row-major input is tilized on the way (concatenating along the rows dim, splitting an outer dim) and the
     // output is tiled, so its packets carry output tiles rather than input rows.
