@@ -97,5 +97,12 @@
       "Keep skills read-only; accept specific checker defect",
       "Authorize tested zero-cost checker patch"
     ]
+  },
+  "terminal_startup_lifecycle": {
+    "run_id": 42182632490,
+    "status": "host_fix_passed_live_retry_queued",
+    "reason": "30s Docker startup timeout followed by own-container port collision; no scored tasks",
+    "retry_run_id": 42190891568,
+    "tti_sha": "2c4a2628b974acc7ebc7a4fa867db68f0b108019"
   }
 }

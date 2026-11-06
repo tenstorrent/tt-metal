@@ -1,0 +1,293 @@
+diff --git a/tests/test_run_docker_server.py b/tests/test_run_docker_server.py
+index ce223db..46ee754 100644
+--- a/tests/test_run_docker_server.py
++++ b/tests/test_run_docker_server.py
+@@ -29,3 +29,157 @@ def test_run_docker_command_retains_foreground_process(monkeypatch, tmp_path):
+ 
+     assert payload["process"] is process
+     callbacks[0]()
++
++
++class FakeProcess:
++    def __init__(self, returncode=None):
++        self.returncode = returncode
++        self.terminated = False
++        self.killed = False
++
++    def poll(self):
++        return self.returncode
++
++    def terminate(self):
++        self.terminated = True
++        self.returncode = -15
++
++    def kill(self):
++        self.killed = True
++        self.returncode = -9
++
++    def wait(self, timeout):
++        return self.returncode
++
++
++def _launch_fixture(monkeypatch, tmp_path, *, visible_at=None, returncode=None):
++    import workflows.run_docker_server as launcher
++
++    clock = [0.0]
++    process = FakeProcess(returncode)
++    callbacks, removals, queries, logs = [], [], [], []
++
++    def popen(*args, **kwargs):
++        logs.append(kwargs["stdout"])
++        return process
++
++    def query(command, **kwargs):
++        queries.append(command)
++        assert kwargs["timeout"] <= 10
++        return "owned-id" if visible_at is not None and clock[0] >= visible_at else ""
++
++    monkeypatch.setenv("TT_SERVER_READY_TIMEOUT_SECONDS", "60")
++    monkeypatch.setattr(launcher.time, "monotonic", lambda: clock[0])
++    monkeypatch.setattr(launcher.time, "time", lambda: clock[0])
++    monkeypatch.setattr(
++        launcher.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
++    )
++    monkeypatch.setattr(launcher.subprocess, "Popen", popen)
++    monkeypatch.setattr(launcher.subprocess, "check_output", query)
++    monkeypatch.setattr(
++        launcher.subprocess,
++        "run",
++        lambda command, **kwargs: (
++            removals.append(command) or SimpleNamespace(returncode=0)
++        ),
++    )
++    monkeypatch.setattr(launcher.atexit, "register", callbacks.append)
++
++    def launch():
++        return run_docker_command(
++            ["docker", "run", "image"],
++            "owned-name",
++            SimpleNamespace(workflow="server", service_port="8000"),
++            SimpleNamespace(docker_image="image"),
++            tmp_path / "docker.log",
++        )
++
++    return launch, process, clock, callbacks, removals, queries, logs
++
++
++def test_delayed_container_start_remains_supervised(monkeypatch, tmp_path):
++    launch, process, clock, callbacks, removals, queries, logs = _launch_fixture(
++        monkeypatch, tmp_path, visible_at=45
++    )
++    assert launch()["container_id"] == "owned-id"
++    assert clock[0] == 45
++    assert not process.terminated
++    assert not removals
++    assert all("name=^/owned-name$" in command for command in queries)
++    callbacks[0]()
++    assert logs[0].closed
++
++
++def test_immediate_cli_failure_preserves_logs_and_closes_attempt(monkeypatch, tmp_path):
++    import pytest
++    from workflows.run_docker_server import DockerLaunchError
++
++    launch, process, clock, callbacks, removals, queries, logs = _launch_fixture(
++        monkeypatch, tmp_path, returncode=125
++    )
++    with pytest.raises(DockerLaunchError, match="status 125") as failure:
++        launch()
++    assert failure.value.retry_safe is False
++    assert clock[0] == 0
++    assert not queries
++    assert not process.terminated
++    assert removals == [["docker", "rm", "-f", "owned-name"]]
++    assert not callbacks
++    assert logs[0].closed
++    assert (tmp_path / "docker.log").exists()
++
++
++def test_timeout_cancels_only_owned_attempt_and_disallows_retry(monkeypatch, tmp_path):
++    import pytest
++    from workflows.run_docker_server import DockerLaunchError
++
++    launch, process, clock, callbacks, removals, queries, logs = _launch_fixture(
++        monkeypatch, tmp_path
++    )
++    with pytest.raises(DockerLaunchError, match="timed out") as failure:
++        launch()
++    assert failure.value.retry_safe is False
++    assert clock[0] == 60
++    assert process.terminated
++    assert removals == [["docker", "rm", "-f", "owned-name"]]
++    assert logs[0].closed
++    assert not callbacks
++
++
++def test_cleanup_failure_still_disallows_retry(monkeypatch, tmp_path):
++    import pytest
++    from workflows.run_docker_server import DockerLaunchError
++
++    launch, process, clock, callbacks, removals, queries, logs = _launch_fixture(
++        monkeypatch, tmp_path
++    )
++
++    def failed_cleanup(*args, **kwargs):
++        raise TimeoutError("daemon unresponsive")
++
++    monkeypatch.setattr("workflows.run_docker_server.subprocess.run", failed_cleanup)
++    with pytest.raises(DockerLaunchError) as failure:
++        launch()
++    assert failure.value.retry_safe is False
++    assert process.terminated
++    assert logs[0].closed
++
++
++def test_server_command_does_not_retry_unreconciled_launch(monkeypatch):
++    from workflow_module.commands import ServerCommand, ServerLaunchSpec, ServerMode
++    from workflows.run_docker_server import DockerLaunchError
++
++    attempts = []
++
++    def fail(self, spec):
++        attempts.append(spec)
++        raise DockerLaunchError("pending daemon creation")
++
++    monkeypatch.setattr(ServerCommand, "_launch_once", fail)
++    monkeypatch.setenv("TT_SERVER_BOOT_ATTEMPTS", "2")
++    spec = ServerLaunchSpec(
++        mode=ServerMode.DOCKER, model_spec=None, runtime_config=None, setup_config=None
++    )
++    result = ServerCommand(spec).execute()
++    assert result.return_code == 1
++    assert len(attempts) == 1
+diff --git a/workflow_module/commands.py b/workflow_module/commands.py
+index eab9a3b..4aedfe0 100644
+--- a/workflow_module/commands.py
++++ b/workflow_module/commands.py
+@@ -444,6 +444,9 @@ class ServerCommand(Command):
+                 logger.exception("Server bring-up failed: %s", e)
+                 last_error = str(e)
+                 _teardown_server(spec, None)
++                if getattr(e, "retry_safe", True) is False:
++                    logger.error("Not retrying an unreconciled server launch")
++                    break
+                 continue
+ 
+             ready_error = _wait_until_ready(spec, payload)
+diff --git a/workflows/run_docker_server.py b/workflows/run_docker_server.py
+index 4f5d476..222ce37 100644
+--- a/workflows/run_docker_server.py
++++ b/workflows/run_docker_server.py
+@@ -836,6 +836,12 @@ def generate_docker_run_command(
+     return docker_command, container_name
+ 
+ 
++class DockerLaunchError(RuntimeError):
++    """Launch failed before ownership could be handed to the readiness monitor."""
++
++    retry_safe = False
++
++
+ def run_docker_command(
+     docker_command, container_name, runtime_config, model_spec, docker_log_file_path
+ ):
+@@ -851,35 +857,73 @@ def run_docker_command(
+     Returns:
+         Dict with container identity, foreground process, log path, and service port.
+     """
++    from workflow_module.commands import _readiness_timeout
++
+     docker_log_file = open(docker_log_file_path, "w", buffering=1)
+     logger.info(f"Running docker container with log file: {docker_log_file_path}")
+-    docker_process = subprocess.Popen(
+-        docker_command, stdout=docker_log_file, stderr=docker_log_file, text=True
+-    )
+-
+-    TIMEOUT = 30  # seconds
+-    POLL_INTERVAL = 0.5  # seconds
+-    start_time = time.time()
+-    container_id = ""
+-
+-    while (time.time() - start_time) < TIMEOUT:
+-        container_id = subprocess.check_output(
+-            ["docker", "ps", "-f", f"name={container_name}", "--format", "{{.ID}}"],
+-            text=True,
+-        ).strip()
+-        if container_id:
+-            break
+-        time.sleep(POLL_INTERVAL)
+-
+-    if not container_id:
+-        logger.error(
+-            f"TIMEOUT={TIMEOUT} seconds has passed. (docker pull has already run)"
++    docker_process = None
++    try:
++        docker_process = subprocess.Popen(
++            docker_command, stdout=docker_log_file, stderr=docker_log_file, text=True
+         )
+-        logger.error(f"Docker container {container_name} failed to start.")
+-        logger.error(f"Docker image: {model_spec.docker_image}")
+-        logger.error("Check logs for more information.")
+-        logger.error(f"Docker logs are streamed to: {docker_log_file_path}")
+-        raise RuntimeError("Docker container failed to start.")
++        # Container creation can include slow daemon work before docker ps sees it.
++        # Use the existing model startup budget instead of a separate 30s cutoff.
++        timeout = _readiness_timeout(model_spec)
++        deadline = time.monotonic() + timeout
++        container_id = ""
++        while time.monotonic() < deadline:
++            returncode = docker_process.poll()
++            if returncode is not None:
++                raise RuntimeError(f"docker run exited with status {returncode}")
++            container_id = subprocess.check_output(
++                [
++                    "docker",
++                    "ps",
++                    "-f",
++                    f"name=^/{container_name}$",
++                    "--format",
++                    "{{.ID}}",
++                ],
++                text=True,
++                timeout=min(10, max(0.1, deadline - time.monotonic())),
++            ).strip()
++            if container_id:
++                break
++            time.sleep(0.5)
++        if not container_id:
++            raise RuntimeError(f"Docker container startup timed out after {timeout}s")
++    except Exception as error:
++        # A killed CLI does not prove the daemon cancelled an in-flight create.
++        # Preserve this attempt's identity and fail closed rather than overlap a retry.
++        try:
++            if docker_process is not None and docker_process.poll() is None:
++                docker_process.terminate()
++                try:
++                    docker_process.wait(timeout=10)
++                except subprocess.TimeoutExpired:
++                    docker_process.kill()
++                    docker_process.wait(timeout=10)
++            cleanup = subprocess.run(
++                ["docker", "rm", "-f", container_name],
++                capture_output=True,
++                text=True,
++                timeout=30,
++            )
++            if cleanup.returncode:
++                logger.warning(
++                    "Owned container cleanup not confirmed for %s", container_name
++                )
++        except Exception:
++            logger.exception(
++                "Owned Docker launch cleanup failed for %s", container_name
++            )
++        finally:
++            docker_log_file.close()
++        raise DockerLaunchError(
++            f"Docker launch failed for {container_name}: {error}. "
++            f"Logs: {docker_log_file_path}; automatic retry disabled because "
++            "daemon creation may still be pending."
++        ) from error
+ 
+     skip_workflows = {WorkflowType.SERVER}
+     if WorkflowType.from_string(runtime_config.workflow) not in skip_workflows:

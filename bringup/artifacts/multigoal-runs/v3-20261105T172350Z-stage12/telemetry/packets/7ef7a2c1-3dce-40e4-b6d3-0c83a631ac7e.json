@@ -51,11 +51,12 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "SWE smoke active; Terminal and GPQA nightly wrong-implementation dispatches excluded and replaced with explicitautoport. Only valid GPQA smoke2/198 scored so far."
+    "stage12_accuracy": "Only GPQA smoke2/198 valid so far. SWE smoke and corrected GPQA nightly active. Terminal42182632490 failed before tasks in Docker startup/retry lifecycle; generic autofix in progress. Earlier wrong-implementation attempts excluded."
   },
   "notes": [
     "Current stage12 serving measurement; not frozen release.",
     "Native-tool registration repaired with2x168 exact token-ID pairs and actualharness parser checks.",
-    "GPQA smoke2 valid; no release completion claimed."
+    "GPQA smoke2 valid; no release completion claimed.",
+    "Synthetic prefill-interference diagnostic is not headline workload or scored accuracy; excluded from performance fields. Local evidence commit6c9d8cdf."
   ]
 }

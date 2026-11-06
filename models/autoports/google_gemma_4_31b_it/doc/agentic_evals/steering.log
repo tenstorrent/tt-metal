@@ -9,3 +9,4 @@
 2026-11-06T07:19:19.897569+00:00 resume boundary: inputs unchanged extended48h/run12h, six qb2-ci slots, operator decision8 route; steering.md absent; preserve active CI runs.
 2026-11-06T08:15:32.711490+00:00 GPQA server-sized preparation boundary: inputs unchanged extended48h/run12h/CI6; no steering.md present; host-only preparation, live admission deferred.
 2026-11-06T08:22:22.615507+00:00 Prefill-under-load boundary: inputs unchanged; no steering.md; local diagnostic only, CI rungs proceed unchanged.
+2026-11-06T08:41:13.089354+00:00 Docker startup failure boundary: inputs unchanged; no steering.md; generic defect investigation under autofix, no workflow modification or foreign process termination.

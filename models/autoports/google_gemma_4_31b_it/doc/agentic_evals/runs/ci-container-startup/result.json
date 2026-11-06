@@ -1,0 +1,30 @@
+{
+  "status": "host_confirmed_live_pending",
+  "goal": "Repair generic Docker launch ownership before retry",
+  "unblocks": [
+    "terminal_bench_2_1"
+  ],
+  "base": "8a3c949317fdf43ba11086ad90d11a6555046d54",
+  "commit": "dcc0772c78d45b9d3690eb19fa4873278b5cdda4",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-container-lifecycle",
+  "device_hour_box": 0,
+  "used_device_hours": 0,
+  "predicted_release_hours_saved": 0,
+  "baseline": "unchanged launcher fails45s delayed visibility at30s",
+  "focused_tests_passed": 51,
+  "full_hooks": "Ruff, format, full pytest, copyright passed",
+  "live_confirmation": "pending normal smoke",
+  "source_changes": [
+    "workflows/run_docker_server.py",
+    "workflow_module/commands.py",
+    "tests/test_run_docker_server.py"
+  ],
+  "evidence": [
+    "AUTODEBUG.md",
+    "AUTOFIX.md",
+    "lifecycle.patch",
+    "bringup/artifacts/stage12-container-lifecycle-baseline.log",
+    "bringup/artifacts/stage12-container-lifecycle-hooks.log"
+  ],
+  "branch": "fix/docker-launch-ownership"
+}

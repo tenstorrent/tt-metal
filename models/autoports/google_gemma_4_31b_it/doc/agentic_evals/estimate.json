@@ -22,7 +22,7 @@
     },
     "swe_bench_verified": {
       "decision": "stop",
-      "reason": "No valid scored smoke or measured release projection yet. Decision8 authorizesCI; existing smoke source build is in progress. Stop is provisional release exclusion, not a capacity or accuracy stop.",
+      "reason": "Correct fresh-autoport smoke is actively running on CI; no completed scored trajectories or measured release projection yet. Provisional release exclusion, not a capacity/accuracy stop.",
       "functional_at": 0,
       "projected_hours": null,
       "score": null,
@@ -30,7 +30,7 @@
     },
     "terminal_bench_2_1": {
       "decision": "stop",
-      "reason": "No valid smoke yet. Original fabric failure then wrong-implementation retry are excluded. Explicit-autoport retry42182632490 preserves frozen2tasks; no measured capacity stop.",
+      "reason": "No valid smoke yet. Prior fabric, wrong-implementation and Docker launch lifecycle failures occurred before tasks. Generic launcher repair host-confirmed; identical2-task smoke42190891568 queued. Provisional release exclusion, not measured capacity stop.",
       "functional_at": 0,
       "projected_hours": null,
       "score": null,

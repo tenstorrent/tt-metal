@@ -112,6 +112,14 @@
       "publication_sha": "8a3c949317fdf43ba11086ad90d11a6555046d54",
       "model_pin": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
       "pin_evidence": "runs/harbor-model-pin/RESULT.md; SWE liveCI checkout07:33:57; official ls-remote fullSHA"
+    },
+    {
+      "branch": "fix/docker-launch-ownership",
+      "sha": "dcc0772c78d45b9d3690eb19fa4873278b5cdda4",
+      "publication_sha": "6dac8d6",
+      "fix": "Supervise delayed Docker startup with existing model budget; exact owned cleanup and fail-closed pending creation prevent overlapping retries.",
+      "evidence": "runs/ci-container-startup/AUTOFIX.md",
+      "live_confirmation": "pending42190891568"
     }
   ]
 }

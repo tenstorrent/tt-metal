@@ -93,6 +93,11 @@
       "planned_clients": 2,
       "max_num_seqs": 8,
       "regime": "local serving diagnostic; no scored evaluation"
+    },
+    "smoke2-terminal-lifecycle-repair": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8
     }
   },
   "release_limits": {

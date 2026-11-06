@@ -932,6 +932,72 @@
       "status": "not_run",
       "reason": "Observed diagnostic stalls only; real overlap, return lengths and release projection pending. No scheduler change justified yet.",
       "evidence": "runs/prefill-under-load/RESULT.md"
+    },
+    {
+      "problem": "docker-startup-timeout-leaks-own-container",
+      "owner": "isolated_autodebug_then_harness_registration",
+      "goal": "Restore stock Docker startup/retry lifecycle with exact ownership and delayed-start handling",
+      "plan": "runs/ci-container-startup/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Isolated source diagnosis then deterministic host lifecycle tests; live normal smoke confirmation separately",
+        "success": "No overlapping own launch on timeout and no premature failure of delayed Docker start"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": {
+        "baseline": "Mock45s launch fails original30s deadline",
+        "candidate_focused_tests": 51,
+        "combined_focused_tests": 83,
+        "full_hooks": "pass",
+        "live_confirmation_run_id": 42190891568,
+        "live_confirmation": "pending"
+      },
+      "evidence": "runs/ci-container-startup/AUTOFIX.md"
+    },
+    {
+      "problem": "terminal-current-base-preparation",
+      "owner": "suite_registration",
+      "goal": "Retain exact frozen Terminal smoke2 while applying generic startup repair on current base",
+      "plan": "runs/terminal-current-base-preparation/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Stock resolved command and focused host checks/fullhooks",
+        "success": "Same2 taskIDs,C2/B8,peers0,unchanged limits and current source pins"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "focused_tests": 32,
+        "full_hooks": "pass",
+        "stock_resolved": "exact smoke2/C2/B8,peer0",
+        "published": false
+      },
+      "evidence": "runs/terminal-current-base-preparation/RESULT.md"
     }
   ],
   "rankings": [
@@ -1954,6 +2020,97 @@
       ],
       "basis": "guess; no credited release savings without measured agent overlap",
       "reason": "Measured long-prefill stalls become a speed candidate; validity rungs continue first. Capacity replay still waits for real distinct histories."
+    },
+    {
+      "after": "terminal-container-startup-failure",
+      "order": [
+        {
+          "problem": "docker-startup-timeout-leaks-own-container",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "basis": "host validity0; speed guesses with no credit yet",
+      "reason": "New concrete startup failure prevents Terminal score; investigate lifecycle before blind redispatch. Other suites continue."
+    },
+    {
+      "after": "docker-launch-repair-published-terminal-requeued",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "docker-startup-timeout-leaks-own-container",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "basis": "hostfix0; future diagnosticcost guesses, no unmeasuredspeedcredit",
+      "reason": "Validity first. Startup fix live confirmation rides requeued normal smoke; real-history capacity and release-cost estimates await scored tool trajectories."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

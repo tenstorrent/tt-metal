@@ -2,7 +2,7 @@
   "arm": "nightly-gpqa-explicit-autoport",
   "device": "qb2-ci",
   "owner": "coordinator",
-  "status": "building_or_queued",
+  "status": "device_job_in_progress",
   "eval": "r1_gpqa_diamond",
   "tasks": 10,
   "planned_clients": 2,
@@ -26,8 +26,13 @@
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42182664252",
   "workflow_status": "in_progress",
   "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T08:35:04.106397+00:00",
+  "last_observed_at": "2026-11-06T08:56:22.584442+00:00",
   "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-7c7mw",
   "build_started_at": "2026-11-06T07:42:59Z",
-  "build_completed_at": null
+  "build_completed_at": "2026-11-06T08:35:37Z",
+  "runner": "qb2-120-p05t05",
+  "device_job_id": 127795403360,
+  "device_job_started_at": "2026-11-06T08:35:39Z",
+  "device_job_completed_at": null,
+  "start": "2026-11-06T08:35:39Z"
 }
