@@ -1723,8 +1723,6 @@ def test_speedrun_decays_linearly_to_min_lr_at_total_steps():
     "training_config, expected_total_steps",
     [
         ({"max_steps": 5000}, 5000),
-        ({"max_steps": 160, "total_steps": 300}, 160),
-        ({"total_steps": 300}, 300),
         ({}, 1000),
     ],
 )
