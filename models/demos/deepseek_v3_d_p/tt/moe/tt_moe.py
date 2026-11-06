@@ -1161,7 +1161,7 @@ class TtMoe(LightweightModule):
         if self.overlap_shared_expert_with_dispatch and not return_intermediates:
             pcr_weights = ttnn.reshape(
                 scores,
-                (1, 1, scores.shape[-2], scores.shape[-1], 1),
+                (1, scores.shape[0], scores.shape[-2], scores.shape[-1], 1),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 sub_core_grids=self.shared_expert.subdevice_cores,
             )
