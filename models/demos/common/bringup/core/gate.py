@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from models.demos.common.bringup.core import freeze, hangdump
+from models.demos.common.bringup.core import batch, freeze, hangdump
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core import stamps
 from models.demos.common.bringup.core.ledger import Ledger, fixed_accuracy, satisfied, wall_only_device_metrics
@@ -721,7 +721,13 @@ def run_units(
             before = M.load(tid, results)
             seen = {p: p.stat().st_mtime_ns for p in outputs_in(results, task) if p.exists()}
             t0 = time.time()
-            rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT).returncode
+            run = batch.unit_command(cmd, spec) if spec.get("tests.one_process") else None
+            if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model loaded once
+                f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {run}\n")
+                f.flush()
+            rc = subprocess.run(
+                run or cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT
+            ).returncode
             if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F204: before the next unit's mesh open wipes it
                 kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
                 f.write(f"\n# {u}: HANG; triage + inspector kept in {kept}\n")

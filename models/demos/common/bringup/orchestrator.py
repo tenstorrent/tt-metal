@@ -79,6 +79,7 @@ import yaml
 from models.demos.common.bringup import overseer as OV
 from models.demos.common.bringup import timing as TL
 from models.demos.common.bringup import watch as W
+from models.demos.common.bringup.core import batch as B
 from models.demos.common.bringup.core import checkout_env, defaults
 from models.demos.common.bringup.core import freeze as F
 from models.demos.common.bringup.core import metrics as M
@@ -1808,13 +1809,15 @@ class Orchestrator:
     ) -> dict:
         """F116: one side's runs (all, or the names / kinds in ``only``). Each run is kept in side.json with its own
         stamp (code key, switch, command); a run whose stamp matches is reused, not run again: the agent's `measure`
-        runs of the 'on' side are the report's. {name: result}; raises InfraStop on a board problem."""
+        runs of the 'on' side are the report's. {name: result}; raises InfraStop on a board problem.
+        F259 (spec tests.one_process): the runs that may share a process (core/batch.py) run first, in one process per
+        model configuration, the model loaded once; each keeps its own results dir, log, stamp and result."""
         tid = task["id"]
         d = self.run_dir / "ab" / tid / side
         f = d / "side.json"
         kept = json.loads(f.read_text()) if f.exists() else {}
         items = kept.get("items", {}) if kept.get("version") == 2 else {}
-        out = {}
+        out, todo = {}, []
         for name, kind, cmd, extra in self.ab_items(task):
             if only is not None and name not in only and kind not in only:
                 continue
@@ -1828,27 +1831,40 @@ class Orchestrator:
                 out[name] = items[name]["result"]
                 self.echo(f"{label} reused (same code and switch)" if code else f"{label} (before the change) kept")
                 continue
-            if not run:
-                continue
-            self.pause_point(tid, f"A/B {'on' if side == 'new' else 'off'}: {name}")  # F240: between runs, not mid-run
-            stamp["code"] = stamp.get("code") or self.ab_code_key(task)
+            if run:
+                todo.append((name, kind, cmd, extra, stamp, label))
+        batched = self.ab_batches(task, side, todo, base, env, d) if todo else {}
+        stop = None
+        for name, kind, cmd, extra, stamp, label in todo:
             res = d / name
-            M.reset(tid, res)
-            self.echo(label)
-            rc = self.run_cmd(cmd, dict(base, **{M.RESULTS_ENV: str(res)}, **env, **extra), res / f"{name}.log")
-            text = (res / f"{name}.log").read_text(errors="replace")
-            crash = PROCESS_CRASH.search(text) if rc != 0 else None
-            if (
-                crash
-            ):  # F207 (DeepSeek-V4.1 P.2, 2026-10-28: a bus error while loading cached weights lost the off side)
-                self.echo(f"{label}: the process died ({crash.group(0)}); running it once more (F207)")
-                (res / f"{name}.log").rename(res / f"{name}.crashed.log")
+            if name in batched:
+                rc = batched[name]["rc"]
+                self.echo(f"{label} (one process, F259: rc {rc})")
+                text = (res / f"{name}.log").read_text(errors="replace") if (res / f"{name}.log").exists() else ""
+            else:
+                if stop is not None:  # F259: a batch hung or died: no new process after it
+                    continue
+                self.pause_point(tid, f"A/B {'on' if side == 'new' else 'off'}: {name}")  # F240: between runs
+                stamp["code"] = stamp.get("code") or self.ab_code_key(task)
                 M.reset(tid, res)
+                self.echo(label)
                 rc = self.run_cmd(cmd, dict(base, **{M.RESULTS_ENV: str(res)}, **env, **extra), res / f"{name}.log")
                 text = (res / f"{name}.log").read_text(errors="replace")
+                crash = PROCESS_CRASH.search(text) if rc != 0 else None
+                if crash:  # F207 (DeepSeek-V4.1 P.2, 2026-10-28: a bus error while loading cached weights lost a side)
+                    self.echo(f"{label}: the process died ({crash.group(0)}); running it once more (F207)")
+                    (res / f"{name}.log").rename(res / f"{name}.crashed.log")
+                    M.reset(tid, res)
+                    rc = self.run_cmd(cmd, dict(base, **{M.RESULTS_ENV: str(res)}, **env, **extra), res / f"{name}.log")
+                    text = (res / f"{name}.log").read_text(errors="replace")
+            stamp["code"] = stamp.get("code") or self.ab_code_key(task)
             sig = INFRA_FAILURES.search(text) or TEST_TIMEOUT.search(text)
-            if sig or rc == SAFE_HANG_RC:
-                raise InfraStop(tid, sig.group(0) if sig else f"{name} hung (rc {rc})")
+            if sig or rc == SAFE_HANG_RC or (name in batched and batched[name].get("unfinished")):
+                why = sig.group(0) if sig else f"{name} hung (rc {rc})" if rc == SAFE_HANG_RC else f"{name} not run"
+                if name not in batched:
+                    raise InfraStop(tid, why)
+                stop = stop or InfraStop(tid, why)  # F259: raised after the batch's finished runs are kept
+                continue
             got = {k: v["value"] for k, v in M.load(tid, res).items()}
             if kind == "test":
                 result = {"rc": rc, "checks": [m.strip() for m in FAILED_CHECK.findall(text)][:12]}
@@ -1881,6 +1897,82 @@ class Orchestrator:
             items[name] = {"kind": kind, "stamp": stamp, "result": result, "t": now()}
             d.mkdir(parents=True, exist_ok=True)
             f.write_text(json.dumps({"version": 2, "items": items}, indent=1))
+        if stop is not None:
+            raise stop
+        return out
+
+    def ab_batches(self, task: dict, side: str, todo: list, base: dict, env: dict, d: Path) -> dict:
+        """F259: the runs of ``todo`` whose every segment may share a process (core/batch.parse_all), in one process
+        per model configuration (core/batch.model_key: a segment with its own switch, e.g. DS41_DECODER_SKIP, is
+        another process), ladders first and profiled runs last (core/batch.phase). Each run keeps its own log and
+        results dir, as alone; a failed segment skips the rest of its run in that process (&&).
+        {name: {"rc", "unfinished"?}}; a process that died of a signal runs what it did not finish once more (F207)."""
+        if not self.spec.get("tests.one_process"):
+            return {}
+        tid = task["id"]
+        where = "on" if side == "new" else "off"
+        cands = {n: (B.parse_all(c), x, c, lab) for n, _, c, x, _, lab in todo}
+        cands = {n: v for n, v in cands.items() if v[0]}
+        if sum(len(v[0]) for v in cands.values()) < 2:
+            return {}
+        names = {k for runs, x, _, _ in cands.values() for r in runs for k in list(r["env"]) + list(x)}
+        batches: dict[str, list[dict]] = {}
+        for n, (runs, x, cmd, lab) in cands.items():
+            res = d / n
+            M.reset(tid, res)
+            res.mkdir(parents=True, exist_ok=True)
+            (res / f"{n}.log").write_text(f"$ {cmd}\n# F259: its runs in one process with the side's other runs\n")
+            self.echo(f"{lab} (one process, F259)")
+            for j, r in enumerate(runs):
+                key = B.model_key({**base, **env, **x, **r["env"]}, names)
+                e_env = {**x, **r["env"], M.RESULTS_ENV: str(res)}  # as the shell: a segment's prefix wins
+                batches.setdefault(key, []).append(
+                    dict(r, env=e_env, name=f"{n}.{j}", group=n, log=str(res / f"{n}.log"), key=key)
+                )
+        state: dict[str, dict] = {}  # entry name -> {"rc"} or None (not finished)
+        hung: set[str] = set()  # the entries a hung process did not finish
+        for k, entries in enumerate(batches.values()):
+            entries.sort(key=B.phase)
+            todo_e = entries
+            for attempt in range(2):
+                self.pause_point(
+                    tid, f"A/B {where}: one process for {', '.join(dict.fromkeys(e['group'] for e in todo_e))}"
+                )
+                plan = B.write_plan(d / f"batch{k}.json", todo_e)
+                self.echo(
+                    f"  [{tid}] A/B {where}: one process (F259), {len(todo_e)} runs: {', '.join(e['name'] for e in todo_e)}"
+                )
+                blog = d / f"batch{k}.log"
+                rc = self.run_cmd(B.command(plan), {**base, **env, **B.hints(entries, self.spec)}, blog)
+                got = B.load_results(plan)["runs"]
+                for e in todo_e:
+                    state[e["name"]] = got.get(e["name"])
+                left = [e for e in todo_e if state[e["name"]] is None]
+                texts = [blog.read_text(errors="replace")] + [Path(e["log"]).read_text(errors="replace") for e in left]
+                crash = next((m for t in texts if (m := PROCESS_CRASH.search(t))), None) if rc and left else None
+                if crash and attempt == 0:  # F207: once more, the runs it did not finish
+                    self.echo(
+                        f"  [{tid}] A/B batch: the process died ({crash.group(0)}); its unfinished runs once more"
+                    )
+                    blog.rename(d / f"batch{k}.crashed.log")
+                    for e in left:
+                        with open(e["log"], "a") as f:
+                            f.write(f"\n# F207: the process died ({crash.group(0)}); the unfinished runs once more\n")
+                    todo_e = left
+                    continue
+                if rc == SAFE_HANG_RC:
+                    hung |= {e["name"] for e in left}
+                break
+            if hung:  # no new process after a hang (the board needs a reset)
+                break
+        out = {}
+        for n in cands:
+            mine = [e for es in batches.values() for e in es if e["group"] == n]
+            rs = [state.get(e["name"]) for e in mine]
+            if any(r is None for r in rs):
+                out[n] = {"rc": SAFE_HANG_RC if any(e["name"] in hung for e in mine) else 1, "unfinished": True}
+            else:
+                out[n] = {"rc": next((r["rc"] for r in rs if r.get("rc")), 0)}
         return out
 
     def ab_metrics(self, tid: str, d: Path, side: str, name: str) -> dict:

@@ -34,7 +34,7 @@ import torch
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.golden import Golden
-from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge
+from models.demos.common.bringup.testing import accuracy_guard, batch, cpu_bridge
 from models.demos.common.bringup.testing import e2e_limits as E
 from models.demos.common.bringup.testing import profiler
 from models.demos.common.bringup.testing.harness import begin_chunk, chunk_last
@@ -428,7 +428,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     layers = [i for i in s.layers() if i in g.layers]
     chunk = rung["chunk"]
     start = rung["seq"] - chunk
-    model = s.hooks().device_model(mesh, s, layers, lm_head=False)
+    model = batch.device_model(s, mesh, layers, lm_head=False)
     state = model.new_state(rung["seq"])
     prefix = {i: g.state(i, at=start) for i in layers}
 

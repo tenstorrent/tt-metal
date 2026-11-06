@@ -21,7 +21,7 @@ import time
 import torch
 
 from models.demos.common.bringup.core import metrics
-from models.demos.common.bringup.testing import cpu_bridge, profile
+from models.demos.common.bringup.testing import batch, cpu_bridge, profile
 from models.demos.common.bringup.testing.harness import begin_chunk
 
 
@@ -56,7 +56,7 @@ def run_positions(s, mesh) -> list[tuple[int, float]]:
     chunk, starts = int(s.get("target.chunk")), positions(s)
     s.data["target"]["seq"] = max(_target_seq(s), max(starts) + chunk)  # in memory only
     layers = s.layers()
-    model = s.hooks().device_model(mesh, s, layers, lm_head=False)
+    model = batch.device_model(s, mesh, layers, lm_head=False)
     metrics.record("device_model_hybrid", int("Hybrid" in type(model).__name__))
     metrics.record("pos_chunk", chunk)
     vocab = int(s.get("checkpoint.config.vocab_size", 32000) or 32000)

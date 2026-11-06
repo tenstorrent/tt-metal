@@ -47,6 +47,9 @@ tests:
                               # (testing/determinism.py; 0 turns it off). About 5 extra calls per test.
   nondeterministic: {}        # component steps exempt from that check, {step: reason}
   fork_waivers: {}            # F199: owner-accepted failing fork tests, {<test id as fork_suite prints it>: reason}; WAIVED
+  one_process: false          # F259: the A/B side's / a gate unit's profile, ladder and position runs in ONE pytest
+                              # process, the model loaded once (core/batch.py); false = a process each (until the
+                              # device check in F259 shows the numbers agree)
 
 box:
   test_timeout_s: 3600     # one device test, seconds (hang guard)
