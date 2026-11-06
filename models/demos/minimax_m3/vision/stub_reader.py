@@ -34,10 +34,8 @@ class StubEmbeddingReader:
             n = stub_key_tokens(key)
         except (ValueError, TypeError, struct.error) as e:
             raise Missing(media_key) from e
-        buf = memoryview(bytearray(format.value_size(n, self.hidden)))
-        h = format.Header(1, n, n, self.hidden)
-        format.write_header(buf, h)
+        buf = memoryview(bytearray(format.stored_nbytes(n, self.hidden)))
         gen = torch.Generator().manual_seed(int.from_bytes(hashlib.sha256(key).digest()[:7], "little"))
         rows = (torch.randn(n, self.hidden, generator=gen) * 0.02).to(torch.bfloat16)
-        format.embeddings(buf, h)[:] = rows.view(torch.int16).numpy()
+        format.embeddings(buf, self.hidden)[:] = rows.view(torch.int16).numpy()
         return buf

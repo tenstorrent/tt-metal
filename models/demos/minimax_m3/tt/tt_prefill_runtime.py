@@ -350,15 +350,12 @@ class TtPrefillRuntime:
         hidden = self.hf_config.hidden_size
         keys = list(dict.fromkeys(ref.media_key for ref in media_refs))
         bufs = self.media_embedding_reader.fetch_batch([FetchRequest(store_key(k)) for k in keys])
-        values = {}
-        for key, buf in zip(keys, bufs, strict=True):
-            h = media_format.read_header(buf)
-            values[key] = (h, media_format.embeddings(buf, h))
+        values = {key: media_format.embeddings(buf, hidden) for key, buf in zip(keys, bufs, strict=True)}
 
         def rows_of(ref):
-            h, rows = values[ref.media_key]
-            if (h.n_tokens, h.hidden) != (ref.num_tokens, hidden):
-                raise ValueError(f"{ref}: stored value has {h.n_tokens} tokens of width {h.hidden}")
+            rows = values[ref.media_key]
+            if len(rows) != ref.num_tokens:
+                raise ValueError(f"{ref}: stored value has {len(rows)} tokens")
             return rows
 
         rows, mask = build_injection(media_refs, chunks, rows_of, cfg.sp_factor, cfg.chunk_size // cfg.sp_factor)

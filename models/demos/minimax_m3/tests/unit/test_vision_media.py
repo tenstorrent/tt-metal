@@ -103,10 +103,10 @@ def test_stub_reader_serves_stub_keys(expect_error):
     reader = StubEmbeddingReader(64)
     key = stub_media_key(6, 0).hex()
     value = reader.fetch(key)
-    assert media_format.read_header(value) == media_format.Header(1, 6, 6, 64)
+    assert media_format.embeddings(value, 64).shape == (6, 64)
     assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1).hex()))
-    head, rows = reader.fetch_batch([FetchRequest(key, 0, 16), FetchRequest(key, media_format.HEADER_BYTES)])
-    assert bytes(head) == bytes(value[:16]) and bytes(rows) == bytes(value[media_format.HEADER_BYTES :])
+    head, rest = reader.fetch_batch([FetchRequest(key, 0, 16), FetchRequest(key, 16)])
+    assert bytes(head) + bytes(rest) == bytes(value)
     for key in (bytes(32).hex(), "00"):
         with expect_error(Missing, key):
             reader.fetch(key)
