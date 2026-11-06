@@ -7,6 +7,7 @@ import os
 from torch import nn
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 from models.demos.gemma4.tt.mesh_orientation import decode_flag
@@ -115,6 +116,8 @@ class RMSNorm(nn.Module):
         the width-sharded input memcfg + LayerNorm program config. Returns None
         if no usable grid divides the tile-width evenly (falls back to plain)."""
         if dim % ttnn.TILE_SIZE != 0:
+            return None
+        if not is_blackhole():  # DIAGNOSTIC: bypass the WH sharded LN kernels (#63974 / #64202)
             return None
         tiles = dim // ttnn.TILE_SIZE
         grid = self.mesh_device.compute_with_storage_grid_size()
