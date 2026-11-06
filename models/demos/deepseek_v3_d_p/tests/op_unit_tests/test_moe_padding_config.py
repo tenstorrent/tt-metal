@@ -220,3 +220,64 @@ def test_moe_padding_config_one_program_across_chunks(mesh_device):
         f"expected 1 cached program for {len(chunks)} chunks, got "
         f"{mesh_device.num_program_cache_entries() - entries_before}"
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param((1, 1), {}, id="1x1"),
+    ],
+    indirect=True,
+)
+def test_moe_padding_config_new_metadata_tensors_on_cache_hit(mesh_device):
+    """A cache hit with DIFFERENT metadata tensors (new allocations, so new addresses) must read the new
+    tensors. The metadata addresses are buffer bindings the framework re-points on a hit; if they were
+    left stale the kernel would read the first call's tensors and produce the first chunk's config."""
+    sp_factor = int(mesh_device.shape[0])
+    tokens_per_chip = PREFILL_CHUNK_TOKENS_PER_CHIP
+
+    config = _alloc_config(mesh_device, sp_factor)
+
+    mesh_device.enable_program_cache()
+    entries_before = mesh_device.num_program_cache_entries()
+
+    # Keep every metadata tensor alive so no allocation can reuse an earlier one's address.
+    live_tensors = []
+    seen_addresses = set()
+    chunks = [(0, 640), (640, 1280), (1280, 300), (2592, 1568)]
+    for actual_start, actual_isl in chunks:
+        start_t = _meta1(mesh_device, actual_start)
+        end_t = _meta1(mesh_device, actual_start + actual_isl)
+        live_tensors += [start_t, end_t]
+        addresses = (start_t.buffer_address(), end_t.buffer_address())
+        assert not seen_addresses.intersection(addresses), "metadata tensors reused an earlier address"
+        seen_addresses.update(addresses)
+
+        ttnn.experimental.deepseek_prefill.moe_padding_config(
+            config,
+            start_t,
+            end_t,
+            tokens_per_chip=tokens_per_chip,
+            pad_side=0,
+            cluster_axis=0,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        got_counts, got_sides = _read_counts(config, mesh_device, sp_factor)
+        expected = rotated_chip_real_token_counts(actual_start, actual_isl, sp_factor, tokens_per_chip)
+        assert got_counts == expected, (
+            f"chunk (start={actual_start}, isl={actual_isl}): device={got_counts} host={expected} "
+            "-- the cached program read a previous call's metadata tensors"
+        )
+        assert got_sides == [0] * sp_factor, f"pad_side mismatch: {got_sides}"
+
+    assert mesh_device.num_program_cache_entries() == entries_before + 1, (
+        f"expected 1 cached program for {len(chunks)} chunks, got "
+        f"{mesh_device.num_program_cache_entries() - entries_before}"
+    )

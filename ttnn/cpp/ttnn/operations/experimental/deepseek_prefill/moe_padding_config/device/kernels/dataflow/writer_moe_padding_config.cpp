@@ -10,8 +10,8 @@
 
 // Builds this chip's [local_real_tokens, pad_side] MoE padding-config row entirely on-device.
 //
-// The per-chunk values arrive as two 1-element uint32 DRAM tensors (raw addresses in common args 3
-// and 4) — `actual_start` (absolute KV position of this chunk's first real token) and `actual_end`
+// The per-chunk values arrive as two 1-element uint32 DRAM tensors (addresses in common args 3 and 4)
+// — `actual_start` (absolute KV position of this chunk's first real token) and `actual_end`
 // (one past its last real token). Reading them on-device keeps them off the host dispatch path, so
 // this op is trace-safe: one captured program recomputes the correct config on every replay.
 //
@@ -24,7 +24,8 @@
 // accessor (the two 1-element tensors share an identical layout, so one accessor serves both reads).
 //
 // Common runtime args: [0]=my_sp_coord, [1]=sp_factor, [2]=tokens_per_chip,
-//                      [3]=actual_start tensor DRAM addr, [4]=actual_end tensor DRAM addr.
+//                      [3]=actual_start tensor DRAM addr, [4]=actual_end tensor DRAM addr
+//                      (both Buffer* bindings, re-pointed by the framework on cache hits).
 // Per-core runtime args: [0]=config output buffer address (Buffer* binding).
 
 namespace {

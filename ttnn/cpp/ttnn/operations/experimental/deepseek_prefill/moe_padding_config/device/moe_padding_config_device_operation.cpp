@@ -31,10 +31,6 @@ constexpr uint32_t kMetaCbIndex = 1;
 // Rounded up to a 16B alignment-friendly slot.
 constexpr uint32_t kMetadataBytes = 16;
 
-// Index of the first per-call common runtime arg (the two metadata tensor addresses).
-constexpr uint32_t kArgActualStartAddr = 3;
-constexpr uint32_t kArgActualEndAddr = 4;
-
 // Checks re-run on BOTH the cache-miss and cache-hit paths: none of these are hashed, so a caller
 // could otherwise change them behind a cached program. The per-chunk VALUES live in device tensors
 // and cannot be read host-side without a read-back, so they stay the caller's responsibility (the
@@ -95,7 +91,7 @@ void validate_runtime_args(
 
 MoePaddingConfigDeviceOperation::program_factory_t MoePaddingConfigDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return MeshWorkloadFactory{};
+    return ProgramFactory{};
 }
 
 void MoePaddingConfigDeviceOperation::validate_on_program_cache_miss(
@@ -123,8 +119,8 @@ MoePaddingConfigDeviceOperation::tensor_return_value_t MoePaddingConfigDeviceOpe
 ttsl::hash::hash_t MoePaddingConfigDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // The per-chunk values are NEVER hashed: they are read on-device from the metadata tensors, whose
-    // raw addresses live in common runtime args refreshed by override_runtime_arguments. That is the
-    // whole point — one cached program serves every chunk, so it can be captured once and replayed.
+    // addresses are Buffer* bindings the framework re-points on every cache hit. That is the whole
+    // point — one cached program serves every chunk, so it can be captured once and replayed.
     const auto& config = tensor_args.config;
     return tt::tt_metal::operation::hash_operation<MoePaddingConfigDeviceOperation>(
         args.tokens_per_chip,
@@ -202,54 +198,21 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
     writer_kernel.config = WriterConfigDescriptor{};
 
     // Common rt-args: [0..2] structural (this chip's mesh position + the rotation period), [3..4] the
-    // per-call metadata tensor addresses that override_runtime_arguments refreshes on cache hits.
+    // per-call metadata tensors. All tensor addresses (the metadata tensors here, the config buffer
+    // below) are passed as Buffer* bindings, so cache hits take the fast path that patches every
+    // address and skips create_descriptor.
     writer_kernel.emplace_common_runtime_args({
         my_sp_coord,
         sp_factor,
         args.tokens_per_chip,
-        tensor_args.actual_start.buffer()->address(),  // smuggled-rta-ok: 1-element metadata tensor DRAM
-                                                       // addr; read on-device (trace-safe, unhashed)
-        tensor_args.actual_end.buffer()->address(),    // smuggled-rta-ok: as above
+        tensor_args.actual_start.buffer(),
+        tensor_args.actual_end.buffer(),
     });
 
-    // The config buffer is passed as a Buffer* binding (not a raw address) so cache hits take the fast
-    // path that patches its address and skips create_descriptor.
     writer_kernel.emplace_runtime_args(core, {config.buffer()});
 
     desc.kernels.push_back(std::move(writer_kernel));
     return desc;
-}
-
-MoePaddingConfigDeviceOperation::MeshWorkloadFactory::cached_mesh_workload_t
-MoePaddingConfigDeviceOperation::MeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output);
-}
-
-void MoePaddingConfigDeviceOperation::MeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    // Default adapter behaviour: patch operand buffer-binding addresses on cache hits.
-    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
-    // The metadata addresses are raw scalars in common runtime args, which the buffer-binding fast
-    // path does not refresh — patch them on every cached program or the kernel would keep reading a
-    // stale (possibly freed) address.
-    constexpr uint32_t kWriterKernelHandle = 0;  // the only kernel pushed in create_descriptor
-    const uint32_t start_addr = tensor_args.actual_start.buffer()->address();
-    const uint32_t end_addr = tensor_args.actual_end.buffer()->address();
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);
-        TT_FATAL(
-            kArgActualEndAddr < writer_common.size(),
-            "moe_padding_config writer is missing its per-call common runtime args");
-        writer_common[kArgActualStartAddr] = start_addr;
-        writer_common[kArgActualEndAddr] = end_addr;
-    }
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_padding_config
