@@ -710,7 +710,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
     RingAttentionRankMapping rank_mapping,
-    const std::vector<RingAttentionRankSlab>& last_input_rank_slabs) {
+    const std::vector<RingAttentionRankSlab>& last_input_rank_slabs,
+    const std::optional<RingAttentionDenseReturn>& dense_return) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -999,6 +1000,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const bool has_metadata = kv_actual_isl.has_value();
     TT_FATAL(!has_slot_metadata || has_metadata, "slot metadata requires KV-extent metadata");
     const bool has_rank_slabs = !last_input_rank_slabs.empty();
+    const bool has_dense_return = dense_return.has_value();
+    TT_FATAL(!has_dense_return || fuse_op, "Ring attention dense return needs a fused consumer");
     const uint32_t my_tensor_rank =
         rank_mapping.full_mesh
             ? ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<true>(
@@ -1156,6 +1159,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
             static_cast<uint32_t>(has_rank_slabs),              // kHasRankSlabs
+            static_cast<uint32_t>(has_dense_return),            // kHasDenseReturn
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,
@@ -1168,6 +1172,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (has_metadata) {
             tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
         }
+        tt::tt_metal::TensorAccessorArgs(has_dense_return ? dense_return->staging : nullptr).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(has_dense_return ? dense_return->recv : nullptr).append_to(args);
         return args;
     };
 
@@ -1401,6 +1407,38 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             writer_args.push_back(chunk_local_tiles);
         }
         append_rank_slabs(writer_args);
+        if (has_dense_return) {
+            // The forward worker sends to the backward neighbour (tensor rank - 1), where its partials arrive from
+            // the + side (receive side 1); the backward worker the other way.
+            const auto& dr = *dense_return;
+            const auto& sends = is_forward ? dr.sends_minus : dr.sends_plus;
+            writer_args.push_back(static_cast<uint32_t>(sends.size()));
+            writer_args.push_back(dr.staging);
+            writer_args.push_back(dr.recv);
+            writer_args.push_back(is_forward ? dr.ready_minus_addr : dr.ready_plus_addr);
+            writer_args.push_back(dr.arrival_addr);
+            writer_args.push_back(dr.n_cores);
+            writer_args.push_back(dr.units_base);
+            writer_args.push_back(dr.units_extra);
+            writer_args.push_back(static_cast<uint32_t>(dr.core_x.size()));
+            writer_args.push_back(static_cast<uint32_t>(dr.core_y.size()));
+            writer_args.push_back(is_forward ? 1u : 0u);
+            writer_args.push_back(dr.n_units);
+            writer_args.push_back(num_links);
+            writer_args.push_back(placement.link);
+            writer_args.push_back(dr.partial_tiles);
+            for (const uint32_t x : dr.core_x) {
+                writer_args.push_back(x);
+            }
+            for (const uint32_t y : dr.core_y) {
+                writer_args.push_back(y);
+            }
+            for (const auto& send : sends) {
+                for (const uint32_t w : send) {
+                    writer_args.push_back(w);
+                }
+            }
+        }
 
         const auto neighbor_coord = is_forward ? backward_device_coord : forward_device_coord;
         std::vector<uint32_t> writer_extra_args;

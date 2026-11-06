@@ -16,6 +16,7 @@
 #include "pooled_bias_gen.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#include "sparse_dense_units.hpp"
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 
@@ -80,7 +81,10 @@ void kernel_main() {
     constexpr auto pooled_k_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto pooled_v_args = TensorAccessorArgs<pooled_k_args.next_compile_time_args_offset()>();
     constexpr auto block_counts_args = TensorAccessorArgs<pooled_v_args.next_compile_time_args_offset()>();
-    constexpr uint32_t chains_base_offset = block_counts_args.next_compile_time_args_offset();
+    // dense_blocks split across devices: the gathered dense-Q buffer and the partials arriving from the neighbours.
+    constexpr auto dense_q_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
+    constexpr auto dense_recv_args = TensorAccessorArgs<dense_q_args.next_compile_time_args_offset()>();
+    constexpr uint32_t chains_base_offset = dense_recv_args.next_compile_time_args_offset();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -152,7 +156,14 @@ void kernel_main() {
     constexpr uint32_t dense_n_ranges = get_named_compile_time_arg_val("dense_n_ranges");
     constexpr bool dense_keys = get_named_compile_time_arg_val("dense_keys") == 1;
     const uint32_t dense_ranges_base = sparse_args_base + 6 + pooled_bias_gen::kTableWords;
-    const uint32_t group_members_base = dense_ranges_base + 2 * dense_n_ranges;
+    // Dense units (dense_owners > 0): [first unit, end unit, arrival semaphore, dense-Q buffer, receive buffer], then
+    // one sparse_dense::Owner record per owner shard.
+    constexpr uint32_t dense_owners = get_named_compile_time_arg_val("dense_owners");
+    constexpr bool dense_debug = get_named_compile_time_arg_val("dense_debug") == 1;
+    constexpr bool res_remap = get_named_compile_time_arg_val("res_remap") == 1;
+    const uint32_t dense_base = dense_ranges_base + 2 * dense_n_ranges;
+    const uint32_t group_members_base =
+        dense_base + (dense_owners > 0 ? 5 + sparse_dense::kRecordWords * dense_owners : 0);
     const auto dense_lo = [&](uint32_t r) { return get_arg_val<uint32_t>(dense_ranges_base + 2 * r); };
     const auto dense_hi = [&](uint32_t r) { return get_arg_val<uint32_t>(dense_ranges_base + 2 * r + 1); };
     const auto in_dense = [&](uint32_t g) {
@@ -327,36 +338,23 @@ void kernel_main() {
     const uint32_t ring_index =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
-    // The ring order before any iteration, replayed by the passes after the first.
-    const auto ring_seq_start = fused_op_receiver.seq;
-    for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
-        // This pass's blocks: the core's [q_pass, q_pass + 1) share of [global_q_start, global_q_end).
-        const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
-        const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
-        auto ring_seq_replay = ring_seq_start;
-        q_pushed = false;
-        pooled_pending = true;
-        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            const bool ring_iter_is_active = ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
-            const uint32_t ring_id = [&]() -> uint32_t {
-                if (q_pass > 0) {
-                    // Every shard arrived (and was read) in the first pass: replay the ring order without waits.
-                    return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        ring_seq_replay.get_next_ring_id([](uint32_t, uint32_t) {}),
-                        mesh_rows,
-                        mesh_cols,
-                        snake_orientation);
-                }
-                return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                    fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-            }();
-            // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
-            // still advances above so reader stays aligned with compute, writer, and all-gather.
-            if (!ring_iter_is_active) {
-                continue;
-            }
-
-            const uint32_t do_pooled = (pooled_route && pooled_pending) ? 1u : 0u;
+    const auto in_dense_rt = [&](uint32_t g) { return in_dense(g); };
+    // Every pass's Q starts at cb_q_in's base when there are several passes or dense batches after them.
+    constexpr bool pad_q = num_q_passes > 1 || dense_owners > 0;
+    // A dense batch: units of one owner against the local shard, Q from q (own shard) or the dense-Q buffer.
+    struct DenseBatch {
+        uint32_t count = 0;
+        bool local = false;
+        uint32_t q_row_offset = 0;  // dense-Q buffer row of local Q row r: r + q_row_offset
+        uint32_t q_row_end = 0;
+        uint32_t heads[32];
+        uint32_t blocks[32];
+    };
+    // One ring iteration over shard ring_id for the pass's Q blocks [pass_q_start, pass_q_end), or one dense batch
+    // (dense != nullptr) over the local shard: every live block kept, own K/V reads, no pooled entries.
+    const auto run_iteration =
+        [&](const uint32_t ring_id, const uint32_t pass_q_start, const uint32_t pass_q_end, const DenseBatch* dense) {
+            const uint32_t do_pooled = (dense == nullptr && pooled_route && pooled_pending) ? 1u : 0u;
             // Per ring iteration:
             //   1. on the pass's first active iteration, the pass's Q chunks into cb_q_in;
             //   2. one plan record per resident chunk [this shard's kept-block words, head-group piece union lo, hi,
@@ -366,26 +364,50 @@ void kernel_main() {
             //   4. on the pass's first active iteration, the pooled K/V chunks once per head, then one bias row per
             //      resident chunk of that head (K and V first, so compute never waits for V behind a bias row).
             constexpr uint32_t kResMax = 32;
-            const uint32_t n_res = pass_q_end - pass_q_start;
+            const uint32_t n_res = dense != nullptr ? dense->count : pass_q_end - pass_q_start;
             ASSERT(n_res <= resident_slots);
             uint32_t res_nb[kResMax];
             uint32_t res_nq[kResMax];
             uint32_t res_qc[kResMax];
             for (uint32_t i = 0; i < n_res; ++i) {
+                if (dense != nullptr) {
+                    res_nb[i] = 0;
+                    res_nq[i] = dense->heads[i];
+                    res_qc[i] = dense->blocks[i];
+                    continue;
+                }
                 const auto d = decompose_global_q_index(pass_q_start + i, num_q_chunks, NH, use_zigzag_balancing);
                 res_nb[i] = d.nb;
                 res_nq[i] = d.nq;
-                res_qc[i] = d.q_chunk;
+                // This shard's dense rows run as dense units: its resident blocks are the others.
+                res_qc[i] = res_remap
+                                ? sparse_dense::resident_block(ring_index, d.q_chunk, mask_nb, mask_nb_pad, in_dense_rt)
+                                : d.q_chunk;
             }
-            // 1. Q, once per pass. The reserve waits until compute has popped the previous pass's Q.
-            if (!q_pushed) {
+            // 1. Q, once per pass (every dense batch). The reserve waits until compute has popped the previous Q.
+            if (dense != nullptr || !q_pushed) {
                 for (uint32_t i = 0; i < n_res; ++i) {
-                    const Slice q_slice(
-                        res_nb[i], res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, DHt);
+                    const uint32_t row0 = res_qc[i] * Sq_chunk_t;
+                    if (dense != nullptr && !dense->local) {
+                        const auto dense_q_generator = PaddedAddrGenerator(
+                            TensorAccessor(dense_q_args, get_arg_val<uint32_t>(dense_base + 3)),
+                            TensorTileShape(B, NH, get_named_compile_time_arg_val("dense_q_rows_t"), DHt));
+                        const uint32_t r0 = row0 + dense->q_row_offset;
+                        read_block(
+                            dense_q_generator,
+                            Slice(0, res_nq[i], r0, r0 + Sq_chunk_t, 0, DHt),
+                            dense->q_row_end,
+                            cb_q_in,
+                            q_tile_bytes,
+                            false,
+                            q_barrier_threshold);
+                        continue;
+                    }
+                    const Slice q_slice(res_nb[i], res_nq[i], row0, row0 + Sq_chunk_t, 0, DHt);
                     read_block(
                         q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
                 }
-                if constexpr (num_q_passes > 1) {
+                if constexpr (pad_q) {
                     // Fill cb_q_in to its capacity (resident_slots blocks) so compute pops it whole at the end of the
                     // pass and every pass's Q starts at the buffer's base: compute addresses Q block i at i blocks past
                     // the read pointer, which must not wrap.
@@ -455,7 +477,7 @@ void kernel_main() {
             // Local Q block qc of a dense row keeps every block.
             const auto row_block_bits = [&](uint32_t* words, uint32_t qc) {
                 CoreLocalMem<volatile uint32_t> row(scratch);
-                const bool dense_row = in_dense(ring_index * mask_nb_pad + qc);
+                const bool dense_row = dense != nullptr || in_dense(ring_index * mask_nb_pad + qc);
                 for (uint32_t w = 0; w < kBlockWords; ++w) {
                     words[w] = dense_row ? ~0u : dense_key_bits[w];
                 }
@@ -500,7 +522,9 @@ void kernel_main() {
                     cb_plan.get_write_ptr() + (plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
             };
             for (uint32_t i = 0; i < n_res; ++i) {
-                read_shard_slice(res_nq[i], res_qc[i]);
+                if (dense == nullptr) {
+                    read_shard_slice(res_nq[i], res_qc[i]);
+                }
                 uint32_t words[kBlockWords];
                 row_block_bits(words, res_qc[i]);
                 if constexpr (plan_rec_base != 0) {
@@ -522,7 +546,7 @@ void kernel_main() {
                     uhi |= res_hi[i1];
                     ++i1;
                 }
-                if (group_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+                if (dense == nullptr && group_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
                     // Chain / group members stream every piece holding a live block of this shard: a superset of the
                     // members' union that needs no mask reads and is the same on every member. Compute skips a piece
                     // it keeps no block of.
@@ -553,7 +577,9 @@ void kernel_main() {
                         scratch = cb_plan.get_write_ptr() + 64;
                     }
                     // The chunk's own block bits, from its slice again (the scratch holds the last chunk's).
-                    read_shard_slice(res_nq[i], res_qc[i]);
+                    if (dense == nullptr) {
+                        read_shard_slice(res_nq[i], res_qc[i]);
+                    }
                     uint32_t words[kBlockWords];
                     row_block_bits(words, res_qc[i]);
                     CoreLocalMem<volatile uint32_t> plan_words(cb_plan.get_write_ptr());
@@ -585,8 +611,8 @@ void kernel_main() {
                 const Slice k_slice(nb, nk, row0, row0 + Sk_chunk_t, 0, DHt);
                 // Chain scope keys: the query head for MHA chains, the KV head for grouped ones.
                 const uint32_t k_head = gqa_grouped_kv ? nk : nq;
-                const bool k_rx = k_chain.should_receive(k_head);
-                const bool v_rx = v_chain.should_receive(nv);
+                const bool k_rx = dense == nullptr && k_chain.should_receive(k_head);
+                const bool v_rx = dense == nullptr && v_chain.should_receive(nv);
                 CircularBuffer cb_k(cb_k_in);
                 uint32_t k_addr;
                 if (k_armed) {
@@ -623,7 +649,7 @@ void kernel_main() {
                     v_reserved = true;
                     v_chain.signal_ready(noc);
                 }
-                if (k_chain.should_forward(k_head, 0)) {
+                if (dense == nullptr && k_chain.should_forward(k_head, 0)) {
                     k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 if (!v_reserved) {
@@ -648,7 +674,7 @@ void kernel_main() {
                     k_armed = true;
                     k_chain.signal_ready(noc);
                 }
-                if (v_chain.should_forward(nv, 0)) {
+                if (dense == nullptr && v_chain.should_forward(nv, 0)) {
                     v_chain.forward(noc, v_addr);
                 }
             };
@@ -696,7 +722,8 @@ void kernel_main() {
             // every consumer has credited p; a deeper lookahead lets a fast consumer's credits stand in for a slow
             // one's and the multicast overwrites a page the slow core has not popped.
             [[maybe_unused]] const uint32_t g_base = group_members_base + 2 * group_n_members;
-            [[maybe_unused]] const uint32_t g_role = group_mcast ? get_arg_val<uint32_t>(g_base) : 0;
+            [[maybe_unused]] const uint32_t g_role =
+                group_mcast && dense == nullptr ? get_arg_val<uint32_t>(g_base) : 0;
             [[maybe_unused]] uint32_t g_granted = 0;  // pieces credited this iteration
             [[maybe_unused]] uint32_t g_ahead = 0;    // pieces credited, not yet pushed
             const auto g_try_grant = [&](bool blocking) -> bool {
@@ -947,8 +974,110 @@ void kernel_main() {
                     }
                 }
             }
-
+        };
+    // The ring order before any iteration, replayed by the passes after the first.
+    const auto ring_seq_start = fused_op_receiver.seq;
+    for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
+        // This pass's blocks: the core's [q_pass, q_pass + 1) share of [global_q_start, global_q_end).
+        const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
+        const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
+        auto ring_seq_replay = ring_seq_start;
+        q_pushed = false;
+        pooled_pending = true;
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            const bool ring_iter_is_active = ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
+            const uint32_t ring_id = [&]() -> uint32_t {
+                if (q_pass > 0) {
+                    // Every shard arrived (and was read) in the first pass: replay the ring order without waits.
+                    return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        ring_seq_replay.get_next_ring_id([](uint32_t, uint32_t) {}),
+                        mesh_rows,
+                        mesh_cols,
+                        snake_orientation);
+                }
+                return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            }();
+            // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
+            // still advances above so reader stays aligned with compute, writer, and all-gather.
+            if (!ring_iter_is_active) {
+                continue;
+            }
+            run_iteration(ring_id, pass_q_start, pass_q_end, nullptr);
             pooled_pending = false;
+        }
+    }
+
+    // Dense units, after every pass (every shard, and so every slab, has arrived): per batch the Q blocks, the plan
+    // and the local pieces (run_iteration), then each partial arriving from a neighbour, unit by unit, for compute to
+    // merge (not in dense_debug).
+    if constexpr (dense_owners > 0) {
+        constexpr uint32_t kPartialTiles = sparse_dense::partial_tiles<Sq_chunk_t, vDHt>();
+        constexpr uint32_t cb_dense_in = get_named_compile_time_arg_val("cb_dense_in");
+        constexpr uint32_t dense_units = get_named_compile_time_arg_val("dense_units");
+        const uint32_t arrival_addr = get_arg_val<uint32_t>(dense_base + 2);
+        const auto recv_reader = TensorAccessor(dense_recv_args, get_arg_val<uint32_t>(dense_base + 4));
+        constexpr uint32_t partial_tile_bytes = get_tile_size(cb_dense_in);
+        bool any_arrivals = false;
+        sparse_dense::for_each_batch(
+            dense_owners,
+            dense_base + 5,
+            get_arg_val<uint32_t>(dense_base),
+            get_arg_val<uint32_t>(dense_base + 1),
+            NH,
+            resident_slots,
+            [](uint32_t a) { return get_arg_val<uint32_t>(a); },
+            [&](uint32_t k, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool first, bool) {
+                DenseBatch db;
+                db.count = u1 - u0;
+                db.local = o.shard == ring_index;
+                db.q_row_offset = o.slab_out_row - o.slab_row_start;
+                db.q_row_end = o.slab_out_row + o.slab_rows;
+                for (uint32_t u = u0; u < u1; ++u) {
+                    const uint32_t idx = u - o.unit_start;
+                    db.heads[u - u0] = idx / o.n_blocks;
+                    db.blocks[u - u0] =
+                        sparse_dense::dense_block(o.shard, idx % o.n_blocks, mask_nb, mask_nb_pad, in_dense_rt);
+                }
+                run_iteration(ring_index, 0, 0, &db);
+                if constexpr (!dense_debug) {
+                    if (o.n_up() == 0) {
+                        return;
+                    }
+                    any_arrivals = true;
+                    if (first) {
+                        // Arrival counts: 4 bits per owner record, one increment per arriving neighbour.
+                        auto* arrivals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
+                        do {
+                            invalidate_l1_cache();
+                        } while (((*arrivals >> (4 * k)) & 0xFu) < o.n_up());
+                    }
+                    CircularBuffer cb_in(cb_dense_in);
+                    for (uint32_t side = 0; side < 2; ++side) {
+                        if (((o.up_sides >> side) & 1u) == 0) {
+                            continue;
+                        }
+                        for (uint32_t u = u0; u < u1; ++u) {
+                            cb_in.reserve_back(kPartialTiles);
+                            const uint32_t page0 = (side * dense_units + u) * kPartialTiles;
+                            for (uint32_t t = 0; t < kPartialTiles; ++t) {
+                                noc.async_read(
+                                    recv_reader,
+                                    CoreLocalMem<uint32_t>(cb_in.get_write_ptr() + t * partial_tile_bytes),
+                                    partial_tile_bytes,
+                                    {.page_id = page0 + t},
+                                    {});
+                            }
+                            noc.async_read_barrier();
+                            cb_in.push_back(kPartialTiles);
+                        }
+                    }
+                }
+            });
+        if constexpr (!dense_debug) {
+            if (any_arrivals) {
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr) = 0;
+            }
         }
     }
 }

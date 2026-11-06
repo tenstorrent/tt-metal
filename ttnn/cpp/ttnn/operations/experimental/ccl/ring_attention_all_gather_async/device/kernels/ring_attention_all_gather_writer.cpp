@@ -54,6 +54,8 @@ enum CompileTimeArg : uint32_t {
     kNumDramBanks,
     // The last input's slices are per-rank tile-row slabs (see rank_slice below).
     kHasRankSlabs,
+    // After the gather, forward sparse_ring_sdpa's dense-row partials one hop (see the tail below).
+    kHasDenseReturn,
     kNumFixedCompileTimeArgs,
 };
 
@@ -87,6 +89,7 @@ constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialRead
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 constexpr bool has_rank_slabs = get_compile_time_arg_val(kHasRankSlabs);
+constexpr bool has_dense_return = get_compile_time_arg_val(kHasDenseReturn);
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
@@ -147,6 +150,13 @@ void kernel_main() {
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
                                              : (kNumFixedCompileTimeArgs + num_inputs);
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
+    // Dense return: the local staging buffer (read) and the neighbour's receive buffer (written), after the metadata
+    // accessor.
+    constexpr uint32_t kDenseArgsOffset = has_metadata
+                                              ? meta_args.next_compile_time_args_offset()
+                                              : std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
+    constexpr auto staging_args = TensorAccessorArgs<kDenseArgsOffset>();
+    constexpr auto recv_args = TensorAccessorArgs<staging_args.next_compile_time_args_offset()>();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -248,6 +258,15 @@ void kernel_main() {
             pages = input_valid_pages[input_idx];
         }
     };
+
+    // Dense return block: [n_sends, staging, receive, ready semaphore, arrival semaphore, cores, units per core,
+    // cores with one more, grid x, grid y, receive side, total units, link stride, link, tiles per partial], the NoC
+    // x of each grid column, the NoC y of each grid row, then per send (owner record k, first unit, end unit).
+    [[maybe_unused]] const uint32_t dense_args = arg_idx;
+    if constexpr (has_dense_return) {
+        const uint32_t n_sends = get_arg_val<uint32_t>(arg_idx);
+        arg_idx += 15 + get_arg_val<uint32_t>(arg_idx + 8) + get_arg_val<uint32_t>(arg_idx + 9) + 3 * n_sends;
+    }
 
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
@@ -627,6 +646,85 @@ void kernel_main() {
         signal_output_ready();
 
         slice_writes++;
+    }
+
+    if constexpr (has_dense_return) {
+        // sparse_ring_sdpa dense rows: for each owner routed this way, core by core (this link's share), wait for the
+        // core's ready count, move its units' partials from the local staging buffer to the neighbour's receive
+        // buffer, then count the arrival on the neighbour's same core. Last, clear the ready words this worker read.
+        const auto arg = [&](uint32_t i) { return get_arg_val<uint32_t>(dense_args + i); };
+        const uint32_t n_sends = arg(0);
+        const auto staging = TensorAccessor(staging_args, arg(1));
+        const auto recv = TensorAccessor(recv_args, arg(2));
+        const uint32_t ready_addr = arg(3);
+        const uint32_t arrival_addr = arg(4);
+        const uint32_t n_cores = arg(5);
+        const uint32_t base = arg(6);
+        const uint32_t extra = arg(7);
+        const uint32_t grid_x = arg(8);
+        const uint32_t grid_y = arg(9);
+        const uint32_t recv_side = arg(10);
+        const uint32_t n_units = arg(11);
+        const uint32_t stride = arg(12);
+        const uint32_t link = arg(13);
+        const uint32_t partial_tiles = arg(14);
+        const uint32_t xs = dense_args + 15;
+        const uint32_t ys = xs + grid_x;
+        const uint32_t sends = ys + grid_y;
+        const uint32_t tile_bytes = output_page_size;
+        const uint32_t scratch = get_local_cb_interface(cb_output_id).fifo_limit -
+                                 get_local_cb_interface(cb_output_id).fifo_size;  // the gather is done with it
+        const auto core_noc = [&](uint32_t c, uint32_t addr) {
+            return get_noc_addr(get_arg_val<uint32_t>(xs + c % grid_x), get_arg_val<uint32_t>(ys + c / grid_x), addr);
+        };
+        cb_packet_header.reserve_back(1);
+        auto* pkt_hdr_arrival = reinterpret_cast<PACKET_HEADER_TYPE*>(cb_packet_header.get_write_ptr());
+        cb_packet_header.push_back(1);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_arrival, unicast_route_info);
+        for (uint32_t sidx = 0; sidx < n_sends; ++sidx) {
+            const uint32_t k = get_arg_val<uint32_t>(sends + 3 * sidx);
+            const uint32_t us = get_arg_val<uint32_t>(sends + 3 * sidx + 1);
+            const uint32_t ue = get_arg_val<uint32_t>(sends + 3 * sidx + 2);
+            for (uint32_t c = link; c < n_cores; c += stride) {
+                const uint32_t c_start = c * base + (c < extra ? c : extra);
+                const uint32_t c_end = c_start + base + (c < extra ? 1 : 0);
+                const uint32_t lo = c_start > us ? c_start : us;
+                const uint32_t hi = c_end < ue ? c_end : ue;
+                if (lo >= hi) {
+                    continue;
+                }
+                volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+                do {
+                    noc_async_read(core_noc(c, ready_addr), scratch, sizeof(uint32_t));
+                    noc_async_read_barrier();
+                    invalidate_l1_cache();
+                } while (((*word >> (4 * k)) & 0xFu) == 0);
+                for (uint32_t u = lo; u < hi; ++u) {
+                    for (uint32_t t = 0; t < partial_tiles; ++t) {
+                        const uint32_t page = u * partial_tiles + t;
+                        noc_async_read(staging.get_noc_addr(page), scratch, tile_bytes);
+                        noc_async_read_barrier();
+                        fabric_write_unidir(
+                            recv_side * n_units * partial_tiles + page,
+                            recv,
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            scratch,
+                            tile_bytes);
+                    }
+                }
+                pkt_hdr_arrival->to_noc_unicast_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{core_noc(c, arrival_addr), 1u << (4 * k)});
+                fabric_direction_connection->wait_for_empty_write_slot();
+                fabric_direction_connection->send_payload_flush_blocking_from_address(
+                    reinterpret_cast<uint32_t>(pkt_hdr_arrival), sizeof(PACKET_HEADER_TYPE));
+            }
+        }
+        if (n_sends > 0) {
+            for (uint32_t c = link; c < n_cores; c += stride) {
+                noc_inline_dw_write(core_noc(c, ready_addr), 0);
+            }
+        }
     }
 
     // Drain in-flight writes BEFORE closing the EDM connections.

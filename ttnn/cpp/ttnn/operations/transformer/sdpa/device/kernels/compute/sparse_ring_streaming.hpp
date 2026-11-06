@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/sparse_dense_units.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -1491,7 +1492,7 @@ void sdpa_ring_resident(
             sdpa_cb_pop_front_out_of_line(cb_prev_out, (resident_slots - n_res) * out_tiles);
         }
         sdpa_cb_pop_front_out_of_line(cb_max_in, kStatsCap);
-        if constexpr (num_q_passes > 1) {
+        if constexpr (num_q_passes > 1 || get_named_compile_time_arg_val("dense_owners") > 0) {
             // The reader fills cb_q_in to capacity every pass: pop it whole, so the next pass's Q starts at the base.
             CircularBuffer(cb_q_in).wait_front(resident_slots * q_chunk_tiles);
             sdpa_cb_pop_front_out_of_line(cb_q_in, resident_slots * q_chunk_tiles);
@@ -1503,4 +1504,220 @@ void sdpa_ring_resident(
         // The plan records were read in place for the whole iteration.
         CircularBuffer(cb_sparse_plan).pop_front(1);
     }
+}
+
+// ---- Dense units (dense_blocks split across devices) ----
+// A dense batch runs as one first-and-not-last ring iteration of sdpa_ring_resident over the local shard; then
+// res_dense_finish merges the partials arriving from the neighbours into the slots and either normalizes them into
+// cb_out (the owner) or emits them raw to cb_out for the next hop (sparse_dense::partial_tiles per unit: out, the
+// per-column sums, the row max; bf16). Every helper enters and leaves with the unpacker in the intermediate format and
+// the packer in cb_qkt_im's (the step's exit state; cb_recip_scratch has the same format).
+
+// Merges the partial at cb_dense_in's front into slot i: M = max(slot max, in max), slot = exp((slot max - M) *
+// scale) * slot + exp((in max - M) * scale) * in, slot max = M. The step's 2^-28 exp scale is the same on every
+// device, so it cancels.
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t scale_fp32,
+    uint32_t resident_slots,
+    uint32_t cb_qkt_im,
+    uint32_t cb_max_in,
+    uint32_t cb_sum_in,
+    uint32_t cb_prev_out,
+    uint32_t cb_max_scratch,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_dense_in>
+static __attribute__((noinline, noclone)) void res_merge_slot(const uint32_t i) {
+    constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t kStatsCap = resident_slots * Sq_chunk_t;
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+    constexpr uint32_t in_max = out_tiles + Sq_chunk_t;
+    constexpr uint32_t kPartialTiles = sparse_dense::partial_tiles<Sq_chunk_t, vDHt>();
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+    const uint32_t row0 = i * Sq_chunk_t;
+    CircularBuffer(cb_dense_in).wait_front(kPartialTiles);
+
+    // M into the max scratch's pages 0 .. Sq_chunk_t - 1.
+    CircularBuffer(cb_max_scratch).reserve_back(kStatsCap);
+    copy_init(cb_max_in);
+    add_binary_tile_init();
+    configure_single_tile_pack(cb_max_scratch);
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        tile_regs_acquire();
+        copy_tile(cb_max_in, row0 + r, 0);
+        copy_tile(cb_dense_in, in_max + r, 1);
+        MATH((_llk_math_eltwise_binary_sfpu_params_(sdpa_max_sfpi, 0, 1, 0, VectorMode::RC)));
+        tile_regs_commit();
+        tile_regs_wait();
+        sdpa_pack_tile_ooo(0, cb_max_scratch, r);
+        tile_regs_release();
+    }
+    cb_push_back_hold_wr_ptr(cb_max_scratch, kStatsCap);
+    CircularBuffer(cb_max_scratch).wait_front(kStatsCap);
+
+    // exp((max - M) * scale) of one side into cb_exp_max_diff pages page0 ..
+    const auto alpha = [&](uint32_t max_cb, uint32_t max_idx0, uint32_t page0) {
+        CircularBuffer(cb_exp_max_diff).reserve_back(kStatsCap);
+        exp_packthread_tile_init<EXP_APPROX_MODE>();
+        tile_regs_acquire();
+        sub_init(max_cb, cb_max_scratch);
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            sub_tiles(max_cb, cb_max_scratch, max_idx0 + r, r, r);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(r)));
+        }
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        configure_single_tile_pack(cb_exp_max_diff);
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            sdpa_pack_tile_ooo(r, cb_exp_max_diff, page0 + r);
+        }
+        tile_regs_release();
+        cb_push_back_hold_wr_ptr(cb_exp_max_diff, kStatsCap);
+        CircularBuffer(cb_exp_max_diff).wait_front(kStatsCap);
+    };
+
+    // The slot, rescaled in place (as the step's S4).
+    alpha(cb_max_in, row0, row0);
+    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_prev_out, cb_qkt_im, cb_exp_max_diff>();
+    sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
+    salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
+        cb_prev_out, cb_sum_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, i, i, i);
+    sdpa_maybe_reconfig_data_format<cb_prev_out, cb_qkt_im, cb_exp_max_diff, cb_qkt_im>();
+    sdpa_maybe_pack_reconfig_data_format<cb_prev_out, cb_qkt_im>();
+    CircularBuffer(cb_exp_max_diff).pop_front(kStatsCap);
+
+    // The arriving partial, scaled and L1-accumulated onto the slot (out at its page 0, sums at out_tiles).
+    alpha(cb_dense_in, in_max, 0);
+    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_dense_in, cb_qkt_im, cb_exp_max_diff>();
+    sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
+        cb_dense_in, cb_dense_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, 0, vDHt, i);
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    sdpa_maybe_reconfig_data_format<cb_dense_in, cb_qkt_im, cb_exp_max_diff, cb_qkt_im>();
+    sdpa_maybe_pack_reconfig_data_format<cb_prev_out, cb_qkt_im>();
+    CircularBuffer(cb_exp_max_diff).pop_front(kStatsCap);
+
+    // The slot's max becomes M.
+    copy_init(cb_max_scratch);
+    configure_single_tile_pack(cb_max_in);
+    tile_regs_acquire();
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        copy_tile(cb_max_scratch, r, r);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        sdpa_pack_tile_ooo(r, cb_max_in, row0 + r);
+    }
+    tile_regs_release();
+    CircularBuffer(cb_max_scratch).pop_front(kStatsCap);
+    CircularBuffer(cb_dense_in).pop_front(kPartialTiles);
+    // The slot's packs land before anything unpacks it again.
+    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+}
+
+// Emits the slot at the front of the out and sum slots (consumed) and slot i's max into cb_out, one tile at a time.
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t cb_qkt_im,
+    uint32_t cb_max_in,
+    uint32_t cb_sum_in,
+    uint32_t cb_prev_out,
+    uint32_t cb_out>
+static __attribute__((noinline, noclone)) void res_emit_slot(const uint32_t i) {
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+    const auto copy_out = [&](uint32_t cb, uint32_t idx) {
+        CircularBuffer(cb_out).reserve_back(1);
+        tile_regs_acquire();
+        copy_tile(cb, idx, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_out);
+        tile_regs_release();
+        CircularBuffer(cb_out).push_back(1);
+    };
+    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_prev_out, cb_qkt_im, cb_qkt_im>();
+    sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_out>();
+    configure_single_tile_pack(cb_out);
+    copy_init(cb_prev_out);
+    CircularBuffer(cb_prev_out).wait_front(out_tiles);
+    for (uint32_t t = 0; t < out_tiles; ++t) {
+        copy_out(cb_prev_out, t);
+    }
+    sdpa_cb_pop_front_out_of_line(cb_prev_out, out_tiles);
+    CircularBuffer(cb_sum_in).wait_front(Sq_chunk_t);
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        copy_out(cb_sum_in, r);
+    }
+    sdpa_cb_pop_front_out_of_line(cb_sum_in, Sq_chunk_t);
+    sdpa_maybe_reconfig_data_format<cb_sum_in, cb_max_in, cb_qkt_im, cb_qkt_im>();
+    copy_init(cb_max_in);
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        copy_out(cb_max_in, i * Sq_chunk_t + r);
+    }
+    sdpa_maybe_reconfig_data_format<cb_max_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+    sdpa_maybe_pack_reconfig_data_format<cb_out, cb_qkt_im>();
+}
+
+// After a dense batch's steps: n_merge rounds of arriving partials (one per arriving neighbour, every slot in order),
+// then every slot normalized into cb_out (emit false: the owner) or emitted raw; then the slots and Q released, as
+// at the end of a pass.
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t DHt,
+    uint32_t vDHt,
+    uint32_t scale_fp32,
+    uint32_t resident_slots,
+    uint32_t cb_q_in,
+    uint32_t cb_qkt_im,
+    uint32_t cb_max_in,
+    uint32_t cb_sum_in,
+    uint32_t cb_prev_out,
+    uint32_t cb_out,
+    uint32_t cb_max_scratch,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_dense_in,
+    uint32_t cb_col_identity,
+    uint32_t cb_recip_scratch>
+void res_dense_finish(const uint32_t n_res, const uint32_t n_merge, const bool emit) {
+    constexpr uint32_t kStatsCap = resident_slots * Sq_chunk_t;
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+    for (uint32_t m = 0; m < n_merge; ++m) {
+        for (uint32_t i = 0; i < n_res; ++i) {
+            res_merge_slot<
+                Sq_chunk_t,
+                vDHt,
+                scale_fp32,
+                resident_slots,
+                cb_qkt_im,
+                cb_max_in,
+                cb_sum_in,
+                cb_prev_out,
+                cb_max_scratch,
+                cb_exp_max_diff,
+                cb_dense_in>(i);
+        }
+    }
+    for (uint32_t i = 0; i < n_res; ++i) {
+        if (emit) {
+            res_emit_slot<Sq_chunk_t, vDHt, cb_qkt_im, cb_max_in, cb_sum_in, cb_prev_out, cb_out>(i);
+        } else {
+            res_normalize_slot<Sq_chunk_t, vDHt, cb_col_identity, cb_recip_scratch, cb_out, cb_sum_in, cb_prev_out>();
+        }
+    }
+    if (n_res < resident_slots) {
+        sdpa_cb_pop_front_out_of_line(cb_sum_in, (resident_slots - n_res) * Sq_chunk_t);
+        sdpa_cb_pop_front_out_of_line(cb_prev_out, (resident_slots - n_res) * out_tiles);
+    }
+    sdpa_cb_pop_front_out_of_line(cb_max_in, kStatsCap);
+    CircularBuffer(cb_q_in).wait_front(resident_slots * Sq_chunk_t * DHt);
+    sdpa_cb_pop_front_out_of_line(cb_q_in, resident_slots * Sq_chunk_t * DHt);
 }

@@ -65,6 +65,8 @@ void kernel_main() {
     const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     argidx += 4;  // KV-pad rotation words (unused: no KV cache)
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    // Dense units (dense_owners > 0): [first unit, end unit], then the sparse_dense::Owner records.
+    const uint32_t dense_args = argidx;
 
     // CB indices: the block starts at positional slot 49.
     constexpr uint32_t cb_arg_offset = 49;
@@ -128,6 +130,94 @@ void kernel_main() {
     uint32_t kv_pos = 0;
     // The key-bias CB's read position in pages, carried the same way (the reader tracks the same).
     uint32_t kb_pos = 0;
+    // One ring iteration over shard ring_id (a resident pass's, or a dense batch's over the local shard).
+    const auto run_ring_iteration = [&](const uint32_t ring_id,
+                                        const uint32_t pass_q_start,
+                                        const uint32_t pass_q_end,
+                                        const uint32_t units_per_head,
+                                        uint32_t& initialized_slots,
+                                        const bool is_last_ring_iter,
+                                        const bool is_first_active_iter) {
+        // Global logical_n tail: the shard-relative K chunk holding the last real tile and the fully padded tiles
+        // after it, on the shard where logical_n lands. Anchored on the last real tile, so a chunk-final sub-tile
+        // partial column also counts as a masked chunk.
+        const int32_t global_nt_within_ring_iter =
+            static_cast<int32_t>(logical_nt) - static_cast<int32_t>(ring_id * kv_local_padded_Nt);
+        const bool global_n_is_within_ring_iter =
+            global_nt_within_ring_iter > 0 && global_nt_within_ring_iter <= (int32_t)kv_local_padded_Nt;
+        const uint32_t global_n_mask_chunk_id =
+            global_n_is_within_ring_iter ? (uint32_t)(global_nt_within_ring_iter - 1) / Sk_chunk_t : 0;
+        const uint32_t global_n_valid_tiles_in_chunk =
+            global_n_is_within_ring_iter ? (uint32_t)global_nt_within_ring_iter - global_n_mask_chunk_id * Sk_chunk_t
+                                         : 0;
+        const uint32_t global_n_padded_tiles_iter =
+            global_n_is_within_ring_iter ? Sk_chunk_t - global_n_valid_tiles_in_chunk : 0;
+        const bool ring_iter_needs_global_n_mask =
+            global_n_is_within_ring_iter && (global_n_padded_tiles_iter > 0 || global_n_partial_col > 0);
+        const uint32_t global_n_padded_tiles = ring_iter_needs_global_n_mask ? global_n_padded_tiles_iter : 0;
+        // Local padded tail of the shard (masked whenever local_n_has_padding).
+        const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
+
+        sdpa_ring_resident<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            DHt,
+            vDHt,
+            NH,
+            scale_fp32,
+            qk_subblock_w,
+            cb_q_in,
+            cb_k_in,
+            cb_v_in,
+            cb_qk_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_max_A,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_max_in,
+            cb_prev_out,
+            cb_out,
+            cb_sum_in,
+            kv_local_padded_Nt,
+            kv_region_Nt,
+            chunk_size_t,
+            vDHt,  // V CB row width in tiles (V is a separate tensor)
+            global_n_has_padding,
+            local_n_has_padding,
+            local_n_padded_tiles,
+            cb_sparse_plan,
+            cb_pooled_bias,
+            pooled_chunks,
+            pooled_last_tiles,
+            pooled_route,
+            resident_slots,
+            plan_block_words,
+            plan_rec_base,
+            num_q_passes,
+            pair_steps,
+            kv_cb_pages,
+            has_block_counts,
+            cb_key_bias,
+            key_bias_tiles,
+            cb_sum_identity>(
+            pass_q_start,
+            pass_q_end,
+            units_per_head,
+            ring_id,
+            num_local_k_chunks,
+            logical_nt,
+            ring_iter_needs_global_n_mask,
+            global_n_mask_chunk_id,
+            local_n_mask_chunk_id,
+            global_n_padded_tiles,
+            initialized_slots,
+            kv_pos,
+            kb_pos,
+            is_last_ring_iter,
+            is_first_active_iter,
+            block_counts);
+    };
     for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
         const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
         const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
@@ -148,87 +238,54 @@ void kernel_main() {
             seen_active_iter = true;
             const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
 
-            // Global logical_n tail: the shard-relative K chunk holding the last real tile and the fully padded tiles
-            // after it, on the shard where logical_n lands. Anchored on the last real tile, so a chunk-final sub-tile
-            // partial column also counts as a masked chunk.
-            const int32_t global_nt_within_ring_iter =
-                static_cast<int32_t>(logical_nt) - static_cast<int32_t>(ring_id * kv_local_padded_Nt);
-            const bool global_n_is_within_ring_iter =
-                global_nt_within_ring_iter > 0 && global_nt_within_ring_iter <= (int32_t)kv_local_padded_Nt;
-            const uint32_t global_n_mask_chunk_id =
-                global_n_is_within_ring_iter ? (uint32_t)(global_nt_within_ring_iter - 1) / Sk_chunk_t : 0;
-            const uint32_t global_n_valid_tiles_in_chunk =
-                global_n_is_within_ring_iter
-                    ? (uint32_t)global_nt_within_ring_iter - global_n_mask_chunk_id * Sk_chunk_t
-                    : 0;
-            const uint32_t global_n_padded_tiles_iter =
-                global_n_is_within_ring_iter ? Sk_chunk_t - global_n_valid_tiles_in_chunk : 0;
-            const bool ring_iter_needs_global_n_mask =
-                global_n_is_within_ring_iter && (global_n_padded_tiles_iter > 0 || global_n_partial_col > 0);
-            const uint32_t global_n_padded_tiles = ring_iter_needs_global_n_mask ? global_n_padded_tiles_iter : 0;
-            // Local padded tail of the shard (masked whenever local_n_has_padding).
-            const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
-
-            sdpa_ring_resident<
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                vDHt,
-                NH,
-                scale_fp32,
-                qk_subblock_w,
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_qk_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_max_A,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_max_in,
-                cb_prev_out,
-                cb_out,
-                cb_sum_in,
-                kv_local_padded_Nt,
-                kv_region_Nt,
-                chunk_size_t,
-                vDHt,  // V CB row width in tiles (V is a separate tensor)
-                global_n_has_padding,
-                local_n_has_padding,
-                local_n_padded_tiles,
-                cb_sparse_plan,
-                cb_pooled_bias,
-                pooled_chunks,
-                pooled_last_tiles,
-                pooled_route,
-                resident_slots,
-                plan_block_words,
-                plan_rec_base,
-                num_q_passes,
-                pair_steps,
-                kv_cb_pages,
-                has_block_counts,
-                cb_key_bias,
-                key_bias_tiles,
-                cb_sum_identity>(
+            run_ring_iteration(
+                ring_id,
                 pass_q_start,
                 pass_q_end,
                 num_q_chunks,
-                ring_id,
-                num_local_k_chunks,
-                logical_nt,
-                ring_iter_needs_global_n_mask,
-                global_n_mask_chunk_id,
-                local_n_mask_chunk_id,
-                global_n_padded_tiles,
                 initialized_slots,
-                kv_pos,
-                kb_pos,
                 is_last_ring_iter,
-                is_first_active_iter,
-                block_counts);
+                is_first_active_iter);
         }
+    }
+    // Dense units: per batch the local pieces' steps (a fresh first, not last, iteration), then the merges and the
+    // normalization or emit (res_dense_finish). The reader and the writer walk the same batches.
+    constexpr uint32_t dense_owners = get_named_compile_time_arg_val("dense_owners");
+    if constexpr (dense_owners > 0) {
+        constexpr bool dense_debug = get_named_compile_time_arg_val("dense_debug") == 1;
+        constexpr uint32_t cb_dense_in = get_named_compile_time_arg_val("cb_dense_in");
+        sparse_dense::for_each_batch(
+            dense_owners,
+            dense_args + 2,
+            get_arg_val<uint32_t>(dense_args),
+            get_arg_val<uint32_t>(dense_args + 1),
+            NH,
+            resident_slots,
+            [](uint32_t a) { return get_arg_val<uint32_t>(a); },
+            [&](uint32_t, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool, bool) {
+                const uint32_t idx0 = u0 - o.unit_start;
+                uint32_t initialized_slots = 0;
+                run_ring_iteration(
+                    ring_index_runtime, idx0, idx0 + (u1 - u0), o.n_blocks, initialized_slots, false, true);
+                res_dense_finish<
+                    Sq_chunk_t,
+                    DHt,
+                    vDHt,
+                    scale_fp32,
+                    resident_slots,
+                    cb_q_in,
+                    cb_qk_im,
+                    cb_max_in,
+                    cb_sum_in,
+                    cb_prev_out,
+                    cb_out,
+                    cb_max_A,
+                    cb_exp_max_diff,
+                    cb_dense_in,
+                    cb_col_identity,
+                    cb_recip_scratch>(
+                    u1 - u0, dense_debug ? 0u : o.n_up(), dense_debug || o.role != sparse_dense::kRoleOwner);
+            });
     }
     if constexpr (has_block_counts) {
         CircularBuffer(cb_block_counts).pop_front(1);

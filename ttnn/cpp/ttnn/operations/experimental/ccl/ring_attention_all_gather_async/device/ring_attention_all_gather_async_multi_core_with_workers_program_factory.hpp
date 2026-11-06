@@ -10,6 +10,7 @@
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <array>
 #include <cstdint>
 #include <tt-metalium/workload_descriptor.hpp>
 #include <optional>
@@ -133,6 +134,27 @@ struct RingAttentionRankSlab {
     uint32_t input_row = 0;
     uint32_t output_row = 0;
     uint32_t rows = 0;
+};
+
+// sparse_ring_sdpa's dense-row partials, forwarded one hop toward their owner by the gather writers once the gather is
+// done (the tail of ring_attention_all_gather_writer.cpp). Units are split over the SDPA cores as base or base + 1
+// each (the first `units_extra` cores get one more).
+struct RingAttentionDenseReturn {
+    tt::tt_metal::Buffer* staging = nullptr;  // this device's partials, page = unit * partial_tiles + tile
+    tt::tt_metal::Buffer* recv = nullptr;     // the neighbours': page = (side * n_units + unit) * partial_tiles + tile
+    uint32_t ready_plus_addr = 0;             // per SDPA core: 4 bits per owner, set once its units are staged
+    uint32_t ready_minus_addr = 0;
+    uint32_t arrival_addr = 0;  // per SDPA core: 4 bits per owner, one increment per arriving neighbour
+    uint32_t n_cores = 0;
+    uint32_t units_base = 0;
+    uint32_t units_extra = 0;
+    std::vector<uint32_t> core_x;  // NoC x of each SDPA grid column, NoC y of each row
+    std::vector<uint32_t> core_y;
+    uint32_t n_units = 0;
+    uint32_t partial_tiles = 0;
+    // (owner record, first unit, end unit) sent to tensor rank + 1 / - 1.
+    std::vector<std::array<uint32_t, 3>> sends_plus;
+    std::vector<std::array<uint32_t, 3>> sends_minus;
 };
 
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
@@ -337,7 +359,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     bool partial_readiness_enabled = false,
     RingAttentionRankMapping rank_mapping = {},
     // Empty: every input sends its whole slab. Else one entry per tensor rank for the last input.
-    const std::vector<RingAttentionRankSlab>& last_input_rank_slabs = {});
+    const std::vector<RingAttentionRankSlab>& last_input_rank_slabs = {},
+    const std::optional<RingAttentionDenseReturn>& dense_return = std::nullopt);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

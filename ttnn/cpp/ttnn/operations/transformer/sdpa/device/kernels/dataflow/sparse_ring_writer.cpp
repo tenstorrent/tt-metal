@@ -19,6 +19,7 @@
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#include "sparse_dense_units.hpp"
 
 // Output slice of one local Q chunk (the op has no joint tokens).
 inline Slice q_chunk_out_slice(uint32_t q_chunk, uint32_t nb, uint32_t nq, uint32_t Sq_chunk_t, uint32_t DHt) {
@@ -55,7 +56,9 @@ void kernel_main() {
     // accessor starts at slot 38 and the CB block follows it.
     constexpr uint32_t kFirstAccessorArgOffset = 38;
     constexpr auto out_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
-    constexpr uint32_t cb_arg_offset = out_args.next_compile_time_args_offset();
+    // dense_blocks split across devices: where emitted partials go (the hop staging buffer, or dense_debug's).
+    constexpr auto partials_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_arg_offset = partials_args.next_compile_time_args_offset();
 
     // No Q rotation and no grouped K/V sources.
     static_assert(get_ct_arg<kernel_compile_time_args.size() - 1>() == 0, "no rotated Q split");
@@ -71,6 +74,25 @@ void kernel_main() {
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
+    // dense_blocks: the ranges (start, end), then (dense_owners > 0) [first unit, end unit, partials buffer, ready
+    // semaphore + , ready semaphore -] and the sparse_dense::Owner records.
+    constexpr uint32_t dense_n_ranges = get_named_compile_time_arg_val("dense_n_ranges");
+    constexpr uint32_t dense_owners = get_named_compile_time_arg_val("dense_owners");
+    constexpr bool res_remap = get_named_compile_time_arg_val("res_remap") == 1;
+    constexpr uint32_t mask_nb = get_named_compile_time_arg_val("mask_nb");
+    constexpr uint32_t mask_nb_pad = get_named_compile_time_arg_val("mask_nb_pad");
+    const uint32_t dense_ranges_base = argidx;
+    const uint32_t dense_base = dense_ranges_base + 2 * dense_n_ranges;
+    const auto in_dense = [&](uint32_t g) {
+        for (uint32_t r = 0; r < dense_n_ranges; ++r) {
+            if (g >= get_arg_val<uint32_t>(dense_ranges_base + 2 * r) &&
+                g < get_arg_val<uint32_t>(dense_ranges_base + 2 * r + 1)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const uint32_t shard = fused_op_receiver.seq.ring_index;
 
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
@@ -135,10 +157,13 @@ void kernel_main() {
             }
             for (uint32_t q_flat = pass_q_start; q_flat < pass_q_end; ++q_flat) {
                 const auto decoded_q = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing);
+                const uint32_t q_chunk =
+                    res_remap ? sparse_dense::resident_block(shard, decoded_q.q_chunk, mask_nb, mask_nb_pad, in_dense)
+                              : decoded_q.q_chunk;
                 write_block_row_grouped_trid<output_has_no_padding>(
                     noc,
                     out_generator,
-                    q_chunk_out_slice(decoded_q.q_chunk, decoded_q.nb, decoded_q.nq, Sq_chunk_t, vDHt),
+                    q_chunk_out_slice(q_chunk, decoded_q.nb, decoded_q.nq, Sq_chunk_t, vDHt),
                     /*end_seq_tile=*/q_local_padded_Nt,
                     cb_out,
                     tile_bytes,
@@ -147,5 +172,63 @@ void kernel_main() {
             }
             noc.async_write_barrier();
         }
+    }
+
+    // Dense units (see the reader): per batch, the owner writes its normalized dense rows to the output; every other
+    // device writes the raw partials to the partials buffer, and after an owner's last batch (not in dense_debug)
+    // counts it in its ready word for the gather writer that forwards it (4 bits per owner record).
+    if constexpr (dense_owners > 0) {
+        constexpr bool dense_debug = get_named_compile_time_arg_val("dense_debug") == 1;
+        constexpr uint32_t kPartialTiles = sparse_dense::partial_tiles<Sq_chunk_t, vDHt>();
+        const auto partials_writer = TensorAccessor(partials_args, get_arg_val<uint32_t>(dense_base + 2));
+        CircularBuffer cb(cb_out);
+        sparse_dense::for_each_batch(
+            dense_owners,
+            dense_base + 5,
+            get_arg_val<uint32_t>(dense_base),
+            get_arg_val<uint32_t>(dense_base + 1),
+            NH,
+            get_named_compile_time_arg_val("resident_slots"),
+            [](uint32_t a) { return get_arg_val<uint32_t>(a); },
+            [&](uint32_t k, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool, bool last) {
+                const bool emit = dense_debug || o.role != sparse_dense::kRoleOwner;
+                for (uint32_t u = u0; u < u1; ++u) {
+                    if (!emit) {
+                        const uint32_t idx = u - o.unit_start;
+                        const uint32_t b =
+                            sparse_dense::dense_block(o.shard, idx % o.n_blocks, mask_nb, mask_nb_pad, in_dense);
+                        write_block_row_grouped_trid<output_has_no_padding>(
+                            noc,
+                            out_generator,
+                            q_chunk_out_slice(b, 0, idx / o.n_blocks, Sq_chunk_t, vDHt),
+                            /*end_seq_tile=*/q_local_padded_Nt,
+                            cb_out,
+                            tile_bytes,
+                            out_subblock_h,
+                            /*flush_trid=*/0);
+                        continue;
+                    }
+                    for (uint32_t t = 0; t < kPartialTiles; ++t) {
+                        cb.wait_front(1);
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(cb.get_read_ptr()),
+                            partials_writer,
+                            tile_bytes,
+                            {},
+                            {.page_id = u * kPartialTiles + t});
+                        noc.async_writes_flushed();
+                        cb.pop_front(1);
+                    }
+                }
+                noc.async_write_barrier();
+                if constexpr (!dense_debug) {
+                    if (emit && last) {
+                        const uint32_t ready_addr =
+                            get_arg_val<uint32_t>(dense_base + (o.role == sparse_dense::kRoleEmitPlus ? 3 : 4));
+                        noc_semaphore_inc(get_noc_addr(my_x[noc_index], my_y[noc_index], ready_addr), 1u << (4 * k));
+                        noc_async_atomic_barrier();
+                    }
+                }
+            });
     }
 }
