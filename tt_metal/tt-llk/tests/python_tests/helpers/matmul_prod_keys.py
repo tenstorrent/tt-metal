@@ -1183,6 +1183,7 @@ _GRID_MAIN_ROWS = (
     ("LoFi", True, False, "F16b", "F32", "B8", 1, 2, 8, 0, False, 1),
     ("LoFi", True, False, "F16b", "F32", "B8", 1, 2, 32, 0, False, 1),
     ("LoFi", True, True, "F16b", "F32", "B8", 1, 4, 2, 0, False, 1),
+    ("LoFi", True, False, "F16b", "F32", "B8", 1, 4, 3, 0, False, 1),
     ("LoFi", True, False, "F16b", "F32", "B8", 2, 3, 5, 0, False, 1),
     ("LoFi", True, False, "F16b", "F32", "F32", 1, 3, 4, 0, False, 1),
     ("LoFi", True, True, "F16b", "F32", "F32", 2, 1, 2, 0, False, 1),

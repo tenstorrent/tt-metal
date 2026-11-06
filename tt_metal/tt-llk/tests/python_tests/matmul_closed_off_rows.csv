@@ -4320,3 +4320,4 @@ LoFi,Float32,Bfp8_b,Bfp4_b,1,2,3,0,False,False,1,perf_matmul_grid,0.469,-0.312,T
 LoFi,Bfp4_b,Float16_b,Float32,1,5,3,0,False,False,1,perf_matmul_grid(fix3),0.19,,True,True,main,Half,
 LoFi,Float16_b,Float16_b,Bfp8_b,1,2,32,0,False,False,1,perf_matmul(fix3),0.16,,True,True,main,Half,
 LoFi,Float16_b,Float32,Float32,2,3,3,0,False,False,1,perf_matmul_grid(fix3),0.14,,True,True,main,Half,
+LoFi,Float16_b,Float32,Bfp8_b,1,4,3,0,False,False,1,perf_matmul_grid(fix3),0.18,,True,True,main,Half,
