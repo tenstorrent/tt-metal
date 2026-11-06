@@ -17,9 +17,11 @@ import importlib
 import pytest
 from tracy import signpost
 
+import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.moe_bench.moe_models import selected_models
+from models.demos.deepseek_v3_d_p.tests.pcc import test_ttnn_moe
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_transport_arg, routed_expert_combine_overlap_arg
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -70,12 +72,18 @@ def _cases():
 )
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole Galaxy benchmark")
 @pytest.mark.timeout(0)
-def test_prefill_moe_bench(model, variant, config_only, mesh_device, device_params, num_links, request):
+def test_prefill_moe_bench(model, variant, config_only, mesh_device, device_params, num_links, request, monkeypatch):
     # Rows with a host gate keep DeepSeek-V3's router config: it decides which experts are picked, not how much
     # device work an expert does.
     cfg = _model_cfg(model)
+    routed_activation = ROUTED_EXPERT_ACTIVATION_BY_NAME[model.routed_act]
+    # run_model rejects device activations without a torch reference (swiglu_oai) even with PCC off. The
+    # reference never runs here, so give it SiLU's entries; the device still runs the requested activation.
+    for table in (test_ttnn_moe._TORCH_ROUTED_ACTIVATION, test_ttnn_moe._UPSTREAM_ACT):
+        if routed_activation not in table:
+            monkeypatch.setitem(table, routed_activation, table[ttnn.RoutedExpertActivation.Silu])
     kwargs = dict(
-        routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[model.routed_act],
+        routed_activation=routed_activation,
         shared_activation=getattr(cfg, "SHARED_EXPERT_ACTIVATION", "silu"),
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(cfg),
         moe_transport=moe_transport_arg(cfg),

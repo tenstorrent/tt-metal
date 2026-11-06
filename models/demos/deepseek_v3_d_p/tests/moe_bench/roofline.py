@@ -65,18 +65,29 @@ def _parse_tag(tag: str) -> dict:
 
 
 def platform(res_dir: str) -> dict:
-    """AICLK (MHz) from the tt-smi snapshot when present; the spec value otherwise."""
-    aiclk = None
+    """Peak AICLK and DRAM bandwidth from the tt-smi snapshot when present; the spec values otherwise.
+
+    The snapshot is taken at idle, so its live `aiclk` reads the idle clock; the peak is AICLK_LIMIT_MAX. DRAM
+    bandwidth scales with the GDDR data rate (DDR_SPEED, MT/s): 512 GB/s at 16000. Galaxies ship with 14000 and
+    16000 parts, so the slowest chip's rate sets the roof.
+    """
+    aiclk = ddr = None
     path = os.path.join(res_dir, "tt_smi_snapshot.json")
     if os.path.exists(path):
-        try:
-            text = open(path).read()
-            vals = [float(v) for v in re.findall(r'"aiclk"\s*:\s*"?([0-9.]+)', text, flags=re.I)]
-            vals = [v for v in vals if 200 < v < 3000]
-            aiclk = max(vals) if vals else None
-        except Exception:
-            pass
-    return {"aiclk_mhz": aiclk or BH_AICLK_MHZ, "aiclk_source": "tt-smi" if aiclk else "spec", "dram_gbps": BH_DRAM_GBPS}
+        text = open(path).read()
+        clk = [int(v, 16) for v in re.findall(r'"AICLK_LIMIT_MAX"\s*:\s*"(0x[0-9a-fA-F]+)"', text)]
+        clk = [v for v in clk if 200 < v < 3000]
+        aiclk = min(clk) if clk else None
+        rates = [int(v, 16) for v in re.findall(r'"DDR_SPEED"\s*:\s*"(0x[0-9a-fA-F]+)"', text)]
+        rates = [v for v in rates if 4000 < v < 32000]
+        ddr = min(rates) if rates else None
+    return {
+        "aiclk_mhz": aiclk or BH_AICLK_MHZ,
+        "aiclk_source": "tt-smi AICLK_LIMIT_MAX" if aiclk else "spec",
+        "ddr_mtps": ddr or 16000,
+        "dram_gbps": BH_DRAM_GBPS * (ddr or 16000) / 16000,
+        "dram_source": "tt-smi DDR_SPEED" if ddr else "spec",
+    }
 
 
 def split_cases(csv_path: str):
@@ -246,7 +257,8 @@ def main(res_dir: str):
     md = [
         f"# BH Galaxy MoE roofline ({os.path.basename(os.path.normpath(res_dir))})",
         "",
-        f"AICLK {plat['aiclk_mhz']:.0f} MHz ({plat['aiclk_source']}), DRAM {plat['dram_gbps']:.0f} GB/s per chip, "
+        f"AICLK {plat['aiclk_mhz']:.0f} MHz ({plat['aiclk_source']}), DRAM {plat['dram_gbps']:.0f} GB/s per chip "
+        f"(GDDR {plat['ddr_mtps']} MT/s, {plat['dram_source']}), "
         f"LoFi peak {BH_FLOP_PER_CYCLE_PER_CORE_LOFI} FLOP/cycle/core. Galaxy = {GALAXY_CHIPS} chips.",
         "",
     ]
