@@ -153,6 +153,14 @@ class TtMultiheadAttention:
         else:
             attn_output_weights = ttnn.matmul(q_scaled, key_transposed, **mm_kw)
 
+        if key_padding_mask is not None:
+            # (bsz, src_len), nonzero where the key is padding: those keys get no weight. The
+            # scores are laid out (bsz * num_heads, tgt_len, src_len), batch-major.
+            masked = ttnn.gt(ttnn.to_layout(key_padding_mask, ttnn.TILE_LAYOUT), 0.0)
+            masked = ttnn.reshape(ttnn.multiply(masked, -1e9), (bsz, 1, 1, src_len))
+            masked = ttnn.reshape(ttnn.repeat(masked, (1, self.num_heads, 1, 1)), (bsz * self.num_heads, 1, src_len))
+            attn_output_weights = attn_output_weights + masked
+
         attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1)
 
         attn_output = ttnn.matmul(attn_output_weights, value, **mm_kw)
