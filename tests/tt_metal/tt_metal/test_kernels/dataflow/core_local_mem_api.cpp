@@ -28,8 +28,9 @@ void access_memory(uint32_t src_addr, uint32_t end_addr, uint32_t num_iterations
             }
         } else {
             CoreLocalMem<std::uint32_t> mem(src_addr);
+            const CoreLocalMem<std::uint32_t> end(end_addr);
 #pragma GCC unroll 8
-            while (mem.get_address() < end_addr) {
+            while (mem < end) {
                 [[maybe_unused]] volatile uint32_t word = mem[0];
                 mem++;
             }
@@ -129,16 +130,15 @@ void kernel_main() {
     uint32_t mid_index = num_bytes / sizeof(uint32_t) / 2;
     auto mid = mem + mid_index;
 
-    // get_address
-    auto mid_addr = mid.get_address();
-    if (mid_addr != src_addr + mid_index * sizeof(uint32_t)) {
+    // Pointer arithmetic lands on the same address as a handle constructed from the raw address
+    const CoreLocalMem<std::uint32_t> mid_from_addr(src_addr + mid_index * sizeof(uint32_t));
+    if (mid != mid_from_addr) {
         while (true) {
         }
     }
 
-    // get_unsafe_ptr
-    auto unsafe_ptr = mid.get_unsafe_ptr();
-    if (reinterpret_cast<uintptr_t>(unsafe_ptr) != src_addr + mid_index * sizeof(uint32_t)) {
+    // Address-of the element (&*mid / &mid[0]) is the raw address
+    if (reinterpret_cast<uintptr_t>(&*mid) != src_addr + mid_index * sizeof(uint32_t) || &mid[0] != &*mid) {
         while (true) {
         }
     }
