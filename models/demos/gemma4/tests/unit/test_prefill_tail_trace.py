@@ -105,7 +105,9 @@ def test_prefill_tail_in_trace_bit_exact(mesh_device, device_params, reset_seeds
         off_logits, off_tokens = results[False]
         on_logits, on_tokens = results[True]
         passing, pcc = compare_tensors(off_logits, eager, pcc_threshold=0.99)
-        logger.info(f"prefill_len={prefill_len}: traced (eager tail) vs eager PCC {pcc}; argmax eager {int(eager.argmax(-1)[0])}")
+        logger.info(
+            f"prefill_len={prefill_len}: traced (eager tail) vs eager PCC {pcc}; argmax eager {int(eager.argmax(-1)[0])}"
+        )
         assert passing, f"traced vs eager: {pcc}"
         assert off_logits.shape == on_logits.shape == (1, hf_config.vocab_size)
         assert torch.equal(off_logits, on_logits), (

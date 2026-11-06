@@ -343,8 +343,12 @@ def test_share_page_tables_default_policy(monkeypatch):
     mesh = SimpleNamespace(shape=(1, 4))
     monkeypatch.setenv(model_module.SHARE_PAGE_TABLES_ENV, "1")
     assert model_module.share_page_tables_default(mesh) is True
-    assert model_module.share_page_tables_default(mesh, SimpleNamespace(lane_sharded=True, weight_fracture=False)) is False
-    assert model_module.share_page_tables_default(mesh, SimpleNamespace(lane_sharded=False, weight_fracture=True)) is False
+    assert (
+        model_module.share_page_tables_default(mesh, SimpleNamespace(lane_sharded=True, weight_fracture=False)) is False
+    )
+    assert (
+        model_module.share_page_tables_default(mesh, SimpleNamespace(lane_sharded=False, weight_fracture=True)) is False
+    )
     assert model_module.share_page_tables_default(mesh, bounded_sliding=True) is False
     assert model_module.share_page_tables_default(mesh, kv_shared=True) is False
     monkeypatch.setenv(model_module.SHARE_PAGE_TABLES_ENV, "0")

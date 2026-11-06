@@ -412,20 +412,29 @@ def test_prefill_wide_progcfg_host(monkeypatch):
     budget = 1_572_864 - 64 * 1024
     cfg = {}
     for (k, n), name in zip(_WIDE_12B_TP4, _WIDE_12B_IDS):
-        pc = prefill_wide_progcfg(128, k, n, max_cols=11, in0_cap=8, weight_tile_bytes=1088, fp32_acc=True, budget=budget)
+        pc = prefill_wide_progcfg(
+            128, k, n, max_cols=11, in0_cap=8, weight_tile_bytes=1088, fp32_acc=True, budget=budget
+        )
         cfg[name] = (pc.compute_with_storage_grid_size.x, pc.in0_block_w, pc.per_core_N, pc.out_subblock_w)
     assert cfg["gateup12b_tp4"] == (10, 8, 24, 4)
     assert cfg["down12b_tp4"] == (10, 8, 12, 4)
     assert cfg["oproj12b_tp4"] == (10, 8, 12, 4)
     assert cfg["wqkv12b_tp4"] == (8, 8, 8, 4)  # 64 N tiles: 8 is the widest exact divisor
     for k, n in [(5376, 4096), (2048, 5376), (5376, 10752), (5376, 5376)]:  # 31B TP=4: never past 8 columns
-        pc = prefill_wide_progcfg(128, k, n, max_cols=11, in0_cap=8, weight_tile_bytes=1088, fp32_acc=True, budget=budget)
+        pc = prefill_wide_progcfg(
+            128, k, n, max_cols=11, in0_cap=8, weight_tile_bytes=1088, fp32_acc=True, budget=budget
+        )
         assert pc.compute_with_storage_grid_size.x <= 8
         assert (pc.in0_block_w * TILE_SIZE) and (k // TILE_SIZE) % pc.in0_block_w == 0
     # the slab's row tiles: in0 shrinks to what fits (never a config past the budget); None when nothing fits
-    pc = prefill_wide_progcfg(2560, 3840, 7680, max_cols=11, in0_cap=8, weight_tile_bytes=2048, fp32_acc=True, budget=budget)
+    pc = prefill_wide_progcfg(
+        2560, 3840, 7680, max_cols=11, in0_cap=8, weight_tile_bytes=2048, fp32_acc=True, budget=budget
+    )
     assert pc is None or pc.in0_block_w <= 8
-    assert prefill_wide_progcfg(2560, 3840, 7680, max_cols=11, in0_cap=8, weight_tile_bytes=2048, fp32_acc=True, budget=1) is None
+    assert (
+        prefill_wide_progcfg(2560, 3840, 7680, max_cols=11, in0_cap=8, weight_tile_bytes=2048, fp32_acc=True, budget=1)
+        is None
+    )
     # the narrow config is what the knob-off path keeps
     narrow = prefill_progcfg(128, 3840, 7680, max_cols=8)
     assert narrow.compute_with_storage_grid_size.x == 6 and narrow.in0_block_w == 4
