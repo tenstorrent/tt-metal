@@ -47,7 +47,7 @@ pytest models/experimental/ops/quasar/qwen3_vl/demo/demo.py -sv -k batch-1 --vis
 - `TTSIM_QSR3A2_MCAST_CROSS_DIE=1` lets craq-sim deliver multicasts that cross a die boundary, which it otherwise aborts because their acknowledgements are not reliable on silicon. It is a simulator-only escape hatch; the matmul gap stays open.
 - Matmuls with a sharded input run from DRAM on Quasar (QUASAR_GAPS Q4, workarounds in `tests/e2e/op_overrides.py`).
 - At this depth the demo uses the model's deepstack taps 5/11/17 (#64363).
-- 2026-11-05, craq-sim 450de768: the prompt "Describe this image." (256x256 image) gave `This is a` with the default 2 generated tokens. Simulated time: vision 19.5 min, first token 93 min, each decode step ~26 min; 2 h 48 min in all. Each extra token adds ~26 min.
+- 2026-11-05, craq-sim 450de768, prompt "Describe this image." (256x256 image), `--max_generated_tokens 27`: `This is a heartwarming, serene image of a woman and her` (14 tokens, before the run was stopped). HF on the CPU gives "This is a heartwarming, sun-drenched photograph capturing a tender moment between a woman and her dog on a beach at sunset." (27 tokens). Simulated time: vision 19.5 min, first token ~93 min, each decode step ~25 min, so the 27-token sentence takes ~13 h. The default 2 tokens (`This is a`) take 2 h 48 min.
 - `--vision_depth 2 --num_layers 2` runs the same code paths in ~18 min.
 
 ## Details
