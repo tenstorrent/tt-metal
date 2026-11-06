@@ -332,6 +332,7 @@ def run_sdpa_noncausal(
     rmse_threshold=None,
     bcast_mask_batch_dim=False,
     bcast_mask_head_dim=True,
+    fp32_dest_acc_en=False,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -347,7 +348,7 @@ def run_sdpa_noncausal(
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
@@ -607,6 +608,31 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         pytest.skip("Bad PCC for small chunks")
     rmse_threshold = 0.0069
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["streaming", "standard"])
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(128, 512)], ids=["q128_k512"])
+@pytest.mark.parametrize("b, nh, nkv, sq, d", ([1, 4, 1, 256, 128],))
+@pytest.mark.parametrize("sks", [(224, 256, 512, 1056, 1536)], ids=["sk224_256_512_1056_1536"])
+def test_sdpa_noncausal_k_len_shares_program(
+    device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, fp32_dest_acc_en, sks
+):
+    """A dense mask and a different K length each call: the length is a runtime argument, so one program serves all."""
+    for sk in sks:
+        run_sdpa_noncausal(
+            device,
+            b,
+            nh,
+            nkv,
+            sq,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            ttnn.bfloat16,
+            sk=sk,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+        )
+    assert device.num_program_cache_entries() == 1
 
 
 def run_sdpa_noncausal_randn_bias(device, b, nh, s, d, torch_dtype, ttnn_dtype):
