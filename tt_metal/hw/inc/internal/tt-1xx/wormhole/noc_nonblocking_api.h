@@ -1303,10 +1303,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
  * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                                            | False    |
  * | skip_cmdbuf_chk (template param)    | Skip the cmd buf ready poll (see note)                   | bool      | true or false                                            | False    |
  *
- * Only set skip_cmdbuf_chk on the first issue after ncrisc_noc_write_set_state. That function waits for the
- * command buffer and then writes registers that do not make it busy again, so the poll here is guaranteed
- * to pass. Every later issue must poll, because the one before it wrote NOC_CMD_CTRL. Setting this anywhere
- * else corrupts the transaction already in flight.
+ * Set skip_cmdbuf_chk only when the command buffer is known to be ready: on the first issue after
+ * ncrisc_noc_write_set_state (it waits for the command buffer and then writes registers that do not make it busy
+ * again), or after the caller's own noc_cmd_buf_ready returned true with nothing issued on the buffer since. Any other
+ * issue must poll, because the one before it wrote NOC_CMD_CTRL: skipping the poll corrupts that transaction.
  */
 // clang-format on
 template <

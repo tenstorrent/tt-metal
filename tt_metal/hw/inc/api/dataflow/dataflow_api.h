@@ -667,10 +667,11 @@ FORCE_INLINE void noc_async_read_set_state(uint64_t src_noc_addr, uint8_t noc = 
  * | inc_num_issued (template argument)| Whether issued read counter should be increment    | uint32_t  | Any uint32_t number | False    |
  * | skip_cmdbuf_chk (template arg)    | Skip the cmd buf ready poll on the first burst     | bool      | true or false       | False    |
  *
- * Only set skip_cmdbuf_chk on the first call after \a noc_async_read_set_state or
- * \a noc_async_read_set_pcie_state. Those wait for read_cmd_buf and then write registers that do not make
- * it busy again, so the poll here is guaranteed to pass. On any later call the previous one wrote
- * NOC_CMD_CTRL and the poll is required, so skipping it corrupts the transaction already in flight.
+ * Set skip_cmdbuf_chk only when read_cmd_buf is known to be ready: on the first call after
+ * \a noc_async_read_set_state or \a noc_async_read_set_pcie_state (those wait for read_cmd_buf and then write
+ * registers that do not make it busy again), or after the caller's own noc_cmd_buf_ready returned true with nothing
+ * issued on read_cmd_buf since. Otherwise the previous call wrote NOC_CMD_CTRL and the poll is required: skipping it
+ * corrupts the transaction already in flight.
  */
 // clang-format on
 template <bool inc_num_issued = true, bool skip_cmdbuf_chk = false>
@@ -1077,10 +1078,11 @@ FORCE_INLINE void noc_async_write_set_state(
  * | update_counter (template argument)  | Whether to increment write counters                | bool      | true or false       | False    |
  * | skip_cmdbuf_chk (template argument) | Skip the cmd buf ready poll on the first burst     | bool      | true or false       | False    |
  *
- * Only set skip_cmdbuf_chk on the first call after \a noc_async_write_set_state or
- * \a noc_async_write_set_pcie_state. Those wait for write_cmd_buf and then write registers that do not make
- * it busy again, so the poll here is guaranteed to pass. On any later call the previous one wrote
- * NOC_CMD_CTRL and the poll is required, so skipping it corrupts the transaction already in flight.
+ * Set skip_cmdbuf_chk only when write_cmd_buf is known to be ready: on the first call after
+ * \a noc_async_write_set_state or \a noc_async_write_set_pcie_state (those wait for write_cmd_buf and then write
+ * registers that do not make it busy again), or after the caller's own noc_cmd_buf_ready returned true with nothing
+ * issued on write_cmd_buf since. Otherwise the previous call wrote NOC_CMD_CTRL and the poll is required: skipping it
+ * corrupts the transaction already in flight.
  */
 // clang-format on
 template <bool posted = false, bool update_counter = true, bool skip_cmdbuf_chk = false>
