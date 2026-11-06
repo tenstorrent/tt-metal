@@ -475,6 +475,21 @@ TABLE = {
         "metrics identical): the same three in one program a chip, the tilize and add under the "
         "sends; the same output (bf16 TILE, then GLUE_FOLD's typecast as for ops)",
     ),
+    "MOE_BLOCK_SRC": Setting(
+        "carried",
+        ("carried", "main"),
+        "MOE_IMPL=block, MOE_HEAD=fused only: which MoE block runs the layer (owner 2026-11-06). carried = the block "
+        "this branch runs since P.17 (models/demos/moe_block: Python ProgramDescriptor ops, the routed experts' gate / "
+        "up weights pushed by the DRAM cores' RISCs, DRISC; tt/moe_block_adapter.py). main = Marko Staletovic's "
+        "reworked block from mstaletovic/moe-block-main @ 0c0bbe59d98 as a separate copy (models/demos/moe_block_main "
+        "on the C++ ops ttnn.bringup.moe_block_main: the gate/up cores read their own weights, no DRISC, which the "
+        "serving framework's prefill runner also uses; tt/moe_block_main_adapter.py): [N, K] expert tiles "
+        "(weights_nk), the core cap (MAX_WORKER_CORES), COMBINE_SNAP, the shared expert at LoFi / GEMM_INPUTS; "
+        "OWN_ROWS through a TP all-to-all into its head and a local tail; not NORM_INTO_MOE's in-place x, the "
+        "carried block's prepared / HOST_ALLOC hooks, SE_PACK_PRECISE, DECODER_SKIP=replay128, EXPERTS_IMPL=bfp8_down4. "
+        "Its routed weights are laid out from the checkpoint (cached beside the carried block's: "
+        "<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin)",
+    ),
     "TAIL_A2A_PREPARED": Setting(
         "on",
         ("on", "off"),

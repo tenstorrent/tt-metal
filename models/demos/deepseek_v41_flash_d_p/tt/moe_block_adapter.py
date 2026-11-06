@@ -375,4 +375,8 @@ class TtMoEBlockLayer:
 
 
 def build_moe_block_layer(mesh, ck, cfg, layer: int, chunk: int, cache_dir=None, own_rows: bool = False):
+    if settings.get("MOE_BLOCK_SRC") == "main":  # (Marko's reworked block, no DRISC: tt/moe_block_main_adapter.py)
+        from .moe_block_main_adapter import build_moe_block_main_layer
+
+        return build_moe_block_main_layer(mesh, ck, cfg, layer, chunk, cache_dir=cache_dir, own_rows=own_rows)
     return TtMoEBlockLayer(mesh, ck, cfg, layer, chunk, cache_dir=cache_dir, own_rows=own_rows)
