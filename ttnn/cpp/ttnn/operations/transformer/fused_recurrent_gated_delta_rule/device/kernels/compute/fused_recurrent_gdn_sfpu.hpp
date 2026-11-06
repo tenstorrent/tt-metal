@@ -13,9 +13,12 @@
 // touch rows 0..3 of them, which is the band the token vectors live in (row 0 of v16 / r16 / u16, rows 0 and 2 of
 // qk16). Every op here writes whole rows, so a packed tile never carries a partially written row.
 //
-// Inits: each op family's init is called right before its ops, inside the acquire, because the column broadcast's
-// init (mask, replay program) and the parked-scalar load (LREG14) and the exact exp's init (LREG12..14) overwrite
-// each other's SFPU state; nothing is hoisted out of the per-tile chain.
+// Inits: the column broadcast's init (mask, replay program) and the binary ops' init run right before their ops,
+// inside the acquire, because the broadcast init, the parked-scalar load (LREG14, and LREG6, the broadcast's mask)
+// and the exact exp's init (LREG12..14) overwrite each other's SFPU state. The fill and copy ops only need the
+// zero-increment DEST address mode every family here leaves in place, so their two inits run once per acquire
+// (vector_chain_init) ahead of zero_rows_from_1, move_row2_to_row0 and copy_rows4, instead of once per op: four
+// inits per V tile were about a tenth of the vector pass.
 
 #pragma once
 
@@ -39,11 +42,17 @@ namespace gdn_decode_sfpu {
 // slot_out must be a free slot (it is zeroed first).
 inline void build_ebc16(uint32_t slot_e, uint32_t slot_b, uint32_t slot_c, uint32_t slot_out) {
     ckernel::fill_tile_init();
-    ckernel::fill_rows_tile(slot_out, 0, 16, 0.0f);
+    ckernel::fill_rows_tile<0, 16>(slot_out, 0.0f);
     ckernel::copy_dest_values_init();
     ckernel::copy_dest_rows(slot_out, 0, slot_e, 0);
     ckernel::copy_dest_rows(slot_out, 1, slot_b, 0);
     ckernel::copy_dest_rows(slot_out, 2, slot_c, 0);
+}
+
+// The fill and copy inits the three row compositions below rely on; once per acquire, before them.
+inline void vector_chain_init() {
+    ckernel::fill_tile_init();
+    ckernel::copy_dest_values_init();
 }
 
 // Rows 0..3 of DEST[dst] <- DEST[dst][r][c] * DEST[dst_col][4 * band + r][0]: the band broadcast with the column
@@ -63,25 +72,20 @@ inline void add_rows4(uint32_t a, uint32_t b) {
     ckernel::add_binary_tile<ckernel::DstRoundingMode::Default, true, 2>(a, b, a, ckernel::VectorMode::R);
 }
 
-// DEST[to] rows 0..3 <- DEST[from] rows 0..3, bit-exact.
+// DEST[to] rows 0..3 <- DEST[from] rows 0..3, bit-exact. After vector_chain_init.
 inline void copy_rows4(uint32_t to, uint32_t from) {
-    ckernel::copy_dest_values_init();
     ckernel::copy_dest_values<DataFormat::Float32, 2>(from, to, ckernel::VectorMode::R);
 }
 
 // 16x32 tile in slot dst: rows 1..15 <- 0, row 0 kept (the form u16 needs: a NaN in a padding row of r16 or v16 would
-// otherwise survive into u16).
-inline void zero_rows_from_1(uint32_t dst) {
-    ckernel::fill_tile_init();
-    ckernel::fill_rows_tile(dst, 1, 16, 0.0f);
-}
+// otherwise survive into u16). After vector_chain_init.
+inline void zero_rows_from_1(uint32_t dst) { ckernel::fill_rows_tile<1, 16>(dst, 0.0f); }
 
-// 16x32 tile in slot dst: row 0 <- row 2, rows 1..15 <- 0 (r_q to the output row, the padding cleared).
+// 16x32 tile in slot dst: row 0 <- row 2, rows 1..15 <- 0 (r_q to the output row, the padding cleared). After
+// vector_chain_init.
 inline void move_row2_to_row0(uint32_t dst) {
-    ckernel::copy_dest_values_init();
     ckernel::copy_dest_row(dst, 0, dst, 2);
-    ckernel::fill_tile_init();
-    ckernel::fill_rows_tile(dst, 1, 16, 0.0f);
+    ckernel::fill_rows_tile<1, 16>(dst, 0.0f);
 }
 
 }  // namespace gdn_decode_sfpu
