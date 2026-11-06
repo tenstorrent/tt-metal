@@ -90,4 +90,48 @@ inline void _calculate_fill_rows_(const std::uint32_t row_begin, const std::uint
         }
     }
 }
+
+// The same with the rows as template constants. One function per band: a band outside the range compiles to
+// nothing, one inside to its four stores or four lane-masked stores with immediate bounds, so the whole fill is
+// the stores alone. (Unrolling the run-time loop above instead does not compile: its run-time bounds would have to
+// live across the unrolled bands, and sfpi cannot spill a vector object.)
+template <std::uint32_t ROW_BEGIN, std::uint32_t ROW_END, std::uint32_t BAND>
+inline void _fill_rows_band_ct_(const sfpi::vFloat fill_val) {
+    constexpr std::uint32_t r0 = 4 * BAND;
+    constexpr std::uint32_t lo = ROW_BEGIN > r0 ? ROW_BEGIN - r0 : 0;
+    constexpr std::uint32_t hi = ROW_END >= r0 + 4 ? 4 : (ROW_END > r0 ? ROW_END - r0 : 0);
+    if constexpr (lo < hi) {
+        constexpr std::uint32_t left = 8 * (2 * (BAND / 4)) + 2 * (BAND % 4);
+        constexpr std::uint32_t vecs[4] = {left, left + 1, left + 8, left + 9};
+        if constexpr (lo == 0 && hi == 4) {
+            sfpi::dst_reg[vecs[0]] = fill_val;
+            sfpi::dst_reg[vecs[1]] = fill_val;
+            sfpi::dst_reg[vecs[2]] = fill_val;
+            sfpi::dst_reg[vecs[3]] = fill_val;
+        } else {
+#pragma GCC unroll 4
+            for (std::uint32_t i = 0; i < 4; i++) {
+                sfpi::vFloat x = sfpi::dst_reg[vecs[i]];
+                v_if(
+                    sfpi::vConstTileId >= static_cast<int>(16 * lo) && sfpi::vConstTileId < static_cast<int>(16 * hi)) {
+                    x = fill_val;
+                }
+                v_endif;
+                sfpi::dst_reg[vecs[i]] = x;
+            }
+        }
+    }
+}
+template <bool APPROXIMATION_MODE, std::uint32_t ROW_BEGIN, std::uint32_t ROW_END>
+inline void _calculate_fill_rows_ct_(const float value) {
+    const sfpi::vFloat fill_val = value;
+    _fill_rows_band_ct_<ROW_BEGIN, ROW_END, 0>(fill_val);
+    _fill_rows_band_ct_<ROW_BEGIN, ROW_END, 1>(fill_val);
+    _fill_rows_band_ct_<ROW_BEGIN, ROW_END, 2>(fill_val);
+    _fill_rows_band_ct_<ROW_BEGIN, ROW_END, 3>(fill_val);
+    _fill_rows_band_ct_<ROW_BEGIN, ROW_END, 4>(fill_val);
+    _fill_rows_band_ct_<ROW_BEGIN, ROW_END, 5>(fill_val);
+    _fill_rows_band_ct_<ROW_BEGIN, ROW_END, 6>(fill_val);
+    _fill_rows_band_ct_<ROW_BEGIN, ROW_END, 7>(fill_val);
+}
 }  // namespace ckernel::sfpu

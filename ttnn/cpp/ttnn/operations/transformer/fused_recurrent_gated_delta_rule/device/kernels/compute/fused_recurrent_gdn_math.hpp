@@ -228,6 +228,7 @@ void vector_pass(uint32_t cb_r16, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t c
         copy_tile(cb_r16, j, 0);
         copy_tile(cb_v16, j, 1);
         copy_tile(cb_ebc16, 0, 2);
+        gdn_decode_sfpu::vector_chain_init();
         gdn_decode_sfpu::mul_band0_by(0, 2, 0);  // e r_k (row 0), e r_q (row 2)
         gdn_decode_sfpu::sub_rows4(1, 0);        // v - e r_k
         gdn_decode_sfpu::mul_band0_by(1, 2, 1);  // u = beta (v - e r_k)
@@ -274,6 +275,7 @@ void read_vector_pass(
         copy_init(cb_v16);  // 16x32 tiles
         copy_tile(cb_v16, j, 1);
         copy_tile(cb_ebc16, 0, 2);
+        gdn_decode_sfpu::vector_chain_init();
         gdn_decode_sfpu::mul_band0_by(0, 2, 0);  // e r_k (row 0), e r_q (row 2)
         gdn_decode_sfpu::sub_rows4(1, 0);        // v - e r_k
         gdn_decode_sfpu::mul_band0_by(1, 2, 1);  // u = beta (v - e r_k)

@@ -1097,10 +1097,12 @@ bool is_written_by_partial_tile_op(const std::string& op_name, size_t element_in
 // fill_rows_tile: the chain fill_rows_{begin}_{end}_{tag} fills tile rows [begin, end) with the tag's value (v5 = 5.0,
 // v0 = 0.0, vn0 = -0.0, vnan = the quiet NaN) and leaves every other row as the input. Begins and ends sit on and off
 // the 4-row band edges; every ordered pair runs with 5.0, and the edge pairs of the tile and of a band also with the
-// special values. The chain's kernel defines come from sfpu_defines_of, not sfpu_op_to_op_name.
+// special values and through the compile-time form fill_rows_tile<begin, end> (tag v5ct). The chain's kernel defines
+// come from sfpu_defines_of, not sfpu_op_to_op_name.
 struct RowRangeCase {
     uint32_t begin, end;
     uint32_t value_bits;
+    bool ct = false;  // the template form, the rows as constants
 };
 const std::map<std::string, RowRangeCase> sfpu_row_range_ops = [] {
     std::map<std::string, RowRangeCase> cases;
@@ -1121,6 +1123,7 @@ const std::map<std::string, RowRangeCase> sfpu_row_range_ops = [] {
         cases[name(b, e, "v0")] = {b, e, 0u};
         cases[name(b, e, "vn0")] = {b, e, 0x80000000u};
         cases[name(b, e, "vnan")] = {b, e, 0x7fc00000u};
+        cases[name(b, e, "v5ct")] = {b, e, kFive, true};
     }
     return cases;
 }();
@@ -1135,11 +1138,11 @@ bool is_written_by_row_range_op(const std::string& op_name, size_t element_in_ti
 std::map<std::string, std::string> sfpu_defines_of(const std::string& op_name) {
     if (const auto it = sfpu_row_range_ops.find(op_name); it != sfpu_row_range_ops.end()) {
         const auto& c = it->second;
-        return {
-            {"SFPU_OP_FILL_INCLUDE", "1"},
-            {"SFPU_OP_CHAIN_0",
-             "fill_tile_init(); fill_rows_tile(0, " + std::to_string(c.begin) + ", " + std::to_string(c.end) +
-                 ", __builtin_bit_cast(float, " + std::to_string(c.value_bits) + "u));"}};
+        const std::string value = "__builtin_bit_cast(float, " + std::to_string(c.value_bits) + "u)";
+        const std::string call =
+            c.ct ? "fill_rows_tile<" + std::to_string(c.begin) + ", " + std::to_string(c.end) + ">(0, " + value + ");"
+                 : "fill_rows_tile(0, " + std::to_string(c.begin) + ", " + std::to_string(c.end) + ", " + value + ");";
+        return {{"SFPU_OP_FILL_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "fill_tile_init(); " + call}};
     }
     return sfpu_op_to_op_name.at(op_name);
 }
