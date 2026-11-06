@@ -467,7 +467,15 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         num_tiles_in_attn_mask = tensor_args.mask->padded_shape()[-1] * tensor_args.mask->padded_shape()[-2] / tile_hw;
         num_tiles_of_attn_mask_needed_per_core = program_config.block_h * program_config.block_w;
     }
-    std::uint32_t num_cores_per_batch_index = 0;
+    const uint64_t batch_elements = static_cast<uint64_t>(shape[1]) * shape[2] * shape[3];
+    const uint64_t shard_elements = static_cast<uint64_t>(input_tensor.shard_spec().value().shape[0]) *
+                                    input_tensor.shard_spec().value().shape[1];
+    const uint32_t mask_tiles_per_batch = has_mask ? (
+        attributes.is_causal_mask ? (tensor_args.mask->padded_shape()[-1] * tensor_args.mask->padded_shape()[-2] / tile_width / tile_height)
+                                  : (use_row_major_kernel ? tensor_args.mask->padded_shape()[-2]
+                                                         : tensor_args.mask->padded_shape()[-1] / tile_width)
+    ) : 0;
+    uint32_t processed_core_idx = 0;
 
     auto emit_reader_args = [&](const CoreCoord& core) {
         if (has_mask) {
@@ -481,20 +489,15 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             }
         }
 
-        num_cores_per_batch_index++;
+        processed_core_idx++;
         if (attributes.is_scale_causal_mask_hw_dims_softmax) {
             mask_start_tile_id = (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
-        } else if (num_cores_per_batch_index == num_cores_per_batch) {
-            num_cores_per_batch_index = 0;
-            if (has_mask) {
-                if (attributes.is_causal_mask) {
-                    mask_start_tile_id += tensor_args.mask->padded_shape()[-1] * tensor_args.mask->padded_shape()[-2] /
-                                          tile_width / tile_height;
-                } else {
-                    mask_start_tile_id += use_row_major_kernel ? tensor_args.mask->padded_shape()[-2]
-                                                               : tensor_args.mask->padded_shape()[-1] / tile_width;
-                }
+        } else if (has_mask && batch_elements > 0) {
+            uint32_t current_batch_idx = static_cast<uint32_t>((static_cast<uint64_t>(processed_core_idx) * shard_elements) / batch_elements);
+            if (current_batch_idx >= shape[0]) {
+                current_batch_idx = shape[0] - 1;
             }
+            mask_start_tile_id = current_batch_idx * mask_tiles_per_batch;
         }
     };
 

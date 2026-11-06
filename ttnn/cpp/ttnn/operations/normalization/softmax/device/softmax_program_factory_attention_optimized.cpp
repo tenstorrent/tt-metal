@@ -410,7 +410,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         const std::uint32_t num_tiles_causal_mask = tensor_args.mask.value().padded_shape()[-1] *
                                                     tensor_args.mask.value().padded_shape()[-2] / tile_width /
                                                     tile_height;
+        const std::uint32_t mask_Ht = tensor_args.mask.value().padded_shape()[-2] / tile_height;
+        const std::uint32_t mask_Wt = tensor_args.mask.value().padded_shape()[-1] / tile_width;
         reader_cta.insert({"num_tiles_causal_mask", num_tiles_causal_mask});
+        reader_cta.insert({"mask_Ht", mask_Ht});
+        reader_cta.insert({"mask_Wt", mask_Wt});
     }
     KernelSpec reader{
         .unique_id = READER,
