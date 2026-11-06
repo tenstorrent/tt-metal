@@ -231,3 +231,4 @@ Branch commits on the new base: 70075e3e7a1 906d3fbe4b7 3b9ed4635b1 020b0fb7556 
   run) it hangs on both builds. Pre-existing, a framework bug to fix (F-entry pending).
 - landed on the rebased branch: moe_grouped_topk + fabric_all_gather retirements, upstream combine file, H=32 waiver,
   rotary test fix, F257; rebuild OK (unity regrouping exposed a missing include in prepared_program.hpp: fixed).
+- SFPI ICE filed: https://github.com/tenstorrent/tt-metal/issues/64605 (report + reproducer on the branch: ttnn/ttnn/bringup/sdpa/docs/sfpi_ice/). Pushed cd24bcb7899 (fast-forward).

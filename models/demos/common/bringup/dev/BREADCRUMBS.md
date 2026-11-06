@@ -2635,3 +2635,10 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
   tests (with the spec's serving.server_repo) found the engine; "not found" for a working setup.
 - Fix: with BRINGUP_SPEC set, the CLI loads the spec and passes it to find_build.
 - Selftest: none (CLI wiring); checked by hand: prints the engine at /scratch/$USER/tt-d-gen.
+
+## F258: a ttnn debug line counted as a test (rebase onto 107f838f379, 2026-11-06)
+- Problem: fork_tests.collect took every stdout line with "::" as a node id; when a file failed to import, ttnn's
+  "Initial ttnn.CONFIG" line (report_name=std::nullopt) became a bogus node, run, retried as a box error and counted
+  as "not run" (7 phantom failures, 14 wasted whole-box runs on the 2026-11-06 Galaxy fork suite).
+- Fix: a node id is a path ending in .py, then "::".
+- Selftest: none added (one-line filter); the next fork suite shows no phantom "not run".
