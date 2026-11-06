@@ -385,10 +385,7 @@ void gather_rows_to_shard(
             return (i % N_TRIDS) + 1;
         }
     };
-    // Device 2.0 has no call that only sets the read transaction id.  set_async_read_state<TXN_ID>
-    // is the one API that writes the sticky NOC_PACKET_TAG register; the read state it programs
-    // alongside (self endpoint, size 0) is overwritten by the next read, so only the tag persists.
-    // Same idiom as the trid-0 reset in data_movement/sharded's stick-layout reader.
+    // set_async_read_state<TXN_ID> sets the sticky NOC_PACKET_TAG without issuing a read.
     [[maybe_unused]] auto set_read_tag = [&](uint32_t trid) {
         UnicastEndpoint self_ep;
         noc.set_async_read_state<NocOptions::TXN_ID>(
