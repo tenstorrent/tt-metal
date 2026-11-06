@@ -8,10 +8,12 @@
 Usage: check_manifest_schema.py PATH [PATH ...]
 
 Checks the schema against the JSON Schema metaschema, then every fabric_manifest_rank_*.json under each directory
-PATH, or each file PATH. Fails when a manifest doesn't match the schema, or when it finds none.
+PATH, or each file PATH, several at once. Fails when a manifest doesn't match the schema, or when it finds none.
 """
 
+import concurrent.futures
 import json
+import os
 import pathlib
 import sys
 
@@ -22,6 +24,8 @@ SCHEMA_PATH = (
     / "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_schema.json"
 )
 MAX_ERRORS_SHOWN = 20
+# A galaxy's manifest is tens of MB of JSON, and each check holds one loaded, so only a few run at once.
+MAX_PARALLEL_CHECKS = 4
 
 
 def manifest_paths(args):
@@ -41,10 +45,19 @@ def describe(error):
     return f"/{location}: {error.message}"
 
 
+def load_validator():
+    return jsonschema.Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
+
+
+def find_problems(path):
+    """What in the manifest at path doesn't match the schema, one line each. Runs in a worker process."""
+    manifest = json.loads(path.read_text())
+    errors = sorted(load_validator().iter_errors(manifest), key=lambda e: list(map(str, e.path)))
+    return [describe(error) for error in errors]
+
+
 def main(args):
-    schema = json.loads(SCHEMA_PATH.read_text())
-    jsonschema.Draft202012Validator.check_schema(schema)
-    validator = jsonschema.Draft202012Validator(schema)
+    jsonschema.Draft202012Validator.check_schema(json.loads(SCHEMA_PATH.read_text()))
 
     missing = [arg for arg in args if not pathlib.Path(arg).exists()]
     if missing:
@@ -55,17 +68,21 @@ def main(args):
         print(f"Fabric manifest: no manifests found under {' '.join(args)}")
         return 1
     failed = 0
-    for path in paths:
-        manifest = json.loads(path.read_text())
-        errors = sorted(validator.iter_errors(manifest), key=lambda e: list(map(str, e.path)))
-        problems = [describe(error) for error in errors]
-        if not problems:
-            print(f"{path}: matches the schema")
-            continue
-        failed += 1
-        print(f"Fabric manifest: {path} does not match {SCHEMA_PATH.name} ({len(problems)} problems)")
-        for problem in problems[:MAX_ERRORS_SHOWN]:
-            print(f"  {problem}")
+    # Each result is printed as it arrives, so a run cut short shows how far it got.
+    num_workers = min(MAX_PARALLEL_CHECKS, len(paths), os.cpu_count() or 1)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(find_problems, path): path for path in paths}
+        for future in concurrent.futures.as_completed(futures):
+            path = futures[future]
+            problems = future.result()
+            if not problems:
+                print(f"{path}: matches the schema", flush=True)
+                continue
+            failed += 1
+            print(f"Fabric manifest: {path} does not match {SCHEMA_PATH.name} ({len(problems)} problems)")
+            for problem in problems[:MAX_ERRORS_SHOWN]:
+                print(f"  {problem}")
+            sys.stdout.flush()
     return 1 if failed else 0
 
 
