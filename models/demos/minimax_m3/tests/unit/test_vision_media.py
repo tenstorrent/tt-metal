@@ -15,11 +15,15 @@ from models.demos.minimax_m3.vision import format as media_format
 from models.demos.minimax_m3.vision.media import IMAGE_END, IMAGE_START, M3Image, MiniMaxM3Media
 from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
 
-CONFIG = {"image_token_index": 200025, "text_config": {"hidden_size": 64}, "vision_config": {"patch_size": 14}}
+CONFIG = {
+    "image_token_index": 200025,
+    "text_config": {"hidden_size": 64},
+    "vision_config": {"patch_size": 14, "spatial_merge_size": 2},
+}
 
 
-def rgba(h, w, seed=0):
-    return np.random.default_rng(seed).integers(0, 256, (h, w, 4), dtype=np.uint8)
+def rgb(h, w, seed=0):
+    return np.random.default_rng(seed).integers(0, 256, (h, w, 3), dtype=np.uint8)
 
 
 @pytest.mark.parametrize("hw", [(672, 896), (560, 756), (30, 30), (4000, 3000), (28, 5000), (1, 150)])
@@ -29,7 +33,7 @@ def test_prepare_matches_hf(hw):
 
     proc = MiniMaxM3VLImageProcessor()
     media = MiniMaxM3Media(CONFIG)
-    image = rgba(*hw)
+    image = rgb(*hw)
     item = media.prepare("image", image)
 
     want = proc(images=[Image.fromarray(image)], return_tensors="pt")
@@ -44,10 +48,10 @@ def test_prepare_matches_hf(hw):
 @pytest.mark.parametrize(
     "kind,image,message",
     [
-        ("video", rgba(28, 28), "does not accept video"),
-        ("image", rgba(1, 201), "aspect ratio"),
-        ("image", rgba(28, 28)[..., :3], "RGBA"),
-        ("image", rgba(0, 28), "non-empty"),
+        ("video", rgb(28, 28), "does not accept video"),
+        ("image", rgb(1, 201), "aspect ratio"),
+        ("image", np.zeros((28, 28, 4), np.uint8), "RGB"),
+        ("image", rgb(0, 28), "non-empty"),
     ],
 )
 def test_prepare_rejects(expect_error, kind, image, message):
@@ -57,44 +61,36 @@ def test_prepare_rejects(expect_error, kind, image, message):
 
 def test_stub_encode_writes_a_value_prefill_reads(expect_error):
     media = MiniMaxM3Media(CONFIG)
+    with expect_error(ValueError, "does not accept video"):
+        media.load(None, "", "video", {"stub_embeddings": True})
     with expect_error(NotImplementedError, "stub_embeddings"):
-        media.load("", {})
-    media.load("", {"stub_embeddings": True})
-    item = media.prepare("image", rgba(100, 60))
-    bufs = [memoryview(bytearray(media.value_size(item))) for _ in range(2)]
+        media.load(None, "", "image", {})
+    media.load(None, "", "image", {"stub_embeddings": True})
+    item = media.prepare("image", rgb(100, 60))
+    bufs = [memoryview(bytearray(media.stored_nbytes(item))) for _ in range(2)]
     media.encode([item], bufs[:1])
     media.encode([item], bufs[1:])
 
-    h = media_format.read_header(bufs[0])
-    assert h == media_format.Header(item.grid_h, item.grid_w, item.n_tokens, 64)
+    rows = media_format.embeddings(bufs[0], 64)
+    assert rows.shape == (item.n_tokens, 64) and rows.any()
     assert bytes(bufs[0]) == bytes(bufs[1])
     transposed = M3Image(item.pixels.reshape(item.pixels.shape[1], item.pixels.shape[0], 3), item.grid_w, item.grid_h)
-    other = memoryview(bytearray(media.value_size(transposed)))
+    other = memoryview(bytearray(media.stored_nbytes(transposed)))
     media.encode([transposed], [other])
-    assert bytes(other[media_format.HEADER_BYTES :]) != bytes(bufs[0][media_format.HEADER_BYTES :])
-    assert media_format.embeddings(bufs[0], h).any()
+    assert bytes(other) != bytes(bufs[0])
 
 
 def test_format_rejects_bad_values(expect_error):
-    h = media_format.Header(2, 3, 6, 64)
-    buf = memoryview(bytearray(media_format.value_size(6, 64)))
-    media_format.write_header(buf, h)
-    assert media_format.read_header(buf) == h
-    with expect_error(ValueError, "needs"):
-        media_format.read_header(buf[:-2])
-    buf[8:12] = (5).to_bytes(4, "little")
-    with expect_error(ValueError, "grid_h"):
-        media_format.read_header(buf)
-    with expect_error(ValueError, "no embeddings"):
-        media_format.read_header(memoryview(bytearray(media_format.HEADER_BYTES)))
-    buf[8:12] = (6).to_bytes(4, "little")
-    buf[40] = 1
-    with expect_error(ValueError, "reserved"):
-        media_format.read_header(buf)
+    buf = memoryview(bytearray(media_format.stored_nbytes(6, 64)))
+    assert media_format.embeddings(buf, 64).shape == (6, 64)
+    with expect_error(ValueError, "whole bf16 rows"):
+        media_format.embeddings(buf[:-2], 64)
+    with expect_error(ValueError, "whole bf16 rows"):
+        media_format.embeddings(buf[:0], 64)
 
 
 def test_image_pickles_out_of_band():
-    item = MiniMaxM3Media(CONFIG).prepare("image", rgba(672, 896))
+    item = MiniMaxM3Media(CONFIG).prepare("image", rgb(672, 896))
     buffers = []
     stream = pickle.dumps(item, protocol=5, buffer_callback=buffers.append)
     assert len(stream) < 4096
