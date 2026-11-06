@@ -5,6 +5,7 @@
 import pytest
 import torch
 from datasets import load_dataset
+from PIL import Image
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -15,6 +16,26 @@ from models.demos.vision.classification.vit.blackhole.tt import (
 )
 from models.demos.vision.classification.vit.common.common import load_torch_model
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def distinct_views(image, count):
+    """A different crop of the image per batch slot, every other one mirrored.
+
+    Identical images would hide any mix-up between batch slots, since every slot would then
+    produce the same logits.
+    """
+    width, height = image.size
+    crop_width, crop_height = width * 5 // 8, height * 5 // 8
+    step_x = (width - crop_width) // max(count - 1, 1)
+    step_y = (height - crop_height) // max(count - 1, 1)
+    views = []
+    for index in range(count):
+        left, top = index * step_x, index * step_y
+        view = image.crop((left, top, left + crop_width, top + crop_height))
+        if index % 2:
+            view = view.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        views.append(view)
+    return views
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -303,9 +324,8 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     )
     image = dataset["test"]["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
-    torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
-    torch_output, *_ = model(torch_pixel_values).logits
+    torch_pixel_values = image_processor(distinct_views(image, batch_size), return_tensors="pt").pixel_values
+    torch_output = model(torch_pixel_values).logits
 
     # cls_token & position embeddings expand to batch_size
     # TODO: pass batch_size to preprocess_model_parameters
@@ -350,5 +370,6 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
-    # 1000 classes slicing
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.95)
+    # The class token's row, first 1000 of the padded classes, for every batch slot
+    for index in range(batch_size):
+        assert_with_pcc(torch_output[index], output[index, 0, :1000], 0.95)
