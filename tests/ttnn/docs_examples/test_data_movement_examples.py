@@ -33,9 +33,9 @@ def test_pad(device):
     # Create a tensor to pad
     input_tensor = ttnn.rand((1, 1, 4, 4), dtype=ttnn.bfloat16, device=device)
 
-    # Pad the tensor with 1 zero on all sides
+    # Pad the last two dimensions with 12 zeros at the end
     padded_tensor = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 12), (0, 12)], 0)
-    logger.info("Padded Tensor Shape:", padded_tensor.shape)  # Padded Tensor Shape: Shape([1, 1, 16, 16])
+    logger.info(f"Padded Tensor Shape: {padded_tensor.shape}")  # Shape([1, 1, 16, 16])
 
 
 def test_permute(device):
@@ -233,7 +233,8 @@ def test_gather(device):
     )
 
     # Gather elements along dimension 1 using the index tensor
-    ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    gathered_tensor = ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    logger.info(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
 
 
 def test_sort(device):
