@@ -67,16 +67,18 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
         }
     }
 
-    auto reduced = ttnn::moreh_sum(
-        grad,
-        broadcast_dims,
-        /* keep_dim */ true,
-        /* output_tensor */ std::nullopt,
-        /* memory_config_arg */ std::nullopt,
-        core::ComputeKernelConfig::precise());
+    auto reduced = grad;
+    if (!broadcast_dims.empty()) {
+        reduced = ttnn::moreh_sum(
+            grad,
+            broadcast_dims,
+            /* keep_dim */ true,
+            /* output_tensor */ std::nullopt,
+            /* memory_config_arg */ std::nullopt,
+            core::ComputeKernelConfig::precise());
+    }
 
-    // When ranks differ, moreh_sum with keep_dim preserves the grad's rank.
-    // Reshape back to the input's original shape so add_grad doesn't throw.
+    // Restore the input's rank after reducing any genuinely expanded dimensions.
     if (input_rank != grad_rank) {
         reduced = ttnn::reshape(reduced, input_shape);
     }

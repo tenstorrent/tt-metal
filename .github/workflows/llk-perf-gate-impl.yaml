@@ -86,6 +86,13 @@ on:
         required: false
         default: true
         type: boolean
+      fail_without_baseline:
+        description: >-
+          Fail the job when no baseline is found, because the gate then compares nothing.
+          False skips the gate with a warning.
+        required: false
+        default: false
+        type: boolean
       slack:
         description: "Post the verdict to the LLK regressions channel"
         required: false
@@ -196,6 +203,8 @@ jobs:
                   LINE="${NAME##*/ }: ${CONCLUSION}${MINUTES:+ after ${MINUTES} min}"
                   # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
                   if [ "$CONCLUSION" = cancelled ]; then LINE="${LINE}, most likely at its timeout"; fi
+                  # The suite stops at the first failing test (-x), so a failed leg is a test or the runner.
+                  if [ "$CONCLUSION" = failure ]; then LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"; fi
                   REASON="${REASON:+${REASON}; }${LINE}"
                 done <<< "$BAD"
                 REASON="A ${ARCH} measuring leg did not complete: ${REASON}."
@@ -575,6 +584,7 @@ jobs:
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
           THRESHOLD: ${{ inputs.threshold }}
+          MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -637,6 +647,7 @@ jobs:
             --note "$NOTE" \
             --post-pass "$SLACK_ON_PASS" \
             --threshold "$THRESHOLD" \
+            --min-cycles "$MIN_CYCLES" \
             --module-thresholds "$MODULE_THRESHOLDS" \
             --part-out slack_part.json \
             --out slack_payload.json && exit 0
@@ -685,34 +696,54 @@ jobs:
       - name: Gate verdict
         if: always()
         env:
+          ARCH: ${{ inputs.arch }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
+          COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
+          FAIL_WITHOUT_BASELINE: ${{ inputs.fail_without_baseline }}
         run: |
+          # The exit code and what kind of verdict it is: pass, regression, incomplete or no-compare.
+          KIND=no-compare
+          trap 'echo "$? $KIND" > "gate_verdict-${ARCH}.txt"' EXIT
           # Only the merge gate posts to Slack, so the run page is where the other gates show their verdict.
           if [ -f perf_gate_report.md ]; then
             cat perf_gate_report.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          HAVE_BASELINE=$(cat have_baseline.txt)
+          HAVE_BASELINE=$(cat have_baseline.txt 2>/dev/null || echo false)
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
+            KIND=incomplete
             echo "::error::${MEASURE_REASON:-The measurement did not complete.} The gate compared nothing."
-            echo "This is an infrastructure fault, not a performance result."
+            echo "This is not a performance result: a perf test failed, or a runner or board did."
             exit 1
           fi
 
+          if [ ! -f have_baseline.txt ]; then
+            echo "::error::The baseline read did not finish, so the gate has no verdict."
+            echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
           if [ "$HAVE_BASELINE" != "true" ]; then
+            if [ "$FAIL_WITHOUT_BASELINE" = "true" ]; then
+              echo "::error::No baseline found, so the gate compared nothing."
+              echo "This is a missing baseline in the warehouse, not a performance result."
+              exit 1
+            fi
+            KIND=pass
             echo "⚠️  No baseline found; gate skipped (first run or data missing)"
             exit 0
           fi
 
-          if [ "${{ steps.compare.outputs.comparison_finished }}" = "false" ]; then
+          # Not "false" only: a skipped comparison leaves it empty, and that is no verdict either.
+          if [ "$COMPARISON_FINISHED" != "true" ]; then
             echo "::error::The comparison did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
             exit 1
           fi
 
           if [ "$EXIT_CODE" != "0" ]; then
+            KIND=regression
             echo "❌ Performance regressions detected"
             cat perf_gate_report.md
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
@@ -722,5 +753,14 @@ jobs:
             exit 0
           fi
 
+          KIND=pass
           echo "✅ No regressions detected"
           cat perf_gate_report.md
+
+      - name: Upload the gate verdict
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-verdict-${{ inputs.arch }}
+          path: gate_verdict-${{ inputs.arch }}.txt
+          if-no-files-found: ignore
