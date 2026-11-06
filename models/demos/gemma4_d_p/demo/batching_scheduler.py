@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """In-process continuous-batching prefill scheduler on the 8x4 Galaxy, driven by batching_showcase.py and
-agentx_replay.py.
+agentx_sim/agentx_replay.py.
 
 Modes:
 - batched: each traced step has up to num_slots 2k lanes; every active request gets one and the spare lanes go to

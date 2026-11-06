@@ -3,7 +3,7 @@
 
 """Replay an AgentX slice through batching_scheduler.py on silicon, to check the AgentX simulator's predictions.
 
-    AGENTX_SLICE=slice.json AGENTX_OUT=replay.json pytest models/demos/gemma4_d_p/demo/agentx_replay.py -s
+    AGENTX_SLICE=slice.json AGENTX_OUT=replay.json pytest models/demos/gemma4_d_p/agentx_sim/agentx_replay.py -s
 
 The slice lists requests as (arrival s, input tokens, cached prefix tokens). Every mode plays the same arrivals open
 loop; each request resumes at its cached prefix rounded down to the mode's chunk width, or with AGENTX_ALIGNS also
