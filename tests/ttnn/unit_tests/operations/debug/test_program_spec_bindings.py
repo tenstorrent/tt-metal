@@ -617,7 +617,7 @@ def test_run_args_reject_unknown_attributes(expect_error):
         run_args.dfb_run_override = None
     run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb="in", num_entries=4)]
     assert run_args.dfb_run_overrides[0].num_entries == 4
-    # The attribute that keeps the tensors alive changes only with tensor_args.
+    # The attribute that keeps the tensors alive, and the instance dict that holds it, cannot be assigned or deleted.
     with expect_error(AttributeError, "'ProgramRunArgs' object attribute '_tensor_args' is read-only"):
         run_args._tensor_args = {}
     with expect_error(AttributeError, "'ProgramRunArgs' object attribute '_tensor_args' is read-only"):
