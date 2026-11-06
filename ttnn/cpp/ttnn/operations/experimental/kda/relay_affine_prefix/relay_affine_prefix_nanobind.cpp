@@ -20,7 +20,8 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         ``actual_start``) takes its entry state ``S_p`` from its predecessor, computes
         ``S_{p+1} = A_p S_p + B_p = S_p + (E_p S_p + B_p)`` from its packed complement-form summary ``[E | B]``
         (``E = A - I``) and forwards it, one head per core and one tile column at a time. ``S_p`` and ``B_p`` are
-        added exactly in FP32 DST; only ``E_p S_p`` passes through the matmul's source registers; the last rank sends the final state on to the first. ``cores`` lists a core
+        added exactly in FP32 DST (``B_p`` as ``I B_p`` in the matmul); only ``E_p S_p`` passes through the matmul's
+        source registers at its fidelity; the last rank sends the final state on to the first. ``cores`` lists a core
         per head, then a sender core per link. The ``landing`` buffer and the two global ``semaphores`` outlive
         the call: a peer writes them before this rank's call starts. Consecutive calls must be separated by a
         barrier across the SP line, since a rank's landing buffer is copied out at the end of its call and
@@ -48,8 +49,8 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             entry_memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the entry states.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The hop's matmul fidelity;
-                its products accumulate in DST. Requires ``fp32_dest_acc_en``. Defaults to HiFi2 with FP32
-                destination accumulation.
+                its products accumulate in DST. Requires ``fp32_dest_acc_en`` and HiFi2 or above. Defaults to
+                HiFi2 with FP32 destination accumulation.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: FLOAT32 TILE-layout ``[B*H, K, K]`` entry states and the final state in
