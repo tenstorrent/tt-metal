@@ -747,7 +747,7 @@ class TtPrefillBlock(LightweightModule):
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
-        fold_residual = self.is_moe and not return_intermediates and isinstance(self.ffn, TtMoe)
+        fold_residual = self.is_moe and not return_intermediates
         if self.is_moe:
             ffn_out = self._moe_path(
                 ffn_norm_out,
@@ -818,7 +818,7 @@ class TtPrefillBlock(LightweightModule):
             metadata=metadata,
             # Only consumed by the env-gated routing dump, which names its files by KV slot.
             cache_user_id=cache_user_id,
-            **({"residual": ttnn.squeeze(residual, dim=0)} if residual is not None else {}),
+            residual=None if residual is None else ttnn.squeeze(residual, dim=0),
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
