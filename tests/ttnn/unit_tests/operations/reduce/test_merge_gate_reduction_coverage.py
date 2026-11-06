@@ -221,7 +221,7 @@ def test_integer_reduce_returns_result_or_raises(device, op_name, ttnn_op, torch
             ttnn_op(tt_input, dim=-1)
         return
     if op_name in ("std", "var"):
-        with expect_error(RuntimeError, "are supported for Std/Var reduction"):
+        with expect_error(RuntimeError, "Only FLOAT32, BFLOAT16, and BFLOAT8_B are supported for Std/Var reduction"):
             ttnn_op(tt_input, dim=-1)
         return
 

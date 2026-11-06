@@ -632,13 +632,12 @@ Tensor reduce(
         for (const int d : dim) {
             const int axis = d < 0 ? d + rank : d;
             TT_FATAL(
-                axis == rank - 1 || axis == rank - 2, "MX reductions support the H and W axes only, got dim {}", d);
+                axis == (rank - 1) || axis == (rank - 2), "MX reductions support the H and W axes only, got dim {}", d);
         }
         TT_FATAL(keepdim, "MX reductions need keepdim=True (the squeezing reshape is not wired for MX tiles)");
     }
-    if (is_tiled &&
-        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
-         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+    if (is_tiled && (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                     input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
         // fill_pad writes in place. A reduction must not rewrite its caller's tensor.
         input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
         input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value);

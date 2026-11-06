@@ -67,10 +67,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     // Reader generates mask/scaler with uint16_t (1024 elements = 2048 bytes). Use Float16_b for these CBs when
     // input is Bfp8_b so tile size matches; Bfp8_b tile layout is smaller and would be overflowed (issue #32934).
-    // Same for the MX formats: their tiles are smaller than the bf16 mask / scaler the reader generates.
-    const auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b || is_mx(input_tensor.dtype()))
-                                        ? tt::DataFormat::Float16_b
-                                        : data_format;
+    const auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     const std::uint32_t in_tile_size = tt::tile_size(data_format);
     const std::uint32_t mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
@@ -182,7 +179,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
     compute_defines["SOFTMAX"] = "1";
     // Enable FP32_DEST_ACC_EN for format reconfiguration in moreh compute helpers when using mixed
     // data formats (Bfp8_b input with Float16_b intermediates/mask/scaler) (issue #32934).
-    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b || is_mx(input_tensor.dtype())) {
+    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 

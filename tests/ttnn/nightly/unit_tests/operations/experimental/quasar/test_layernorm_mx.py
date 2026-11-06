@@ -6,6 +6,9 @@
 
 The interleaved layernorm unpacks the MX input (and residual) to Float16_b, keeps every intermediate ring in
 Float16_b / Float32, and packs the output in the input's format; gamma / beta stay bf16.
+
+Not accepted (host rejection pinned below or left to the op's dtype check): softmax (#62095 is the Quasar softmax),
+and layernorm_distributed pre / post all-gather, which build Gen1 compute configs only and do not run on Quasar.
 """
 
 import pytest
@@ -107,34 +110,6 @@ def test_layer_norm_mx_fp32_dest_acc(device, dtype):
     check(mx_round_trip(golden, dtype), ttnn.to_torch(out), pcc_floor(dtype))
 
 
-# Single-device pipeline of the distributed norm: pre_all_gather computes the bf16 stats from the MX input,
-# post_all_gather normalizes the same MX input with them. The host side accepts MX; the op itself is not on Quasar
-# yet (layernorm_distributed_metal2_helpers.hpp builds Gen1 compute configs only and FATALs on Quasar).
-@pytest.mark.skip(reason="layernorm_distributed is Wormhole / Blackhole only (Gen1 compute config FATAL on Quasar)")
-@pytest.mark.parametrize("dtype", [ttnn.mxfp8_e4m3, ttnn.mxint8, ttnn.mxfp4])
-@pytest.mark.parametrize("is_rms", [False, True], ids=["layer_norm", "rms_norm"])
-def test_distributed_norm_mx(device, dtype, is_rms):
-    torch.manual_seed(0)
-    x = torch.randn(SHAPE)
-    gamma = torch.randn(SHAPE[-1]).bfloat16()
-    beta = torch.randn(SHAPE[-1]).bfloat16()
-    xt = to_device(device, x, dtype)
-    gt = to_device(device, gamma.reshape(1, 1, 1, -1), ttnn.bfloat16)
-    if is_rms:
-        stats = ttnn.rms_norm_pre_all_gather(xt, dtype=ttnn.bfloat16)
-        assert stats.dtype == ttnn.bfloat16
-        out = ttnn.rms_norm_post_all_gather(xt, stats, epsilon=EPS, weight=gt, dtype=dtype)
-        golden = _rms_norm(mx_round_trip(x, dtype), gamma.float(), EPS)
-    else:
-        stats = ttnn.layer_norm_pre_all_gather(xt, dtype=ttnn.bfloat16)
-        assert stats.dtype == ttnn.bfloat16
-        bt = to_device(device, beta.reshape(1, 1, 1, -1), ttnn.bfloat16)
-        out = ttnn.layer_norm_post_all_gather(xt, stats, epsilon=EPS, weight=gt, bias=bt, dtype=dtype)
-        golden = torch.nn.functional.layer_norm(mx_round_trip(x, dtype), (SHAPE[-1],), gamma.float(), beta.float(), EPS)
-    assert out.dtype == dtype
-    check(mx_round_trip(golden, dtype), ttnn.to_torch(out), pcc_floor(dtype))
-
-
 @pytest.mark.parametrize("dtype", [ttnn.mxfp8_e4m3, ttnn.mxint8])
 def test_layer_norm_mx_sharded(device, dtype):
     # Block-sharded input over a 2x2 grid (one 32x128 shard per core), sharded output in place.
@@ -169,9 +144,9 @@ def test_layer_norm_mx_sharded(device, dtype):
     check(mx_round_trip(golden, dtype), ttnn.to_torch(out), pcc_floor(dtype))
 
 
-def test_softmax_mx_rejects_nc_axis(device, expect_error):
-    # Only the W / H general softmax factories keep Float16_b intermediates for MX; the C-axis factory repacks the
-    # running sum in the input format after every channel.
-    x = to_device(device, torch.randn(1, 2, 32, 32), ttnn.mxint8)
-    with expect_error(RuntimeError, "H and W axes only"):
-        ttnn.softmax(x, dim=1)
+def test_softmax_mx_rejected(device, expect_error):
+    # Softmax does not accept MX yet: the attention-optimized factories were never run with MX, and the mainline
+    # general factories hang on Quasar for bf16 as well (the Quasar softmax is #62095). Rejected on the host.
+    x = to_device(device, torch.randn(1, 1, 32, 32), ttnn.mxint8)
+    with expect_error(RuntimeError, "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B"):
+        ttnn.softmax(x, dim=-1)

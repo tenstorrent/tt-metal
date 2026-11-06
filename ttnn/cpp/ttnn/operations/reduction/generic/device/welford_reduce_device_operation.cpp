@@ -43,8 +43,8 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
         tile.get_width());
     TT_FATAL(
         tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-            tensor_args.dtype() == DataType::BFLOAT8_B || is_mx(tensor_args.dtype()),
-        "Only FLOAT32, BFLOAT16, BFLOAT8_B and the MX formats are supported for Std/Var reduction - got {}",
+            tensor_args.dtype() == DataType::BFLOAT8_B,
+        "Only FLOAT32, BFLOAT16, and BFLOAT8_B are supported for Std/Var reduction - got {}",
         tensor_args.dtype());
     TT_FATAL(
         tensor_args.logical_shape().rank() >= 2,

@@ -538,7 +538,7 @@ Tensor reduce(
         for (const int d : dim) {
             const int axis = d < 0 ? d + rank : d;
             TT_FATAL(
-                axis == rank - 1 || axis == rank - 2, "MX reductions support the H and W axes only, got dim {}", d);
+                axis == (rank - 1) || axis == (rank - 2), "MX reductions support the H and W axes only, got dim {}", d);
         }
         TT_FATAL(keepdim, "MX reductions need keepdim=True (the squeezing reshape is not wired for MX tiles)");
     }
