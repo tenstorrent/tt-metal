@@ -784,12 +784,7 @@ class Qwen36Model:
         # the hidden fracture, so the round-trip gather->place->reshard preserves the per-device
         # columns. ConcatMeshToTensor(dim=1) over the 2D [rows, dim/TP] is the inverse of the
         # dims=(None,-1) hidden shard used on re-upload.
-        if tp:
-            vis_host = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
-                torch.bfloat16
-            )
-        else:
-            vis_host = ttnn.to_torch(vision_tokens).to(torch.bfloat16)  # [num_image_tokens, Hg]
+        vis_host = self.vision_rows_host(vision_tokens)  # [num_image_tokens, Hg]
         seg = vis_host[vis_row_offset : vis_row_offset + n]
         if tp:
             shard = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape)
@@ -817,6 +812,18 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._vis_mask_buf
         )
+
+    def vision_rows_host(self, vision_tokens):
+        """The packed vision rows as one host bf16 tensor [num_image_tokens, dim] (what _set_vision_merge splices); a
+        host tensor passes through. A prefill that replays traces before its last vision splice reads the rows once,
+        first: the device rows were allocated after the traces were captured, so a replay can overwrite them."""
+        if vision_tokens is None or isinstance(vision_tokens, torch.Tensor):
+            return vision_tokens
+        if self.num_devices > 1:
+            return ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
+                torch.bfloat16
+            )
+        return ttnn.to_torch(vision_tokens).to(torch.bfloat16)
 
     def _vis_row_offset_for(self, token_ids, chunk_start):
         """Packed-vision-row offset for the prefill segment starting at absolute position
@@ -2045,8 +2052,8 @@ class Qwen36Model:
         (max_batch_size == 1, slot 0) prefills in place.
 
         ``vision_tokens`` (multimodal prompt: packed vision rows, see Qwen36ForCausalLM._compute_vision_tokens): the M-RoPE
-        table is built with the grid and each chunk splices its own rows. A multimodal prompt is never prefix-cached
-        (``plan`` must be None).
+        table is built with the grid and each chunk splices its own rows. A multimodal prompt is never prefix-cached:
+        ``plan`` is None, or (QWEN36_MAMBA_PREFILL_CKPT) a from-0 plan whose save points are vLLM's checkpoints.
 
         ``final`` False (MTP chunked prefill, a non-final chunk; needs ``plan``): the GDN state is only snapshotted at the plan's
         save points (+ the chunk end L when ``save_end``: Option B exact resume); nothing is written to decode row ``slot``
@@ -2057,7 +2064,9 @@ class Qwen36Model:
         """
         assert self.num_devices > 1, "prefill_for_spec is the TP path"
         assert final or plan is not None, "a non-final prefill chunk needs a prefix plan"
-        assert vision_tokens is None or plan is None, "a multimodal prompt bypasses the prefix cache"
+        assert (
+            vision_tokens is None or plan is None or (int(plan[0]) == 0 and isinstance(plan[2], CheckpointPoints))
+        ), "a multimodal prompt bypasses the prefix cache (only vLLM's prefill checkpoints, from position 0)"
         assert 0 <= slot < self.args.max_batch_size, f"slot {slot} out of range [0,{self.args.max_batch_size})"
         if self.args.max_batch_size > 1:
             dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
@@ -2070,7 +2079,14 @@ class Qwen36Model:
                     )
                 else:
                     logits = self._prefill_for_spec_resumable(
-                        token_ids, page_table, actual_len, on_chunk, plan, want_logits=final, save_end=save_end
+                        token_ids,
+                        page_table,
+                        actual_len,
+                        on_chunk,
+                        plan,
+                        want_logits=final,
+                        save_end=save_end,
+                        vision_tokens=vision_tokens,
                     )
                 if gdn_write is not None:
                     gdn_write()
@@ -2091,15 +2107,20 @@ class Qwen36Model:
             return logits
         return self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk, vision_tokens=vision_tokens)
 
-    def _prefill_for_spec_resumable(self, token_ids, page_table, L, on_chunk, plan, want_logits=True, save_end=False):
+    def _prefill_for_spec_resumable(
+        self, token_ids, page_table, L, on_chunk, plan, want_logits=True, save_end=False, vision_tokens=None
+    ):
         """Prefix-cached spec prefill on the BOUND B=1 scratch (plan from plan_spec_prefix): restore the snapshot at s
         (or zero the state when s == 0), prefill [s, p1), [p1, p2) ... [pk, L) at absolute positions with the same
         2048-chunk eager loop as _prefill_for_spec_b1 (``on_chunk`` gets every chunk, so the drafter KV is warmed over
-        [s, L)), and snapshot the scratch after the segments that end at a save point. Returns device logits at L-1."""
+        [s, L)), and snapshot the scratch after the segments that end at a save point. Returns device logits at L-1.
+        ``vision_tokens``: a multimodal prompt (s == 0, vLLM's checkpoints as the save points); each chunk splices its
+        own vision rows."""
         cache = self._prefix_cache
         s, src, points = plan
         tokens = token_ids[:, :L].to(torch.int32)
-        self._build_request_rope(tokens, None)
+        vision_tokens = self.vision_rows_host(vision_tokens)  # a checkpoint write between segments can replay a trace
+        self._build_request_rope(tokens, vision_tokens)
         if s > 0:
             src[0].restore(src[1])
         else:
@@ -2110,7 +2131,13 @@ class Qwen36Model:
         for i, seg_end in enumerate(bounds):
             last = i == len(bounds) - 1
             logits = self._spec_prefill_segment(
-                tokens, page_table, seg_start, seg_end, on_chunk, want_logits=last and want_logits
+                tokens,
+                page_table,
+                seg_start,
+                seg_end,
+                on_chunk,
+                want_logits=last and want_logits,
+                vision_tokens=vision_tokens,
             )
             if not last:
                 if isinstance(points, CheckpointPoints):  # QWEN36_MAMBA_PREFILL_CKPT: into vLLM's checkpoint block
@@ -2131,9 +2158,10 @@ class Qwen36Model:
             cache.log(L, -1, s, saved)
         return logits
 
-    def _spec_prefill_segment(self, token_ids, page_table, start, end, on_chunk, want_logits):
+    def _spec_prefill_segment(self, token_ids, page_table, start, end, on_chunk, want_logits, vision_tokens=None):
         """tokens[start:end] (start % 128 == 0, GDN state carried from `start`) in 2048-token eager chunks + a masked
-        tail; hands every chunk's hidden to on_chunk. Device logits at end-1 when want_logits, else None."""
+        tail; hands every chunk's hidden to on_chunk. Device logits at end-1 when want_logits, else None. Every chunk
+        stages its vision rows (``vision_tokens`` None clears the merge mask a multimodal prefill left staged)."""
         chunk_size = self._chunked_chunk_size or 2048
         n = end - start
         num_full, tail_real = n // chunk_size, n % chunk_size
@@ -2143,6 +2171,9 @@ class Qwen36Model:
             cs = start + c * chunk_size
             if last_hidden is not None:
                 ttnn.deallocate(last_hidden)
+            self._set_vision_merge(
+                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+            )
             last_hidden = self._forward_prefill_chunk_masked_tp(
                 token_ids[:, cs : cs + chunk_size],
                 chunk_size,
@@ -2159,8 +2190,15 @@ class Qwen36Model:
             if last_hidden is not None:
                 ttnn.deallocate(last_hidden)
             cs = start + num_full * chunk_size
+            vis_kw = {}
+            if vision_tokens is not None:
+                vis_kw = dict(
+                    vision_tokens=vision_tokens,
+                    vis_row_offset=self._vis_row_offset_for(token_ids, cs),
+                    rope_staged=True,  # _prefill_for_spec_resumable staged the whole prompt's table
+                )
             logits, hidden = self.prefill_masked_bucket(
-                token_ids[:, cs:end], page_table, actual_len=tail_real, chunk_start=cs, return_hidden=True
+                token_ids[:, cs:end], page_table, actual_len=tail_real, chunk_start=cs, return_hidden=True, **vis_kw
             )
             on_chunk(hidden, cs, tail_real)
             ttnn.deallocate(hidden)
@@ -5502,6 +5540,7 @@ class Qwen36Model:
         vis_row_offset=0,
         bucket=None,
         snap_rows=(),
+        rope_staged=False,
     ):
         """Stage every per-request input of the bucket trace serving `actual_len` tokens, replay it, drain.
         Returns the _ShortPrefillTrace (outputs readable) or None when no trace serves this request (strict=False
@@ -5557,8 +5596,10 @@ class Qwen36Model:
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
         # Per-request RoPE: M-RoPE for multimodal, else clears to 1D RoPE with rope_delta = 0 (decode reads it).
-        # A resumed segment (chunk_start > 0) keeps the table the caller staged for the whole prompt.
-        if chunk_start == 0:
+        # A resumed segment (chunk_start > 0) keeps the table the caller staged for the whole prompt, and so does a
+        # segment at 0 when the caller staged it (rope_staged: a multimodal prompt split at vLLM's prefill checkpoints,
+        # whose first segment may hold none of the image placeholders).
+        if chunk_start == 0 and not rope_staged:
             self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
         self._prepare_short_trace_gdn_init(carry_gdn)
         toks = token_ids[:, :actual_len].to(torch.int32)
@@ -7300,8 +7341,11 @@ class Qwen36Model:
         vision_tokens=None,
         vis_row_offset=0,
         return_hidden=False,
+        rope_staged=False,
     ):
-        """Masked fixed-bucket prefill for a segment of `actual_len` real tokens.
+        """Masked fixed-bucket prefill for a segment of `actual_len` real tokens. ``rope_staged``: the caller staged the
+        RoPE table of the whole prompt (a multimodal prompt split at vLLM's prefill checkpoints); a segment at 0 keeps
+        it.
 
         Pads to a fixed bucket, runs all layers ONCE, and masks GDN recurrent + conv state to exactly
         `actual_len` real tokens — numerically equivalent to eager exact-length (prefill_paged) but
@@ -7323,7 +7367,8 @@ class Qwen36Model:
             # Stage the per-request RoPE for this segment (M-RoPE for multimodal, 1D for text).
             # Only at the sequence start; a carried tail (chunk_start>0) keeps the table the
             # long-prompt entry (prefill_traced_chunked) already staged.
-            self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
+            if not rope_staged:
+                self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
 
         real = token_ids[:, :actual_len].to(torch.int32)
         if bucket > actual_len:

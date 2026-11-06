@@ -281,17 +281,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         bs = int(cc.block_size)
         # Mode none: one state block per request and group, as upstream resolves mamba_block_size = max_model_len.
         max_len = int(vllm_config.model_config.max_model_len)
+        # A multimodal prompt writes its checkpoints too (MTPSpecEngine._paged_plan), so images and video keep them on.
         ckpt = mode == "align" and cls._PREFILL_CHECKPOINTS and mamba_prefill_checkpoints_enabled()
-        mm = getattr(vllm_config.model_config, "multimodal_config", None)
-        limit = getattr(mm, "get_limit_per_prompt", None)
-        if ckpt and mm is not None and (limit is None or any(limit(m) > 0 for m in ("image", "video"))):
-            # A multimodal prompt runs as one segment (no split at a checkpoint), so its checkpoint states would stay
-            # unwritten, and a text prompt that shares the text before the image would hit one.
-            logger.warning(
-                "QWEN36_MAMBA_PREFILL_CKPT is ignored: multimodal inputs are enabled (set --limit-mm-per-prompt "
-                'to {"image": 0, "video": 0} to use prefill checkpoints)'
-            )
-            ckpt = False
         return qwen36_kv_cache_spec(
             tc,
             _mesh_tp(),

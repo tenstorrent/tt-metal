@@ -865,6 +865,20 @@ def test_a_checkpoint_off_the_block_grid_or_outside_the_prefill_is_refused():
     assert eng._paged_plan(0, 3000, None, True, 0) is None
 
 
+def test_a_multimodal_row_writes_its_checkpoints_from_position_0():
+    """A multimodal prompt never resumes from a block, but vLLM's checkpoints inside it become segment ends from 0
+    (a block before the first image hashes like text, so it must hold the state); without checkpoints the plan stays
+    None (one segment, as before)."""
+    book = _BookAsState(_layout(8, 1024, 8, "two_pool"), 3, B, T, "align", 1024)
+    eng = _EngineStub(book, 1024)
+    book.set_prefill_blocks([torch.tensor([5])] * 3)
+    book.set_prefill_checkpoints([torch.tensor([[7]])] * 3, torch.tensor([[2048]]))
+    s, src, points = eng._paged_plan(1024, 3000, "VISION", True, 0)
+    assert (s, src, list(points)) == (0, None, [2048])
+    book.set_prefill_checkpoints(None, torch.zeros(1, 1, dtype=torch.int32))
+    assert eng._paged_plan(1024, 3000, "VISION", True, 0) is None
+
+
 @pytest.mark.parametrize("mode", ["none", "align"])
 def test_rows_left_out_of_a_step_are_held_and_resume(tmp_path, mode):
     # A long prompt arriving mid-decode takes the step budget: running rows sit out steps (the TT runner runs prefill

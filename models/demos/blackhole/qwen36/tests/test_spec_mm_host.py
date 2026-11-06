@@ -326,3 +326,105 @@ def test_prefill_for_spec_b1_threads_vision(monkeypatch, expect_error):
         AssertionError, "bypasses the prefix cache"
     ):  # the resumable (prefix-cache) path never serves a multimodal prompt
         Qwen36Model.prefill_for_spec(m, toks, None, 10, None, plan=(0, None, []), vision_tokens=VIS)
+
+
+def test_checkpoint_segments_of_a_multimodal_prompt_splice_their_vision_rows(monkeypatch):
+    """QWEN36_MAMBA_PREFILL_CKPT with images allowed: a multimodal prompt with a vLLM checkpoint at 1024 runs as the
+    segments [0, 1024) and [1024, L) from position 0 (the eager path); every chunk and tail stages its own vision rows
+    (the image straddles the checkpoint) and the checkpoint state is written after the first segment."""
+    from models.demos.blackhole.qwen36.tt.spec_block_state import CheckpointPoints
+
+    m = types.SimpleNamespace(_chunked_chunk_size=2048, device=None, num_devices=4, _prefix_cache=None)
+    _with_vis_offset(m)
+    log = []
+    m._build_request_rope = lambda toks, vt: log.append(("rope", int(toks.shape[1]), vt))
+    m._reset_gdn_state_for_new_sequence = lambda: log.append(("reset",))
+    m._set_vision_merge = lambda ids, vt, off: log.append(("merge", int(ids.shape[1]), vt, off))
+    m._forward_prefill_chunk_masked_tp = lambda ids, n, cs, *a, **k: log.append(("chunk", cs)) or "H"
+    m._masked_bucket_logits_tp = lambda *a: "LOGITS"
+    m.prefill_masked_bucket = lambda ids, pt, **k: log.append(
+        (
+            "masked",
+            k["chunk_start"],
+            k["actual_len"],
+            k.get("vision_tokens"),
+            k.get("vis_row_offset"),
+            k.get("rope_staged"),
+        )
+    ) or ("L", "H")
+    m._spec_prefill_segment = lambda *a, **k: Qwen36Model._spec_prefill_segment(m, *a, **k)
+    m.vision_rows_host = lambda vt: vt
+    import ttnn
+
+    monkeypatch.setattr(ttnn, "deallocate", lambda *a, **k: None)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *a, **k: None)
+    toks = torch.tensor([_mm_prompt(4400, 100, first=1000)], dtype=torch.int32)
+    points = CheckpointPoints([(1024, [7, 8, 9])], lambda blocks: log.append(("ckpt", blocks)))
+    Qwen36Model._prefill_for_spec_resumable(m, toks, None, 4400, lambda *a: None, (0, None, points), vision_tokens=VIS)
+    assert log == [
+        ("rope", 4400, VIS),
+        ("reset",),
+        ("masked", 0, 1024, VIS, 0, True),  # the table of the whole prompt stays (no image rows before 1024)
+        ("ckpt", [7, 8, 9]),
+        ("merge", 2048, VIS, 24),  # 24 of the image's rows lie before the checkpoint
+        ("chunk", 1024),
+        ("masked", 3072, 1328, VIS, 100, True),
+    ]
+
+
+def test_text_checkpoint_segments_clear_a_staged_vision_mask(monkeypatch):
+    """The same segmented path for text stages a cleared merge mask before every eager chunk, so the rows a previous
+    multimodal prefill left staged never reach a text prompt."""
+    from models.demos.blackhole.qwen36.tt.spec_block_state import CheckpointPoints
+
+    m = types.SimpleNamespace(_chunked_chunk_size=2048, device=None, num_devices=4, _prefix_cache=None)
+    _with_vis_offset(m)
+    log = []
+    m._build_request_rope = lambda toks, vt: log.append(("rope", vt))
+    m._reset_gdn_state_for_new_sequence = lambda: None
+    m._set_vision_merge = lambda ids, vt, off: log.append(("merge", vt))
+    m._forward_prefill_chunk_masked_tp = lambda *a, **k: "H"
+    m._masked_bucket_logits_tp = lambda *a: "LOGITS"
+    m.prefill_masked_bucket = lambda ids, pt, **k: log.append(("masked", sorted(k))) or ("L", "H")
+    m._spec_prefill_segment = lambda *a, **k: Qwen36Model._spec_prefill_segment(m, *a, **k)
+    m.vision_rows_host = lambda vt: vt
+    import ttnn
+
+    monkeypatch.setattr(ttnn, "deallocate", lambda *a, **k: None)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *a, **k: None)
+    toks = torch.tensor([_mm_prompt(3000, 0)], dtype=torch.int32)
+    points = CheckpointPoints([(2048, [7, 8, 9])], lambda blocks: None)
+    Qwen36Model._prefill_for_spec_resumable(m, toks, None, 3000, lambda *a: None, (0, None, points))
+    assert log == [
+        ("rope", None),
+        ("merge", None),
+        ("masked", ["actual_len", "chunk_start", "return_hidden"]),
+    ]
+
+
+def test_fast_checkpoint_segments_of_a_multimodal_prompt_keep_the_whole_prompt_rope(fake_ttnn):
+    """Traced path, a multimodal prompt with a vLLM checkpoint at 1024 before its image: the M-RoPE table is built once
+    over the whole prompt, the first segment's replay keeps it (rope_staged) instead of rebuilding it from its 1024
+    text tokens, the second segment splices the image rows from offset 0, and the checkpoint is written between."""
+    from models.demos.blackhole.qwen36.tt.spec_block_state import CheckpointPoints
+
+    calls = []
+    e = _mm_fast_engine(calls, trace_lengths=(1024, 300))
+
+    def _replay(tokens, pt, L, vision_tokens=None, strict=True, chunk_start=0, carry_gdn=False, spec_inputs=None, **kw):
+        calls.append(("replay", L, chunk_start, vision_tokens, kw.get("vis_row_offset", 0), kw.get("rope_staged")))
+        return e.model._short_trace_for(L)
+
+    e.model._replay_short_trace = _replay
+    e.model.vision_rows_host = lambda vt: calls.append(("host_rows", vt)) or vt
+    tokens = _mm_prompt(1324, 100, first=1100)
+    points = CheckpointPoints([(1024, [7, 8, 9])], lambda blocks: calls.append(("ckpt", blocks)))
+    _fast(e, tokens, vision_tokens=VIS, plan=(0, None, points))
+    seen = [c for c in calls if c[0] in ("host_rows", "rope", "replay", "ckpt")]
+    assert seen == [
+        ("host_rows", VIS),  # read once, before any replay
+        ("rope", 1324, VIS),
+        ("replay", 1024, 0, VIS, 0, True),
+        ("ckpt", [7, 8, 9]),
+        ("replay", 300, 1024, VIS, 0, True),  # a segment past 0 keeps the staged table anyway
+    ], seen

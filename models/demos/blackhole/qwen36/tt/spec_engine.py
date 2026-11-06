@@ -3001,17 +3001,12 @@ class MTPSpecEngine:
         segment from the first row of its first block), or leaves fewer than 3 tokens: the cached KV is rewritten with
         the same values. A multimodal prompt always recomputes.
         vLLM's prefill checkpoints of the request (QWEN36_MAMBA_PREFILL_CKPT) become the save points: the prompt runs
-        as segments that end at them, and each one's state goes into vLLM's block (CheckpointPoints)."""
+        as segments that end at them, and each one's state goes into vLLM's block (CheckpointPoints). A multimodal
+        prompt does the same from position 0 (its segments splice their vision rows), so no checkpoint block it gets
+        is left unwritten: vLLM can match a block before the first image to a text prompt."""
         paged = self._paged_state()
         ckpts = [] if gdn_req is None or gdn_req == WARMUP_REQ else paged.prefill_checkpoints(gdn_req)
-        if vision_tokens is not None:
-            if ckpts:
-                raise RuntimeError(
-                    f"multimodal prefill row {gdn_req}: vLLM asks for prefill checkpoints at "
-                    f"{[n for n, _ in ckpts]}, which a multimodal prompt cannot write"
-                )
-            return None
-        s = int(start_pos or 0)
+        s = 0 if vision_tokens is not None else int(start_pos or 0)
         from models.demos.blackhole.qwen36.tt.prefix_cache import SPEC_PREFIX_ALIGN
 
         if s <= 0 or s % SPEC_PREFIX_ALIGN or s % self.block_size or Tp - s < 3:
@@ -3394,7 +3389,9 @@ class MTPSpecEngine:
             if plan is None:
                 logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, **vis_kw, **gkw)
             elif final:
-                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan, **gkw)
+                logits_dev = model.prefill_for_spec(
+                    prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan, **vis_kw, **gkw
+                )
             else:
                 model.prefill_for_spec(
                     prompt,
@@ -3483,12 +3480,18 @@ class MTPSpecEngine:
         bounds = list(points) + [Tp]
         run, seg_kw = None, {}  # QWEN36_PREFILL_INTRACE_SNAP: the single segment's _SnapRun
         # The traces' GDN binding check (_short_trace_for) needs the binding the requests run on, so bind first.
+        if plan is not None and vision_tokens is not None:
+            # every segment splices from this host copy: the device rows can be overwritten by the replays before it
+            vision_tokens = model.vision_rows_host(vision_tokens)
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
             self._skip_logits_read = not final_row
             if plan is not None:
-                assert vision_tokens is None, "a multimodal prompt bypasses the prefix cache"
-                model._build_request_rope(prompt, None)  # one table for the whole prompt: every segment slices it
+                assert vision_tokens is None or (
+                    s0 == 0 and isinstance(points, CheckpointPoints)
+                ), "a multimodal prompt bypasses the prefix cache (only vLLM's prefill checkpoints, from position 0)"
+                # one table for the whole prompt: every segment slices it
+                model._build_request_rope(prompt, vision_tokens)
                 if s0 > 0:
                     src[0].restore(src[1])
                 run, mb_choice = self._snap_run_plan(prompt, pt_row, s0, Tp, points)
@@ -3515,6 +3518,7 @@ class MTPSpecEngine:
                     captured_row=captured_row,
                     decline_ok=(i == 0 and s0 == 0),
                     **({} if vision_tokens is None else dict(vision_tokens=vision_tokens)),
+                    **({"rope_staged": True} if plan is not None and vision_tokens is not None else {}),
                     **seg_kw,
                 )
                 if host is None:
@@ -3710,6 +3714,7 @@ class MTPSpecEngine:
         snap=None,
         mb_choice=None,
         _masked_big=True,
+        rope_staged=False,
     ):
         """Traced prefill of the prompt segment [a, b) (a % 128 == 0) on the bound B=1 GDN scratch: full chunks by the
         chunk trace, the tail by the spec short trace (drafter warm-up fused) or the eager masked bucket. carry: continue
@@ -3724,7 +3729,8 @@ class MTPSpecEngine:
         QWEN36_PREFILL_MASKED_BIG (text only, n >= 2048): after the n // 8192 full big blocks the remainder runs as ONE
         masked 4096 / 8192 spec short trace when the cost model finds it cheaper than 2048 replays + the masked tail
         (``mb_choice``: the caller's _masked_big_choice for this segment). ``_masked_big=False`` (internal) keeps the
-        existing plan, used for the fallback after a declined replay."""
+        existing plan, used for the fallback after a declined replay. ``rope_staged``: the caller staged the whole
+        prompt's RoPE table (a multimodal prompt split at vLLM's prefill checkpoints); a segment at 0 keeps it."""
         model = self.model
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)
         snap_kw = {} if snap is None else dict(snap=snap)
@@ -3790,6 +3796,7 @@ class MTPSpecEngine:
         if num_full == 0:
             # `prompt[:, a:]` (not [:, a:b]): the replay slices the first n tokens, and at a == 0 builds the request RoPE
             # from what it gets, which must be the whole prompt when later segments follow.
+            rs_kw = {"rope_staged": True} if rope_staged else {}
             host = self._replay_spec_short(
                 slot,
                 mtp_list,
@@ -3801,6 +3808,7 @@ class MTPSpecEngine:
                 captured_row,
                 **self._vis_replay_kw(prompt, a, vision_tokens),
                 **snap_kw,
+                **rs_kw,
             )
             if host is None:
                 if decline_ok:
@@ -3817,6 +3825,7 @@ class MTPSpecEngine:
                     chunk_start=a,
                     return_hidden=True,
                     **self._vis_replay_kw(prompt, a, vision_tokens),
+                    **rs_kw,
                 )
                 on_chunk(hidden, a, n)
                 ttnn.deallocate(hidden)
@@ -3935,6 +3944,7 @@ class MTPSpecEngine:
         vis_row_offset=0,
         bucket=None,
         snap=None,
+        rope_staged=False,
     ):
         """One replay of the spec short trace over the prompt segment [chunk_start, chunk_start + L) = the prompt's last
         segment (slot Tp-1 is its last real row): base forward + MTP KV warm-up + feed row, then the feed row of slot
@@ -3951,6 +3961,8 @@ class MTPSpecEngine:
             prompt_list, chunk_start, tr.bucket, pt_row, self.block_size, self._scratch_block, tr.buf_blocks
         )
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens, vis_row_offset=vis_row_offset)
+        if rope_staged:
+            vis_kw["rope_staged"] = True
         inside = snap.inside(chunk_start, L) if snap is not None else []
         if snap is not None:
             vis_kw["snap_rows"] = [p - chunk_start for p in inside]
