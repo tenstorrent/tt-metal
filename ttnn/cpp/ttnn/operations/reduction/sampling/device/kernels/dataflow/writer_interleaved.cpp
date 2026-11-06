@@ -37,20 +37,6 @@ FORCE_INLINE float bf16_to_f32(uint16_t bf16) {
     return result;
 }
 
-// One floored random digit. The compute kernel draws in [0, 256) and floors, so the packed BF16
-// value is an integer 0..255 (256 itself is excluded by the scale). Clamp anyway: a 256 from the
-// inclusive endpoint would otherwise spill into the next byte of the assembled threshold.
-FORCE_INLINE uint32_t rand_digit(uint16_t packed) {
-    const float value = bf16_to_f32(packed);
-    if (value <= 0.0f) {
-        return 0;
-    }
-    if (value >= 255.0f) {
-        return 255;
-    }
-    return static_cast<uint32_t>(value);
-}
-
 void kernel_main() {
     constexpr auto final_indices_stick_size = get_arg(args::final_indices_stick_size);
     // The host also supplies out_stick_size; this kernel does not read it.
@@ -133,16 +119,23 @@ void kernel_main() {
     // rand() programs its dest address mode on every call), and element 2 is lane 1 of the first
     // store. A dead digit would put the threshold back on a coarser grid
     // (test_sampling_low_digit_reaches_the_tail).
+    // The digits stay in float: every partial value below is an integer under 2^24, so each step is
+    // exact in FP32. This core has no FPU, and int/float conversions pull extra soft-float routines
+    // into the kernel, which measurably slowed decode at W=256. A draw of exactly 256 (rand_tile's
+    // range is inclusive) is clamped so it cannot carry into the next digit.
     constexpr uint32_t RAND_DIGIT_0 = 0;
     constexpr uint32_t RAND_DIGIT_1 = 1;
     constexpr uint32_t RAND_DIGIT_2 = 2;
-    const uint32_t digit_0 = rand_digit(rand_values[RAND_DIGIT_0]);
-    const uint32_t digit_1 = rand_digit(rand_values[RAND_DIGIT_1]);
-    const uint32_t digit_2 = rand_digit(rand_values[RAND_DIGIT_2]);
-    const uint32_t threshold_q24 = (digit_0 << 16) | (digit_1 << 8) | digit_2;
-    // 2^24 is exact in FP32, and threshold_q24 <= 2^24 - 1 is exact too, so this scale does not
-    // round the threshold off the 2^-24 grid.
-    const float rand_f = static_cast<float>(threshold_q24) * (1.0f / 16777216.0f);
+    constexpr float RAND_DIGIT_MAX = 255.0f;
+    constexpr float RAND_DIGIT_BASE = 256.0f;
+    constexpr float RAND_GRID_SCALE = 1.0f / 16777216.0f;  // 2^-24
+    float digit_0 = bf16_to_f32(rand_values[RAND_DIGIT_0]);
+    float digit_1 = bf16_to_f32(rand_values[RAND_DIGIT_1]);
+    float digit_2 = bf16_to_f32(rand_values[RAND_DIGIT_2]);
+    digit_0 = digit_0 > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : digit_0;
+    digit_1 = digit_1 > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : digit_1;
+    digit_2 = digit_2 > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : digit_2;
+    const float rand_f = ((digit_0 * RAND_DIGIT_BASE + digit_1) * RAND_DIGIT_BASE + digit_2) * RAND_GRID_SCALE;
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
