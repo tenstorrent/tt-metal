@@ -23,6 +23,7 @@ from models.experimental.vadv2.reference.temporal_self_attention import Temporal
 from models.experimental.vadv2.reference.spatial_cross_attention import SpatialCrossAttention
 from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
+    move_to_device,
     preprocess_model_parameters,
     preprocess_linear_weight,
     preprocess_linear_bias,
@@ -411,12 +412,21 @@ def custom_preprocessor(model, name):
     return parameters
 
 
+# Raw convolution weights and biases stay on the host: conv2d prepares both together on its first
+# call. Moved to device first, the weight is pulled back and prepared while the bias stays raw on
+# device, and the two end up in different dtypes.
+CONV_PARAMETERS = ("img_backbone", "img_neck")
+
+
 def create_vadv2_model_parameters_vad(model: ResNet, input_tensor: input, device=None):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
-        device=device,
+        device=None,
     )
+    for name in list(parameters.keys()):
+        if name not in CONV_PARAMETERS:
+            parameters[name] = move_to_device(parameters[name], device)
 
     parameters.conv_args = {"img_backbone": {}, "img_neck": {}}
 
