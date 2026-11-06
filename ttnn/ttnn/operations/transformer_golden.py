@@ -1798,25 +1798,47 @@ def fused_recurrent_gated_delta_rule_golden(
     *,
     scale=None,
     initial_state=None,
+    inplace_final_state=False,
     output_final_state=False,
     output_per_token_state=False,
+    use_qk_l2norm_in_kernel=False,
+    output_tensor=None,
     use_qk_l2norm=False,
     **_,
 ):
     """Golden of ttnn.transformer.fused_recurrent_gated_delta_rule: the op's argument order (q, k, v, g, beta) over the
-    FLA-ordered recurrence (q, k, v, beta, g). Returns (o, state); state is None unless a state output is requested."""
-    return recurrent_gated_delta_rule(
+    FLA-ordered recurrence (q, k, v, beta, g), with the served contract in torch:
+    - use_qk_l2norm_in_kernel (the old use_qk_l2norm is accepted as an alias): q and k normalised over K with eps
+      inside the root, then scale;
+    - initial_state [Bs, HV, K, V] with Bs >= B: rows [0:B] are the batch's states (the leading-row form);
+    - inplace_final_state: returns initial_state with rows [0:B] replaced by the final state, the other rows
+      untouched;
+    - output_tensor is the caller's buffer on device and does not change the values, so it is ignored here.
+    Returns (o, state); state is None unless a state output is requested or the state is updated in place."""
+    import torch
+
+    B = q.shape[0]
+    s0 = None
+    if initial_state is not None:
+        s0 = initial_state[:B] if initial_state.shape[0] != B else initial_state
+    want_state = output_final_state or output_per_token_state or inplace_final_state
+    o, state = recurrent_gated_delta_rule(
         q,
         k,
         v,
         beta,
         g,
         scale=scale,
-        initial_state=initial_state,
-        output_final_state=output_final_state or output_per_token_state,
-        use_qk_l2norm=use_qk_l2norm,
+        initial_state=s0,
+        output_final_state=want_state,
+        use_qk_l2norm=use_qk_l2norm_in_kernel or use_qk_l2norm,
         output_per_token_state=output_per_token_state,
     )
+    if inplace_final_state:
+        pool = initial_state.detach().clone().to(torch.float32)
+        pool[:B] = state.to(torch.float32)
+        return o, pool
+    return o, (state if (output_final_state or output_per_token_state) else None)
 
 
 def gated_delta_attn_seq_golden(

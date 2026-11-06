@@ -33,6 +33,7 @@ ChunkGdnMonoProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnMonoProgra
 ChunkGdnPhasedProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnPhasedProgramConfig
 ChunkGdnFusedProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnFusedProgramConfig
 ChunkGdnWyInverse = ttnn._ttnn.operations.transformer.ChunkGdnWyInverse
+FusedRecurrentGdnProgramConfig = ttnn._ttnn.operations.transformer.FusedRecurrentGdnProgramConfig
 
 
 def _golden_function(
