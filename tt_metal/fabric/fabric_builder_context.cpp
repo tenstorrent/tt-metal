@@ -49,7 +49,8 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment([[maybe_unused]
         .vc1_uses_counters = true,
         // VC2 has no completion register to fall back on -- the completed table stops at flat
         // position 8 and VC2's sender is position 9 -- so it rides counters wherever it exists.
-        .vc2_uses_counters = intermesh_vc_config_.requires_vc2};
+        .vc2_uses_counters = intermesh_vc_config_.requires_vc2,
+        .stream_registers_available = fabric_context_.get_hal().has_stream_registers()};
 
     std::array<uint32_t, builder_config::MAX_NUM_VCS> max_senders{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> max_receivers{};
