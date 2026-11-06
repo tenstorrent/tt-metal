@@ -190,8 +190,9 @@ git clone https://github.com/tenstorrent/tt-metal.git && cd tt-metal
 git checkout sosborne/sparse-ring-attn-bench
 git submodule update --init --recursive
 ./build_metal.sh && ./create_venv.sh && source python_env/bin/activate
-pip install safetensors
+uv pip install safetensors
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
+export TT_METAL_TDP_LIMIT_WATTS=160
 ```
 
 Run (the bench opens the 4x8 mesh with a 1D ring fabric itself):
