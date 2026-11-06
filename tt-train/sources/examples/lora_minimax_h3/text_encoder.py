@@ -18,6 +18,7 @@ import ml_dtypes
 import numpy as np
 import ttnn
 import ttml
+from ttml.common.utils import unpermute_proj_rows
 from ttml.models.qwen3 import Qwen3RMSNorm
 from ttml.modules import (
     AbstractModuleBase,
@@ -145,18 +146,6 @@ class TextTower(AbstractModuleBase):
 # --------------------------------------------------------------------------- weights
 
 
-def _rows_half_to_interleaved(w: np.ndarray, n_heads: int) -> np.ndarray:
-    """HF rotate-half row order -> ttml interleaved pairs, per head. 1-D or 2-D."""
-    if w.ndim == 1:
-        d = w.shape[0] // n_heads
-        v = w.reshape(n_heads, 2, d // 2)
-        return v.transpose(0, 2, 1).reshape(-1)
-    rows, cols = w.shape
-    d = rows // n_heads
-    v = w.reshape(n_heads, 2, d // 2, cols)
-    return v.transpose(0, 2, 1, 3).reshape(rows, cols)
-
-
 def _fuse_kv_per_shard(k: np.ndarray, v: np.ndarray, tp: int) -> np.ndarray:
     """[K_s0, V_s0, K_s1, V_s1, ...] so a contiguous column shard holds [K_local | V_local]."""
     kv_out, cols = k.shape
@@ -185,12 +174,12 @@ def weight_plan(config: TextTowerConfig, root: str) -> dict[str, tuple[tuple[str
 def prepare_weight(name: str, arrays: tuple[np.ndarray, ...], config: TextTowerConfig, tp: int) -> np.ndarray:
     """Host-side transform of the HF array(s) for one ttml parameter into its 4-D global bf16 layout."""
     if name.endswith("kv_proj/weight"):
-        k = _rows_half_to_interleaved(arrays[0], config.num_key_value_heads)
+        k = unpermute_proj_rows(arrays[0], config.num_key_value_heads)
         w = _fuse_kv_per_shard(k, arrays[1], tp)
     elif name.endswith("q_proj/weight"):
-        w = _rows_half_to_interleaved(arrays[0], config.num_attention_heads)
+        w = unpermute_proj_rows(arrays[0], config.num_attention_heads)
     elif name.endswith("q_norm/weight") or name.endswith("k_norm/weight"):
-        w = _rows_half_to_interleaved(arrays[0], 1)
+        w = unpermute_proj_rows(arrays[0], 1)
     else:
         w = arrays[0]
     w = w.reshape(1, 1, 1, -1) if w.ndim == 1 else w.reshape(1, 1, *w.shape)
