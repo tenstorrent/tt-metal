@@ -130,8 +130,8 @@ void kernel_main() {
     constexpr uint32_t n_inner = get_compile_time_arg_val(N_INNER);        // chunks per outer (resident-axis) index
     constexpr bool resident = get_compile_time_arg_val(RESIDENT) != 0;
     static_assert(super_block >= 1 && num_k_blocks % super_block == 0, "super-block must divide the K-blocks");
-    // runtime args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
-    constexpr uint32_t roles_idx = num_waves;
+    // common args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per half and entry role | lag << 8
+    const uint32_t roles_idx = num_waves + get_arg_val<uint32_t>(mrs::compute_rt::HALF) * num_entries;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_k_window, cb_weight_k_window, cb_partial_hold);
 
@@ -212,7 +212,7 @@ void kernel_main() {
     // One entry's matmul. fusable: its finish folds into the last super-block (an arrival entry: only if the
     // arrival landed by the end of that super-block's first subblock). Returns whether the finish is complete.
     auto matmul_entry = [&](uint32_t e, bool fill, bool fusable, uint32_t role) -> bool {
-        const uint32_t wave = get_arg_val<uint32_t>(e % num_waves);
+        const uint32_t wave = get_common_arg_val<uint32_t>(e % num_waves);
         const uint32_t rows = wave & 0xFF, cols = (wave >> 8) & 0xFF;
         const uint32_t sb_h = (wave >> 16) & 0xFF, sb_w = wave >> 24;
         const uint32_t n_sb_r = rows / sb_h, n_sb_c = cols / sb_w;
@@ -377,7 +377,7 @@ void kernel_main() {
         // the resident operand reloads in the first entry of a chunk whose outer index changed (always chunk 0)
         const bool chunk_fill = c == 0 || (resident && c % n_inner == 0);
         for (uint32_t e = 0; e < num_entries; ++e) {
-            const uint32_t word = get_arg_val<uint32_t>(roles_idx + e);
+            const uint32_t word = get_common_arg_val<uint32_t>(roles_idx + e);
             const uint32_t role = word & 0xFF;
             const bool lag =
                 (word >> mrs::role::LAG_SHIFT) & 1;  // host: arrival expected late -> finish behind the next matmul
@@ -385,7 +385,7 @@ void kernel_main() {
             const bool fused = matmul_entry(e, chunk_fill && e == 0, fusable, role);
             if (pending != NONE) {
                 finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
-                    get_arg_val<uint32_t>(roles_idx + pending) & 0xFF, finish_bufs);
+                    get_common_arg_val<uint32_t>(roles_idx + pending) & 0xFF, finish_bufs);
                 pending = NONE;
             }
             if (lag) {
