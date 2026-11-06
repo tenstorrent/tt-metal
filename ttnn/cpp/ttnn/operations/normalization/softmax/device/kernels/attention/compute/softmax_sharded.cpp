@@ -109,9 +109,14 @@ void kernel_main() {
     DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
     DataflowBuffer dfb_scale_mask_obj(dfb::scale_mask);
+#ifdef MASK_PER_ROW
+    constexpr bool mask_per_row = true;
+#else
+    constexpr bool mask_per_row = false;
+#endif
     constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
     constexpr auto mask_wait = sharded_causal_mask ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront;
-    constexpr auto mask_pop = causal_mask ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
+    constexpr auto mask_pop = (causal_mask || mask_per_row) ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
 #endif
 
 #if defined(ROWS_PER_PASS) && !defined(FUSED_SCALE_MASK) && defined(MASK_PADDED_DATA) && defined(NUMERIC_STABLE)
@@ -488,9 +493,9 @@ void kernel_main() {
     // of the block; pop it once here so the buffer is left balanced.
     dfb_fused_scale_obj.pop_front(1);
     // A non-causal attention mask is one row of block_w tiles that every row of the block re-waits
-    // and reuses, so it is popped once here rather than per row. The causal paths set mask_pop to
-    // AtEnd and so pop it inside the loop instead, so don't pop here in that case.
-    if constexpr (!causal_mask) {
+    // and reuses, so it is popped once here rather than per row. The causal and per-row paths set
+    // mask_pop to AtEnd and so pop it inside the loop instead, so don't pop here in that case.
+    if constexpr (!causal_mask && !mask_per_row) {
         dfb_fused_attn_obj.pop_front(block_w);
     }
 #endif  // FUSED_SCALE_MASK

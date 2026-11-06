@@ -201,11 +201,26 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
         TT_FATAL(
             tensors_args.input_tensor.device() == mask.device(), "Input tensor and mask must be on the same device");
+        TT_FATAL(
+            !(attributes.is_causal_mask && mask.layout() == Layout::ROW_MAJOR),
+            "A causal mask must have TILE layout; a ROW_MAJOR mask holds one row per batch");
         if (mask.is_sharded()) {  // sharded mask
             TT_FATAL(mask.layout() == Layout::TILE, "Sharded mask must have TILE layout");
             TT_FATAL(
                 mask.padded_shape() == tensors_args.input_tensor.padded_shape(),
                 "Sharded mask shape must match input tensor shape");
+            // The sharded program config reads each core's mask shard from that core's own L1.
+            const auto& input_tensor = tensors_args.input_tensor;
+            TT_FATAL(
+                !std::holds_alternative<SoftmaxShardedMultiCoreProgramConfig>(attributes.program_config) ||
+                    (mask.memory_config().memory_layout() == input_tensor.memory_config().memory_layout() &&
+                     mask.shard_spec() == input_tensor.shard_spec()),
+                "A sharded mask must be sharded like the input; got a {} mask with shard spec {} and a {} input with "
+                "shard spec {}",
+                mask.memory_config().memory_layout(),
+                mask.shard_spec(),
+                input_tensor.memory_config().memory_layout(),
+                input_tensor.shard_spec());
         } else {
             if (mask.layout() == Layout::ROW_MAJOR) {
                 const auto tile_width = tensors_args.input_tensor.tensor_spec().tile().get_width();
@@ -225,6 +240,12 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     input_tile.get_height(),
                     input_tile.get_width(),
                     mask.padded_shape());
+                // The readers fetch one input row's worth of mask tiles per mask row.
+                TT_FATAL(
+                    mask.padded_shape()[-1] == tensors_args.input_tensor.padded_shape()[-1],
+                    "Mask width must match the input width, got mask padded shape {} and input padded shape {}",
+                    mask.padded_shape(),
+                    tensors_args.input_tensor.padded_shape());
             }
             for (uint32_t i = 1; i < tensors_args.input_tensor.padded_shape().rank() - 2; i++) {
                 TT_FATAL(
@@ -271,6 +292,11 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             "shard width must equal to input tensor shape[3]!");
 
                         TT_FATAL(attributes.inplace, "Operation must be inplace for sharded multi-core program config");
+                        TT_FATAL(
+                            mask.padded_shape()[0] == 1 || mask.padded_shape()[0] == shape[0],
+                            "Mask batch size must be 1 or match the input batch size, got input: {} vs mask: {}",
+                            shape,
+                            mask.padded_shape());
                         if (!attributes.is_scale_causal_mask_hw_dims_softmax) {
                             // grid
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
