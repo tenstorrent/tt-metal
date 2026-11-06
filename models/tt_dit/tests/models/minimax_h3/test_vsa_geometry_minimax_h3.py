@@ -140,7 +140,7 @@ def test_roundtrip_identity(sp_factor, extra_rows_per_shard):
 
 
 def test_pad_blocks_in_the_rung(expect_error):
-    """15 s / 768p at SP 8 with a straggler per shard: tiles fill whole blocks in order, the rest is inert."""
+    """15 s / 768p at SP 8 with a straggler per shard: tiles fill whole blocks, the rest is inert."""
     prefix_segments, grid = _15S768P
     sp_factor = 8
     min_len = vsa_min_padded_len(prefix_segments, grid, sp_factor)
@@ -158,16 +158,51 @@ def test_pad_blocks_in_the_rung(expect_error):
     straggler = torch.arange(geometry.n_blocks) % geometry.blocks_per_shard == geometry.blocks_per_shard - 1
     assert bool(pad[straggler].all())
 
-    # Real tiles keep FastVideo order: the blocks holding them, in global order, carry the canonical counts.
-    canonical = torch.cat([torch.tensor(chop_prefix_segments(prefix_segments)), video_tile_valid_counts(grid)])
-    assert torch.equal(geometry.valid_counts[real], canonical)
     last_real = int(torch.nonzero(real).max())
     assert geometry.logical_n == int(geometry.block_starts[last_real]) + VSA_TILE_TOKENS
-    assert int(real[last_real + 1 :].sum()) == 0
 
     # Production scale sanity: k = ceil(0.1 * candidates) at 0.9 sparsity.
     assert geometry.n_real_tiles == geometry.n_prefix_tiles + 27 * 6 * 11
     assert int(geometry.is_candidate.sum()) == 27 * 6 * 11
+
+
+@pytest.mark.parametrize("extra_rows_per_shard", [0, 32, 160])
+@pytest.mark.parametrize("fixture", list(_FIXTURES), ids=list(_FIXTURES))
+def test_balanced_shards(fixture, extra_rows_per_shard):
+    """SP 8: shards split prefix tiles, real tiles and pads within one; each is prefix, one video run, pads."""
+    prefix_segments, grid = _FIXTURES[fixture]
+    geometry = _geometry(prefix_segments, grid, sp_factor=8, extra_rows_per_shard=extra_rows_per_shard)
+    sp, bps, n_prefix = geometry.sp_factor, geometry.blocks_per_shard, geometry.n_prefix_tiles
+
+    # Source tile of each block, read off the SP 1 layout where block i holds tile i.
+    exact = _geometry(prefix_segments, grid)
+    real = geometry.valid_counts > 0
+    block_tile = torch.full((geometry.n_blocks,), -1, dtype=torch.long)
+    block_tile[real] = exact.untile_index[geometry.gather_index[geometry.block_starts[real]]] // VSA_TILE_TOKENS
+
+    per_shard = block_tile.reshape(sp, bps)
+    prefix_counts = ((per_shard >= 0) & (per_shard < n_prefix)).sum(1)
+    real_counts = (per_shard >= 0).sum(1)
+    pad_counts = bps - real_counts
+    for counts in (prefix_counts, real_counts, pad_counts):
+        assert int(counts.max() - counts.min()) <= 1, counts
+
+    for s in range(sp):
+        tiles = per_shard[s].tolist()
+        n_p, n_r = int(prefix_counts[s]), int(real_counts[s])
+        assert all(0 <= t < n_prefix for t in tiles[:n_p]), (s, tiles)
+        assert all(t == -1 for t in tiles[n_r:]), (s, tiles)
+        video = tiles[n_p:n_r]
+        assert all(t >= n_prefix for t in video), (s, tiles)
+        assert video == list(range(video[0], video[0] + len(video))), (s, tiles)
+
+    canonical = torch.cat([torch.tensor(chop_prefix_segments(prefix_segments)), video_tile_valid_counts(grid)])
+    order = torch.argsort(block_tile[real])
+    assert torch.equal(block_tile[real][order], torch.arange(geometry.n_real_tiles))
+    assert torch.equal(geometry.valid_counts[real][order], canonical)
+    expected_exempt = torch.arange(geometry.n_real_tiles) < n_prefix
+    assert torch.equal(geometry.is_exempt[real][order], expected_exempt)
+    assert torch.equal(geometry.is_candidate[real][order], ~expected_exempt)
 
 
 def test_averaging_matrix_matches_upstream_pooling(upstream):

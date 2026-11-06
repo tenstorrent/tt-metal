@@ -12,10 +12,12 @@ sequence out as 64-token VSA tiles inside a ladder rung:
   dimension's tail);
 - every prefix segment (text, condition keyframes, audio) is chopped into
   64-token chunks that never cross a segment boundary;
-- each SP shard holds ``rung / sp`` rows as 64-row blocks; the real tiles fill
-  the whole blocks of shard 0, then shard 1, and so on. Every other block is a
-  pad block with count 0: unused blocks, and the 32-row block that ends each
-  shard when ``rung / sp`` is an odd multiple of 32.
+- each SP shard holds ``rung / sp`` rows as 64-row blocks and an equal share
+  (within one) of the real tiles: prefix tiles are dealt round-robin to the
+  front of the shards, then the video tiles, in cube-major order, are cut into
+  one contiguous run per shard. Every other block is a pad block with count 0:
+  the unused blocks at the end of each shard, and the 32-row block that ends
+  each shard when ``rung / sp`` is an odd multiple of 32.
 
 The rung comes from the bucket ladder (``vsa_min_padded_len`` is what it must
 hold), so the tile layout never changes the rung a request runs at.
@@ -111,7 +113,8 @@ class MiniMaxH3VSAGeometry:
     """One packed sequence's tiles laid out in a ``padded_len``-row rung, in device row order.
 
     Per-block tensors are indexed by global block ``s * blocks_per_shard + b``, block ``b`` of shard ``s``, which
-    starts at row ``s * rows_per_shard + 64 * b``.
+    starts at row ``s * rows_per_shard + 64 * b``. Each shard holds its prefix tiles first, then one contiguous
+    run of video tiles, then its pad blocks, so global block order is not tile order.
     """
 
     sp_factor: int
@@ -166,9 +169,9 @@ class MiniMaxH3VSAGeometry:
 
     @property
     def logical_n(self) -> int:
-        """Row just past the last real tile's block; the ring op masks the tail beyond it."""
-        shard, slot = divmod(self.n_real_tiles - 1, self.rows_per_shard // VSA_TILE_TOKENS)
-        return shard * self.rows_per_shard + (slot + 1) * VSA_TILE_TOKENS
+        """Row just past the last real block in global order; the ring op masks the tail beyond it."""
+        last = int(torch.nonzero(self.valid_counts).max())
+        return int(self.block_starts[last]) + VSA_TILE_TOKENS
 
     def pack_rows(self, x: torch.Tensor, dim: int = 0) -> torch.Tensor:
         """Reorder packed rows into device row order along ``dim``, zero at pad rows."""
@@ -222,6 +225,11 @@ def build_vsa_geometry(
     t2va/fl2va layout, matching FastVideo's ``_h3_vsa_prefix_segments``.
     ``video_grid`` is the ``(t, h, w)`` token grid (latents over patch size).
 
+    Placement balances the shards: shard ``s`` holds ``n // sp + (s < n % sp)``
+    of the ``n`` real tiles. Prefix tile ``i`` goes to shard ``i % sp``, slot
+    ``i // sp``; each shard's remaining slots up to its share take the next
+    contiguous run of video tiles in cube-major order.
+
     v0 policy: every prefix tile is 1D and exempt; every video tile is 3D and
     a top-k candidate; pad blocks are neither.
     """
@@ -244,11 +252,18 @@ def build_vsa_geometry(
     n_real_tiles = n_prefix_tiles + n_video_tiles
 
     rows_per_shard = padded_len // sp_factor
-    slots_per_shard = rows_per_shard // VSA_TILE_TOKENS
     blocks_per_shard = -(-rows_per_shard // VSA_TILE_TOKENS)
     n_blocks = sp_factor * blocks_per_shard
-    tile = torch.arange(n_real_tiles)
-    shard, slot = tile // slots_per_shard, tile % slots_per_shard
+    shards = torch.arange(sp_factor)
+    target = n_real_tiles // sp_factor + (shards < n_real_tiles % sp_factor).long()
+    prefix_per_shard = n_prefix_tiles // sp_factor + (shards < n_prefix_tiles % sp_factor).long()
+    video_per_shard = target - prefix_per_shard
+    prefix_tile = torch.arange(n_prefix_tiles)
+    video_shard = torch.repeat_interleave(shards, video_per_shard)
+    video_first = torch.cumsum(video_per_shard, 0) - video_per_shard
+    video_slot = prefix_per_shard[video_shard] + torch.arange(n_video_tiles) - video_first[video_shard]
+    shard = torch.cat([prefix_tile % sp_factor, video_shard])
+    slot = torch.cat([prefix_tile // sp_factor, video_slot])
     tile_block = shard * blocks_per_shard + slot
     tile_start = shard * rows_per_shard + slot * VSA_TILE_TOKENS
 
