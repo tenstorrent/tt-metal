@@ -510,7 +510,7 @@ ProgramDescriptor build_ring_program_descriptor(
             rt.push_back(v);
         }
     };
-    const auto pcache = persistent_cache_args(args, k);  // kv_len derivation shared with the classic factory
+    const auto pcache = persistent_cache_args(args, tensors);  // kv_len derivation shared with the classic factory
     // Indexed fused mode gathers the selected cache slot into slot 0 of batch-1 k. Keep the gathered and
     // local offsets independent: remote reads start at zero, own-shard reads select the original k_local slot.
     // Indexed mode (scalar OR metadata) gathers one slot into slot 0 of a batch-1 scratch, so remote
@@ -581,6 +581,7 @@ ProgramDescriptor build_ring_program_descriptor(
     } else {
         reader_common.push_back(0u);
     }
+    reader_common.push_back(0u);  // PageTable: classic factory only, held at 0 here to keep the enum layout
     reader_common.append(shard_order);
     reader_common.append(fused_rt);
     append_multicast_axes(reader_common, phys);
@@ -848,13 +849,12 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     using tt::tt_metal::GetRuntimeArgs;
 
     const auto& q = tensors.q;
-    const auto& k = tensors.k;
     const auto& k_local = *tensors.k_local;
     const bool has_slot_metadata = tensors.has_cache_slot_metadata();
     PersistentCacheArgs pcache{};
     uint32_t k_local_batch_page_offset = 0;
     if (update_consumer) {
-        pcache = persistent_cache_args(args, k);
+        pcache = persistent_cache_args(args, tensors);
         // Indexed gathers target slot zero of the batch-1 scratch.
         if (args.cache_batch_idx.has_value() || has_slot_metadata) {
             pcache.k_batch_page_offset = 0;

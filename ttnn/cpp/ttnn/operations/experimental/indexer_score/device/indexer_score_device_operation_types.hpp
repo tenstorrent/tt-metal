@@ -129,6 +129,16 @@ struct operation_attributes_t {
     // K), which selects the classic program factory and stays byte-identical.
     std::optional<FusedRingConfig> fused_ring{std::nullopt};
     bool has_fused_ring() const { return fused_ring.has_value(); }
+    // Page-table mode (classic factory only): k is a block pool [NB,1,paged_block_rows,D] and tensor_args.page_table
+    // [R,W] maps it to the logical k [R,1,S,D] (see logical_k_shape). Rows per block: power of two,
+    // multiple of TILE_HEIGHT. HASHED: it bakes the reader's tile->block shift (compile-time + INDEXER_PAGED define).
+    std::optional<uint32_t> paged_block_rows{std::nullopt};
+    bool has_paged_k() const { return paged_block_rows.has_value(); }
+    // Logical rows per user S (multiple of TILE_HEIGHT, <= W * paged_block_rows). nullopt = W * paged_block_rows.
+    // HASHED: it bakes the reader's per-user tile count. The table stride stays W entries per user.
+    std::optional<uint32_t> paged_user_rows{std::nullopt};
+    // Wide form: the logical k is [1,1,R*S,D] (users back to back, global row g -> user g / S). HASHED.
+    bool paged_wide{false};
     // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
     // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
     uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
@@ -161,7 +171,28 @@ struct tensor_args_t {
     // mirroring TtIndexer's own host formula. Mutually exclusive with the scalar cache_batch_idx.
     std::optional<Tensor> cache_batch_idx_tensor{std::nullopt};
     bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
+    // Paged mode: INT32 ROW_MAJOR DRAM interleaved block table, logical shape [R, W] (its last two dims). Row b lists
+    // the k pool blocks of logical batch b in order. nullopt = k is the contiguous cache.
+    std::optional<Tensor> page_table{std::nullopt};
+    bool has_page_table() const { return page_table.has_value(); }
 };
+
+// Shape every consumer of k's extent (T, batch slots, kv_len bound, causal geometry, output width) must use: k's
+// own shape, or in page-table mode the logical [R, 1, S, D] (wide: [1, 1, R * S, D]) the table presents over the pool.
+inline ttnn::Shape logical_k_shape(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    const auto& ks = t.k.logical_shape();
+    if (!attrs.paged_block_rows.has_value() || !t.page_table.has_value()) {
+        return ks;
+    }
+    const auto& ps = t.page_table->logical_shape();
+    const uint32_t rank = ps.rank();
+    const uint32_t users = ps[rank - 2];
+    const uint32_t user_rows = attrs.paged_user_rows.value_or(ps[rank - 1] * *attrs.paged_block_rows);
+    if (attrs.paged_wide) {
+        return ttnn::Shape({1u, 1u, users * user_rows, ks[3]});
+    }
+    return ttnn::Shape({users, 1u, user_rows, ks[3]});
+}
 
 using tensor_return_value_t = Tensor;
 

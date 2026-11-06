@@ -134,6 +134,90 @@ constexpr uint32_t vend_ct_base = slot_meta_args.next_compile_time_args_offset()
 constexpr uint32_t vend_rt_base = get_compile_time_arg_val(vend_ct_base);
 constexpr auto vend_args = TensorAccessorArgs<vend_ct_base + 1>();
 
+#ifdef INDEXER_PAGED
+// Page-table mode (host: indexer_score_dsa page_table). k is a block pool; the logical k tile G = batch_tile_offset +
+// seq_tile (a global tile in the wide form, where batch_tile_offset is 0) splits as user b = G / user_tiles, tile
+// t = G % user_tiles and lives at physical tile pt[b][t >> log2(tpb)] * tpb + (t & (tpb - 1)). CT tail after the vend
+// accessor: log2(tpb), page-table row entries (W, the table stride per user), logical tiles per user (S/32), scratch
+// CB, page-table accessor. Only the k-reading core loads the table.
+constexpr uint32_t paged_ct_base = vend_args.next_compile_time_args_offset();
+constexpr uint32_t paged_tpb_log2 = get_compile_time_arg_val(paged_ct_base);
+constexpr uint32_t pt_row_entries = get_compile_time_arg_val(paged_ct_base + 1);
+constexpr uint32_t user_tiles = get_compile_time_arg_val(paged_ct_base + 2);
+constexpr uint32_t cb_pt = get_compile_time_arg_val(paged_ct_base + 3);
+constexpr auto pt_args = TensorAccessorArgs<paged_ct_base + 4>();
+constexpr uint32_t null_tile = 0xFFFFFFFFu;  // physical_tile result for a null-block table entry
+constexpr uint32_t pt_align_entries = 16;    // 64 B DRAM read alignment / sizeof(int32)
+static_assert(!block_cyclic && !fused_ring_enabled, "page-table mode is classic and contiguous only");
+
+/** Window of one page-table row covering the entries a band's k tiles touch (one L1 scratch, one read per band).
+ *  A band whose tiles cross a user boundary (wide form) has no single row: its tiles read one aligned entry group
+ *  each instead. */
+struct PagedK {
+    decltype(TensorAccessor(pt_args, 0u, 0u)) pt;
+    uint32_t window_l1;  // 64 B aligned scratch
+    uint32_t origin;     // flat entry index (b * W + col) of window[0]
+    uint32_t batch_tile_offset;
+    bool crosses_users;
+
+    /** Load the entries for logical seq tiles [first_tile, first_tile + n_tiles) of batch offset `batch_off`. */
+    void load(Noc noc, uint32_t batch_off, uint32_t first_tile, uint32_t n_tiles) {
+        batch_tile_offset = batch_off;
+        const uint32_t g0 = batch_off + first_tile;
+        const uint32_t g1 = g0 + n_tiles - 1;
+        const uint32_t b0 = g0 / user_tiles;
+        crosses_users = (g1 / user_tiles) != b0;
+        if (crosses_users) {
+            return;
+        }
+        const uint32_t t0 = g0 - b0 * user_tiles;
+        const uint32_t t1 = g1 - b0 * user_tiles;
+        const uint32_t c0 = t0 >> paged_tpb_log2;
+        uint32_t c1 = t1 >> paged_tpb_log2;
+        c1 = c1 < pt_row_entries ? c1 : pt_row_entries - 1;
+        const uint32_t cs = c0 & ~(pt_align_entries - 1);
+        noc.async_read(
+            pt,
+            CoreLocalMem<uint32_t>(window_l1),
+            (c1 - cs + 1) * sizeof(uint32_t),
+            {.page_id = b0, .offset_bytes = cs * static_cast<uint32_t>(sizeof(uint32_t))},
+            {});
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+        origin = b0 * pt_row_entries + cs;
+    }
+
+    /** Physical k tile of logical seq tile `seq_tile` (inside the loaded band), or null_tile when its table entry is
+     *  0 (vLLM's null block: no data, the flat form held zeros there). */
+    uint32_t physical_tile(Noc noc, uint32_t seq_tile) const {
+        constexpr uint32_t tpb_mask = (1u << paged_tpb_log2) - 1;
+        const uint32_t g = batch_tile_offset + seq_tile;
+        const uint32_t b = g / user_tiles;
+        const uint32_t t = g - b * user_tiles;
+        const uint32_t col = t >> paged_tpb_log2;
+        uint32_t block;
+        if (crosses_users) {
+            const uint32_t cs = col & ~(pt_align_entries - 1);
+            const uint32_t n = pt_row_entries - cs < pt_align_entries ? pt_row_entries - cs : pt_align_entries;
+            noc.async_read(
+                pt,
+                CoreLocalMem<uint32_t>(window_l1),
+                n * sizeof(uint32_t),
+                {.page_id = b, .offset_bytes = cs * static_cast<uint32_t>(sizeof(uint32_t))},
+                {});
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+            block = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(window_l1)[col - cs];
+        } else {
+            block = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(window_l1)[b * pt_row_entries + col - origin];
+        }
+        return block == 0 ? null_tile : (block << paged_tpb_log2) + (t & tpb_mask);
+    }
+};
+#else
+struct PagedK {};
+#endif
+
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
 // the fused dual-source reads (both read byte-identically).
@@ -416,6 +500,16 @@ inline void read_ktile_dims(Noc noc, const Acc& acc, uint32_t& ptr, uint32_t bas
     }
 }
 
+#ifdef INDEXER_PAGED
+/** Zero one k tile's head_dim_tiles pages at `ptr` (a null-block tile: no DRAM read), advancing ptr. The zeros come
+ *  from the NoC zero-write path (local L1 MEM_ZEROS source), done before returning. */
+inline void zero_ktile_dims(Noc noc, uint32_t& ptr) {
+    noc.async_write_zeros(CoreLocalMem<uint32_t>(ptr), head_dim_tiles * k_tile_bytes);
+    noc.write_zeros_l1_barrier();
+    ptr += head_dim_tiles * k_tile_bytes;
+}
+#endif
+
 /** k chunk [k_tiles_in_unit][head_dim_tiles], role-aware (k col mcast). ONE chunk / ONE mcast handshake. */
 template <typename KAcc>
 inline void read_k_chunk(
@@ -424,17 +518,31 @@ inline void read_k_chunk(
     uint32_t k_tile_start,
     uint32_t k_tiles_in_unit,
     const McastDir& k_dir,
-    uint32_t k_batch_page_offset) {
+    uint32_t k_batch_page_offset,
+    [[maybe_unused]] PagedK& paged) {
     // Reserves/pushes the full k_chunk_tiles (keeps the 2-chunk ring half-aligned) but reads only the
     // k_tiles_in_unit valid cols (pad slots stale, compute masks them). k_batch_page_offset = indexed-cache
     // slot shift; 0 when not indexed.
     read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
+#ifdef INDEXER_PAGED
+            // Paged: k_batch_page_offset is the LOGICAL tile offset of the batch; map each tile through the table.
+            paged.load(noc, k_batch_page_offset, k_tile_start, k_tiles_in_unit);
+#endif
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
                 // bc_ktile: identity for contiguous K; invP(logical seq tile) for the per-SP-shard block-cyclic layout.
                 const uint32_t seq_tile = bc_ktile(k_tile_start + k_col);
+#ifdef INDEXER_PAGED
+                const uint32_t phys = paged.physical_tile(noc, seq_tile);
+                if (phys == null_tile) {
+                    zero_ktile_dims(noc, ptr);
+                } else {
+                    read_ktile_dims(noc, k_acc, ptr, phys * head_dim_tiles);
+                }
+#else
                 read_ktile_dims(noc, k_acc, ptr, k_batch_page_offset + seq_tile * head_dim_tiles);
+#endif
             }
         });
 }
@@ -590,11 +698,19 @@ struct FusedRingGate {
  *  No mcast. mm_col_batch is shared with the compute kernel's DEST column batch (indexer_score_common.hpp). */
 template <typename KAcc>
 inline void read_k_chunk_streaming(
-    Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t k_batch_page_offset) {
+    Noc noc,
+    const KAcc& k_acc,
+    uint32_t k_tile_start,
+    uint32_t k_tiles_in_unit,
+    uint32_t k_batch_page_offset,
+    [[maybe_unused]] PagedK& paged) {
     // k_batch_page_offset = indexed-cache slot shift (0 when not indexed), applied on top of the (possibly
     // block-cyclic remapped) intra-slot page -- identical to read_k_chunk; the fused-streaming path must not
     // drop it, or an indexed slot would silently read slot 0.
     CircularBuffer cb(cb_k);
+#ifdef INDEXER_PAGED
+    paged.load(noc, k_batch_page_offset, k_tile_start, k_tiles_in_unit);
+#endif
     for (uint32_t cbase = 0; cbase < k_tiles_per_unit; cbase += mm_col_batch) {
         const uint32_t c_end = (cbase + mm_col_batch <= k_tiles_per_unit) ? (cbase + mm_col_batch) : k_tiles_per_unit;
         const uint32_t sub_tiles = (c_end - cbase) * head_dim_tiles;
@@ -608,13 +724,18 @@ inline void read_k_chunk_streaming(
                     bc_sp,
                     bc_shard_stride_gap,
                     bc_slab_stride_gap>(k_tile_start + c);
+#ifdef INDEXER_PAGED
+                const uint32_t phys = paged.physical_tile(noc, seq_tile);
+                if (phys == null_tile) {
+                    zero_ktile_dims(noc, ptr);
+                    continue;
+                }
+                const uint32_t page_base = phys * head_dim_tiles;
+#else
+                const uint32_t page_base = k_batch_page_offset + seq_tile * head_dim_tiles;
+#endif
                 for (uint32_t d = 0; d < head_dim_tiles; ++d) {
-                    noc.async_read(
-                        k_acc,
-                        CoreLocalMem<uint32_t>(ptr),
-                        k_tile_bytes,
-                        {.page_id = k_batch_page_offset + seq_tile * head_dim_tiles + d},
-                        {});
+                    noc.async_read(k_acc, CoreLocalMem<uint32_t>(ptr), k_tile_bytes, {.page_id = page_base + d}, {});
                     ptr += k_tile_bytes;
                 }
             }
@@ -701,6 +822,18 @@ void kernel_main() {
     const auto w_acc = TensorAccessor(w_args, w_addr, bf16_tile_bytes);
 
     Noc noc;
+#ifdef INDEXER_PAGED
+    CircularBuffer cb_pt_scratch(cb_pt);
+    cb_pt_scratch.reserve_back(1);  // never pushed: the scratch belongs to this reader for the whole run
+    PagedK paged_k{
+        TensorAccessor(pt_args, get_common_arg_val<uint32_t>(indexer_common::reader::PageTable), pt_row_entries * 4),
+        (cb_pt_scratch.get_write_ptr() + 63) & ~63u,
+        0,
+        0,
+        false};
+#else
+    PagedK paged_k;
+#endif
     // The fused path is DSA-only. Keep the invariant compile-time checked without preprocessor-specialized
     // binaries; the regular path may still use head streaming or the single-head fuse.
     static_assert(!fused_ring_enabled || !stream_heads, "fused ring requires all heads resident");
@@ -796,10 +929,16 @@ void kernel_main() {
                         if (span.k_tiles() != 0) {
                             if constexpr (fuse_single && fused_stream_k) {
                                 read_k_chunk_streaming(
-                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
+                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset, paged_k);
                             } else {
                                 read_k_chunk(
-                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                                    noc,
+                                    k_acc,
+                                    span.k_tile_start(),
+                                    span.k_tiles(),
+                                    k_dir,
+                                    k_batch_page_offset,
+                                    paged_k);
                             }
                         }
                     }
@@ -942,4 +1081,7 @@ void kernel_main() {
     } else {
         run(nullptr);
     }
+    // The multicast senders end on async_writes_flushed (issued, acks still in flight). Wait for every ack before
+    // the next program's kernel on this RISC samples the NoC counters, or its write barrier can wait forever.
+    noc_async_full_barrier();
 }

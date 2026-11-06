@@ -103,6 +103,25 @@ void bind_indexer_score(nb::module_& mod) {
                 remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
                 Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
 
+            page_table: optional INT32 ROW_MAJOR DRAM-interleaved block table, logical shape
+                [R, W] (its last two dims). With paged_block_rows it switches k to a block
+                pool: k is then [NB, 1, paged_block_rows, D] (tiled, same dtypes) and the op
+                scores the LOGICAL k [R, 1, W*paged_block_rows, D]; row b of the table holds
+                the pool block ids of logical batch b in order. T, the batch-slot bound
+                (cache_batch_idx < R), kv_len, chunk_start_idx and the output width all use
+                the logical shape. Classic (unfused) path only; incompatible with the
+                block-cyclic arguments. The table address is re-applied each dispatch.
+            paged_block_rows: optional int, REQUIRED with page_table. Rows per pool block;
+                a power of two and a multiple of 32.
+            paged_user_rows: optional int S (multiple of 32, 0 < S <= W*paged_block_rows; default
+                W*paged_block_rows). Logical rows per user: the logical k becomes [R, 1, S, D]
+                (row j of user b is in block page_table[b][j // paged_block_rows]). The table
+                keeps W entries per user, independent of S.
+            paged_wide: optional bool (default False). Wide form: the logical k is
+                [1, 1, R*S, D], users back to back (global row g -> user g // S). Needs
+                cache_batch_idx absent; chunk_start_idx, kv_len and the output width then
+                use the R*S extent.
+
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
         &ttnn::experimental::indexer_score_dsa,
@@ -119,7 +138,11 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt,
-        nb::arg("block_cyclic_cache_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
+        nb::arg("page_table") = std::nullopt,
+        nb::arg("paged_block_rows") = std::nullopt,
+        nb::arg("paged_user_rows") = std::nullopt,
+        nb::arg("paged_wide") = false);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,

@@ -22,6 +22,7 @@ enum : uint32_t {
     NumLayers,
     LayerIndex,
     ValidEnd,
+    PageTable,
     Count
 };
 }

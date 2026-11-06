@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <map>
 #include <unordered_map>
 #include <string>
 #include <utility>
@@ -47,7 +49,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t Hi = q.logical_shape()[1];
     const uint32_t Sq = q.logical_shape()[2];
     const uint32_t D = q.logical_shape()[3];
-    const uint32_t T = k.logical_shape()[2];
+    // Page-table mode: k is the block pool; T (and every k extent below) is the logical k the table presents.
+    const bool paged = args.has_paged_k();
+    const uint32_t T = logical_k_shape(args, tensors)[2];
 
     // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
     // arg, so the binary is identical across coords and steps. tp_index = its rank along the TP axis
@@ -240,6 +244,31 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
+    // Page-table mode: one L1 scratch CB holds the page-table window of the band being read. A band's tiles
+    // touch at most ceil(KC / tpb) + 1 consecutive entries; the DRAM read starts on a 64 B boundary (16 entries),
+    // so the window gets 16 more entries and the base is 64 B aligned in the kernel (+64 B slack).
+    constexpr uint32_t pt_align_entries = 16;
+    uint32_t paged_tpb_log2 = 0;
+    uint32_t pt_row_entries = 0;
+    uint32_t paged_user_tiles = 0;
+    uint32_t cb_pt = 0;
+    if (paged) {
+        const uint32_t tpb = *args.paged_block_rows / tt::constants::TILE_HEIGHT;
+        paged_tpb_log2 = static_cast<uint32_t>(std::countr_zero(tpb));
+        pt_row_entries = tensors.page_table->logical_shape()[-1];
+        paged_user_tiles =
+            args.paged_user_rows.value_or(pt_row_entries * *args.paged_block_rows) / tt::constants::TILE_HEIGHT;
+        const uint32_t window_entries =
+            ((KC + tpb - 1) / tpb + 1 + pt_align_entries + pt_align_entries - 1) / pt_align_entries * pt_align_entries;
+        cb_pt = next_cb_index++;
+        const uint32_t pt_bytes = window_entries * sizeof(uint32_t) + 64;
+        tt::tt_metal::CreateCircularBuffer(
+            program,
+            core_ranges,
+            tt::tt_metal::CircularBufferConfig(pt_bytes, {{cb_pt, tt::DataFormat::Int32}})
+                .set_page_size(cb_pt, pt_bytes));
+    }
+
     // Common dimensions (including compressed-key ratio), then CB indices. chunk_t stays a runtime arg.
     std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles, args.key_compression_ratio};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
@@ -313,6 +342,18 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
 
+    // Page-table tail (INDEXER_PAGED binary only; the unpaged reader CT layout is unchanged): log2(tiles per
+    // block), page-table row entries (W), logical tiles per user (S/32), scratch CB, then the page table accessor.
+    std::map<std::string, std::string> reader_defines;
+    if (paged) {
+        reader_defines["INDEXER_PAGED"] = "1";
+        reader_ct.push_back(paged_tpb_log2);
+        reader_ct.push_back(pt_row_entries);
+        reader_ct.push_back(paged_user_tiles);
+        reader_ct.push_back(cb_pt);
+        tt::tt_metal::TensorAccessorArgs(*tensors.page_table->buffer()).append_to(reader_ct);
+    }
+
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
     const uint32_t out_elem_bytes = out.element_size();  // bf16 today
@@ -358,7 +399,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         program,
         kdir + "reader_indexer_score.cpp",
         core_ranges,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct, {}, schedule_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct, reader_defines, schedule_args));
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
         kdir + "writer_indexer_score.cpp",
@@ -378,11 +419,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     // One core identity per kernel; geometry and multicast axes are shared.
     // Indexed-cache k page offset + valid kv_len, baked at miss and re-applied each dispatch (both hash-excluded).
-    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, k);
+    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors);
     std::vector<uint32_t> reader_values(indexer_common::reader::Count, 0u);
     const std::array<uint32_t, 6> reader_prefix = {
         q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), 0u, k_batch_page_offset, kv_len_tiles};
     std::copy(reader_prefix.begin(), reader_prefix.end(), reader_values.begin());
+    if (paged) {
+        reader_values[indexer_common::reader::PageTable] = tensors.page_table->buffer()->address();
+    }
     append_multicast_axes(reader_values, phys);
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_id, reader_values);
     tt::tt_metal::SetCommonRuntimeArgs(
@@ -438,16 +482,19 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     // Re-apply all hash-excluded runtime values on a hit: buffer addresses, cache_batch_idx / kv_len, and
     // chunk_start (per-coordinate, from the stored device_index).
     const uint32_t Sq = tensors.q.logical_shape()[2];
-    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
+    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors);
     // Refresh the uniform reader block once per dispatch, then copy it to each program.
     // Fused-only slots stay zero on the single-chip/unfused path.
-    const std::array<uint32_t, indexer_common::reader::Count> reader_values = {
+    std::array<uint32_t, indexer_common::reader::Count> reader_values = {
         tensors.q.buffer()->address(),
         tensors.k.buffer()->address(),
         tensors.weights.buffer()->address(),
         0u,
         k_batch_page_offset,
         kv_len_tiles};
+    if (tensors.has_page_table()) {
+        reader_values[indexer_common::reader::PageTable] = tensors.page_table->buffer()->address();
+    }
     const uint32_t out_address = out.buffer()->address();
     for (auto& [range, shared] : cached.shared_variables) {
         auto& program = cached.workload.get_programs().at(range);

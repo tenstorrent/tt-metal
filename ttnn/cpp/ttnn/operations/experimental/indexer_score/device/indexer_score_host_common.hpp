@@ -188,18 +188,20 @@ inline uint32_t transport_to_tensor_rank(const operation_attributes_t& args, uin
         transport_rank, args.fused_ring->mesh_rows, args.fused_ring->mesh_cols, args.fused_ring->snake_orientation);
 }
 
-// The two non-hashed runtime args derived from k's shape + the optionals. Single source for both create()
+// The two non-hashed runtime args derived from k's logical shape + the optionals. Single source for both create()
 // (bakes at miss) and override_runtime_arguments() (re-patches on a hit).
 struct PersistentCacheArgs {
-    uint32_t k_batch_page_offset;  // cache_batch_idx * Tt * Dt; 0 when not indexed
-    uint32_t kv_len_tiles;         // valid key prefix in tiles; full Tt when kv_len unset
+    // cache_batch_idx * Tt * Dt; 0 when not indexed. Page-table mode: the LOGICAL tile offset
+    // cache_batch_idx * Tt (Tt = S/32; none in the wide form), which the reader maps through the table.
+    uint32_t k_batch_page_offset;
+    uint32_t kv_len_tiles;  // valid key prefix in tiles; full Tt when kv_len unset
 };
-inline PersistentCacheArgs persistent_cache_args(const operation_attributes_t& attrs, const Tensor& k) {
-    const auto& shape = k.logical_shape();
+inline PersistentCacheArgs persistent_cache_args(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+    const auto shape = logical_k_shape(attrs, tensors);
     const uint32_t Tt = shape[2] / tt::constants::TILE_WIDTH;
     const uint32_t Dt = shape[3] / tt::constants::TILE_WIDTH;
     return {
-        .k_batch_page_offset = attrs.cache_batch_idx.value_or(0) * Tt * Dt,
+        .k_batch_page_offset = attrs.cache_batch_idx.value_or(0) * Tt * (attrs.has_paged_k() ? 1u : Dt),
         .kv_len_tiles = attrs.kv_len.value_or(shape[2]) / tt::constants::TILE_WIDTH};
 }
 

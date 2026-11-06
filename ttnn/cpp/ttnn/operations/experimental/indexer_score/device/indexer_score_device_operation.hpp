@@ -109,7 +109,11 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    bool block_cyclic_cache_tp_sharded = false);
+    bool block_cyclic_cache_tp_sharded = false,
+    const std::optional<ttnn::Tensor>& page_table = std::nullopt,
+    std::optional<uint32_t> paged_block_rows = std::nullopt,
+    std::optional<uint32_t> paged_user_rows = std::nullopt,
+    bool paged_wide = false);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale
