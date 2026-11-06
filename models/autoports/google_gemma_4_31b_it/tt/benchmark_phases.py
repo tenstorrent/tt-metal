@@ -69,6 +69,7 @@ class PhaseRecorder:
         self.export_chunk_events = export_chunk_events
         self.export_lock = threading.Lock()
         self.export_stream = None
+        self.last_export_state = None
         self.export_failed = False
         self.file_exhausted = False
         self.truncated = False
@@ -314,6 +315,12 @@ class PhaseRecorder:
                 result = self._snapshot()
                 count = min(len(self.events), self.export_chunk_events) if automatic else len(self.events)
                 result["events"] = self.events[:count]
+                # Freeze semantic metadata before I/O; a producer may change it while writing.
+                state = json.dumps(
+                    {k: v for k, v in result.items() if k not in ("boundary_ns", "events")}, sort_keys=True
+                )
+                if automatic and not count and state == self.last_export_state:
+                    return result
                 exhausted = self.file_exhausted
             if exhausted:
                 return result
@@ -328,6 +335,8 @@ class PhaseRecorder:
                 raise
             with self.lock:
                 del self.events[:count]
+                if not self.file_exhausted:
+                    self.last_export_state = state
                 if self.file_exhausted:
                     self.events.clear()
                     result["truncated"] = True
