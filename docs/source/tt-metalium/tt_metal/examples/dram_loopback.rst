@@ -116,8 +116,8 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
     constexpr CoreCoord core = {0, 0};
     std::vector<uint32_t> dram_copy_compile_time_args;
-    TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
-    TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+    TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
+    TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
 
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,

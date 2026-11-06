@@ -28,6 +28,10 @@ void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
         cache_tensor.layout(),
         input_tensor.layout());
     TT_FATAL(
+        cache_tensor.padded_shape()[-1] > 0,
+        "Cache tensor width must be greater than 0, got shape {}",
+        cache_tensor.padded_shape());
+    TT_FATAL(
         (cache_tensor.physical_volume() / cache_tensor.padded_shape()[-1]) % args.num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
 

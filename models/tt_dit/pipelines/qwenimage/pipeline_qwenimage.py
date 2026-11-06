@@ -19,7 +19,11 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.tt_dit.models.transformers.transformer_qwenimage import QwenImageCheckpoint
+from models.tt_dit.models.transformers.transformer_qwenimage import (
+    QwenImageCarry,
+    QwenImageCheckpoint,
+    QwenImageTransformer,
+)
 from models.tt_dit.models.vae.vae_wan_2d import WanVaeDecoder2DAdapter, WanVaeEncoder2DAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
@@ -35,6 +39,8 @@ from models.tt_dit.pipelines.qwenimage.text_encoder import (
 )
 from models.tt_dit.solvers import EulerSolver, calculate_shift
 from models.tt_dit.utils import tensor
+from models.tt_dit.utils.dbcache import DBCacheConfig
+from models.tt_dit.utils.dbcache_runner import DBCache, ResidualForecaster
 from models.tt_dit.utils.padding import torch_pad
 from models.tt_dit.utils.tracing import Tracer
 
@@ -67,6 +73,16 @@ _SPATIAL_SEQUENCE_LENGTH_BUCKETS = (4096, 6144, 6528, 6656, 7168)
 # 384² instead.
 _EDIT_AREA = 1024 * 1024
 _EDIT_PLUS_VISION_AREA = 384 * 384
+
+# The DBCache settings of cache-dit's Qwen-Image example (`python -m cache_dit.generate qwen_image
+# --cache`).
+DEFAULT_DBCACHE = DBCacheConfig(
+    Fn_compute_blocks=1,
+    Bn_compute_blocks=0,
+    residual_diff_threshold=0.12,
+    max_warmup_steps=8,
+    max_continuous_cached_steps=3,
+)
 
 
 def edit_size(area: int, aspect_ratio: float) -> tuple[int, int]:
@@ -199,6 +215,9 @@ class QwenImagePipelineConfig:
     sequence_length_buckets: tuple[int, ...]
     # The most input images of an edit checkpoint; 0 for text-to-image.
     max_images: int
+    # The default DBCache step skipping, such as DEFAULT_DBCACHE; None runs without it, and allows
+    # none per call.
+    dbcache: DBCacheConfig | None
 
     checkpoint_name: str
 
@@ -222,6 +241,7 @@ class QwenImagePipelineConfig:
         cfg_enabled: bool = True,
         sequence_length_buckets: Sequence[int] | None = None,
         max_images: int | None = None,
+        dbcache: DBCacheConfig | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> QwenImagePipelineConfig:
         """The preset for ``mesh_shape``.
@@ -283,8 +303,31 @@ class QwenImagePipelineConfig:
             cfg_enabled=cfg_enabled,
             sequence_length_buckets=tuple(sequence_length_buckets),
             max_images=max_images,
+            dbcache=dbcache,
             checkpoint_name=checkpoint_name,
         )
+
+
+class _BatchedCFG:
+    """A transformer running both CFG passes as one batch of two, on prompts that are batched already."""
+
+    def __init__(self, transformer: QwenImageTransformer) -> None:
+        self._transformer = transformer
+
+    @property
+    def num_blocks(self) -> int:
+        return self._transformer.num_blocks
+
+    def prologue(self, *, spatial: ttnn.Tensor, **inputs: Any) -> tuple[ttnn.Tensor, QwenImageCarry]:
+        return self._transformer.prologue(spatial=ttnn.concat([spatial, spatial]), **inputs)
+
+    def run_blocks(
+        self, hidden: ttnn.Tensor, carry: QwenImageCarry, *, start: int, end: int
+    ) -> tuple[ttnn.Tensor, QwenImageCarry]:
+        return self._transformer.run_blocks(hidden, carry, start=start, end=end)
+
+    def epilogue(self, hidden: ttnn.Tensor, carry: QwenImageCarry) -> ttnn.Tensor:
+        return self._transformer.epilogue(hidden, carry)
 
 
 class _BlendInputs(NamedTuple):
@@ -384,13 +427,17 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(config.checkpoint_name, subfolder="scheduler")
         self._solvers = [EulerSolver(scheduler=scheduler) for _ in self._devices]
-        # One tracer per submesh, prompt bucket and spatial bucket.
-        self._tracers = {
-            (idx, bucket, spatial_bucket): Tracer(self._traced_step, device=d, prep_run=False)
-            for idx, d in enumerate(self._devices)
-            for bucket in config.sequence_length_buckets
-            for spatial_bucket in self._spatial_sequence_length_buckets
-        }
+        # One tracer per submesh, prompt bucket and spatial bucket. DBCache traces by itself.
+        self._tracers = (
+            {
+                (idx, bucket, spatial_bucket): Tracer(self._traced_step, device=d, prep_run=False)
+                for idx, d in enumerate(self._devices)
+                for bucket in config.sequence_length_buckets
+                for spatial_bucket in self._spatial_sequence_length_buckets
+            }
+            if config.dbcache is None
+            else {}
+        )
         self._image_processor = VaeImageProcessor(vae_scale_factor=_VAE_SCALE_FACTOR * 2)
         self._mask_processor = VaeImageProcessor(
             vae_scale_factor=_VAE_SCALE_FACTOR * 2,
@@ -420,6 +467,32 @@ class QwenImagePipeline(PipelineAPIMixin):
             self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
             for m in self._ccl_managers
         ]
+        self._dbcache = (
+            DBCache(
+                [_BatchedCFG(t) if self._cfg_enabled and not self._cfg_parallel else t for t in self._transformers],
+                config.dbcache,
+                devices=self._devices,
+            )
+            if config.dbcache is not None
+            else None
+        )
+        # The warm-up computes its first steps and, with DBCache, caches the last one whatever its
+        # difference, so that the difference and the cached path are compiled too. TaylorSeer needs
+        # more computed steps before it, to form each of its derivatives.
+        order = config.dbcache.taylorseer_order if config.dbcache is not None else 0
+        self._warm_up_computed_steps = ResidualForecaster.steps_to_fill(order)
+        self._warm_up_dbcache = (
+            DBCacheConfig(
+                Fn_compute_blocks=config.dbcache.Fn_compute_blocks,
+                Bn_compute_blocks=config.dbcache.Bn_compute_blocks,
+                taylorseer_order=order,
+                residual_diff_threshold=math.inf,
+                max_warmup_steps=self._warm_up_computed_steps,
+                max_continuous_cached_steps=-1,
+            )
+            if config.dbcache is not None
+            else None
+        )
 
         logger.info("creating VAE decoder...")
         self._vae = WanVaeDecoder2DAdapter(
@@ -439,12 +512,18 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         # Allocated before the traces: the blend inputs of each spatial bucket and submesh,
         # patchified and padded like the latents, for zero_cond_t checkpoints the rows of the input
-        # images, and the spatial length without padding of each submesh.
+        # images, with DBCache the rows of the output image, and the spatial length without padding
+        # of each submesh.
         p = self._checkpoint.patch_size
         mesh_axes = [None, self._sp_axis, None]
         self._blend_inputs: dict[int, list[_BlendInputs]] = {}
         self._condition_masks: dict[int, list[ttnn.Tensor]] = {}
+        self._output_masks: dict[int, list[ttnn.Tensor]] = {}
         for bucket in self._spatial_sequence_length_buckets:
+            if self._dbcache is not None:
+                self._output_masks[bucket] = [
+                    tensor.zeros([1, bucket, 1], device=d, mesh_axes=mesh_axes) for d in self._devices
+                ]
             shape = [1, bucket, _LATENT_CHANNELS * p * p]
             self._blend_inputs[bucket] = [
                 _BlendInputs(
@@ -484,19 +563,13 @@ class QwenImagePipeline(PipelineAPIMixin):
                     # six more, so this comes to two tokens short of the bucket, which the 32-token
                     # spacing keeps above the next-smaller one.
                     prompt = "a " * (bucket - 8)
-                    self(
+                    self._warm_up_call(
                         prompts=[prompt],
-                        negative_prompts=[prompt],
-                        num_inference_steps=2,
-                        cfg_scale=2 if self._cfg_enabled else 1,
                         width=size.width,
                         height=size.height,
                         traced=traced,
-                        encoder_traced=traced,
-                        vae_traced=traced,
                         image=image,
                         mask_image=mask_image,
-                        strength=1.0,
                     )
 
         # The VAE needs each resolution.
@@ -535,21 +608,47 @@ class QwenImagePipeline(PipelineAPIMixin):
                         word_count -= 1
                         prompt = "a " * word_count
 
-                    self(
+                    self._warm_up_call(
                         prompts=[prompt],
-                        negative_prompts=[prompt],
-                        num_inference_steps=2,
-                        cfg_scale=2 if self._cfg_enabled else 1,
                         width=size.width,
                         height=size.height,
                         traced=traced,
-                        encoder_traced=traced,
-                        vae_traced=traced,
                         image=images,
                         # Edit inpainting takes a single image.
                         mask_image=Image.new("L", (size.width, size.height), 255) if image_count == 1 else None,
-                        strength=1.0,
                     )
+
+    def _warm_up_call(
+        self,
+        *,
+        prompts: list[str],
+        width: int,
+        height: int,
+        traced: bool,
+        image: Image.Image | list[Image.Image],
+        mask_image: Image.Image | None,
+    ) -> None:
+        """One warm-up generation, its last step cached with DBCache."""
+        cached_step = self._warm_up_computed_steps
+        self(
+            prompts=prompts,
+            negative_prompts=prompts,
+            num_inference_steps=cached_step + 1,
+            cfg_scale=2 if self._cfg_enabled else 1,
+            width=width,
+            height=height,
+            traced=traced,
+            encoder_traced=traced,
+            image=image,
+            mask_image=mask_image,
+            strength=1.0,
+            dbcache=self._warm_up_dbcache,
+        )
+        if self._dbcache is not None and self._dbcache.cached_steps != [cached_step]:
+            # A difference that is not finite computes the step: infinite when the previous step's
+            # first block residual is all zero, NaN when the sums overflow.
+            msg = f"the DBCache warm-up cached steps {self._dbcache.cached_steps}, not step {cached_step}"
+            raise RuntimeError(msg)
 
     def __call__(
         self,
@@ -563,11 +662,11 @@ class QwenImagePipeline(PipelineAPIMixin):
         width: int | None = None,
         height: int | None = None,
         traced: bool = True,
-        vae_traced: bool | None = None,
         encoder_traced: bool | None = None,
         image: Image.Image | Sequence[Image.Image] | None = None,
         mask_image: Image.Image | None = None,
         strength: float = 0.6,
+        dbcache: DBCacheConfig | None = None,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
         """Generates an image from the prompt.
@@ -585,12 +684,21 @@ class QwenImagePipeline(PipelineAPIMixin):
         closest to it in aspect ratio. With ``mask_image`` and a single input image, only the white
         part of the mask is edited, as by diffusers' ``QwenImageEditInpaintPipeline``; the output
         then has the input image's size.
+
+        ``dbcache`` replaces the pipeline's DBCache configuration for this call. It needs one to be
+        configured, with the same ``Fn_compute_blocks``, ``Bn_compute_blocks`` and
+        ``taylorseer_order``.
         """
         prompt_count = len(prompts)
 
         if cfg_scale > 1 and not self._cfg_enabled:
             msg = "cfg_scale > 1 requires CFG to be enabled"
             raise ValueError(msg)
+        if dbcache is not None:
+            if self._dbcache is None:
+                msg = "dbcache needs the pipeline to be configured with DBCache"
+                raise ValueError(msg)
+            self._dbcache.validate(dbcache)
 
         images = [image] if isinstance(image, Image.Image) else list(image) if image is not None else []
         edit = self._max_images > 0
@@ -633,7 +741,6 @@ class QwenImagePipeline(PipelineAPIMixin):
             raise ValueError(msg)
         layout = self._layout(size, conditions)
 
-        vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         on_event = on_event if on_event is not None else null_callback
         negative_prompts = negative_prompts if negative_prompts is not None else [""] * prompt_count
@@ -681,10 +788,17 @@ class QwenImagePipeline(PipelineAPIMixin):
             batch_size=prompt_count * num_images_per_prompt,
             seed=seed,
             first_step=first_step if inpaint else None,
-            traced=vae_traced,
+            traced=traced,
         )
-        context = [tensor.from_torch(c, device=d) for c, d in zip(torch_contexts, self._devices, strict=True)]
-        latents = tensor.from_torch_to_devices(latents, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
+        # Traced, the first step's inputs stay on the host: the tracer writes them into the captured
+        # ones, which needs no program, while copying a device tensor would compile one on the
+        # first request.
+        context = [
+            tensor.from_torch(c, device=d, on_host=traced) for c, d in zip(torch_contexts, self._devices, strict=True)
+        ]
+        latents = tensor.from_torch_to_devices(
+            latents, devices=self._devices, mesh_axes=[None, self._sp_axis, None], on_host=traced
+        )
         ropes = [
             self._checkpoint.rope_tables(
                 latents_height=size.latents_height,
@@ -694,6 +808,7 @@ class QwenImagePipeline(PipelineAPIMixin):
                 padded_spatial_sequence_length=layout.padded_sequence_length,
                 device=device,
                 sp_axis=self._sp_axis,
+                on_host=traced,
             )
             for length, device in zip(prompt_sequence_lengths, self._devices, strict=True)
         ]
@@ -701,10 +816,25 @@ class QwenImagePipeline(PipelineAPIMixin):
             host = self._sequence_length_tensor(layout.sequence_length, device=d, on_host=True)
             ttnn.copy_host_to_device_tensor(host, sequence_length)
         condition_masks = self._condition_masks.get(layout.padded_sequence_length, [None] * len(self._devices))
-        tracers = [
-            self._tracers[idx, length, layout.padded_sequence_length]
-            for idx, length in enumerate(prompt_sequence_lengths)
-        ]
+        tracers = (
+            [
+                self._tracers[idx, length, layout.padded_sequence_length]
+                for idx, length in enumerate(prompt_sequence_lengths)
+            ]
+            if self._dbcache is None
+            else []
+        )
+        output_masks = [None] * len(self._devices)
+        if self._dbcache is not None:
+            self._dbcache.reset(dbcache)
+            # The step difference counts only the output image's rows, not the input images' or
+            # the padding.
+            output_mask = torch.zeros([1, layout.padded_sequence_length, 1])
+            output_mask[:, : size.sequence_length] = 1
+            output_masks = self._output_masks[layout.padded_sequence_length]
+            for d, buffer in zip(self._devices, output_masks, strict=True):
+                host = tensor.from_torch(output_mask, device=d, mesh_axes=[None, self._sp_axis, None], on_host=True)
+                ttnn.copy_host_to_device_tensor(host, buffer)
 
         logger.info("denoising...")
         on_event(SectionStart("denoising"))
@@ -713,34 +843,51 @@ class QwenImagePipeline(PipelineAPIMixin):
             on_event(SectionStart(f"denoising_step_{step}"))
 
             velocity_preds = []
-            for idx, tracer in enumerate(tracers):
+            for idx, device in enumerate(self._devices):
                 timestep = ttnn.full(
                     [1, 1],
                     fill_value=t,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.float32,
-                    device=self._devices[idx],
+                    device=device,
                 )
                 spatial_rope, prompt_rope = ropes[idx]
-
-                velocity_preds.append(
-                    tracer(
-                        submesh_idx=idx,
-                        latents=latents[idx],
-                        prompt=context[idx] if step == first_step else tracer.inputs["prompt"],
-                        timestep=timestep,
-                        spatial_rope=spatial_rope if step == first_step else tracer.inputs["spatial_rope"],
-                        prompt_rope=prompt_rope if step == first_step else tracer.inputs["prompt_rope"],
-                        spatial_sequence_length=self._sequence_lengths[idx],
-                        condition_mask=condition_masks[idx],
-                        traced=traced,
-                        tracer_blocking_execution=False,
+                inputs = {
+                    "prompt": context[idx],
+                    "timestep": timestep,
+                    "spatial_rope": spatial_rope,
+                    "prompt_rope": prompt_rope,
+                    "spatial_sequence_length": self._sequence_lengths[idx],
+                    "condition_mask": condition_masks[idx],
+                }
+                # The inputs allocated for this call can be overwritten by trace execution. After
+                # the first step, the captured inputs hold the same values and are safe, and so are
+                # the captured latents.
+                if self._dbcache is None:
+                    tracer = tracers[idx]
+                    if step != first_step:
+                        inputs |= {k: tracer.inputs[k] for k in ("prompt", "spatial_rope", "prompt_rope")}
+                    velocity_preds.append(
+                        tracer(
+                            submesh_idx=idx,
+                            latents=latents[idx],
+                            **inputs,
+                            traced=traced,
+                            tracer_blocking_execution=False,
+                        )
                     )
-                )
+                    latents[idx] = tracer.inputs["latents"]
+                else:
+                    if step != first_step:
+                        captured = self._dbcache.inputs(idx)
+                        inputs |= {k: captured[k] for k in ("prompt", "spatial_rope", "prompt_rope")}
+                    # Dispatches only the leading blocks, so that every submesh runs them before
+                    # the host waits for their difference.
+                    self._dbcache.start(idx, spatial=latents[idx], **inputs, diff_mask=output_masks[idx], traced=traced)
+                    latents[idx] = self._dbcache.inputs(idx)["spatial"]
 
-                # latents can be overwritten by trace execution, use the captured input instead,
-                # which is safe.
-                latents[idx] = tracer.inputs["latents"]
+            if self._dbcache is not None:
+                velocity_preds = self._dbcache.finish()
 
             if self._cfg_enabled:
                 velocity_preds = self._combiner.combine(velocity_preds, cfg_scale)
@@ -765,9 +912,15 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         on_event(SectionEnd("denoising"))
 
+        if self._dbcache is not None:
+            # DBCache counts from the first step of this run, which inpainting moves.
+            skipped = [first_step + s for s in self._dbcache.cached_steps]
+            diffs = ", ".join(f"{first_step + s}: {d:.3f}" for s, d in self._dbcache.diffs.items())
+            logger.info(f"DBCache skipped steps {skipped}; differences {{{diffs}}}")
+
         logger.info("decoding image...")
         on_event(SectionStart("vae"))
-        images = self._decode_latents(latents[-1], size=size, traced=vae_traced)
+        images = self._decode_latents(latents[-1], size=size, traced=traced)
         on_event(SectionEnd("vae"))
 
         on_event(SectionEnd("total"))

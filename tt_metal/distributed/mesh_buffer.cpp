@@ -12,7 +12,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
@@ -27,7 +26,6 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <map>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -361,8 +359,7 @@ void MeshBuffer::initialize_device_buffers() {
     // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
     if (std::holds_alternative<OwnedBufferState>(state_) && device_local_config_.buffer_type == BufferType::L1 &&
         mesh_device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid()) {
-        auto* backing = get_backing_buffer();
-        auto alloc_size = backing->aligned_size_per_bank();
+        auto alloc_size = std::get<OwnedBufferState>(state_).backing_buffer->aligned_size_per_bank();
         for (const auto& [coord, device_buffer] : buffers_) {
             if (mesh_device->impl().is_local(coord)) {
                 auto* device = mesh_device->impl().get_device(coord);
