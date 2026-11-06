@@ -22,6 +22,7 @@
 namespace tt::tt_metal {
 
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -157,7 +158,7 @@ enum class PrefetcherPipeL1Source : uint8_t {
     // Lockstep L1 buffers from the device's L1 allocator. A space can be created or destroyed at
     // any time; enqueueing a Program whose CBs or DFBs overlap a live space fails. The range is
     // taken on every worker core, not only the space's. Config pages are written through the
-    // calling thread's command queue, so they land after the work already enqueued on it.
+    // command queue the space was created on, so they land after the work already enqueued on it.
     Allocator,
 };
 
@@ -270,7 +271,15 @@ private:
  * L1 on those cores (the persistent arena seals a core at that point). Quasar config pages reserve
  * PREFETCHER_PIPE_MAX_CREDIT_LANES credit lanes per receiver slot; each pipe uses the number it
  * is carved with (PrefetcherPipeSpace::create_pipe).
+ *
+ * The space lives on `mesh_cq`'s device and keeps that queue: with the Allocator source, the config
+ * pages written at create and by every later carve, and the fence a DRAM-sender carve takes, go
+ * through it. Programs that use the pipes on another queue must order themselves after it.
  */
+PrefetcherPipeSpace CreatePrefetcherPipeSpace(
+    distributed::MeshCommandQueue& mesh_cq, const PrefetcherPipeSpaceConfig& config);
+
+// As above, on `device.mesh_command_queue()`.
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config);
 
 /**
@@ -282,7 +291,12 @@ PrefetcherPipeSpace CreatePrefetcherPipeSpace(distributed::MeshDevice& device, c
  * PrefetcherPipeL1Source. The shared ring and config page are sized for the largest of them. With
  * the Allocator source this takes one range of every worker core's L1 where creating the spaces
  * one by one would take one range each. The L1 is released once every returned space is destroyed.
+ * Every returned space keeps `mesh_cq`, as CreatePrefetcherPipeSpace does.
  */
+std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
+    distributed::MeshCommandQueue& mesh_cq, std::span<const PrefetcherPipeSpaceConfig> configs);
+
+// As above, on `device.mesh_command_queue()`.
 std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
     distributed::MeshDevice& device, std::span<const PrefetcherPipeSpaceConfig> configs);
 
