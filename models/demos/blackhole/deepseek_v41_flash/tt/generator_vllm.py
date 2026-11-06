@@ -1076,7 +1076,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         free_rows = {p // U for p in range(self.B) if p not in self.slots.live}
         return len(free_rows - busy)
 
-    def _place_row_aware(self, toks, starts, ends, empty_slots):
+    def _place_row_aware(self, toks, starts, ends, empty_slots, request_ids=None, avoid=()):
         """Users of the rows of one prefill call (DSV41_PREFILL_ROW_AWARE=1, few prefill slots per mesh row): first every continuation finds its carried user and is bound to the state slot the
         plugin gave it (the plugin shifts the slots of the continuing prompts when a request leaves the prefill batch, so the logical slot of a NEW prompt can still map to the user of a
         continuation that comes later in the call); then each new prompt takes a free user of a mesh row without an in-progress prompt (fewest live users first, so that the decoders spread
@@ -1085,10 +1085,27 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         N, U = len(ends), self.U
         resume = self.m.__dict__.get("pf_resume", {})
         eff, chosen = list(starts), [None] * N
+        self.hit_rows_last = hit_rows = set()
         for i in range(N):
             st = starts[i]
             if st <= 0:
                 continue
+            rid_i = request_ids[i] if request_ids is not None and i < len(request_ids) else None
+            if self.paged is not None and rid_i is not None:
+                # a prefix hit of the paged cache (start > 0 of a NEW request): the scheduler reserved a free user on the row that holds the blocks; the request runs on THAT user and keeps its start
+                # (the model restores the cached state and computes only [start, end)). Without this the start was reset to 0 below: a full recompute per hit.
+                plan = self.paged.idx.reservation(rid_i)
+                if (
+                    plan is not None
+                    and plan.hit_tokens == st
+                    and plan.user not in self.slots.live
+                    and plan.user not in chosen
+                ):
+                    chosen[i] = plan.user
+                    self.slots.bind(empty_slots[i], plan.user)
+                    self.slots.live.add(plan.user)
+                    hit_rows.add(i)
+                    continue
             p = self.inprog.find(st, toks[i, :st], exclude=[c for c in chosen if c is not None], lag=self.piece_lag)
             r_ = None if p is None else self._lag_start(p, st)
             if p is not None:
@@ -1108,7 +1125,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         for i in range(N):
             if chosen[i] is not None:
                 continue
-            p, clean = self.slots.claim_rowaware(empty_slots[i], busy, U)
+            p, clean = self.slots.claim_rowaware(empty_slots[i], busy, U, avoid)
             self.row_stats["placed"] += 1
             if not clean:
                 self.row_stats["conflicts"] += 1
@@ -1212,7 +1229,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             for i in range(N):
                 if not 0 <= starts[i] < ends[i]:
                     raise ValueError(f"chunk [{starts[i]}, {ends[i]}) of row {i} is empty or reversed")
-            items, phys = self._place_row_aware(toks, starts, ends, empty_slots)
+            items, phys = self._place_row_aware(toks, starts, ends, empty_slots, request_ids, avoid)
+            hit_rows |= self.hit_rows_last
         for i in range(N):
             if rowaware:
                 break
