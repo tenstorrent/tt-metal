@@ -106,8 +106,6 @@ def _mark_stand_in(replacement, original):
 
 # Names the stand-ins are installed under; _restore_leaked_stand_ins looks for leaked copies of these.
 _STAND_IN_NAMES = (
-    "randn",
-    "rand",
     "manual_seed",
     "conv2d",
     "conv3d",
@@ -117,7 +115,13 @@ _STAND_IN_NAMES = (
     "bmm",
     "scaled_dot_product_attention",
     "comp_pcc",
+    "comp_ulp",
+    "comp_allclose",
+    "comp_equal",
     "assert_numeric_metrics",
+    "equal",
+    "allclose",
+    "assert_close",
     "from_torch",
     "torch2tt_tensor",
     "begin_trace_capture",
@@ -222,18 +226,14 @@ def _try_shallow(alloc):
 
 
 def _reference_op_patches():
-    """Host reference compute -> shape-correct zeros. Programs depend on shapes and config, not values."""
+    """Host reference compute -> shape-correct zeros. Programs depend on shapes and config, not values.
+    Random inputs stay real: zeros would break host code that derives parameters from the data, such as a
+    quantization scale of (max - min) / range."""
     import torch
     import torch.nn.functional as F
 
     real_matmul = torch.matmul
     real_sdpa = getattr(F, "scaled_dot_product_attention", None)
-
-    def _fast_randn(*size, **kw):
-        if len(size) == 1 and isinstance(size[0], (tuple, list, torch.Size)):
-            size = tuple(size[0])
-        kw.pop("generator", None)
-        return torch.zeros(*size, **kw)
 
     def _ntuple(n, x):
         return tuple(x) if isinstance(x, (tuple, list)) else (x,) * n
@@ -277,8 +277,6 @@ def _reference_op_patches():
         return torch.random.default_generator.manual_seed(int(seed))
 
     patches = [
-        _AttrPatch(torch, "randn", lambda _orig: _fast_randn),
-        _AttrPatch(torch, "rand", lambda _orig: _fast_randn),
         _AttrPatch(torch, "manual_seed", lambda _orig: _fast_manual_seed),
         _AttrPatch(F, "conv2d", lambda _orig: _fast_conv2d),
         _AttrPatch(F, "conv3d", lambda _orig: _fast_conv3d),
@@ -304,10 +302,27 @@ def _verifier_patches():
     def _assert_numeric_metrics(*a, **k):
         return (True, "precompile-stub")
 
+    def _matches(*a, **k):
+        return (True, "precompile-stub")
+
+    def _true(*a, **k):
+        return True
+
+    def _none(*a, **k):
+        return None
+
+    import torch
+
     return [
         _RebindPatch("tests.ttnn.utils_for_testing", "comp_pcc", lambda _orig: _pcc),
         _RebindPatch("models.common.utility_functions", "comp_pcc", lambda _orig: _pcc),
         _RebindPatch("tests.ttnn.utils_for_testing", "assert_numeric_metrics", lambda _orig: _assert_numeric_metrics),
+        _RebindPatch("ttnn.comparison", "comp_ulp", lambda _orig: _matches),
+        _RebindPatch("tt_py_test_utils_common.utility_functions", "comp_allclose", lambda _orig: _matches),
+        _RebindPatch("tt_py_test_utils_common.utility_functions", "comp_equal", lambda _orig: _matches),
+        _AttrPatch(torch, "equal", lambda _orig: _true),
+        _AttrPatch(torch, "allclose", lambda _orig: _true),
+        _AttrPatch(torch.testing, "assert_close", lambda _orig: _none),
     ]
 
 
