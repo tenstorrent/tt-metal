@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <variant>
+
 #include "dit_fused_distributed_rmsnorm_device_operation_types.hpp"
 #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
@@ -28,7 +30,6 @@ struct DitFusedDistributedRmsnormDeviceOperation {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<DitFusedDistributedRmsnormMeshWorkloadFactory>;
-    using shared_variables_t = DitFusedDistributedRmsnormMeshWorkloadFactory::shared_variables_t;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
