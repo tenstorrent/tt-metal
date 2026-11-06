@@ -226,6 +226,34 @@ jobs:
       # Run tt-blaze's full merge gate from its main branch.
       blaze-ref: main
 
+  # Hands a build that passed tt-blaze's merge gate to tt-blaze's nightly tt-metal uplift,
+  # which pins it on a trial branch and validates it there. Only a scheduled run on main,
+  # or a re-run of one (a re-run keeps its event), launches it. It launches the run and
+  # does not wait: the uplift reports in its own run and draft PR.
+  launch-blaze-uplift:
+    needs: [blaze-merge-gate]
+    if: >-
+      ${{ !cancelled()
+          && needs.blaze-merge-gate.result == 'success'
+          && github.event_name == 'schedule'
+          && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Launch tt-blaze's nightly tt-metal uplift
+        env:
+          # The default GITHUB_TOKEN cannot dispatch another repo.
+          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          METAL_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # metal-sha makes the uplift adopt this run's profiler build, the one the gate
+          # just passed, instead of building it again; metal-ref is the branch it is on.
+          gh workflow run nightly-metal-uplift.yaml --repo tenstorrent/tt-blaze --ref main \
+            -f metal-ref=main -f metal-sha="$METAL_SHA" -f validate=true
+          echo "Launched tt-blaze nightly-metal-uplift.yaml for tt-metal ${METAL_SHA}" >> "$GITHUB_STEP_SUMMARY"
+
   publish-to-pypi:
     needs: [build-test-publish, create-tag, blaze-merge-gate]
     runs-on: ubuntu-latest
