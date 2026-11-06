@@ -1268,6 +1268,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         destroy_metal_context_instance_on_close_ = false;
     }
 
+    // Again after teardown: entries checked while it ran are not trusted after it.
+    mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }
 

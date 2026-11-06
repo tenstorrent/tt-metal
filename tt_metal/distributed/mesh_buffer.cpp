@@ -531,6 +531,12 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
         device_buffer = create_device_buffer_at_lockstep_address(*this, device);
     }
     if (built_device_buffers_) {
+        // Entries checked before a close are dropped, not revalidated by this one's check.
+        if (cached_close_count_.load(std::memory_order_relaxed) != close_count) {
+            for (size_t i = 0; i < buffers_.shape().mesh_size(); ++i) {
+                built_device_buffers_[i].store(nullptr, std::memory_order_relaxed);
+            }
+        }
         built_device_buffers_[index].store(device_buffer.get(), std::memory_order_release);
         cached_close_count_.store(close_count, std::memory_order_release);
     }
