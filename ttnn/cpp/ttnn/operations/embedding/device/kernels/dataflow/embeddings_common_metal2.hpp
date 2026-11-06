@@ -69,14 +69,14 @@ FORCE_INLINE void prepare_local_cache(
     zero_local_ptr = &cache[0];
     noc.async_read(weights, cache, weight_stick_size, {.page_id = 0, .offset_bytes = weight_col_offset_bytes}, {});
 
-    // Row 1 is a NoC read destination, so weight_stick_size is NoC-aligned and divides exactly.
-    one_local_ptr = &cache[weight_stick_size / sizeof(uint32_t)];
+    const uint32_t row_one_offset = ((weight_stick_size + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+    one_local_ptr = &cache[row_one_offset / sizeof(uint32_t)];
     noc.async_read(
         weights,
         cache,
         weight_stick_size,
         {.page_id = 1, .offset_bytes = weight_col_offset_bytes},
-        {.offset_bytes = weight_stick_size});
+        {.offset_bytes = row_one_offset});
 
     noc.async_read_barrier();
 #endif

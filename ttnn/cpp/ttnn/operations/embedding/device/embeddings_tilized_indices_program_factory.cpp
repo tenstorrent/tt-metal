@@ -123,7 +123,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     });
 
     if (use_local_cache) {
-        uint32_t cache_page_size = tt::round_up(weight_page_size, 32u);
+        uint32_t cache_page_size =
+            tt::round_up(weight_page_size, device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM));
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
         spec.scratchpads.push_back(ScratchpadSpec{
