@@ -491,12 +491,14 @@ def pytest_runtest_call(item):
 @pytest.hookimpl(tryfirst=True, wrapper=True)
 def pytest_runtest_makereport(item, call):
     """Flip a failed dry-run body's report to passed. The exception itself (call.excinfo) is untouched, so hooks
-    that act on it, such as releasing the device tensors a failing frame holds, still see it."""
+    that act on it, such as releasing the device tensors a failing frame holds, still see it. A strict xfail whose
+    body passes on meaningless values (XPASS(strict), no exception) is flipped too; plugins that report failures
+    from this hook, such as GitHub annotations, would otherwise flag it."""
     rep = yield
     if call.when != "call" or _DRY_RUN_BODY_KEY not in item.stash:
         return rep
     del item.stash[_DRY_RUN_BODY_KEY]
-    if call.excinfo is not None and rep.outcome == "failed" and isinstance(call.excinfo.value, Exception):
+    if rep.outcome == "failed" and (call.excinfo is None or isinstance(call.excinfo.value, Exception)):
         _STATS.swallowed += 1
         rep.outcome = "passed"
         rep.longrepr = None
@@ -646,15 +648,19 @@ def pytest_runtestloop(session):
         if not _DRY_RUN_ONLY:
             before_real = _kernel_build_dirs()
             t2 = time.monotonic()
-            _run_items(session, items)
-            real_s = time.monotonic() - t2
-            # Kernels the real run compiled itself: binary directories that appeared during it, less one for each
-            # session job that started meanwhile (a job creates its directory when it starts, so jobs already
-            # running at the start are in the snapshot). Approximate if another process shares the kernel cache.
-            new_binaries = len(_kernel_build_dirs() - before_real)
-            started_during = at_real_start.kernels_pending - _SESSION.stats().kernels_pending
-            real_run_compiled = max(0, new_binaries - started_during)
-            print(f"PRECOMPILE: real run took {real_s:.1f}s", flush=True)
+            try:
+                _run_items(session, items)
+            finally:
+                # Recorded even when -x or a keyboard interrupt ends the real run early.
+                real_s = time.monotonic() - t2
+                # Kernels the real run compiled itself: binary directories that appeared during it, less one for
+                # each session job that started meanwhile (a job creates its directory when it starts, so jobs
+                # already running at the start are in the snapshot). Approximate if another process shares the
+                # kernel cache.
+                new_binaries = len(_kernel_build_dirs() - before_real)
+                started_during = at_real_start.kernels_pending - _SESSION.stats().kernels_pending
+                real_run_compiled = max(0, new_binaries - started_during)
+                print(f"PRECOMPILE: real run took {real_s:.1f}s", flush=True)
     finally:
         at_end = _SESSION.stats()
         _SESSION.close()
