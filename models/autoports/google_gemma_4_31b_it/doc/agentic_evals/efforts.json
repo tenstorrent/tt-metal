@@ -1713,6 +1713,55 @@
         "causal_speedup_claim": false
       },
       "evidence": "runs/measured-workload-idle-regime/RESULT.md"
+    },
+    {
+      "problem": "serving-shortfall-pricing",
+      "owner": "local_serving_check",
+      "goal": "Price remaining serving shortfalls from existing measurements or state unidentifiable counterfactuals",
+      "plan": "runs/serving-shortfall-pricing/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated",
+        "reason": "Host-only evidence analysis; no runtime change or speed credit"
+      },
+      "unblocks": [
+        "representative release projection"
+      ],
+      "confirm": {
+        "method": "Every numeric estimate traces to measured evidence with scope; unavailable causal savings remain unknown",
+        "success": "Auditable release-pricing inputs or precise evidence gaps"
+      },
+      "box_hours": 0,
+      "status": "running",
+      "started_at": "2026-11-06T12:34:15.678297+00:00"
+    },
+    {
+      "problem": "ci-image-reuse",
+      "owner": "harness_registration",
+      "goal": "Determine supported immutable server image reuse across TTI-only cohort changes",
+      "plan": "runs/ci-image-reuse/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0.8333333333333334,
+          "swe_bench_verified": 0.8333333333333334,
+          "terminal_bench_2_1": 0.8333333333333334
+        },
+        "device_hours": 0,
+        "basis": "guess",
+        "reason": "Observed builds around50minutes; benefit requires proven source/config parity and excludes queue effects"
+      },
+      "confirm": {
+        "method": "Trace stock docker-image and config paths; identify immutable existing image and source/runtime parity",
+        "success": "Safe supported dispatch argument or explicit unsupported finding"
+      },
+      "box_hours": 0,
+      "status": "running",
+      "started_at": "2026-11-06T12:34:47.105929+00:00"
     }
   ],
   "rankings": [

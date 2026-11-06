@@ -3,7 +3,7 @@
   "eval": "swe_bench_verified",
   "device": "qb2-ci",
   "owner": "coordinator",
-  "status": "building_or_queued",
+  "status": "device_job_in_progress",
   "queued_at": "2026-11-06T11:27:53.112555+00:00",
   "planned_clients": 2,
   "batch": 8,
@@ -41,8 +41,13 @@
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42210467509",
   "workflow_status": "in_progress",
   "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T11:34:12.199380+00:00",
+  "last_observed_at": "2026-11-06T12:33:00.401858+00:00",
   "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kd74g",
   "build_started_at": "2026-11-06T11:28:23Z",
-  "build_completed_at": null
+  "build_completed_at": "2026-11-06T12:19:28Z",
+  "runner": "120-qb2-p04t07",
+  "device_job_id": 127888688175,
+  "device_job_started_at": "2026-11-06T12:19:30Z",
+  "device_job_completed_at": null,
+  "start": "2026-11-06T12:19:30Z"
 }

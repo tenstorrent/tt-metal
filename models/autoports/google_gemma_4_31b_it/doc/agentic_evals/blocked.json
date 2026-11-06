@@ -29,7 +29,7 @@
     "Stage gate pass"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T12:10:39.013324+00:00",
+  "updated_at": "2026-11-06T12:34:15.678297+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -38,10 +38,10 @@
   "live_wait": {
     "run_ids": [
       42208934357,
-      42200513517,
+      42210467509,
       42206258311
     ],
-    "status": "Full GPQA198 rung, SWE validity smoke retry and Terminal nightly10 in flight"
+    "status": "Full GPQA198 and SWE5/Terminal10 nightly runs executing on three distinct QB2 runners"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",

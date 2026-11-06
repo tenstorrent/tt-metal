@@ -521,6 +521,35 @@
           "client_exit_status": 0,
           "exit_reason": "Idle API gracefully interrupted; wrapper1, empty device owners.",
           "actual_hours": 0.15261222555555554
+        },
+        {
+          "arm": "measured-workload-idle-regime",
+          "owner": "coordinator",
+          "device": "local",
+          "status": "completed",
+          "queued_at": "2026-11-06T11:46:58.004182+00:00",
+          "planned_clients": 2,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "predicted_hours": 0.2,
+          "box_hours": 0.35,
+          "timeout_seconds": 1260,
+          "regime": "Serial TT mesh1x4, HF CPU reference finished; ordinary host activity recorded",
+          "owner_check": [],
+          "prediction_basis": "Prior .2758h included CPU-contended startup and failed client retry; .20h current guess, exact previous successful protocol.",
+          "start": "2026-11-06T11:47:34.390258+00:00",
+          "end": "2026-11-06T11:54:06.969835+00:00",
+          "exit_status": 0,
+          "wrapper_exit_status": 1,
+          "wrapper_exit_reason": "Intentional idle API SIGINT; device owners empty",
+          "actual_hours": 0.10904988249999999,
+          "owner_check_after": [],
+          "runtime_publication": "439c22b0e991e5af626efafa7224edf28f84795b",
+          "execution_commit_at_launch": "98f2216c00377b21a58754c756d4d5bb1a9e9c5f",
+          "plugin_runtime": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+          "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+          "command": "timeout1260 tests/run_serving.sh --stages serve --max-num-seqs8 --enable-prefix-caching; client-command.json",
+          "evidence": "runs/measured-workload-idle-regime/RESULT.md"
         }
       ]
     },
@@ -1052,7 +1081,7 @@
           "eval": "terminal_bench_2_1",
           "device": "qb2-ci",
           "owner": "coordinator",
-          "status": "building_or_queued",
+          "status": "device_job_in_progress",
           "queued_at": "2026-11-06T10:54:39.812689+00:00",
           "planned_clients": 2,
           "batch": 8,
@@ -1090,17 +1119,22 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T11:34:15.517260+00:00",
+          "last_observed_at": "2026-11-06T12:33:03.417076+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
           "build_started_at": "2026-11-06T10:55:05Z",
-          "build_completed_at": null
+          "build_completed_at": "2026-11-06T11:47:58Z",
+          "runner": "qb2-120-p05t06",
+          "device_job_id": 127875630165,
+          "device_job_started_at": "2026-11-06T11:48:00Z",
+          "device_job_completed_at": null,
+          "start": "2026-11-06T11:48:00Z"
         },
         {
           "arm": "full-gpqa-observable",
           "eval": "r1_gpqa_diamond",
           "device": "qb2-ci",
           "owner": "coordinator",
-          "status": "building_or_queued",
+          "status": "device_job_in_progress",
           "queued_at": "2026-11-06T11:15:45.309509+00:00",
           "planned_clients": 2,
           "batch": 8,
@@ -1132,17 +1166,22 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42208934357",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T11:34:52.998245+00:00",
+          "last_observed_at": "2026-11-06T12:32:39.632815+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-l229t",
           "build_started_at": "2026-11-06T11:16:03Z",
-          "build_completed_at": null
+          "build_completed_at": "2026-11-06T12:06:53Z",
+          "runner": "120-qb2-p05t01",
+          "device_job_id": 127883320307,
+          "device_job_started_at": "2026-11-06T12:06:55Z",
+          "device_job_completed_at": null,
+          "start": "2026-11-06T12:06:55Z"
         },
         {
           "arm": "nightly-swe-observable",
           "eval": "swe_bench_verified",
           "device": "qb2-ci",
           "owner": "coordinator",
-          "status": "building_or_queued",
+          "status": "device_job_in_progress",
           "queued_at": "2026-11-06T11:27:53.112555+00:00",
           "planned_clients": 2,
           "batch": 8,
@@ -1180,10 +1219,15 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42210467509",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T11:34:12.199380+00:00",
+          "last_observed_at": "2026-11-06T12:33:00.401858+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kd74g",
           "build_started_at": "2026-11-06T11:28:23Z",
-          "build_completed_at": null
+          "build_completed_at": "2026-11-06T12:19:28Z",
+          "runner": "120-qb2-p04t07",
+          "device_job_id": 127888688175,
+          "device_job_started_at": "2026-11-06T12:19:30Z",
+          "device_job_completed_at": null,
+          "start": "2026-11-06T12:19:30Z"
         }
       ]
     }
@@ -1223,7 +1267,25 @@
       "session_id": 7763,
       "script": "bringup/artifacts/stage12-monitor-ci.py",
       "role": "read-only observation and artifact collection"
+    },
+    {
+      "run_id": 42206258311,
+      "session_id": 36412,
+      "script": "bringup/artifacts/stage12-monitor-ci.py",
+      "role": "Read-only status and artifact collection"
+    },
+    {
+      "run_id": 42208934357,
+      "session_id": 31191,
+      "script": "bringup/artifacts/stage12-monitor-ci.py",
+      "role": "Read-only status and artifact collection"
+    },
+    {
+      "run_id": 42210467509,
+      "session_id": 54863,
+      "script": "bringup/artifacts/stage12-monitor-ci.py",
+      "role": "Read-only status and artifact collection"
     }
   ],
-  "last_updated": "2026-11-06T10:43:58.963987+00:00"
+  "last_updated": "2026-11-06T12:25:01.555848+00:00"
 }

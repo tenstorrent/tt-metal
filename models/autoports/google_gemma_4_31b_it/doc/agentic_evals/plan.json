@@ -13,31 +13,31 @@
     {
       "phase": "nightly",
       "start_hour": 4,
+      "end_hour": 16
+    },
+    {
+      "phase": "server_sized_larger_and_efforts",
+      "start_hour": 7,
       "end_hour": 22
     },
     {
-      "phase": "server_sized_and_larger",
-      "start_hour": 7,
-      "end_hour": 30
+      "phase": "freeze_and_first_dry_run_reserve",
+      "start_hour": 22,
+      "end_hour": 33.1
     },
     {
-      "phase": "freeze_and_early_dry_run",
-      "start_hour": 30,
-      "end_hour": 36
+      "phase": "fix_reserve",
+      "start_hour": 33.1,
+      "end_hour": 34.1
     },
     {
-      "phase": "fix_and_recheck_reserve",
-      "start_hour": 36,
-      "end_hour": 40
+      "phase": "second_dry_run_reserve_if_needed",
+      "start_hour": 34.1,
+      "end_hour": 45.2
     },
     {
-      "phase": "release_dispatch_with_queue_margin",
-      "start_hour": 40,
-      "end_hour": 42
-    },
-    {
-      "phase": "queue_reserve_before_stage_deadline",
-      "start_hour": 42,
+      "phase": "release_dispatch_and_queue_margin",
+      "start_hour": 45.2,
       "end_hour": 48
     }
   ],
@@ -864,7 +864,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T11:50:29.286920+00:00",
+      "last_observed_at": "2026-11-06T12:33:03.417076+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
       "build_started_at": "2026-11-06T10:55:05Z",
       "build_completed_at": "2026-11-06T11:47:58Z",
@@ -879,7 +879,7 @@
       "eval": "r1_gpqa_diamond",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "building_or_queued",
+      "status": "device_job_in_progress",
       "queued_at": "2026-11-06T11:15:45.309509+00:00",
       "planned_clients": 2,
       "batch": 8,
@@ -911,17 +911,22 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42208934357",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T11:50:05.859628+00:00",
+      "last_observed_at": "2026-11-06T12:32:39.632815+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-l229t",
       "build_started_at": "2026-11-06T11:16:03Z",
-      "build_completed_at": null
+      "build_completed_at": "2026-11-06T12:06:53Z",
+      "runner": "120-qb2-p05t01",
+      "device_job_id": 127883320307,
+      "device_job_started_at": "2026-11-06T12:06:55Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-06T12:06:55Z"
     },
     {
       "arm": "nightly-swe-observable",
       "eval": "swe_bench_verified",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "building_or_queued",
+      "status": "device_job_in_progress",
       "queued_at": "2026-11-06T11:27:53.112555+00:00",
       "planned_clients": 2,
       "batch": 8,
@@ -959,16 +964,21 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42210467509",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T11:50:26.720091+00:00",
+      "last_observed_at": "2026-11-06T12:33:00.401858+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kd74g",
       "build_started_at": "2026-11-06T11:28:23Z",
-      "build_completed_at": null
+      "build_completed_at": "2026-11-06T12:19:28Z",
+      "runner": "120-qb2-p04t07",
+      "device_job_id": 127888688175,
+      "device_job_started_at": "2026-11-06T12:19:30Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-06T12:19:30Z"
     },
     {
       "arm": "measured-workload-idle-regime",
       "owner": "coordinator",
       "device": "local",
-      "status": "queued",
+      "status": "completed",
       "queued_at": "2026-11-06T11:46:58.004182+00:00",
       "planned_clients": 2,
       "batch": 8,
@@ -978,11 +988,18 @@
       "timeout_seconds": 1260,
       "regime": "Serial TT mesh1x4, HF CPU reference finished; ordinary host activity recorded",
       "owner_check": [],
-      "prediction_basis": "Prior .2758h included CPU-contended startup and failed client retry; .20h current guess, exact previous successful protocol."
+      "prediction_basis": "Prior .2758h included CPU-contended startup and failed client retry; .20h current guess, exact previous successful protocol.",
+      "start": "2026-11-06T11:47:34.390258+00:00",
+      "end": "2026-11-06T11:54:06.969835+00:00",
+      "exit_status": 0,
+      "wrapper_exit_status": 1,
+      "wrapper_exit_reason": "Intentional idle API SIGINT; device owners empty",
+      "actual_hours": 0.10904988249999999,
+      "owner_check_after": []
     }
   ],
-  "status": "valid_gpqa_nightly_terminal_smoke_swe_repair_inflight",
-  "last_updated": "2026-11-06T11:54:06.969835+00:00",
+  "status": "all_smokes_valid_three_larger_runs_executing",
+  "last_updated": "2026-11-06T12:34:15.678297+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1011,7 +1028,7 @@
     "job_limit_hours": 18,
     "run_limit_hours": 12
   },
-  "schedule_basis": "Updated after valid Terminal smoke: GPQA and Terminal advance independently; SWE4.5h workflow retry forecast reaches aboutstagehour10.2. Overlapping nightly4\u201322 and server/larger7\u201330 retain dry30\u201336,fix36\u201340 and dispatch40\u201342 reserves. Rungs never wait for another suite or an effort. Queue margin remains6h before48h deadline.",
+  "schedule_basis": "Conservative contingency after measured GPQA server-sized projection11.08496h for198 including4h request-tail and build/queue. Proposed completed rehearsal still requires operator approval; reserve two11.1h cycles plus1h fix and2.8h finaldispatch/queue by hour48. This does not authorize completed-score dry runs. Freeze targethour22; revise when full/nightly measurements or route decision arrive. Rungs proceed independently if projected tofinish before first dry; efforts cannot delay them.",
   "ci_queue_observations": [
     {
       "run_id": 42166117505,
@@ -1347,5 +1364,59 @@
       "end": null,
       "reason": "No4distinct native histories yet; capacity work awaits normal nightly artifacts. Existing requested local measurements complete."
     }
-  ]
+  ],
+  "schedule_history": [
+    {
+      "at": "2026-11-06T12:30:31.027118+00:00",
+      "schedule": [
+        {
+          "phase": "survey_preflight_and_smoke",
+          "start_hour": 0,
+          "end_hour": 11
+        },
+        {
+          "phase": "nightly",
+          "start_hour": 4,
+          "end_hour": 22
+        },
+        {
+          "phase": "server_sized_and_larger",
+          "start_hour": 7,
+          "end_hour": 30
+        },
+        {
+          "phase": "freeze_and_early_dry_run",
+          "start_hour": 30,
+          "end_hour": 36
+        },
+        {
+          "phase": "fix_and_recheck_reserve",
+          "start_hour": 36,
+          "end_hour": 40
+        },
+        {
+          "phase": "release_dispatch_with_queue_margin",
+          "start_hour": 40,
+          "end_hour": 42
+        },
+        {
+          "phase": "queue_reserve_before_stage_deadline",
+          "start_hour": 42,
+          "end_hour": 48
+        }
+      ],
+      "basis": "Updated after valid Terminal smoke: GPQA and Terminal advance independently; SWE4.5h workflow retry forecast reaches aboutstagehour10.2. Overlapping nightly4\u201322 and server/larger7\u201330 retain dry30\u201336,fix36\u201340 and dispatch40\u201342 reserves. Rungs never wait for another suite or an effort. Queue margin remains6h before48h deadline."
+    }
+  ],
+  "dry_route_contingency": {
+    "authorization": "pending_operator_existing_question",
+    "provisional_cycle_hours": 11.1,
+    "basis": "Current fullGPQA forecast11.084957716 roundedup; not measured completed198 or release admission",
+    "first_dry_start_hour": 22,
+    "efforts_end_hour": 22,
+    "fix_hours": 1,
+    "second_cycle_reserved": true,
+    "release_queue_margin_hours": 2.8,
+    "exact_early_stop_route": "If operator provides supported exact dry route, recalculate its measured shorter duration and release reserve; do not assume it exists."
+  }
 }
