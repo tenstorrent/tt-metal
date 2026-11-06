@@ -1,7 +1,7 @@
 {
-  "pid": 218248,
-  "start_ticks": "87814431",
-  "ppid": 218243,
+  "pid": 3580,
+  "start_ticks": "88084034",
+  "ppid": 3569,
   "command": [
     "bash",
     "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
@@ -13,14 +13,14 @@
     "--port",
     "8000",
     "--output-dir",
-    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b1",
     "--additional-server-args",
     "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it --max-num-seqs 1 /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
   ],
   "max_num_seqs": 1,
   "base_url": "http://127.0.0.1:8000",
-  "server_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1",
-  "phase_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/phase-b1.jsonl",
+  "server_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b1",
+  "phase_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/phase-b1.jsonl",
   "launch_command": [
     "bash",
     "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
@@ -32,11 +32,27 @@
     "--port",
     "8000",
     "--output-dir",
-    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b1",
     "--additional-server-args",
     "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it --max-num-seqs 1 /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
   ],
-  "started_unix": 1793934421.9303737,
-  "startup_seconds": 180.22456280200277,
+  "started_unix": 1793937117.9661298,
+  "started_monotonic": 880840.346180874,
+  "source_sha256_at_launch": {
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+    "models/autoports/google_gemma_4_31b_it/tt/generator.py": "fe3314365b9294b237f2388cece2962f94b9bf46b9ed44ad8439caf99229cc9c",
+    "models/autoports/google_gemma_4_31b_it/tt/prefill.py": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+    "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py": "a96be7d9612ed94c1bebc020ed3a658aeaab8f39bd9ff5ead25b361c538217ef",
+    "models/autoports/google_gemma_4_31b_it/tt/precision.py": "0abdc4374e699ae20ce26dc43d5f2d9078b0ecb41698aa2d7a0d13a743180699",
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "4580814729e23f84b4b8fc1b952ae6dc3eeb55a7de6b8f13753c940f98fb03b7",
+    "models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "10224839f923f08887ac64ab71121980affa50d7bb542784b234ff19b466e70b",
+    "models/autoports/google_gemma_4_31b_it/tt/functional_decoder.py": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "3129039e1aafc3b12f2c535306a80e40f41fc2d98747ed93768d0bab1323e1c7",
+    "models/autoports/google_gemma_4_31b_it/tt/batched_prefill.py": "ab99ab9c8c54f206d16a56df1dc02bc3c4da14db003ea52d6e45d7f679af8df8",
+    "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py": "4cc22731bf210fdb24040d4ad855c663823132aaf441c50bdefa2c0710dd1ff6"
+  },
+  "tt_metal_commit_at_launch": "27ea28bafd0195ba8ce89dd36da722b15fa6fa24",
+  "startup_seconds": 172.22368533397093,
   "bounded_seconds": 7200
 }

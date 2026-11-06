@@ -1,0 +1,16 @@
+{
+  "command": [
+    "python",
+    "models/autoports/google_gemma_4_31b_it/tests/test_benchmark_phases.py"
+  ],
+  "started_utc": "2026-11-06T03:39:04.196085+00:00",
+  "elapsed_seconds": 0.10936328291427344,
+  "exit_code": 0,
+  "test_count": 4,
+  "result": "test_overlapping_reused_device_output_retains_distinct_host_reads (__main__.PhaseRecorderTests) ... ok\ntest_position_shadow_ignores_stale_inputs_and_resets_on_reload (__main__.PhaseRecorderTests) ... ok\ntest_reset_refuses_pending_work (__main__.PhaseRecorderTests) ... ok\ntest_socket_drain_persists_and_clears_completed_events (__main__.PhaseRecorderTests) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.005s\n\nOK\n",
+  "test_sha256": "93f5fe59a0fb10939b5d27af68412b45e478aa529c47839a58d588ea801cf553",
+  "runtime_source_sha256": "a96be7d9612ed94c1bebc020ed3a658aeaab8f39bd9ff5ead25b361c538217ef",
+  "scope": "Host-only recorder tests; no TTNN import, device use, runtime edits or performance measurement.",
+  "post_format_test_sha256": "2b990458781836332c4aa8545263b0a4b52c3d99ae5e0348655af0c949b6a403",
+  "post_format_result": "4 tests passed; observer-host-tests-final.log"
+}

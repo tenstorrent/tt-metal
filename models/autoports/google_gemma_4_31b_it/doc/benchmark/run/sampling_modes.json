@@ -1,26 +1,22 @@
 {
-  "scope": "Entire owned server lifetime: preparation, initial probes, warmups and measured requests; not solely measured windows. No complete step/request export exists.",
-  "counts": {
-    "32": {
-      "prefill/host_compatibility": 128,
-      "prefill/device": 128,
-      "decode/device": 574
-    },
-    "16": {
-      "prefill/host_compatibility": 64,
-      "prefill/device": 64,
-      "decode/device": 542
-    },
-    "8": {
-      "prefill/host_compatibility": 32,
-      "prefill/device": 32,
-      "decode/device": 526
-    },
-    "1": {
-      "prefill/host_compatibility": 9,
-      "prefill/device": 9,
-      "decode/device": 1143
-    }
+  "1": {
+    "prefill:host_compatibility": 8,
+    "prefill:device": 8,
+    "decode:device": 1016
   },
-  "plugin_runtime": "stock ca7a18246e4111629ed6cb4a7d1192002749fccf; test-only local90f33d2e392eb8bfda6948df9dabe712a724cb1a"
+  "8": {
+    "prefill:host_compatibility": 24,
+    "prefill:device": 24,
+    "decode:device": 392
+  },
+  "16": {
+    "prefill:host_compatibility": 48,
+    "prefill:device": 48,
+    "decode:device": 400
+  },
+  "32": {
+    "prefill:host_compatibility": 96,
+    "prefill:device": 96,
+    "decode:device": 416
+  }
 }

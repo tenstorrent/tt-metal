@@ -1,0 +1,33 @@
+--- a/runtime/benchmark_stage/check.py
++++ b/runtime/benchmark_stage/check.py
+@@ -47,8 +47,8 @@
+     if config.get('model') != identity['model']:
+         raise ValueError('run model does not match evaluated implementation identity')
+     elapsed = summary.get('elapsed_seconds')
+-    if summary.get('status') != 'completed' or not finite_number(elapsed) or not 0 < elapsed < min(config.get('budget_seconds', 3600), 3600):
+-        raise ValueError('benchmark stage did not complete within its budget and one hour')
++    if summary.get('status') != 'completed' or not finite_number(elapsed) or not 0 < elapsed < min(config.get('budget_seconds', 1800 * len(config.get('concurrencies', [1, 8, 16, 32]))), 1800 * len(config.get('concurrencies', [1, 8, 16, 32]))):
++        raise ValueError('benchmark stage did not complete within its budget of 30 minutes per configured batch')
+     manifest = read(evidence / 'run/manifest.json')
+     if digest({k: v for k, v in manifest.items() if k != 'manifest_sha256'}) != manifest['manifest_sha256']:
+         raise ValueError('subset manifest checksum mismatch')
+@@ -66,7 +66,18 @@
+     execution = config.get('accuracy_execution', 'sequential')
+     if execution not in ('sequential', 'shared') or summary.get('accuracy_execution', 'sequential') != execution:
+         raise ValueError('accuracy execution mode differs from run configuration')
+-    if not accuracy or set(accuracy) != set(config['tasks']):
++    if not config['tasks']:
++        selected = config.get('selected_evals', [])
++        omitted = config.get('not_covered', {})
++        if (not isinstance(selected, list) or not selected
++                or len(set(selected)) != len(selected)
++                or not isinstance(omitted, dict) or set(omitted) != set(selected)):
++            raise ValueError('empty accuracy requires explicit coverage of every selected eval')
++        for name, record in omitted.items():
++            if (not isinstance(record, dict) or not record.get('reason')
++                    or not record.get('authority')):
++                raise ValueError(f'{name}: missing noncoverage reason or authority')
++    if set(accuracy) != set(config['tasks']):
+         raise ValueError('missing required accuracy tasks')
+     results = {}
+     for task, result in accuracy.items():

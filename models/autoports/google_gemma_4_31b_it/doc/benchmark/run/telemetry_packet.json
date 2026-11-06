@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "run_id": "d038388d-5329-4be7-9f50-34e7f80bffc6",
+  "stage": "11-benchmark",
+  "attempt_id": "da3df348-3260-43bc-b199-d27bb7dcfaca",
+  "kind": "vllm",
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "selected_mesh": {
+    "shape": [
+      1,
+      4
+    ],
+    "devices": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "layer_types": {},
+  "performance": {
+    "source": "vllm",
+    "prefill_device_us": null,
+    "decode_device_us": null,
+    "prefill_flops_pct": null,
+    "decode_dram_pct": null,
+    "ttft_ms": 754.9548402457731,
+    "decode_tps": 35.3096386576596,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1.json"
+  },
+  "accuracy": [],
+  "missing_reasons": {
+    "device_metrics": "Live vLLM profiling prohibited; host-wall phase rooflines are reported separately and are not device-time measurements.",
+    "accuracy": "GPQA credential unavailable; operator decision5 permits local noncoverage. SWE/Terminal tool suites require Stage12 harness."
+  },
+  "notes": [
+    "Full60layers, head_bfp4, context262144, prefix caching enabled.",
+    "Four profiles use distinct4096-token inputs and128 outputs; B1/C1 is headline.",
+    "Installed outer gate has documented stale budget/noncoverage assumptions; corrected evidence gate retained."
+  ]
+}

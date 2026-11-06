@@ -11,9 +11,10 @@
       "concurrency": 1,
       "num_prompts": 8,
       "estimated_seconds": 28.947387445423374,
-      "actual_seconds": null,
-      "missing_reason": "Release128/128 row not measured in this attempt; goal12 must measure it.",
-      "estimate_basis": "8 serial requests: measured B1 TPOT*127 plus TTFT scaled128/4096; linear prefill approximation omits fixed startup/client overhead and is not a latency claim."
+      "actual_seconds": 26.931246740045026,
+      "estimate_basis": "8 serial requests: measured B1 TPOT*127 plus TTFT scaled128/4096; linear prefill approximation omits fixed startup/client overhead and is not a latency claim.",
+      "measurement": "run/release-matrix/128-128-c1.json",
+      "completed_requests": 8
     }
   ]
 }

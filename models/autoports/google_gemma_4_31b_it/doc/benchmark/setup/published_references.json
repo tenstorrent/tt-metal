@@ -1,0 +1,18 @@
+{
+  "model": "google/gemma-4-31B-it",
+  "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+  "checked_utc_date": "2026-11-06",
+  "scores": {
+    "GPQA Diamond": 84.3
+  },
+  "score_unit": "percent",
+  "SWE-bench Verified": null,
+  "Terminal-Bench 2.1": null,
+  "missing_reason": "These suites are not listed in the exact-model official card; no unverified score substituted.",
+  "model_card_generation": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 64
+  },
+  "served_generation_difference": "Operator explicitly authorizes top_k32; intended release GPQA recipe uses top_k20. No local accuracy executed."
+}

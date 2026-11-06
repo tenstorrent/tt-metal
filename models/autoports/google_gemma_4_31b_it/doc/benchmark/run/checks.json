@@ -1,18 +1,18 @@
 {
-  "stage_check": {
+  "corrected_benchmark_evidence": {
+    "status": "passed",
+    "evidence": "evidence_check.json"
+  },
+  "context": {
+    "status": "passed",
+    "full_context": 262144,
+    "evidence": "../setup/resumed-context-check.log"
+  },
+  "installed_outer_check": {
+    "status": "failed",
     "exit_code": 2,
-    "log": "../setup/stage-check.log",
-    "status": "critical_incomplete",
-    "explanation": "Original runner status failed at required roofline readiness; all latency work and reporting are below7200s. Checker generic wording mentions budget/one hour, but this is not a measured timeout."
-  },
-  "context_check": {
-    "exit_code": 0,
-    "status": "pass",
-    "log": "../setup/context-final.log"
-  },
-  "partial_latency_and_identity": {
-    "status": "pass",
-    "evidence": "partial_validation.json"
+    "reason": "Obsolete mandatory nonempty accuracy conflicts with operator decision5. Generic correction is prepared; read-only exception requested, not granted.",
+    "evidence": "../setup/resumed-outer-check.log"
   },
   "accuracy_verdict": null
 }

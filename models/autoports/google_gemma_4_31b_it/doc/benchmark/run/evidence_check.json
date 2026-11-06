@@ -1,0 +1,45 @@
+{
+  "upstream_checker": "/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/check.py",
+  "upstream_sha256": "a92dea8224c7bf476d1d07816060d692b71408aabc9a4cdbd7eee887fdf8aa58",
+  "effective_checker_sha256": "e52f4e4a111264c9f0fa29b27838129252cc8e96d4bb1106f4823d98f52c38ec",
+  "corrections": [
+    {
+      "before": "min(config.get('budget_seconds', 3600), 3600)",
+      "after": "min(config.get('budget_seconds', 1800 * len(config.get('concurrencies', [1, 8, 16, 32]))), 1800 * len(config.get('concurrencies', [1, 8, 16, 32])))"
+    },
+    {
+      "before": "benchmark stage did not complete within its budget and one hour",
+      "after": "benchmark stage did not complete within its budget of 30 minutes per configured batch"
+    },
+    {
+      "before": "if not accuracy or set(accuracy) != set(config['tasks']):",
+      "after": "if set(accuracy) != set(config['tasks']):"
+    }
+  ],
+  "contract": {
+    "empty_accuracy_exemption": true,
+    "batch_sizes": [
+      1,
+      8,
+      16,
+      32
+    ],
+    "not_covered": {
+      "r1_gpqa_diamond": {
+        "reason": "Gated dataset credential unavailable; operator explicitly authorizes local noncoverage (AGENTS.md decision 5).",
+        "authority": "AGENTS.md decision 5"
+      },
+      "swe_bench_verified": {
+        "reason": "Tool-use suite requires goal12 harness, not lm-eval.",
+        "authority": "benchmark-model harness coverage rule"
+      },
+      "terminal_bench_2_1": {
+        "reason": "Terminal/tool-use suite requires goal12 harness, not lm-eval. Release model entry inspected names terminal_bench_2, not2.1; no substitution.",
+        "authority": "benchmark-model harness coverage rule"
+      }
+    },
+    "authority": "AGENTS.md decisions 4\u20136; benchmark-model harness noncoverage rule"
+  },
+  "status": "passed",
+  "evidence": "models/autoports/google_gemma_4_31b_it/doc/benchmark"
+}

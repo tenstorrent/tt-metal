@@ -1,0 +1,272 @@
+{
+  "launcher": {
+    "pid": 3191,
+    "start_ticks": "88058746",
+    "ppid": 3181,
+    "command": [
+      "bash",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+      "--stages",
+      "serve",
+      "--max-num-seqs",
+      "8",
+      "--enable-prefix-caching",
+      "--port",
+      "8000",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b8",
+      "--additional-server-args",
+      "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it --max-num-seqs 8 /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+    ],
+    "max_num_seqs": 8,
+    "base_url": "http://127.0.0.1:8000",
+    "server_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b8",
+    "phase_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/phase-b8.jsonl",
+    "launch_command": [
+      "bash",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+      "--stages",
+      "serve",
+      "--max-num-seqs",
+      "8",
+      "--enable-prefix-caching",
+      "--port",
+      "8000",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b8",
+      "--additional-server-args",
+      "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it --max-num-seqs 8 /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+    ],
+    "started_unix": 1793936865.080533,
+    "started_monotonic": 880587.460584578,
+    "source_sha256_at_launch": {
+      "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+      "models/autoports/google_gemma_4_31b_it/tt/generator.py": "fe3314365b9294b237f2388cece2962f94b9bf46b9ed44ad8439caf99229cc9c",
+      "models/autoports/google_gemma_4_31b_it/tt/prefill.py": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+      "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py": "a96be7d9612ed94c1bebc020ed3a658aeaab8f39bd9ff5ead25b361c538217ef",
+      "models/autoports/google_gemma_4_31b_it/tt/precision.py": "0abdc4374e699ae20ce26dc43d5f2d9078b0ecb41698aa2d7a0d13a743180699",
+      "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "4580814729e23f84b4b8fc1b952ae6dc3eeb55a7de6b8f13753c940f98fb03b7",
+      "models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+      "models/autoports/google_gemma_4_31b_it/tt/model.py": "10224839f923f08887ac64ab71121980affa50d7bb542784b234ff19b466e70b",
+      "models/autoports/google_gemma_4_31b_it/tt/functional_decoder.py": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+      "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "3129039e1aafc3b12f2c535306a80e40f41fc2d98747ed93768d0bab1323e1c7",
+      "models/autoports/google_gemma_4_31b_it/tt/batched_prefill.py": "ab99ab9c8c54f206d16a56df1dc02bc3c4da14db003ea52d6e45d7f679af8df8",
+      "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py": "4cc22731bf210fdb24040d4ad855c663823132aaf441c50bdefa2c0710dd1ff6"
+    },
+    "tt_metal_commit_at_launch": "27ea28bafd0195ba8ce89dd36da722b15fa6fa24",
+    "startup_seconds": 186.2315111400094,
+    "bounded_seconds": 7200
+  },
+  "api_process": {
+    "pid": 3225,
+    "start_ticks": "88058971",
+    "ppid": 3193,
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--block_size",
+      "32",
+      "--max_num_seqs",
+      "8",
+      "--port",
+      "8000",
+      "--max_model_len",
+      "262144",
+      "--enable-prefix-caching",
+      "--additional-config",
+      "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 134217728, \"fabric_config\": \"FABRIC_1D_RING\"}}",
+      "--revision",
+      "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--tokenizer-revision",
+      "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--language-model-only",
+      "--async-scheduling",
+      "--override-generation-config",
+      "{\"top_k\":32}",
+      "--served-model-name",
+      "google/gemma-4-31B-it",
+      "--max-num-seqs",
+      "8",
+      "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+    ]
+  },
+  "models_response": {
+    "object": "list",
+    "data": [
+      {
+        "id": "google/gemma-4-31B-it",
+        "object": "model",
+        "created": 1793937051,
+        "owned_by": "vllm",
+        "root": "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "parent": null,
+        "max_model_len": 262144,
+        "permission": [
+          {
+            "id": "modelperm-a74a8fab671ed168",
+            "object": "model_permission",
+            "created": 1793937051,
+            "allow_create_engine": false,
+            "allow_sampling": true,
+            "allow_logprobs": true,
+            "allow_search_indices": false,
+            "allow_view": true,
+            "allow_fine_tuning": false,
+            "organization": "*",
+            "group": null,
+            "is_blocking": false
+          }
+        ]
+      }
+    ]
+  },
+  "registration": {
+    "event": "autoport_registration",
+    "class": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+    "module_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+    "device_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "mesh_shape": "MeshShape([1, 4])",
+    "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59
+    ],
+    "precision": {
+      "config_id": "head_bfp4",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp4"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    }
+  },
+  "pool": {
+    "event": "serving_pool_budget",
+    "synthetic_token_budget": 262144,
+    "target_tokens_per_user": 32768,
+    "prior_turn_reserve_tokens_per_user": 24576,
+    "global_block_size": 64,
+    "max_model_len": 262144,
+    "max_num_seqs": 8,
+    "basis": "normalized hybrid blocks plus prior-turn APC reserve; worker adds live sliding/output reserves"
+  },
+  "source_commits": {
+    "tt-metal": "27ea28bafd0195ba8ce89dd36da722b15fa6fa24",
+    "vllm-tt-plugin": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+    "vllm": null
+  },
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+    "models/autoports/google_gemma_4_31b_it/tt/generator.py": "fe3314365b9294b237f2388cece2962f94b9bf46b9ed44ad8439caf99229cc9c",
+    "models/autoports/google_gemma_4_31b_it/tt/prefill.py": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+    "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py": "a96be7d9612ed94c1bebc020ed3a658aeaab8f39bd9ff5ead25b361c538217ef",
+    "models/autoports/google_gemma_4_31b_it/tt/precision.py": "0abdc4374e699ae20ce26dc43d5f2d9078b0ecb41698aa2d7a0d13a743180699",
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "4580814729e23f84b4b8fc1b952ae6dc3eeb55a7de6b8f13753c940f98fb03b7",
+    "models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "10224839f923f08887ac64ab71121980affa50d7bb542784b234ff19b466e70b",
+    "models/autoports/google_gemma_4_31b_it/tt/functional_decoder.py": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "3129039e1aafc3b12f2c535306a80e40f41fc2d98747ed93768d0bab1323e1c7",
+    "models/autoports/google_gemma_4_31b_it/tt/batched_prefill.py": "ab99ab9c8c54f206d16a56df1dc02bc3c4da14db003ea52d6e45d7f679af8df8",
+    "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py": "4cc22731bf210fdb24040d4ad855c663823132aaf441c50bdefa2c0710dd1ff6"
+  },
+  "startup_log": "2026-11-06 03:47:48.318 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:\nConfig{cache_path=/home/bringup/.cache/ttnn,model_cache_path=/home/bringup/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}\n/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py:24: DeprecationWarning: `vllm.entrypoints.openai.api_server` is deprecated and will likely beunsupported in a future version. Use the corresponding function from `vllm.entrypoints.launchers` instead.\n  warnings.warn(\n/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py:51: DeprecationWarning: The `python -m vllm.entrypoints.openai.api_server` command is deprecated and may be removed in a future release. Please use `vllm server` instead.\n  warnings.warn(\nFound duplicate keys --max-num-seqs\n(APIServer pid=3225) INFO 11-06 03:47:51 [api_utils.py:347] \n(APIServer pid=3225) INFO 11-06 03:47:51 [api_utils.py:347]        \u2588     \u2588     \u2588\u2584   \u2584\u2588\n(APIServer pid=3225) INFO 11-06 03:47:51 [api_utils.py:347]  \u2584\u2584 \u2584\u2588 \u2588     \u2588     \u2588 \u2580\u2584\u2580 \u2588  version 0.31.0\n(APIServer pid=3225) INFO 11-06 03:47:51 [api_utils.py:347]   \u2588\u2584\u2588\u2580 \u2588     \u2588     \u2588     \u2588  model   /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475\n(APIServer pid=3225) INFO 11-06 03:47:51 [api_utils.py:347]    \u2580\u2580  \u2580\u2580\u2580\u2580\u2580 \u2580\u2580\u2580\u2580\u2580 \u2580     \u2580\n(APIServer pid=3225) INFO 11-06 03:47:51 [api_utils.py:347] \n(APIServer pid=3225) INFO 11-06 03:47:51 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(APIServer pid=3225) INFO 11-06 03:47:51 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForCausalLM -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(APIServer pid=3225) INFO 11-06 03:47:51 [api_utils.py:286] non-default args: {'model_tag': '/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475', 'model': '/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475', 'revision': '842da3794eaa0b77d5f08bae87a17459d91ff475', 'tokenizer_revision': '842da3794eaa0b77d5f08bae87a17459d91ff475', 'max_model_len': 262144, 'served_model_name': ['google/gemma-4-31B-it'], 'override_generation_config': {'top_k': 32}, 'block_size': 32, 'enable_prefix_caching': True, 'language_model_only': True, 'max_num_seqs': 8, 'async_scheduling': True, 'additional_config': {'tt': {'sample_on_device_mode': 'all', 'trace_region_size': 134217728, 'fabric_config': 'FABRIC_1D_RING'}}}\n(APIServer pid=3225) INFO 11-06 03:47:51 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(APIServer pid=3225) INFO 11-06 03:47:51 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForCausalLM -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(APIServer pid=3225) WARNING 11-06 03:47:51 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_TT_PLUGIN_ROOT\n(APIServer pid=3225) WARNING 11-06 03:47:51 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_RPC_TIMEOUT\n(APIServer pid=3225) INFO 11-06 03:47:51 [model.py:699] Resolved architecture: Gemma4ForConditionalGeneration\n(APIServer pid=3225) INFO 11-06 03:47:51 [model.py:2109] Using max model len 262144\n(APIServer pid=3225) INFO 11-06 03:47:53 [model.py:917] All limits of multimodal modalities supported by the model are set to 0, running in text-only mode.\n(APIServer pid=3225) INFO 11-06 03:47:53 [model.py:974] Disabled mm_prefix attention mode because multimodal inputs are configuration-disabled. Attention backends without mm_prefix support may now be selected.\n(APIServer pid=3225) INFO 11-06 03:47:53 [config.py:266] Gemma4 model has heterogeneous head dimensions {'sliding_attention': 256, 'full_attention': 512}. FA4 not available, forcing TRITON_ATTN backend.\n(APIServer pid=3225) WARNING 11-06 03:47:53 [vllm.py:1750] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.\n(APIServer pid=3225) INFO 11-06 03:47:53 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['native'])\n(APIServer pid=3225) INFO 11-06 03:47:53 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(APIServer pid=3225) INFO 11-06 03:47:53 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForCausalLM -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(APIServer pid=3225) INFO 11-06 03:47:53 [tt/platform.py:276] Chunked prefill enabled for TT model Gemma4ForCausalLM (models.autoports.google_gemma_4_31b_it.tt.generator_vllm): max_num_batched_tokens=2048, long_prefill_token_threshold=0.\n(APIServer pid=3225) INFO 11-06 03:47:53 [tt/platform.py:230] Decode interleave enabled: at most 2 consecutive prefill step(s) before 1 decode-only step(s).\n(APIServer pid=3225) INFO 11-06 03:47:53 [tt/platform.py:2214] Automatic prefix caching is enabled\n(APIServer pid=3225) INFO 11-06 03:47:53 [compilation.py:331] Enabled custom fusions: norm_quant, act_quant\n(APIServer pid=3225) WARNING 11-06 03:47:53 [model.py:900] Model /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475 is treated as multimodal but has no registered multimodal processor; running in text-only mode.\n2026-11-06 03:47:57.441 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:\nConfig{cache_path=/home/bringup/.cache/ttnn,model_cache_path=/home/bringup/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForCausalLM -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(EngineCore pid=3279) INFO 11-06 03:48:00 [core.py:129] Initializing a V1 LLM engine (v0.31.0) with config: model='/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475', speculative_config=None, tokenizer='/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475', skip_tokenizer_init=False, tokenizer_mode=auto, revision=842da3794eaa0b77d5f08bae87a17459d91ff475, tokenizer_revision=842da3794eaa0b77d5f08bae87a17459d91ff475, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=262144, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=True, quantization=None, quantization_config=None, enforce_eager=False, aux_output_config=AuxOutputConfig(enable_return_routed_experts=False, max_bytes=None), kv_cache_dtype=auto, device_config=None, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=True, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, per_request_spec_decode_metrics='none', kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=0, served_model_name=google/gemma-4-31B-it, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'eager', 'custom_ops': ['all'], 'ir_enable_torch_wrap': False, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen4_exp_ple_short_conv', 'vllm::qwen4_exp_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::gdn_attention_core_xpu', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::deepseek_v4_attention', 'vllm::hpc_rope_norm_forward', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': None, 'compile_ranges_endpoints': [2048], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'size_asserts': False, 'alignment_asserts': False, 'scalar_asserts': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, moe_backend='auto', sparse_indexer_topk_backend='auto', linear_backend='auto', linear_backend_per_quant=None)\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForCausalLM -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForCausalLM -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:276] Chunked prefill enabled for TT model Gemma4ForCausalLM (models.autoports.google_gemma_4_31b_it.tt.generator_vllm): max_num_batched_tokens=2048, long_prefill_token_threshold=0.\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:230] Decode interleave enabled: at most 2 consecutive prefill step(s) before 1 decode-only step(s).\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/platform.py:2214] Automatic prefix caching is enabled\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/worker.py:296] TT worker standard-DP binding: data_parallel_index=0 data_parallel_rank_local=0 TT_VISIBLE_DEVICES=None MESH_DEVICE=P300x2\n2026-11-06 03:48:00.331 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)\n2026-11-06 03:48:00.331 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)\n2026-11-06 03:48:00.331 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)\n2026-11-06 03:48:00.331 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)\n2026-11-06 03:48:00.337 | info     |             UMD | Established firmware bundle version: 19.17.0 (topology_discovery.cpp:695)\n2026-11-06 03:48:00.338 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)\n2026-11-06 03:48:00.418 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)\n2026-11-06 03:48:00.418 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)\n2026-11-06 03:48:00.418 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)\n2026-11-06 03:48:00.418 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)\n2026-11-06 03:48:00.419 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)\n2026-11-06 03:48:00.422 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/worker.py:1108] Attempting to open mesh device with grid shape (1, 4)\n(EngineCore pid=3279) INFO 11-06 03:48:00 [tt/worker.py:1021] Setting fabric config: {'config': FabricConfig.FABRIC_1D_RING, 'reliability_mode': FabricReliabilityMode.STRICT_INIT}\n2026-11-06 03:48:00.456 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)\n2026-11-06 03:48:00.456 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)\n2026-11-06 03:48:00.456 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) \u2014 falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)\n2026-11-06 03:48:00.456 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)\n2026-11-06 03:48:00.525 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)\n2026-11-06 03:48:00.549 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)\n2026-11-06 03:48:00.549 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)\n(EngineCore pid=3279) INFO 11-06 03:48:01 [tt/worker.py:1122] multidevice with 4 devices and grid (1, 4) is created\n{\"event\": \"serving_pool_budget\", \"synthetic_token_budget\": 262144, \"target_tokens_per_user\": 32768, \"prior_turn_reserve_tokens_per_user\": 24576, \"global_block_size\": 64, \"max_model_len\": 262144, \"max_num_seqs\": 8, \"basis\": \"normalized hybrid blocks plus prior-turn APC reserve; worker adds live sliding/output reserves\"}\n(EngineCore pid=3279) INFO 11-06 03:48:01 [tt/worker.py:768] Getting max_tokens_all_users=262144 for number of blocks in KV cache from generator '<class 'models.autoports.google_gemma_4_31b_it.tt.generator_vllm.Gemma4ForCausalLM'>'.\n(EngineCore pid=3279) INFO 11-06 03:48:01 [tt/model_runner.py:403] TTModelRunner: trace_mode=all, sample_on_device_mode=all, enable_model_warmup=True\nLOAD_LAYER 0\nLOAD_LAYER 1\nLOAD_LAYER 2\nLOAD_LAYER 3\nLOAD_LAYER 4\nLOAD_LAYER 5\nLOAD_LAYER 6\nLOAD_LAYER 7\nLOAD_LAYER 8\nLOAD_LAYER 9\nLOAD_LAYER 10\nLOAD_LAYER 11\nLOAD_LAYER 12\nLOAD_LAYER 13\nLOAD_LAYER 14\nLOAD_LAYER 15\nLOAD_LAYER 16\nLOAD_LAYER 17\nLOAD_LAYER 18\nLOAD_LAYER 19\nLOAD_LAYER 20\nLOAD_LAYER 21\nLOAD_LAYER 22\nLOAD_LAYER 23\nLOAD_LAYER 24\nLOAD_LAYER 25\nLOAD_LAYER 26\nLOAD_LAYER 27\nLOAD_LAYER 28\nLOAD_LAYER 29\nLOAD_LAYER 30\nLOAD_LAYER 31\nLOAD_LAYER 32\nLOAD_LAYER 33\nLOAD_LAYER 34\nLOAD_LAYER 35\nLOAD_LAYER 36\nLOAD_LAYER 37\nLOAD_LAYER 38\nLOAD_LAYER 39\nLOAD_LAYER 40\nLOAD_LAYER 41\nLOAD_LAYER 42\nLOAD_LAYER 43\nLOAD_LAYER 44\nLOAD_LAYER 45\nLOAD_LAYER 46\nLOAD_LAYER 47\nLOAD_LAYER 48\nLOAD_LAYER 49\nLOAD_LAYER 50\nLOAD_LAYER 51\nLOAD_LAYER 52\nLOAD_LAYER 53\nLOAD_LAYER 54\nLOAD_LAYER 55\nLOAD_LAYER 56\nLOAD_LAYER 57\nLOAD_LAYER 58\nLOAD_LAYER 59\n{\"event\": \"autoport_registration\", \"class\": \"models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\", \"module_file\": \"/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py\", \"device_ids\": [0, 1, 2, 3], \"mesh_shape\": \"MeshShape([1, 4])\", \"layers\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59], \"precision\": {\"config_id\": \"head_bfp4\", \"weight_groups\": {\"attention\": \"bfp4\", \"mlp\": \"bfp4\", \"down\": \"bfp4\", \"lm_head\": \"bfp4\"}, \"layer_exceptions\": {}, \"compute_fidelities\": {\"attention\": \"LoFi\", \"mlp\": \"LoFi\", \"down\": \"LoFi\", \"lm_head\": \"LoFi\"}, \"activation_dtype\": \"bfloat8_b\", \"residual_dtype\": \"bfloat16\", \"ccl_dtype\": {\"prefill\": \"bfloat8_b\", \"decode\": \"bfloat16\"}, \"kv_cache_dtype\": \"bfloat8_b\", \"logits_dtype\": \"bfloat16\", \"sampling_dtype\": \"bfloat16\", \"embedding_dtype\": \"bfloat16\", \"norm_dtype\": \"bfloat16\", \"max_seq_len\": 262144}}\n(EngineCore pid=3279) INFO 11-06 03:50:11 [utils.py:343] Using LBNHC KV cache layout.\n(EngineCore pid=3279) INFO 11-06 03:50:11 [kv_cache_utils.py:2772] Overriding num_gpu_blocks=10248 with num_gpu_blocks_override=10248\n(EngineCore pid=3279) INFO 11-06 03:50:11 [kv_cache_utils.py:2464] TT KV cache size: 548,143 tokens, Maximum concurrency for 262,144 tokens per request: 2.09x\n{\"event\": \"serving_memory\", \"phase\": \"before_serving_cache\", \"allocator\": {\"num_banks\": 8, \"total_bytes_allocated_per_bank\": 802478336, \"total_bytes_per_bank\": 4255564160, \"largest_contiguous_bytes_free_per_bank\": 3431885696}, \"program_cache_entries\": 20, \"generator_counters\": null}\n{\"event\": \"serving_memory\", \"phase\": \"after_serving_cache\", \"allocator\": {\"num_banks\": 8, \"total_bytes_allocated_per_bank\": 1696430336, \"total_bytes_per_bank\": 4255564160, \"largest_contiguous_bytes_free_per_bank\": 2539899776}, \"program_cache_entries\": 20, \"generator_counters\": null}\n{\"event\": \"serving_cache_allocation\", \"unique_buffers\": 10, \"layers\": [{\"layer\": 0, \"tensor_idx\": 0, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 1, \"tensor_idx\": 0, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 2, \"tensor_idx\": 0, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 3, \"tensor_idx\": 0, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 4, \"tensor_idx\": 0, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 5, \"tensor_idx\": 0, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 6, \"tensor_idx\": 1, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 7, \"tensor_idx\": 1, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 8, \"tensor_idx\": 1, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 9, \"tensor_idx\": 1, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 10, \"tensor_idx\": 1, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 11, \"tensor_idx\": 1, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 12, \"tensor_idx\": 2, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 13, \"tensor_idx\": 2, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 14, \"tensor_idx\": 2, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 15, \"tensor_idx\": 2, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 16, \"tensor_idx\": 2, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 17, \"tensor_idx\": 2, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 18, \"tensor_idx\": 3, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 19, \"tensor_idx\": 3, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 20, \"tensor_idx\": 3, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 21, \"tensor_idx\": 3, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 22, \"tensor_idx\": 3, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 23, \"tensor_idx\": 3, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 24, \"tensor_idx\": 4, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 25, \"tensor_idx\": 4, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 26, \"tensor_idx\": 4, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 27, \"tensor_idx\": 4, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 28, \"tensor_idx\": 4, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 29, \"tensor_idx\": 4, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 30, \"tensor_idx\": 5, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 31, \"tensor_idx\": 5, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 32, \"tensor_idx\": 5, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 33, \"tensor_idx\": 5, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 34, \"tensor_idx\": 5, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 35, \"tensor_idx\": 5, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 36, \"tensor_idx\": 6, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 37, \"tensor_idx\": 6, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 38, \"tensor_idx\": 6, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 39, \"tensor_idx\": 6, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 40, \"tensor_idx\": 6, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 41, \"tensor_idx\": 6, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 42, \"tensor_idx\": 7, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 43, \"tensor_idx\": 7, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 44, \"tensor_idx\": 7, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 45, \"tensor_idx\": 7, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 46, \"tensor_idx\": 7, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 47, \"tensor_idx\": 7, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 48, \"tensor_idx\": 8, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 49, \"tensor_idx\": 8, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 50, \"tensor_idx\": 8, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 51, \"tensor_idx\": 8, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 52, \"tensor_idx\": 8, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 53, \"tensor_idx\": 8, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}, {\"layer\": 54, \"tensor_idx\": 9, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 55, \"tensor_idx\": 9, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 56, \"tensor_idx\": 9, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 57, \"tensor_idx\": 9, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 58, \"tensor_idx\": 9, \"scheduler_shape\": [10248, 4, 32, 256], \"physical_shape\": [10248, 4, 32, 256]}, {\"layer\": 59, \"tensor_idx\": 9, \"scheduler_shape\": [10248, 1, 64, 512], \"physical_shape\": [20496, 1, 32, 512]}]}\nWARM_PREFILL 32\nWARM_PREFILL 64\nWARM_PREFILL 96\nWARM_PREFILL 128\nWARM_PREFILL 160\nWARM_PREFILL 192\nWARM_PREFILL 224\nWARM_PREFILL 256\nWARM_PREFILL 288\nWARM_PREFILL 320\nWARM_PREFILL 352\nWARM_PREFILL 384\nWARM_PREFILL 416\nWARM_PREFILL 448\nWARM_PREFILL 480\nWARM_PREFILL 512\nWARM_PREFILL 544\nWARM_PREFILL 576\nWARM_PREFILL 608\nWARM_PREFILL 640\nWARM_PREFILL 672\nWARM_PREFILL 704\nWARM_PREFILL 736\nWARM_PREFILL 768\nWARM_PREFILL 800\nWARM_PREFILL 832\nWARM_PREFILL 864\nWARM_PREFILL 896\nWARM_PREFILL 928\nWARM_PREFILL 960\nWARM_PREFILL 992\nWARM_PREFILL 1024\nWARM_BATCHED_PREFILL 2 32\nWARM_BATCHED_PREFILL 4 32\nWARM_BATCHED_PREFILL 8 32\nWARM_BATCHED_PREFILL 2 64\nWARM_BATCHED_PREFILL 4 64\nWARM_BATCHED_PREFILL 8 64\nWARM_BATCHED_PREFILL 2 96\nWARM_BATCHED_PREFILL 4 96\nWARM_BATCHED_PREFILL 8 96\nWARM_BATCHED_PREFILL 2 128\nWARM_BATCHED_PREFILL 4 128\nWARM_BATCHED_PREFILL 8 128\n2026-11-06 03:50:42.958 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region for them. (ccl_common.cpp:175)\n2026-11-06 03:50:42.959 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:82)\n2026-11-06 03:50:42.960 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region for them. (ccl_common.cpp:175)\n2026-11-06 03:50:43.403 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:142)\n{\"event\": \"generator_trace_prepare\", \"batch\": 8, \"layers\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59], \"cache_shapes\": [[10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [10248, 4, 32, 256], [20496, 1, 32, 512]], \"prefill_buckets\": [32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832, 864, 896, 928, 960, 992, 1024], \"batched_prefill_buckets\": [[2, 32], [4, 32], [8, 32], [2, 64], [4, 64], [8, 64], [2, 96], [4, 96], [8, 96], [2, 128], [4, 128], [8, 128]], \"batched_prefill_bytes_per_device\": 33122304, \"traces\": {\"decode\": \"MeshTraceId(0)\", \"sample\": \"MeshTraceId(1)\", \"buffered_sample\": \"MeshTraceId(2)\"}, \"capture_seconds\": {\"prefill\": 0.0, \"decode\": 0.18761731800623238, \"sample\": 0.0046637109480798244, \"buffered_sample\": 0.010093491058796644}, \"warmup_seconds\": {\"prefill\": 10.542895192978904, \"decode\": 0.24154945299960673, \"sample\": 0.05619800998829305}, \"timing_basis\": \"host wall including compilation and synchronized warmup; not device timings\", \"prefill_execution\": \"eager prepared buckets; no prefill traces\", \"programs_before\": 32, \"programs_warmed\": 2983, \"programs_after_capture\": 2983, \"captures\": 3, \"retirements\": 0, \"preparation_seconds\": 11.256106532993726}\n{\"event\": \"serving_memory\", \"phase\": \"after_serving_prepare\", \"allocator\": {\"num_banks\": 8, \"total_bytes_allocated_per_bank\": 1711566848, \"total_bytes_per_bank\": 4255564160, \"largest_contiguous_bytes_free_per_bank\": 2531556224}, \"program_cache_entries\": 2983, \"generator_counters\": {\"model_replays\": 0, \"sample_replays\": 0, \"token_refreshes\": 0, \"position_refreshes\": 0, \"page_refreshes\": 0, \"readbacks\": 0, \"captures\": 3}}\n(EngineCore pid=3279) INFO 11-06 03:50:43 [torch_utils.py:286] Reducing Torch threads from 8 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.\n(EngineCore pid=3279) INFO 11-06 03:50:43 [core.py:373] init engine (profile, create kv cache, warmup model) took 31.71 s (compilation: 11.26 s)\n(EngineCore pid=3279) WARNING 11-06 03:50:45 [scheduler.py:245] Using custom scheduler class vllm_tt_plugin.scheduler.TTScheduler. This scheduler interface is not public and compatibility may not be maintained. If you have subclassed Scheduler instead of AsyncScheduler, you will see degraded performance due to async scheduling being disabled.\n(EngineCore pid=3279) INFO 11-06 03:50:45 [kv_cache_utils.py:772] kv cache group sizes [32, 32, 32, 32, 32, 64]\n(EngineCore pid=3279) INFO 11-06 03:50:45 [kv_cache_utils.py:773] kv lcm block sizes 64\n(EngineCore pid=3279) WARNING 11-06 03:50:45 [model.py:900] Model /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475 is treated as multimodal but has no registered multimodal processor; running in text-only mode.\n(EngineCore pid=3279) INFO 11-06 03:50:45 [tt/scheduler.py:377] TT scheduler: partial prefill chunks end on 128-token boundaries\n(EngineCore pid=3279) WARNING 11-06 03:50:45 [vllm.py:1750] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.\n(EngineCore pid=3279) INFO 11-06 03:50:45 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['native'])\n(EngineCore pid=3279) INFO 11-06 03:50:45 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(EngineCore pid=3279) INFO 11-06 03:50:45 [tt/platform.py:1401] Applied TT_MODEL_CLASS_OVERRIDES: TTGemma4ForCausalLM -> models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM\n(EngineCore pid=3279) INFO 11-06 03:50:45 [tt/platform.py:276] Chunked prefill enabled for TT model Gemma4ForCausalLM (models.autoports.google_gemma_4_31b_it.tt.generator_vllm): max_num_batched_tokens=2048, long_prefill_token_threshold=0.\n(EngineCore pid=3279) INFO 11-06 03:50:45 [tt/platform.py:230] Decode interleave enabled: at most 2 consecutive prefill step(s) before 1 decode-only step(s).\n(EngineCore pid=3279) INFO 11-06 03:50:45 [tt/platform.py:2214] Automatic prefix caching is enabled\n(EngineCore pid=3279) INFO 11-06 03:50:45 [compilation.py:331] Enabled custom fusions: norm_quant, act_quant\n(APIServer pid=3225) INFO 11-06 03:50:45 [entry.py:132] Supported tasks: ['generate']\n(APIServer pid=3225) WARNING 11-06 03:50:45 [__init__.py:44] SECURITY WARNING: Development endpoints are enabled! This should NOT be used in production!\n(APIServer pid=3225) INFO 11-06 03:50:45 [factories.py:76] Scale-out endpoints are disabled. Set --enable-scale-out to enable them.\n(APIServer pid=3225) INFO 11-06 03:50:48 [hf.py:646] Detected the chat template content format to be 'openai'. You can set `--chat-template-content-format` to override this.\n(APIServer pid=3225) WARNING 11-06 03:50:48 [model.py:1850] Default vLLM sampling parameters have been overridden by the model's `generation_config.json`: `{'temperature': 1.0, 'top_k': 32, 'top_p': 0.95}`. If this is not intended, please relaunch vLLM instance with `--generation-config vllm`.\n(APIServer pid=3225) INFO 11-06 03:50:48 [entry.py:136] Starting vLLM server on http://0.0.0.0:8000\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:60] Available routes are:\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /openapi.json, Methods: GET, HEAD\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /docs, Methods: GET, HEAD\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /docs/oauth2-redirect, Methods: GET, HEAD\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /redoc, Methods: GET, HEAD\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /load, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /version, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /kv_event_sources, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /health, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /metrics, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /tokenize, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /detokenize, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/models, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /ping, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /ping, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /invocations, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /reset_prefix_cache, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /reset_mm_cache, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /reset_encoder_cache, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /pause, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /resume, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /abort_requests, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /is_paused, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /init_weight_transfer_engine, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /start_weight_update, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /start_draft_weight_update, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /update_weights, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /finish_weight_update, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /update_weight_version, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /weight_info, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /get_world_size, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /collective_rpc, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /server_info, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /sleep, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /release_kv_cache_memory, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /wake_up, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /is_sleeping, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/chat/completions, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/chat/completions/batch, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/responses, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/responses/{response_id}, Methods: GET\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/responses/{response_id}/cancel, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/completions, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/messages, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /v1/messages/count_tokens, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /generative_scoring, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /scale_elastic_ep, Methods: POST\n(APIServer pid=3225) INFO 11-06 03:50:48 [launcher.py:69] Route: /is_scaling_elastic_ep, Methods: POST\nINFO:     Started server process [3225]\nINFO:     Waiting for application startup.\nINFO:     Application startup complete.\nINFO:     127.0.0.1:38370 - \"GET /health HTTP/1.1\" 200 OK\n",
+  "device_owners": [
+    {
+      "pid": 3279,
+      "start_ticks": "88059885",
+      "ppid": 3225,
+      "command": [
+        "VLLM::EngineCore"
+      ]
+    }
+  ],
+  "vllm_package": {
+    "version": "0.31.0+empty",
+    "direct_url": null
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "setup_started_unix": 1793936009.5635881,
+  "previous_attempt": "attempts/incomplete-96fb930d",
+  "operator_decisions": [
+    4,
+    5,
+    6
+  ],
+  "supplied_server": null,
+  "prior_startup_seconds": null
+}

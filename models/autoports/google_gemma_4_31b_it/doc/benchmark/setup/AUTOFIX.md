@@ -7,3 +7,7 @@ Hypotheses checked: direct adapter return timers (rejected: decode enqueue, not 
 Permitted changes: observed autoport module path and device IDs in startup registration; an owned server-selection hook; a fail-closed collector readiness check; separate latency-only evidence collection within the original stage deadline. No partial phase timing is represented as full_phase_wall_time. A complete collector remains unresolved, with a proposed optional observer requiring operator authorization.
 
 Client build failures were repaired with separate environments: upstream lm-eval0.4.13/transformers4.57.6 for accuracy; vLLM0.26.0 empty target for performance, isolated package with existing server dependency packages available. CLI help passes. GPQA dataset authentication is unavailable; no replacement documents or fabricated scores.
+
+## Continuation under operator decisions 4–6
+
+The earlier blockers are superseded by the operator-approved consecutive-completion attribution and GPQA noncoverage. See [resolved repair](AUTOFIX-resolved.md), the fresh run/ evidence and archived previous attempt. PC-04 remains unapplied.

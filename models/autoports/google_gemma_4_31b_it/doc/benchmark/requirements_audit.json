@@ -1,153 +1,34 @@
 {
-  "status": "incomplete",
-  "observed_unix": 1793934968.3329604,
-  "prior_goal_turn": "progress: four latency profiles, report, checks and telemetry completed",
-  "hf_credential_available": false,
-  "requirements": [
-    {
-      "requirement": "Selected evals, frozen subsets, scores and raw responses",
-      "status": "incomplete",
-      "evidence": [
-        "protocol.json",
-        "run/manifest.json",
-        "setup/prepare.log"
-      ],
-      "detail": "GPQA128/198 frozen but no dataset access or scored responses; two tool suites recorded not covered by lm-eval."
-    },
-    {
-      "requirement": "Native template exactly once and intended generation/scoring",
-      "status": "unverified",
-      "evidence": [
-        "run/tokenizer_protocol.json",
-        "protocol.json"
-      ],
-      "detail": "Intended policy recorded; no accuracy requests executed. Release recipe and client timeout differences remain."
-    },
-    {
-      "requirement": "Warmed4096/128 profiles at slots/concurrency1,8,16,32",
-      "status": "proved_latency_only",
-      "evidence": [
-        "run/partial_validation.json",
-        "run/partial-performance/summary.json"
-      ],
-      "detail": {
-        "32": {
-          "completed": 96,
-          "slots": 32,
-          "concurrency": 32
-        },
-        "16": {
-          "completed": 48,
-          "slots": 16,
-          "concurrency": 16
-        },
-        "8": {
-          "completed": 24,
-          "slots": 8,
-          "concurrency": 8
-        },
-        "1": {
-          "completed": 8,
-          "slots": 1,
-          "concurrency": 1
-        }
-      }
-    },
-    {
-      "requirement": "Full-phase prefill FLOPs and decode DRAM accounting, collected before shutdown",
-      "status": "missing",
-      "evidence": [
-        "setup/AUTODEBUG.md",
-        "setup/completion_export_review.md",
-        "run/roofline-b32-unavailable.json"
-      ],
-      "detail": "Cannot reconstruct missing completion events from retained latency data. Need authorized observer implementation, work model and fresh profiles; no runtime exception received."
-    },
-    {
-      "requirement": "Complete client stage within7200s",
-      "status": "not_achieved",
-      "evidence": [
-        "stage_timing.json",
-        "run/summary.json",
-        "bringup/artifacts/benchmark-final-audit.json"
-      ],
-      "detail": "Original incomplete attempt and final audit used1440.03s. This does not prove a complete stage run. Any future rerun must retain this attempt and use its own explicitly recorded run/deadline, with launches and reporting counted."
-    },
-    {
-      "requirement": "Target workload alongside profiles and gaps",
-      "status": "proved",
-      "evidence": [
-        "run/REPORT.md",
-        "../agentic_serving.json"
-      ]
-    },
-    {
-      "requirement": "Report, identity, notes, manifest, configuration and raw artifacts",
-      "status": "proved_artifact_presence",
-      "evidence": [
-        "run/REPORT.md",
-        "identity.json",
-        "RUN_NOTES.md",
-        "run/manifest.json",
-        "run/run_config.json",
-        "run/hook_normalization.json"
-      ]
-    },
-    {
-      "requirement": "Imported autoport,60layers,revisions,precision,hardware,source commits and launches",
-      "status": "partial",
-      "evidence": [
-        "identity.json",
-        "run/partial-performance/configuration-b1.json",
-        "setup/client_versions.json"
-      ],
-      "detail": "Autoport/layers/revisions/precision/mesh/launches proved. Installed server vLLM source SHA unavailable; package version/tag alone is insufficient provenance."
-    },
-    {
-      "requirement": "Evidence and context checks",
-      "status": "executed_not_passed",
-      "evidence": [
-        "run/checks.json"
-      ],
-      "detail": {
-        "stage_check": {
-          "exit_code": 2,
-          "log": "../setup/stage-check.log",
-          "status": "critical_incomplete",
-          "explanation": "Original runner status failed at required roofline readiness; all latency work and reporting are below7200s. Checker generic wording mentions budget/one hour, but this is not a measured timeout."
-        },
-        "context_check": {
-          "exit_code": 0,
-          "status": "pass",
-          "log": "../setup/context-final.log"
-        },
-        "partial_latency_and_identity": {
-          "status": "pass",
-          "evidence": "partial_validation.json"
-        },
-        "accuracy_verdict": null
-      }
-    },
-    {
-      "requirement": "Local commits, no push, owned-only cleanup",
-      "status": "proved",
-      "evidence": [
-        "commit_manifest.json",
-        "run/cleanup.json",
-        "bringup/artifacts/benchmark-final-audit.json"
-      ],
-      "detail": {
-        "device_owners_now": [],
-        "plugin_runtime_diff": ""
-      }
-    },
-    {
-      "requirement": "Compact exact-ID telemetry packet",
-      "status": "proved",
-      "evidence": [
-        "bringup/artifacts/multigoal-runs/v3-20261105T172350Z/telemetry/packets/96fb930d-2d63-4b49-a4d5-6063d2f966e8.json"
-      ]
-    }
+  "measurement_status": "completed",
+  "accuracy_verdict": null,
+  "coverage": "All requested suites explicitly recorded not covered; operator GPQA exemption; tool suites deferred.",
+  "profiles": [
+    1,
+    8,
+    16,
+    32
   ],
-  "next_required_decision": "Operator runtime-observer exception requested; no change authorized or applied."
+  "phase_accounting": "complete for all four; exact token populations; live collector before stop",
+  "context_contract_sha256": "e6d2ccde61c5dec0f84d3810e8e9d813cce76c8ad18589622391ebc07aa1c6c7",
+  "checks": {
+    "corrected_benchmark_evidence": {
+      "status": "passed",
+      "evidence": "evidence_check.json"
+    },
+    "context": {
+      "status": "passed",
+      "full_context": 262144,
+      "evidence": "../setup/resumed-context-check.log"
+    },
+    "installed_outer_check": {
+      "status": "failed",
+      "exit_code": 2,
+      "reason": "Obsolete mandatory nonempty accuracy conflicts with operator decision5. Generic correction is prepared; read-only exception requested, not granted.",
+      "evidence": "../setup/resumed-outer-check.log"
+    },
+    "accuracy_verdict": null
+  },
+  "release_row": "run/release-matrix/128-128-c1.json",
+  "telemetry_packet": "bringup/artifacts/multigoal-runs/v3-20261105T172350Z/telemetry/packets/da3df348-3260-43bc-b199-d27bb7dcfaca.json",
+  "remaining_failure": "Installed outer checker requires accuracy despite explicit operator exemption; generic patch pending requested read-only exception."
 }

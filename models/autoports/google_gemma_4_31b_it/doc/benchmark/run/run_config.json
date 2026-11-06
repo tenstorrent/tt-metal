@@ -2,9 +2,7 @@
   "model": "google/gemma-4-31B-it",
   "base_url": "http://127.0.0.1:8000",
   "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/manifest.json",
-  "tasks": [
-    "gpqa_diamond_cot_zeroshot"
-  ],
+  "tasks": [],
   "concurrencies": [
     1,
     8,
@@ -35,14 +33,30 @@
       }
     }
   },
-  "references": {
-    "gpqa_diamond_cot_zeroshot": {
-      "exact_match,strict-match": {
-        "score": 84.3,
-        "source_url": "https://ai.google.dev/gemma/docs/core/model_card_4",
-        "protocol_notes": "Published thinking score; upstream zero-shot CoT scorer and frozen128/198 subset differ from release r1_gpqa_diamond; no accuracy measured."
-      }
+  "references": {},
+  "source_manifest": "/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/profiles/ci-v1-reasoning.json",
+  "metrics": {},
+  "benchmark_command": [
+    "python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_client.py"
+  ],
+  "not_covered": {
+    "r1_gpqa_diamond": {
+      "reason": "Gated dataset credential unavailable; operator explicitly authorizes local noncoverage (AGENTS.md decision 5).",
+      "authority": "AGENTS.md decision 5"
+    },
+    "swe_bench_verified": {
+      "reason": "Tool-use suite requires goal12 harness, not lm-eval.",
+      "authority": "benchmark-model harness coverage rule"
+    },
+    "terminal_bench_2_1": {
+      "reason": "Terminal/tool-use suite requires goal12 harness, not lm-eval. Release model entry inspected names terminal_bench_2, not2.1; no substitution.",
+      "authority": "benchmark-model harness coverage rule"
     }
   },
-  "source_manifest": "/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/profiles/ci-v1-reasoning.json"
+  "selected_evals": [
+    "r1_gpqa_diamond",
+    "swe_bench_verified",
+    "terminal_bench_2_1"
+  ]
 }

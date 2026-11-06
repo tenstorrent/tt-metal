@@ -1,20 +1,7 @@
 {
-  "status": "blocked",
-  "items": [
-    {
-      "id": "phase_accounting",
-      "reason": "Stock plugin has no lossless post-sampling full-phase export; runtime/interface modifications require operator exception.",
-      "evidence": "setup/completion_export_review.md",
-      "proposal": "setup/PC-04-completion-observer.md"
-    },
-    {
-      "id": "gpqa_dataset",
-      "reason": "Dataset authentication unavailable. No HF token in configured HF_HOME.",
-      "evidence": "setup/prepare.log"
-    }
-  ],
-  "latency_collection": "completed all four profiles; owned servers stopped",
-  "accuracy_verdict": null,
-  "runtime_observer_decision": "pending explicit operator reply",
-  "completion_audit": "requirements_audit.json"
+  "status": "resolved",
+  "resolution": "AGENTS.md decisions 4–6: model-owned consecutive completion boundaries accepted; GPQA local noncoverage authorized; fresh profiles authorized.",
+  "prior_evidence": "attempts/incomplete-96fb930d/blocked.json",
+  "plugin_completion_patch": "rejected and unapplied",
+  "remaining_integration_issue": "Installed outer checker has stale budget/nonempty-accuracy assumptions; corrected local checker and generic source patch retained."
 }

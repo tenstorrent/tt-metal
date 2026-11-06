@@ -1,0 +1,8 @@
+{
+  "runtime_source_commit": "9ef69179548ad879b35cdb5edc17a0138cdfbc23",
+  "stage10_handoff_commit": "6d7f2481460e4f48ec21a4d92ee84fa588936157",
+  "plugin_local_commit": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+  "plugin_runtime_base": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "publication": "none; local only",
+  "final_evidence_commit_log": "bringup/artifacts/benchmark-evidence-commit.log"
+}

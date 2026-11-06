@@ -35,7 +35,7 @@
   "layer_count": 60,
   "configured_layer_count": 60,
   "source_commits": {
-    "tt-metal": "9ef69179548ad879b35cdb5edc17a0138cdfbc23",
+    "tt-metal": "27ea28bafd0195ba8ce89dd36da722b15fa6fa24",
     "vllm-tt-plugin": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
     "vllm": null
   },
@@ -78,9 +78,9 @@
   "phase_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/phase-b32.jsonl",
   "server_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b32/server.log",
   "configuration_evidence": "configuration-b32.json",
-  "configuration_evidence_sha256": "6cceb47856890459e853a46c441f68659d54ee74f6076ed23d6c6fa4dfc3dd47",
-  "startup_seconds": 226.27969185390975,
-  "pid": 216694,
+  "configuration_evidence_sha256": "13b746945c29b819afd58e0b6118dc0029f5730a5f3fecd655bb0c42ed53a2ff",
+  "startup_seconds": 228.3012710949406,
+  "pid": 2222,
   "module_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
   "device_ids": [
     0,

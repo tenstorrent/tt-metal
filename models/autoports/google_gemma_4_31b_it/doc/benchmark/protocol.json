@@ -14,7 +14,7 @@
       "completed_samples": 0,
       "dataset_samples": 198,
       "status": "not_run",
-      "reason": "Gated Idavidrein/gpqa dataset download requires unavailable HF authentication; roofline readiness also fails before accuracy.",
+      "reason": "Gated dataset credential unavailable; operator explicitly authorizes local noncoverage (AGENTS.md decision 5).",
       "manifest_sha256": "3dd6b5fe3878c8138817180626bf5f551ae6a966d11777d3eac935db695fcc38",
       "num_fewshot": 0,
       "scorer": "upstream lm-eval0.4.13 GPQA zero-shot CoT exact-match filters; not release r1 extractor",

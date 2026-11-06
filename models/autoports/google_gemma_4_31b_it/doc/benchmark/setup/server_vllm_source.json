@@ -1,0 +1,42 @@
+{
+  "upstream_url": "https://github.com/vllm-project/vllm",
+  "upstream_tag": "v0.31.0",
+  "verified_python_source_commit": "db9527a46873454610df6dbedf79a36d6bf1a7f6",
+  "source_checkout": "bringup/artifacts/vllm-server-source-v0.31.0",
+  "installed_package": "python_env/lib/python3.10/site-packages/vllm",
+  "method": "SHA-256 byte comparison of every upstream vllm/**/*.py with installed counterpart; no package imports",
+  "source_python_files": 2569,
+  "installed_python_files": 2570,
+  "matching_files": 2569,
+  "different_files": [],
+  "missing_installed_files": [],
+  "installed_only_files": {
+    "_version.py": "a2bc57d342164e8094d32b682bad44e638cff2e3fc72e21bf0ba1a11b52d236c"
+  },
+  "source_python_manifest_sha256": "ac0ff06783b96b678cdf6f498f344ee608711a29f2020b148e38659e3cf7570d",
+  "installed_python_manifest_sha256": "eadf37a3d266dab12a8d4fc79b2aa5b124ad229da2434af2f9798fca54796fe5",
+  "matching_installed_subset_manifest_sha256": "ac0ff06783b96b678cdf6f498f344ee608711a29f2020b148e38659e3cf7570d",
+  "manifest_encoding": "JSON mapping relative path to file SHA-256; sorted keys; separators comma and colon; UTF-8; no newline",
+  "relevant_file_sha256": {
+    "entrypoints/openai/api_server.py": "470ff555bdc19f8e17edf4ee7b6ec3f49ff5af0f773e2a7f91bab536e2239109",
+    "v1/engine/core.py": "f116962c35d9d312b20b0b76c34a8cdaa6d3f1d31f2036db4e123957d2d1555b",
+    "v1/engine/output_processor.py": "c72d0149e18d6da71d53e23b6550d09310af6917523fef6e282b0907d36b8d54",
+    "v1/metrics/stats.py": "b96cabb8f8e692c6c71f30cc2e6793fa86b112bb3ab4a27f6dcb22f3a72e4d68",
+    "v1/core/sched/scheduler.py": "f820bee4f42b878b262a30f3728a97d7413477b2a277748e20f2528ac2ec2f2a",
+    "v1/outputs.py": "a4c73e7125781c339d42bdb7f8fdd3324a489742a4588d8c1b1638aa335fd138"
+  },
+  "wheel_distribution": "vllm-0.31.0+empty",
+  "wheel_build_commit": null,
+  "limits": [
+    "Python content corresponds exactly to the named upstream commit; this does not establish wheel build provenance or a uniquely possible historical source commit.",
+    "Generated installed _version.py is absent upstream and declares version 0.31.0 with commit_id None.",
+    "Compiled artifacts, non-Python assets, dependencies and build options were not compared.",
+    "Server import identity is established separately by runtime launch evidence; comparison does not import vllm."
+  ],
+  "comparison_script": "models/autoports/google_gemma_4_31b_it/doc/benchmark/setup/compare_server_vllm_source.py",
+  "comparison_script_sha256": "f42cdbb959586365861029074a0e33622bc130aee00619aeb969268905a430fb",
+  "source_acquisition_command": "timeout 120 git clone --depth 1 --branch v0.31.0 --filter=blob:none --single-branch https://github.com/vllm-project/vllm.git bringup/artifacts/vllm-server-source-v0.31.0",
+  "source_checkout_dirty": false,
+  "full_hash_manifest": "bringup/artifacts/vllm-server-source-v0.31.0-comparison.json",
+  "full_hash_manifest_sha256": "086a48647a8fa9ff4a8caa99d1c341c2a77f0ee30035c5d66314df0670914d04"
+}

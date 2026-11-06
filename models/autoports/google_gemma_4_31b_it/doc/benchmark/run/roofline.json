@@ -1,0 +1,118 @@
+{
+  "32": {
+    "performance_sha256": "09eb67c7c0ba0b031705b4fa9bc2fbc36fd7ad56ad56456e689753e54db62ea7",
+    "server_identity_sha256": "080bba051f3ac77b7837958ebf1494ef3255c139f4de6bf5c88588b7e2ae82a8",
+    "requests": 96,
+    "input_tokens": 393216,
+    "output_tokens": 12288,
+    "prefill": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b32-evidence.json",
+      "evidence_sha256": "103e43c9004acef88b4076f65c9a031fb6877a8d9c440051e3c0b12be129cb0e",
+      "flops": 24137779554287616,
+      "seconds": 79.63287801900002,
+      "peak_flops_per_second": 2654208000000000
+    },
+    "decode": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b32-evidence.json",
+      "evidence_sha256": "103e43c9004acef88b4076f65c9a031fb6877a8d9c440051e3c0b12be129cb0e",
+      "dram_bytes": 15339365531648.0,
+      "seconds": 29.669337857999988,
+      "peak_dram_bytes_per_second": 2048000000000
+    }
+  },
+  "16": {
+    "performance_sha256": "5ff5032eb4d5044c14f00551582e3f4ab3543dc9963e0f438bf7178db4b898ce",
+    "server_identity_sha256": "6f1c3fd366351c6a33764e34efb795abc36da09b76427e8021d6adfadf902d8f",
+    "requests": 48,
+    "input_tokens": 196608,
+    "output_tokens": 6144,
+    "prefill": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b16-evidence.json",
+      "evidence_sha256": "2d13ce8fd67feed5172323c62ea1f52a1f10e30f72b2ea8ec7575334962e7be9",
+      "flops": 12068889777143808,
+      "seconds": 37.58178171800001,
+      "peak_flops_per_second": 2654208000000000
+    },
+    "decode": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b16-evidence.json",
+      "evidence_sha256": "2d13ce8fd67feed5172323c62ea1f52a1f10e30f72b2ea8ec7575334962e7be9",
+      "dram_bytes": 11220214054912.0,
+      "seconds": 16.506284128999994,
+      "peak_dram_bytes_per_second": 2048000000000
+    }
+  },
+  "8": {
+    "performance_sha256": "8585746c91212c6dec6d2a5e948cbe6a8783fd8e9095f59b9239d66e983bd512",
+    "server_identity_sha256": "8fce067d77c0139938c080631211b14a7b58b90d66a6d245038f0ad7af1d8fca",
+    "requests": 24,
+    "input_tokens": 98304,
+    "output_tokens": 3072,
+    "prefill": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b8-evidence.json",
+      "evidence_sha256": "fe0408eefa9c7d281909a49c4a2d43a393cd6313884e82de8e88bed5cbdc8f98",
+      "flops": 6034444888571904,
+      "seconds": 18.44008150399999,
+      "peak_flops_per_second": 2654208000000000
+    },
+    "decode": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b8-evidence.json",
+      "evidence_sha256": "fe0408eefa9c7d281909a49c4a2d43a393cd6313884e82de8e88bed5cbdc8f98",
+      "dram_bytes": 9160638316544.0,
+      "seconds": 12.737061446,
+      "peak_dram_bytes_per_second": 2048000000000
+    }
+  },
+  "1": {
+    "performance_sha256": "6ed79b4e4842dcefe461ca5e61c3c3a70b13e8208047e55a3a196f3aa6512327",
+    "server_identity_sha256": "5ad920ae9967bd025a0469a7c86f3c9afa5fab4e03a8ed2586cb1972c315cedb",
+    "requests": 8,
+    "input_tokens": 32768,
+    "output_tokens": 1024,
+    "prefill": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b1-evidence.json.gz",
+      "evidence_sha256": "643e881cd2e67a033655af39810b7e1908de4174471f3efc677cc58a2498811d",
+      "flops": 2011481629523968,
+      "seconds": 5.936625036999999,
+      "peak_flops_per_second": 2654208000000000
+    },
+    "decode": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b1-evidence.json.gz",
+      "evidence_sha256": "643e881cd2e67a033655af39810b7e1908de4174471f3efc677cc58a2498811d",
+      "dram_bytes": 19425440382976.0,
+      "seconds": 28.879165066000002,
+      "peak_dram_bytes_per_second": 2048000000000
+    }
+  }
+}

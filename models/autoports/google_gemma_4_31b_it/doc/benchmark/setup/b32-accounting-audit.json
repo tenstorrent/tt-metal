@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "review": "independent AutoFix accounting closure",
+  "schema_and_hashes": "benchmark_stage.roofline.load_roofline required32 passed",
+  "completed_requests": 96,
+  "prefill_tokens": 393216,
+  "decode_tokens": 12192,
+  "max_active_decode_rows": 32,
+  "full_batch_steps": 288,
+  "decode_steps": 416,
+  "mean_active_decode_rows": 29.307692307692307,
+  "prefill_seconds": 79.632878019,
+  "decode_seconds": 29.669337858,
+  "window_seconds": 109.302215877,
+  "raw_duration_seconds": 109.302877689,
+  "device_time_claim": false,
+  "limitations": [
+    "DRAM transfer accounting is modeled with stated assumptions."
+  ]
+}
