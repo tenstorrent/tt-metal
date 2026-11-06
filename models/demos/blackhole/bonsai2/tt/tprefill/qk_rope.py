@@ -9,7 +9,7 @@ import struct
 import torch
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.core_ranges import core_xy, row_major_crs
+from models.demos.blackhole.bonsai2.tt.core_ranges import core_xy, row_major_crs, row_major_range_crs
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/tprefill/kernels/"
 
@@ -27,7 +27,17 @@ class QKNormRope:
         self.consts = ttnn.from_torch(torch.cat(tiles, 0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         self.D, self.eps, self.device = D, eps, device
 
-    def __call__(self, x, cos, sin, kv_out=None, cache=None, kv_l1=None, q_hub=None):
+    @staticmethod
+    def run_parts(*parts):
+        """Several QKNormRope calls (parts=True, on disjoint cores: core_offset) as one op."""
+        kernels, cbs, ios = [], [], []
+        for k, c, t in parts:
+            kernels += k
+            cbs += c
+            ios += [x for x in t if all(x is not y for y in ios)]
+        ttnn.generic_op(ios, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+
+    def __call__(self, x, cos, sin, kv_out=None, cache=None, kv_l1=None, q_hub=None, core_offset=0, parts=False):
         """x [1, H, T, D] bf16 TILE (head-major); cos, sin [..., T, 64] bf16 TILE -> rope(rms_norm(x) * w), same shape.
         T need not fill a tile (decode: T = 1, cos / sin [1, 1, 64]).
         kv_out = (k_sh, v, v_sh) (decode): write the result token-major into k_sh and copy v (head-major [1, H, 1, D])
@@ -36,6 +46,7 @@ class QKNormRope:
         result and v (head-major [1, H, 1, D]) straight into the caches at cur_pos[0] (no paged cache update ops);
         returns None. kv_l1 = (buffer, maxr, NG, cores): also into the decode SDPA's prefetched K / V
         (sdpa_dec/kernels/kv_prefetch.hpp) on the core holding the position's tile row.
+        core_offset: on the cores from core_offset on; parts: return (kernels, CBs, tensors) for run_parts instead.
         """
         device, D = self.device, self.D
         _, H, T, Dx = list(x.shape)
@@ -55,8 +66,12 @@ class QKNormRope:
         grid = device.compute_with_storage_grid_size()
         items = H * Mt
         ncores = min(grid.x * grid.y, items)
-        crs = row_major_crs(ncores, grid.x)
+        if core_offset:
+            crs = row_major_range_crs(core_offset, core_offset + ncores, grid.x)
+        else:
+            crs = row_major_crs(ncores, grid.x)
         span = [items, ncores, grid.x]
+        off = [("CORE_OFFSET", str(core_offset))] if core_offset else []
 
         def cb(index, fmt, pages):
             page = {ttnn.float32: 4096, ttnn.bfloat8_b: 1088}.get(fmt, 2048)
@@ -102,11 +117,11 @@ class QKNormRope:
             core_ranges=crs,
             compile_time_args=wr_ct,
             common_runtime_args=wr_c,
-            defines=wr_def,
+            defines=wr_def + off,
             config=ttnn.WriterConfigDescriptor(),
         )
-        program = ttnn.ProgramDescriptor(
-            kernels=[
+        kernels, cbs = (
+            [
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "qkr_reader.cpp",
                     core_ranges=crs,
@@ -120,7 +135,7 @@ class QKNormRope:
                     + span
                     + [H, Mt, Dt, Rt]
                     + ([v.buffer_address()] if cache is not None else []),  # fmt: skip
-                    defines=[("KV_CACHE", "1")] if cache is not None else [],
+                    defines=([("KV_CACHE", "1")] if cache is not None else []) + off,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 wr_kernel,
@@ -128,7 +143,7 @@ class QKNormRope:
                     kernel_source=KERNELS + "qkr_compute.cpp",
                     core_ranges=crs,
                     common_runtime_args=span + [Dt, _f32_bits(1.0 / D), _f32_bits(self.eps)],
-                    defines=[("KV_CACHE", "1")] if cache is not None else [],
+                    defines=([("KV_CACHE", "1")] if cache is not None else []) + off,
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,
@@ -137,17 +152,18 @@ class QKNormRope:
                     ),
                 ),
             ],
-            semaphores=[],
-            cbs=[cb(0, bf, 2 * Dt), cb(1, f32, 1 + Dt), cb(2, bf, 8), cb(3, f32, Dt), cb(4, f32, 1)]
+            [cb(0, bf, 2 * Dt), cb(1, f32, 1 + Dt), cb(2, bf, 8), cb(3, f32, Dt), cb(4, f32, 1)]
             + ([cb(16, ttnn.bfloat8_b, Dt), cb(5, bf, Dt), cb(17, bf, 1)] if cache is not None else [cb(16, bf, 8)])
             + ([cb(17, bf, 1)] if kv_out is not None else []),
         )
         if cache is not None:
-            ttnn.generic_op([x, self.consts, cos, sin, v, pos, pt, vc, kc], program)
-            return None
-        extra = [v, v_sh] if kv_out is not None and v is not None else []
-        ttnn.generic_op([x, self.consts, cos, sin] + extra + [out], program)
-        return out
+            ios = [x, self.consts, cos, sin, v, pos, pt, vc, kc]
+        else:
+            ios = [x, self.consts, cos, sin] + ([v, v_sh] if kv_out is not None and v is not None else []) + [out]
+        if parts:
+            return kernels, cbs, ios
+        ttnn.generic_op(ios, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+        return None if cache is not None else out
 
 
 _KV_SH = {}

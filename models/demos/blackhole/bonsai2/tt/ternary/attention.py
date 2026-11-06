@@ -13,6 +13,7 @@ from models.demos.blackhole.bonsai2.tt.attn_qg import GatedAttn, HeadMajor, Head
 from models.demos.blackhole.bonsai2.tt.ternary import prerot
 from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import TernaryDecodeLinear3, pack_records_inline
 from models.demos.blackhole.bonsai2.tt.ternary.rotate import DecodeRotation
+from models.demos.blackhole.bonsai2.tt.tprefill.qk_rope import QKNormRope
 
 
 def pack_attention(gguf, layer_num):
@@ -308,7 +309,7 @@ class _KVCache:
     once, with both caches (_Experimental)."""
 
     def __init__(self, k, cos, sin, v):
-        self.k, self.cos, self.sin, self.v, self.kc = k, cos, sin, v, None
+        self.k, self.cos, self.sin, self.v, self.kc, self.q = k, cos, sin, v, None, None
 
 
 class _Experimental:
@@ -332,7 +333,14 @@ class _Experimental:
         if stream_decode.active() and getattr(stream_decode.STATE, "kv_ready", False):
             p = stream_decode.STATE.kvp  # also the new row into the SDPA's prefetched K / V
             kv_l1 = (p["kvbuf"], p["maxr"], p["NG"], p["cores"])
-        x.k.op(x.k.t, x.cos, x.sin, cache=(x.kc, cache, x.v, update_idxs_tensor, page_table), kv_l1=kv_l1)
+        cache_args = (x.kc, cache, x.v, update_idxs_tensor, page_table)
+        if x.q is not None:  # q's norm + RoPE (deferred by apply_rope) and k's in one op: q on cores 0 .., k after
+            qparts, qt, nq = x.q
+            kparts = x.k.op(x.k.t, x.cos, x.sin, cache=cache_args, kv_l1=kv_l1, core_offset=nq, parts=True)
+            QKNormRope.run_parts(qparts, kparts)
+            ttnn.deallocate(qt)
+        else:
+            x.k.op(x.k.t, x.cos, x.sin, cache=cache_args, kv_l1=kv_l1)
         ttnn.deallocate(x.k.t)
         ttnn.deallocate(x.v)
         return None
@@ -536,9 +544,18 @@ class TernaryAttentionTtnn:
                 _, Hq, _, Dq = list(q.t.shape)
                 p = stream_decode.STATE.kvp
                 if p is not None and getattr(stream_decode.STATE, "kv_ready", False):
-                    # straight into the decode SDPA's per-group q hubs (sdpa_dec)
-                    q.op(q.t, cos, sin, kv_out=(p["qhub"], None, None), q_hub=p["hubs"])
+                    # straight into the decode SDPA's per-group q hubs (sdpa_dec); with the cache write, one op with
+                    # k's (run at the cache update: _Experimental)
+                    qparts = q.op(q.t, cos, sin, kv_out=(p["qhub"], None, None), q_hub=p["hubs"], parts=True)
                     qo = _KVSh(p["qhub"])
+                    v = getattr(self._t, "v_raw", None)
+                    if v is not None and _KV_CACHE_ON() and os.environ.get("BONSAI_QK_ONE_OP", "1") == "1":
+                        self._t.v_raw = None
+                        kv = _KVCache(k, cos, sin, v)
+                        kv.q = (qparts, q.t, Hq)
+                        self._vmap = (v, kv)
+                        return qo, kv
+                    QKNormRope.run_parts(qparts)
                 else:
                     (q_sh,) = kv_shards(q.t.device(), Hq, Dq, n=1)
                     q.op(q.t, cos, sin, kv_out=(q_sh, None, None))

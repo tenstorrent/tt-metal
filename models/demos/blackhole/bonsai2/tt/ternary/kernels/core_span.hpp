@@ -34,6 +34,9 @@ FORCE_INLINE void core_span(
         }
     }
 #endif
+#ifdef CORE_OFFSET
+    c -= CORE_OFFSET;  // this op on cores CORE_OFFSET .. (another op's kernels share its program on the cores before)
+#endif
     const uint32_t units = Nt / unit, base = units / ncores, extra = units % ncores;
     n = unit * (base + (c < extra ? 1 : 0));
     first = unit * (c * base + (c < extra ? c : extra));
