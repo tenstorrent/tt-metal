@@ -47,8 +47,8 @@ D = 128
 def torch_reference(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scale: float):
     """Host fp32 mirror of the device pre-pass (diag threshold). q/k/v: [S, H, rows, D] (one shard per leading index).
 
-    Returns block_mask [S, H, nqc_pad(local), n_blocks_pad], pooled k/v [H, nbg, D], bias [S, H, nqc_pad, nbg]
-    (one row per Q chunk; the device version repeats it 32x), q_bar and the per-Q-block threshold.
+    Returns block_mask [S, H, nb_pad(local Q blocks), n_blocks_pad], pooled k/v [H, nbg, D], bias [S, H, nb_pad, nbg]
+    (one row per Q block), q_bar and the per-Q-block threshold.
     """
     S, H, R, D = q.shape
     log2_scale = scale * LOG2E
@@ -66,22 +66,11 @@ def torch_reference(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scal
     q_var = (q_bar * q_bar * var[None]).sum(-1, keepdim=True)
     thr = q_raw_mean * log2_scale + tau * torch.sqrt(q_var * log2_scale * log2_scale + VAR_EPS)
     scores = (q_bar @ kc[None].transpose(2, 3)) * log2_scale  # [S,H,nbp,nbg]
-    exact = (scores > thr).float()
-    exact = exact + consts["band"] + consts["sink_row"]
-    exact = (exact > 0.5).float() * consts["full_row"]
-    m2 = (exact.transpose(2, 3) @ consts["qc_pool_t"]).transpose(2, 3)  # [S,H,nqc_pad,nbg]: any Q block of the chunk
-    block_mask = ((m2 + consts["force_row"]) > 0.5).float() * consts["full_row"]
+    exact = (scores > thr).float() + consts["band"] + consts["sink_row"] + consts["force_row"]
+    # Full K blocks only; padding Q rows are zero.
+    block_mask = (exact > 0.5).float() * consts["full_row"] * consts["q_row"]
     bias = consts["len_bias_row"] + block_mask * NEG
     return {"block_mask": block_mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "q_bar": q_bar, "threshold": thr}
-
-
-def torch_reference_chunk(ref: dict, consts: dict) -> dict:
-    """Chunk-mode outputs from torch_reference's block mask: any kept block keeps its K chunk."""
-    block01 = ref["block_mask"]  # [S,H,nqc_pad,nbg]
-    chunk01 = ((block01 @ consts["kc_pool"]) > 0.5).float()  # [S,H,nqc_pad,nkc_pad]
-    kept = ((chunk01 @ consts["kc_pool_t"]) > 0.5).float() * consts["valid_row"]
-    bias = consts["len_bias_row"] + kept * NEG
-    return {"block_mask": chunk01, "bias": bias, "kept_blk": kept}
 
 
 def _structured_qkv(S: int, rows: int, seed: int = 1):
@@ -97,10 +86,17 @@ def _structured_qkv(S: int, rows: int, seed: int = 1):
     return tuple(x.bfloat16().float() for x in (q, k, v))
 
 
-def _upload(mesh_device, sp_axis, x):  # [S,H,rows,D] -> per device [1,H,rows,D], sharded on SP, replicated on TP
+def _upload(mesh_device, sp_axis, x, dtype=ttnn.bfloat16):  # [S,H,rows,D] -> per device [1,H,rows,D] on SP shards
     return from_torch(
-        x, device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=[sp_axis, None, None, None], layout=ttnn.TILE_LAYOUT
+        x, device=mesh_device, dtype=dtype, mesh_axes=[sp_axis, None, None, None], layout=ttnn.TILE_LAYOUT
     )
+
+
+def _quantize(x, dtype):
+    """x as the device holds it in `dtype` (host round trip), so the fp32 mirror sees the device's inputs."""
+    if dtype == ttnn.bfloat16:
+        return x.bfloat16().float()
+    return ttnn.to_torch(ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT)).float()
 
 
 def _to_host(mesh_device, sp_axis, tp_axis, t):
@@ -112,22 +108,33 @@ def _to_host(mesh_device, sp_axis, tp_axis, t):
     )
 
 
-def _check(mesh_device, sp_axis, tp_axis, ccl_manager, *, geo, tau, mode, sink_tokens, q, k, v):
+def _check(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    ccl_manager,
+    *,
+    geo,
+    tau,
+    sink_tokens,
+    q,
+    k,
+    v,
+    route_unit="auto",
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat16,
+):
     S = geo.shards
+    q, k, v = _quantize(q, q_dtype), _quantize(k, kv_dtype), _quantize(v, kv_dtype)
     scale = D**-0.5
-    consts = build_constants(
-        geo, band=1, sink_tokens=sink_tokens, force_first_chunk=True, scale=scale
-    )  # all modes force block 0 per shard
+    consts = build_constants(geo, band=1, sink_tokens=sink_tokens, force_first_block=True, scale=scale)
     ref = torch_reference(q, k, v, geo, consts, tau=tau, scale=scale)
-    if mode == "chunk":
-        ref_mask = torch_reference_chunk(ref, consts)["block_mask"]
-        cols = torch.cat([torch.arange(s * geo.nkc, s * geo.nkc + geo.nkc) for s in range(S)])
-    else:
-        ref_mask = ref["block_mask"]
-        cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(S)])
+    ref_mask = ref["block_mask"]
+    cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(S)])
 
-    tq, tk, tv = (_upload(mesh_device, sp_axis, x) for x in (q, k, v))
-    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau, mode=mode)
+    tq = _upload(mesh_device, sp_axis, q, q_dtype)
+    tk, tv = (_upload(mesh_device, sp_axis, x, kv_dtype) for x in (k, v))
+    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau, route_unit=route_unit)
     pre.prepare(geo, sink_tokens, scale)
 
     # ---- full pre-pass (both programs are built and launched before any check, so a compile problem shows first)
@@ -145,26 +152,30 @@ def _check(mesh_device, sp_axis, tp_axis, ccl_manager, *, geo, tau, mode, sink_t
         ttnn.deallocate(t)
     logger.info("pool OK")
 
+    # The returned pooled K/V are in K's dtype (block float: one exponent per 16 values, so a looser bound).
+    assert out["pooled_k"].dtype == kv_dtype and out["pooled_v"].dtype == kv_dtype
+    tol = 3e-2 if kv_dtype == ttnn.bfloat16 else 6e-2
     pk = _to_host(mesh_device, sp_axis, tp_axis, out["pooled_k"])[0, :H].float()
-    torch.testing.assert_close(pk, ref["pooled_k"].bfloat16().float(), atol=3e-2, rtol=3e-2)
+    torch.testing.assert_close(pk, ref["pooled_k"].bfloat16().float(), atol=tol, rtol=tol)
     pv = _to_host(mesh_device, sp_axis, tp_axis, out["pooled_v"])[0, :H].float()
-    torch.testing.assert_close(pv, ref["pooled_v"].bfloat16().float(), atol=3e-2, rtol=3e-2)
+    torch.testing.assert_close(pv, ref["pooled_v"].bfloat16().float(), atol=tol, rtol=tol)
 
-    dev_mask = _to_host(mesh_device, sp_axis, tp_axis, out["block_mask"])[:, :H].float()  # [S,H,nqc_pad,W]
+    dev_mask = _to_host(mesh_device, sp_axis, tp_axis, out["block_mask"])[:, :H].float()  # [S,H,nb_pad,n_blocks_pad]
     assert dev_mask.shape == ref_mask.shape, (dev_mask.shape, ref_mask.shape)
     agree_all = (dev_mask == ref_mask).float().mean().item()
-    agree_real = (dev_mask[:, :, : geo.nqc][..., cols] == ref_mask[:, :, : geo.nqc][..., cols]).float().mean().item()
-    dens_dev = dev_mask[:, :, : geo.nqc][..., cols].mean().item()
-    dens_ref = ref_mask[:, :, : geo.nqc][..., cols].mean().item()
+    agree_real = (dev_mask[:, :, : geo.nb][..., cols] == ref_mask[:, :, : geo.nb][..., cols]).float().mean().item()
+    dens_dev = dev_mask[:, :, : geo.nb][..., cols].mean().item()
+    dens_ref = ref_mask[:, :, : geo.nb][..., cols].mean().item()
     logger.info(
-        f"mask vs mirror: agreement all {agree_all:.5f} real {agree_real:.5f}; density dev {dens_dev:.4f} ref {dens_ref:.4f} (reported {pre.last_density:.4f})"
+        f"mask vs mirror ({pre.route_units[0]} route units, units_per_shard {pre.route_units[1]}): agreement all "
+        f"{agree_all:.5f} real {agree_real:.5f}; density dev {dens_dev:.4f} ref {dens_ref:.4f} (reported {pre.last_density:.4f})"
     )
     dump = os.environ.get("SOL_FUSED_DUMP")
     if dump:  # offline analysis: device vs reference routing
         os.makedirs(dump, exist_ok=True)
         torch.save(
             {
-                "mode": mode,
+                "route_unit": route_unit,
                 "tau": tau,
                 "geo": geo.__dict__,
                 "dev_mask": dev_mask,
@@ -174,11 +185,9 @@ def _check(mesh_device, sp_axis, tp_axis, ccl_manager, *, geo, tau, mode, sink_t
                 "threshold": ref["threshold"],
                 "cols": cols,
             },
-            os.path.join(dump, f"prepass_{mode}_{geo.rows}_{geo.logical_n}_{geo.k_chunk}_tau{tau}.pt"),
+            os.path.join(dump, f"prepass_{route_unit}_{geo.rows}_{geo.logical_n}_tau{tau}.pt"),
         )
     assert set(dev_mask.unique().tolist()) <= {0.0, 1.0}
-    if mode == "chunk":
-        assert torch.all(dev_mask[..., S * geo.nkc :] == 0), "mask padding words must be zero"
 
     for t in out.values():
         if t is not None:
@@ -188,20 +197,65 @@ def _check(mesh_device, sp_axis, tp_axis, ccl_manager, *, geo, tau, mode, sink_t
 
 @GALAXY_RING
 @pytest.mark.parametrize(
-    ("rows", "logical_n", "q_chunk", "k_chunk"),
-    [(1184, 9000, 256, 512), (1184, 9472, 256, 256), (1184, 7000, 256, 512)],
-    ids=["mid_shard_cut", "k256", "two_padding_shards"],
+    ("rows", "logical_n"),
+    [(1184, 9000), (1184, 9472), (1184, 7000)],
+    ids=["mid_shard_cut", "no_cut", "two_padding_shards"],
 )
-@pytest.mark.parametrize("mode", ["chunk", "gather", "compact"])
+@pytest.mark.parametrize("route_unit", ["head_shard", "head_q_tile"])
 def test_sol_prepass(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, q_chunk, k_chunk, mode, reset_seeds
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, route_unit, reset_seeds
 ):
     S = tuple(mesh_device.shape)[sp_axis]
-    geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
+    if route_unit == "head_shard" and S > 8:
+        pytest.skip("(head, shard) route units need at most 8 shards")
+    geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n)
     q, k, v = _structured_qkv(S, rows)
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-    r = _check(mesh_device, sp_axis, tp_axis, ccl_manager, geo=geo, tau=1.0, mode=mode, sink_tokens=300, q=q, k=k, v=v)
+    r = _check(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        ccl_manager,
+        geo=geo,
+        tau=1.0,
+        sink_tokens=300,
+        q=q,
+        k=k,
+        v=v,
+        route_unit=route_unit,
+    )
     # bf16 scores flip blocks near the threshold: the bar is 98.5 % agreement with the fp32 mirror on the real cells.
+    assert r["agree_real"] >= 0.985, r
+
+
+@GALAXY_RING
+@pytest.mark.parametrize(
+    ("q_dtype", "kv_dtype"),
+    [(ttnn.bfloat8_b, ttnn.bfloat8_b), (ttnn.bfloat16, ttnn.bfloat8_b)],
+    ids=["bf8", "bf16q_bf8kv"],
+)
+def test_sol_prepass_dtypes(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, q_dtype, kv_dtype, reset_seeds
+):
+    """bf8 inputs (all bf8, or bf16 Q with bf8 K/V): pool, route and the pooled outputs in K's dtype vs the mirror."""
+    S = tuple(mesh_device.shape)[sp_axis]
+    geo = SolGeometry(shards=S, rows=1184, logical_n=9000)
+    q, k, v = _structured_qkv(S, 1184)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    r = _check(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        ccl_manager,
+        geo=geo,
+        tau=1.0,
+        sink_tokens=300,
+        q=q,
+        k=k,
+        v=v,
+        q_dtype=q_dtype,
+        kv_dtype=kv_dtype,
+    )
     assert r["agree_real"] >= 0.985, r
 
 
@@ -210,12 +264,10 @@ def test_sol_prepass(
 def test_sol_prepass_extremes(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, tau, reset_seeds):
     """tau -> -inf keeps every full block (dense); tau -> +inf keeps only band/sink/prefix/forced blocks."""
     S = tuple(mesh_device.shape)[sp_axis]
-    geo = SolGeometry(shards=S, rows=1184, logical_n=9000, q_chunk=256, k_chunk=512)
+    geo = SolGeometry(shards=S, rows=1184, logical_n=9000)
     q, k, v = _structured_qkv(S, 1184, seed=3)
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-    r = _check(
-        mesh_device, sp_axis, tp_axis, ccl_manager, geo=geo, tau=tau, mode="chunk", sink_tokens=300, q=q, k=k, v=v
-    )
+    r = _check(mesh_device, sp_axis, tp_axis, ccl_manager, geo=geo, tau=tau, sink_tokens=300, q=q, k=k, v=v)
     assert r["agree_all"] == 1.0, r
 
 
@@ -230,21 +282,15 @@ def _rows_for_shards(rows_8: int, shards: int) -> int:
 
 @GALAXY_RING
 @pytest.mark.parametrize(
-    ("rows", "logical_n", "q_chunk", "k_chunk"),
-    [
-        (4736, 37800, 320, 384),
-        (9184, 73425, 256, 512),
-        (13664, 109101, 256, 512),
-    ],  # the module's chunking per working point, as the 8-shard local length
+    ("rows", "logical_n"),
+    [(4736, 37800), (9184, 73425), (13664, 109101)],  # working points, as the 8-shard local length
     ids=["5s", "10s", "15s"],
 )
-def test_sol_prepass_bench(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, q_chunk, k_chunk, reset_seeds
-):
+def test_sol_prepass_bench(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, reset_seeds):
     """Production geometries, random data: correctness vs mirror, then wall time of the pre-pass and its parts."""
     S = tuple(mesh_device.shape)[sp_axis]
     local_rows = _rows_for_shards(rows, S)
-    geo = SolGeometry(shards=S, rows=local_rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
+    geo = SolGeometry(shards=S, rows=local_rows, logical_n=logical_n)
     scale = D**-0.5
     sink_tokens = {13664: 1245, 9184: 849, 4736: 453}[rows]  # real t2va prefix lengths (text + audio) per working point
     torch.manual_seed(0)
@@ -257,7 +303,6 @@ def test_sol_prepass_bench(
         ccl_manager,
         geo=geo,
         tau=1.0,
-        mode="chunk",
         sink_tokens=sink_tokens,
         q=q,
         k=k,
@@ -267,7 +312,7 @@ def test_sol_prepass_bench(
 
     tq, tk, tv = (_upload(mesh_device, sp_axis, x) for x in (q, k, v))
     reps = int(os.environ.get("SOL_FUSED_REPS", "5"))
-    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=1.0, mode="chunk")
+    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=1.0)
     pre.prepare(geo, sink_tokens, scale)
     times = []
     for i in range(reps + 1):
@@ -285,15 +330,13 @@ def test_sol_prepass_bench(
     enq = sorted(t[0] for t in times)[len(times) // 2]
     tot = sorted(t[1] for t in times)[len(times) // 2]
     logger.info(
-        f"pre-pass rows {local_rows} (working point {rows}) chunks {q_chunk}x{k_chunk}: median wall {tot:.2f} ms (host enqueue {enq:.2f} ms) over {reps} reps"
+        f"pre-pass rows {local_rows} (working point {rows}): median wall {tot:.2f} ms (host enqueue {enq:.2f} ms) over {reps} reps"
     )
     rows_out = [
         {
             "rows": local_rows,
             "logical_n": logical_n,
-            "q_chunk": q_chunk,
-            "k_chunk": k_chunk,
-            "mode": "chunk",
+            "route_units": pre.route_units,
             "wall_ms": tot,
             "enqueue_ms": enq,
             "reps": reps,
@@ -341,9 +384,7 @@ def test_sol_prepass_bench(
             "prepass": "breakdown",
             "rows": local_rows,
             "logical_n": logical_n,
-            "q_chunk": q_chunk,
-            "k_chunk": k_chunk,
-            "mode": "chunk",
+            "route_units": pre.route_units,
             "reps": reps,
             "breakdown": breakdown,
         }
@@ -448,30 +489,30 @@ def test_sol_primitives(mesh_device, sp_axis, tp_axis, num_links, topology, is_f
 
 @GALAXY_RING
 def test_sol_prepass_tau_scan(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds):
-    """Diagnostic: device vs reference selection density across tau (gather mode); tau=0 isolates the mean term."""
+    """Diagnostic: device vs reference selection density across tau; tau=0 isolates the mean term."""
     S = tuple(mesh_device.shape)[sp_axis]
-    geo = SolGeometry(shards=S, rows=1184, logical_n=9000, q_chunk=256, k_chunk=512)
+    geo = SolGeometry(shards=S, rows=1184, logical_n=9000)
     q, k, v = _structured_qkv(S, 1184)
     scale = D**-0.5
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-    consts = build_constants(geo, band=1, sink_tokens=300, force_first_chunk=True, scale=scale)
+    consts = build_constants(geo, band=1, sink_tokens=300, force_first_block=True, scale=scale)
     cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(S)])
     tq, tk, tv = (_upload(mesh_device, sp_axis, x) for x in (q, k, v))
     ref_dens = {
-        t: torch_reference(q, k, v, geo, consts, tau=t, scale=scale)["block_mask"][:, :, : geo.nqc][..., cols]
+        t: torch_reference(q, k, v, geo, consts, tau=t, scale=scale)["block_mask"][:, :, : geo.nb][..., cols]
         .mean()
         .item()
         for t in [-2, -1, -0.5, 0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 6]
     }
     logger.info("reference density vs tau: " + ", ".join(f"{t}:{d:.3f}" for t, d in ref_dens.items()))
     for tau in [0.0, 0.5, 1.0, 2.0, 4.0]:
-        pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau, mode="gather")
+        pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau)
         pre.prepare(geo, 300, scale)
         out = pre(tq, tk, tv, scale=scale, report_density=False)
         ttnn.synchronize_device(mesh_device)
-        dev = _to_host(mesh_device, sp_axis, tp_axis, out["block_mask"])[:, :H].float()[:, :, : geo.nqc][..., cols]
-        ref = torch_reference(q, k, v, geo, consts, tau=tau, scale=scale)["block_mask"][:, :, : geo.nqc][..., cols]
-        # per-row (Q chunk) density difference pattern: by Q shard and by column shard
+        dev = _to_host(mesh_device, sp_axis, tp_axis, out["block_mask"])[:, :H].float()[:, :, : geo.nb][..., cols]
+        ref = torch_reference(q, k, v, geo, consts, tau=tau, scale=scale)["block_mask"][:, :, : geo.nb][..., cols]
+        # per-row (Q block) density difference pattern: by Q shard and by column shard
         d_dev, d_ref = dev.mean().item(), ref.mean().item()
         by_col = [
             round(

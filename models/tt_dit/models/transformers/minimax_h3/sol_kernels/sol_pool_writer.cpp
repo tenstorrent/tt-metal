@@ -6,7 +6,7 @@
 // group) of the output tensor [1, NUM_HEADS, SHARD_BLOCKS_PADDED, head_dim].
 //
 // Compile-time args: 0 NUM_HEADS, 1 SHARD_ROW_TILES, 2 HEAD_DIM_TILES, 3 SHARD_BLOCK_TILES, 4 SHARD_ROWS, 5 GRID_X,
-// 6 GRID_Y, 7 NUM_UNITS, then TensorAccessorArgs of the Q, K, V outputs.
+// 6 GRID_Y, 7 NUM_UNITS, 8 Q_OWN_CB (unused here), then TensorAccessorArgs of the Q, K, V outputs.
 // Common runtime args: 0..2 the Q, K, V output addresses. Units and per-core ranges: sol_pool_units.hpp.
 
 #include <cstdint>
@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t SHARD_ROW_TILES = get_compile_time_arg_val(1);
     constexpr uint32_t HEAD_DIM_TILES = get_compile_time_arg_val(2);
     constexpr uint32_t SHARD_BLOCK_TILES = get_compile_time_arg_val(3);
-    constexpr auto q_out_args = TensorAccessorArgs<8>();
+    constexpr auto q_out_args = TensorAccessorArgs<9>();
     constexpr auto k_out_args = TensorAccessorArgs<q_out_args.next_compile_time_args_offset()>();
     constexpr auto v_out_args = TensorAccessorArgs<k_out_args.next_compile_time_args_offset()>();
 

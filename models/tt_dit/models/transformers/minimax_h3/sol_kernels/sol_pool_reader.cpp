@@ -13,9 +13,13 @@
 // the rows of a partial last block are built in place. Data is read in batches of 4 rows with two batches in flight
 // (transaction ids 1 and 2) while compute works on a third.
 //
+// Data tiles are in the inputs' dtype (bf16 or bf8), the pooling tiles in bf16. K and V share one dtype. Q has it too
+// (Q_OWN_CB = 0: one data CB for all three) or its own (Q_OWN_CB = 1: Q's data goes through cb_q_data in Q's format,
+// e.g. bf16 Q with bf8 K/V). A batch is pushed before the next batch starts in the other data CB.
+//
 // Compile-time args: 0 NUM_HEADS, 1 SHARD_ROW_TILES (tile rows per shard), 2 HEAD_DIM_TILES, 3 SHARD_BLOCK_TILES
-// (output tile rows per head), 4 SHARD_ROWS, 5 GRID_X, 6 GRID_Y, 7 NUM_UNITS, then TensorAccessorArgs of q_in, k_in,
-// v_in, geo. Common runtime args: 0..2 the Q, K, V input addresses, 3 geo address.
+// (output tile rows per head), 4 SHARD_ROWS, 5 GRID_X, 6 GRID_Y, 7 NUM_UNITS, 8 Q_OWN_CB, then TensorAccessorArgs of
+// q_in, k_in, v_in, geo. Common runtime args: 0..2 the Q, K, V input addresses, 3 geo address.
 
 #include <cstdint>
 
@@ -28,8 +32,8 @@
 #include "sol_pool_units.hpp"
 
 namespace {
-constexpr uint32_t cb_data = 0, cb_pool_tiles = 2, cb_zero = 3, cb_geo = 4, cb_pool_table = 5;
-constexpr uint32_t TILE_BYTES = 2048;
+constexpr uint32_t cb_data = 0, cb_q_data = 1, cb_pool_tiles = 2, cb_zero = 3, cb_geo = 4, cb_pool_table = 5;
+constexpr uint32_t TILE_BYTES = 2048;  // bf16 tiles: pooling, zero and table tiles
 constexpr uint32_t BLOCK_TOKENS = sol_pool::BLOCK_TOKENS;
 constexpr uint32_t TILE_ROWS_PER_GROUP = sol_pool::TILE_ROWS_PER_GROUP;
 constexpr uint32_t GEO_BYTES = 128;
@@ -72,7 +76,8 @@ void kernel_main() {
     constexpr uint32_t SHARD_ROW_TILES = get_compile_time_arg_val(1);
     constexpr uint32_t HEAD_DIM_TILES = get_compile_time_arg_val(2);
     constexpr uint32_t SHARD_BLOCK_TILES = get_compile_time_arg_val(3);
-    constexpr auto q_in_args = TensorAccessorArgs<8>();
+    constexpr uint32_t Q_OWN_CB = get_compile_time_arg_val(8);  // 1: Q's dtype differs from K/V's
+    constexpr auto q_in_args = TensorAccessorArgs<9>();
     constexpr auto k_in_args = TensorAccessorArgs<q_in_args.next_compile_time_args_offset()>();
     constexpr auto v_in_args = TensorAccessorArgs<k_in_args.next_compile_time_args_offset()>();
     constexpr auto geo_args = TensorAccessorArgs<v_in_args.next_compile_time_args_offset()>();
@@ -95,8 +100,8 @@ void kernel_main() {
     const auto geo = TensorAccessor(geo_args, get_common_arg_val<uint32_t>(3));
 
     Noc noc;
-    CircularBuffer data_cb(cb_data), pool_tiles_cb(cb_pool_tiles), zero_cb(cb_zero), geo_cb(cb_geo),
-        pool_table_cb(cb_pool_table);
+    CircularBuffer data_cb(cb_data), q_data_cb(cb_q_data), pool_tiles_cb(cb_pool_tiles), zero_cb(cb_zero),
+        geo_cb(cb_geo), pool_table_cb(cb_pool_table);
     const PrecomposedUnicastEndpoint local;
 
     // This shard's valid token count.
@@ -127,17 +132,23 @@ void kernel_main() {
     };
 
     constexpr uint32_t DATA_PAGES_PER_BATCH = ROWS_PER_BATCH * HEAD_DIM_TILES;
-    constexpr uint32_t DATA_CB_BYTES = BATCHES_IN_CB * DATA_PAGES_PER_BATCH * TILE_BYTES;
+    // Per data CB (0: cb_data, 1: cb_q_data): tile size, ring base and ring size.
+    uint32_t data_tile_bytes[2] = {data_cb.get_tile_size(), 0};
+    uint32_t data_cb_base[2] = {data_cb.get_write_ptr(), 0};
+    if constexpr (Q_OWN_CB) {
+        data_tile_bytes[1] = q_data_cb.get_tile_size();
+        data_cb_base[1] = q_data_cb.get_write_ptr();
+    }
     constexpr uint32_t POOL_TILES_CB_BYTES = BATCHES_IN_CB * ROWS_PER_BATCH * TILE_BYTES;
-    const uint32_t data_cb_base = data_cb.get_write_ptr();
     const uint32_t pool_tiles_cb_base = pool_tiles_cb.get_write_ptr();
 
     bool pending = false;  // a batch on the NoC, not yet pushed
     uint32_t pending_trid = 2;
+    CircularBuffer* pending_data_cb = &data_cb;
     auto finish_pending = [&]() {
         noc.async_read_barrier<NocOptions::TXN_ID>({.trid = pending_trid});
         pool_tiles_cb.push_back(ROWS_PER_BATCH);
-        data_cb.push_back(DATA_PAGES_PER_BATCH);
+        pending_data_cb->push_back(DATA_PAGES_PER_BATCH);
         pending = false;
     };
     // Copy one pooling tile from local L1 (the table or the zero tile) into the batch.
@@ -155,29 +166,38 @@ void kernel_main() {
         const sol_pool::Unit coords = Layout::decode(unit);
         const uint32_t first_row = coords.group * TILE_ROWS_PER_GROUP;
         const uint32_t end_row = min_u(first_row + TILE_ROWS_PER_GROUP, SHARD_ROW_TILES);
+        const uint32_t ring = (Q_OWN_CB && coords.tensor == 0) ? 1 : 0;  // always 0 when Q_OWN_CB = 0
+        CircularBuffer& unit_data_cb = ring ? q_data_cb : data_cb;
+        const uint32_t DATA_TILE_BYTES = data_tile_bytes[ring];
+        const uint32_t DATA_CB_BYTES = BATCHES_IN_CB * DATA_PAGES_PER_BATCH * DATA_TILE_BYTES;
+        if constexpr (Q_OWN_CB) {
+            if (pending && pending_data_cb != &unit_data_cb) {
+                finish_pending();  // the next batch goes into the other data CB
+            }
+        }
 
         auto read_page = [&](uint32_t page, uint32_t dst_addr, uint32_t trid) {
             if (coords.tensor == 0) {
                 noc.async_read<NocOptions::TXN_ID>(
-                    q_in, CoreLocalMem<uint32_t>(dst_addr), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
+                    q_in, CoreLocalMem<uint32_t>(dst_addr), DATA_TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
             } else if (coords.tensor == 1) {
                 noc.async_read<NocOptions::TXN_ID>(
-                    k_in, CoreLocalMem<uint32_t>(dst_addr), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
+                    k_in, CoreLocalMem<uint32_t>(dst_addr), DATA_TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
             } else {
                 noc.async_read<NocOptions::TXN_ID>(
-                    v_in, CoreLocalMem<uint32_t>(dst_addr), TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
+                    v_in, CoreLocalMem<uint32_t>(dst_addr), DATA_TILE_BYTES, {.page_id = page}, {}, {.trid = trid});
             }
         };
 
         for (uint32_t batch_row = first_row; batch_row < end_row; batch_row += ROWS_PER_BATCH) {
             const uint32_t rows_in_batch = min_u(ROWS_PER_BATCH, end_row - batch_row);
             // Reserve two batches so the slot after the pending batch is free.
-            data_cb.reserve_back(2 * DATA_PAGES_PER_BATCH);
+            unit_data_cb.reserve_back(2 * DATA_PAGES_PER_BATCH);
             pool_tiles_cb.reserve_back(2 * ROWS_PER_BATCH);
-            uint32_t data_slot = data_cb.get_write_ptr(), pool_tiles_slot = pool_tiles_cb.get_write_ptr();
+            uint32_t data_slot = unit_data_cb.get_write_ptr(), pool_tiles_slot = pool_tiles_cb.get_write_ptr();
             if (pending) {
-                data_slot += DATA_PAGES_PER_BATCH * TILE_BYTES;
-                if (data_slot >= data_cb_base + DATA_CB_BYTES) {
+                data_slot += DATA_PAGES_PER_BATCH * DATA_TILE_BYTES;
+                if (data_slot >= data_cb_base[ring] + DATA_CB_BYTES) {
                     data_slot -= DATA_CB_BYTES;
                 }
                 pool_tiles_slot += ROWS_PER_BATCH * TILE_BYTES;
@@ -223,10 +243,10 @@ void kernel_main() {
                                 data_slot + offset,
                                 trid);
                         } else {
-                            noc.async_write_zeros(CoreLocalMem<uint32_t>(data_slot + offset), TILE_BYTES);
+                            noc.async_write_zeros(CoreLocalMem<uint32_t>(data_slot + offset), DATA_TILE_BYTES);
                             zeros_issued = true;
                         }
-                        offset += TILE_BYTES;
+                        offset += DATA_TILE_BYTES;
                     }
                 }
             };
@@ -258,6 +278,7 @@ void kernel_main() {
             }
             pending = true;
             pending_trid = trid;
+            pending_data_cb = &unit_data_cb;
         }
     }
     if (pending) {

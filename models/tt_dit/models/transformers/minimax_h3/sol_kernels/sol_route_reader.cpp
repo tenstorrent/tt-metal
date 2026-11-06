@@ -5,8 +5,8 @@
 // Sol-Attn pre-pass, route step, reader kernel.
 //
 // Feeds the compute kernel. Per unit: the head's pooled K tiles (this shard's only with (head, shard) units), the
-// head's pooled Q tiles, then per (Q-chunk tile, shard) the constant OR-mask tiles and the valid-block row. Once
-// per core, after the first unit's data: the ones tile and the selector tiles.
+// head's pooled Q tiles, then per (Q-block tile, shard) the always-keep tiles and the valid-block tiles. Once per
+// core, after the first unit's data: the ones tile and (with (head, shard) units) the shard selector tiles.
 //
 // (head, shard) units: a core only has its shard's K, so the head's cores exchange partial moments. Compute hands
 // this kernel 8 reduced rows (cb_local_moments); they are written into the gather tiles (cb_gathered_moments) at this
@@ -14,10 +14,9 @@
 // NUM_SHARDS - 1 every shard's rows have arrived. With Q_SHARED the shard-0 core reads the pooled Q and sends it to
 // the other cores (semaphore 1).
 //
-// Compile-time args: 0..18 as sol_route_compute.cpp (names explained there), then TensorAccessorArgs of q_pooled,
-// k_pooled, const_or, valid_blocks (host name colconst), q_select (qsel), k_select (ksel), ones, shard_select (shsel),
-// then Q_SHARED.
-// Common runtime args: 0..7 the buffer addresses in that order, 8.. the NoC coordinates of every logical core
+// Compile-time args: 0..10 as sol_route_compute.cpp (names explained there), then TensorAccessorArgs of q_pooled,
+// k_pooled, const_or, valid_blocks, ones, shard_select (host name shsel), then Q_SHARED.
+// Common runtime args: 0..5 the buffer addresses in that order, 6.. the NoC coordinates of every logical core
 // (x | y << 8). Semaphores: 0 moment exchange, 1 Q hand-off.
 
 #include <cstdint>
@@ -30,8 +29,8 @@
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t cb_k_pooled = 0, cb_q_pooled = 1, cb_ones = 2, cb_q_select = 3, cb_k_select = 4, cb_const_or = 6,
-                   cb_valid_blocks = 7, cb_gathered_moments = 23, cb_local_moments = 24, cb_shard_select = 29;
+constexpr uint32_t cb_k_pooled = 0, cb_q_pooled = 1, cb_ones = 2, cb_const_or = 6, cb_valid_blocks = 7,
+                   cb_gathered_moments = 23, cb_local_moments = 24, cb_shard_select = 29;
 constexpr uint32_t PARTIAL_MOMENT_TILES = 8;  // HEAD_DIM_TILES sum tiles + HEAD_DIM_TILES sum-of-squares tiles
 constexpr uint32_t SHARD_SELECT_TILES = 8;
 
@@ -42,31 +41,25 @@ void kernel_main() {
     constexpr uint32_t NUM_SHARDS = get_compile_time_arg_val(1);
     constexpr uint32_t SHARD_BLOCK_TILES = get_compile_time_arg_val(2);
     constexpr uint32_t HEAD_DIM_TILES = get_compile_time_arg_val(3);
-    constexpr uint32_t SHARD_Q_CHUNK_TILES = get_compile_time_arg_val(4);
-    constexpr uint32_t SHARD_K_CHUNK_TILES = get_compile_time_arg_val(5);
-    constexpr uint32_t MODE = get_compile_time_arg_val(9);
-    constexpr uint32_t GRID_X = get_compile_time_arg_val(15);
-    constexpr uint32_t GRID_Y = get_compile_time_arg_val(16);
-    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(17);
-    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(18);  // 1: (head, shard); 0: (head, Q-chunk tile)
+    constexpr uint32_t GRID_X = get_compile_time_arg_val(7);
+    constexpr uint32_t GRID_Y = get_compile_time_arg_val(8);
+    constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(9);
+    constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(10);  // 1: (head, shard); 0: (head, Q-block tile)
 
     constexpr uint32_t ALL_BLOCK_TILES = NUM_SHARDS * SHARD_BLOCK_TILES;
     // Pooled-K block tiles a unit reads: its own shard's, or every shard's.
     constexpr uint32_t K_BLOCK_TILES_PER_UNIT = UNITS_PER_SHARD ? SHARD_BLOCK_TILES : ALL_BLOCK_TILES;
     constexpr uint32_t K_TILES_PER_UNIT = K_BLOCK_TILES_PER_UNIT * HEAD_DIM_TILES;
     constexpr uint32_t Q_TILES_PER_HEAD = SHARD_BLOCK_TILES * HEAD_DIM_TILES;
-    constexpr auto q_pooled_args = TensorAccessorArgs<19>();
+    constexpr auto q_pooled_args = TensorAccessorArgs<11>();
     constexpr auto k_pooled_args = TensorAccessorArgs<q_pooled_args.next_compile_time_args_offset()>();
     constexpr auto const_or_args = TensorAccessorArgs<k_pooled_args.next_compile_time_args_offset()>();
     constexpr auto valid_blocks_args = TensorAccessorArgs<const_or_args.next_compile_time_args_offset()>();
-    constexpr auto q_select_args = TensorAccessorArgs<valid_blocks_args.next_compile_time_args_offset()>();
-    constexpr auto k_select_args = TensorAccessorArgs<q_select_args.next_compile_time_args_offset()>();
-    constexpr auto ones_args = TensorAccessorArgs<k_select_args.next_compile_time_args_offset()>();
+    constexpr auto ones_args = TensorAccessorArgs<valid_blocks_args.next_compile_time_args_offset()>();
     constexpr auto shard_select_args = TensorAccessorArgs<ones_args.next_compile_time_args_offset()>();
     // Q_SHARED: the shard-0 core reads the head's Q and sends it to the other cores (semaphore 1).
     constexpr uint32_t Q_SHARED = get_compile_time_arg_val(shard_select_args.next_compile_time_args_offset());
 
-    static_assert(UNITS_PER_SHARD == 0 || MODE == 1, "(head, shard) units are MODE 1 only");
     // This core's units, [core_index * NUM_UNITS / NUM_CORES, (core_index + 1) * NUM_UNITS / NUM_CORES).
     constexpr uint32_t NUM_CORES = GRID_X * GRID_Y;
     static_assert(
@@ -90,10 +83,8 @@ void kernel_main() {
     const auto k_pooled = TensorAccessor(k_pooled_args, get_common_arg_val<uint32_t>(1));
     const auto const_or = TensorAccessor(const_or_args, get_common_arg_val<uint32_t>(2));
     const auto valid_blocks = TensorAccessor(valid_blocks_args, get_common_arg_val<uint32_t>(3));
-    const auto q_select = TensorAccessor(q_select_args, get_common_arg_val<uint32_t>(4));
-    const auto k_select = TensorAccessor(k_select_args, get_common_arg_val<uint32_t>(5));
-    const auto ones = TensorAccessor(ones_args, get_common_arg_val<uint32_t>(6));
-    const auto shard_select = TensorAccessor(shard_select_args, get_common_arg_val<uint32_t>(7));
+    const auto ones = TensorAccessor(ones_args, get_common_arg_val<uint32_t>(4));
+    const auto shard_select = TensorAccessor(shard_select_args, get_common_arg_val<uint32_t>(5));
 
     Noc noc;
     auto read_pages = [&](auto& accessor, uint32_t cb_id, uint32_t first_page, uint32_t count) {
@@ -120,9 +111,9 @@ void kernel_main() {
         valid_blocks_cb(cb_valid_blocks);
     for (uint32_t unit = unit_start; unit < unit_start + unit_count; ++unit) {
         // One of the two ranges is a single value; the loops are the same either way.
-        const uint32_t head = UNITS_PER_SHARD ? unit / NUM_SHARDS : unit / SHARD_Q_CHUNK_TILES;
-        const uint32_t q_chunk_tile_begin = UNITS_PER_SHARD ? 0 : unit % SHARD_Q_CHUNK_TILES;
-        const uint32_t q_chunk_tile_end = UNITS_PER_SHARD ? SHARD_Q_CHUNK_TILES : q_chunk_tile_begin + 1;
+        const uint32_t head = UNITS_PER_SHARD ? unit / NUM_SHARDS : unit / SHARD_BLOCK_TILES;
+        const uint32_t q_block_tile_begin = UNITS_PER_SHARD ? 0 : unit % SHARD_BLOCK_TILES;
+        const uint32_t q_block_tile_end = UNITS_PER_SHARD ? SHARD_BLOCK_TILES : q_block_tile_begin + 1;
         const uint32_t shard_begin = UNITS_PER_SHARD ? unit % NUM_SHARDS : 0;
         const uint32_t shard_end = UNITS_PER_SHARD ? shard_begin + 1 : NUM_SHARDS;
 
@@ -173,7 +164,7 @@ void kernel_main() {
                 const UnicastEndpoint remote;             // below waits for the writes and bumps semaphore 1
                 for (uint32_t peer_shard = 1; peer_shard < NUM_SHARDS; ++peer_shard) {
                     const uint32_t peer_noc_xy =
-                        get_common_arg_val<uint32_t>(8 + core_of_unit(head * NUM_SHARDS + peer_shard));
+                        get_common_arg_val<uint32_t>(6 + core_of_unit(head * NUM_SHARDS + peer_shard));
                     noc.async_write(
                         CoreLocalMem<uint32_t>(q_addr),
                         remote,
@@ -188,8 +179,6 @@ void kernel_main() {
         // Per-core constants, read once.
         if (unit == unit_start) {
             read_pages(ones, cb_ones, 0, 1);
-            read_pages(q_select, cb_q_select, 0, SHARD_Q_CHUNK_TILES * SHARD_BLOCK_TILES);
-            read_pages(k_select, cb_k_select, 0, SHARD_BLOCK_TILES * SHARD_K_CHUNK_TILES);
             if constexpr (UNITS_PER_SHARD) {
                 read_pages(shard_select, cb_shard_select, 0, SHARD_SELECT_TILES);
             }
@@ -225,7 +214,7 @@ void kernel_main() {
                     continue;
                 }
                 peer_noc_xy[peer_shard] =
-                    get_common_arg_val<uint32_t>(8 + core_of_unit(head * NUM_SHARDS + peer_shard));  // the peer's core
+                    get_common_arg_val<uint32_t>(6 + core_of_unit(head * NUM_SHARDS + peer_shard));  // the peer's core
                 const uint32_t peer_x = peer_noc_xy[peer_shard] & 0xFF, peer_y = (peer_noc_xy[peer_shard] >> 8) & 0xFF;
                 for (uint32_t run : {left_run, right_run}) {
                     noc.async_write(
@@ -260,15 +249,17 @@ void kernel_main() {
             }
         }
 
-        for (uint32_t q_chunk_tile = q_chunk_tile_begin; q_chunk_tile < q_chunk_tile_end; ++q_chunk_tile) {
+        // The always-keep and valid-block tiles of (Q-block tile, shard), the same page in both tensors.
+        for (uint32_t q_block_tile = q_block_tile_begin; q_block_tile < q_block_tile_end; ++q_block_tile) {
             for (uint32_t shard = shard_begin; shard < shard_end; ++shard) {
+                const uint32_t first_page = q_block_tile * ALL_BLOCK_TILES + shard * SHARD_BLOCK_TILES;
                 const_or_cb.reserve_back(SHARD_BLOCK_TILES);
                 for (uint32_t k_block_tile = 0; k_block_tile < SHARD_BLOCK_TILES; ++k_block_tile) {
                     noc.async_read(
                         const_or,
                         const_or_cb,
                         TILE_BYTES,
-                        {.page_id = q_chunk_tile * ALL_BLOCK_TILES + shard * SHARD_BLOCK_TILES + k_block_tile},
+                        {.page_id = first_page + k_block_tile},
                         {.offset_bytes = k_block_tile * TILE_BYTES});
                 }
                 valid_blocks_cb.reserve_back(SHARD_BLOCK_TILES);
@@ -277,7 +268,7 @@ void kernel_main() {
                         valid_blocks,
                         valid_blocks_cb,
                         TILE_BYTES,
-                        {.page_id = shard * SHARD_BLOCK_TILES + k_block_tile},
+                        {.page_id = first_page + k_block_tile},
                         {.offset_bytes = k_block_tile * TILE_BYTES});
                 }
                 noc.async_read_barrier();
