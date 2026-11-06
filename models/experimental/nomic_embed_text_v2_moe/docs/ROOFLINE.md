@@ -40,8 +40,8 @@ Bound by DRAM, reading the weights. Target: 60% DRAM bandwidth
 | 1x128 | compute | DRAM | bound | target, ms | current, ms |
 |---|---|---|---|---|---|
 | Dense layer | 7% | 35% | DRAM (97%) | 0.05 | 0.10 |
-| MoE layer | 4% | 51% | DRAM (99%) | 0.15 | 0.21 |
-| **e2e** | 5% | 46% | DRAM (99%) | 1.17 | 1.87 |
+| MoE layer | 4% | 50% | DRAM (99%) | 0.15 | 0.22 |
+| **e2e** | 5% | 45% | DRAM (99%) | 1.17 | 1.89 |
 
 ### 4x288: past the switch
 
@@ -53,7 +53,7 @@ DRAM-bound at every T, SDPA and the norms compute-bound at every T.
 | 4x288 | compute | DRAM | bound | target, ms | current, ms |
 |---|---|---|---|---|---|
 | Dense layer | 42% | 22% | compute | 0.10 | 0.16 |
-| MoE layer | 33% | 43% | DRAM (74%) | 0.18 | 0.26 |
+| MoE layer | 33% | 43% | DRAM (74%) | 0.18 | 0.25 |
 | **e2e** | 36% | 35% | compute (51%) | 1.66 | 2.49 |
 
 ### 8x256: compute-bound
@@ -62,7 +62,7 @@ Bound by compute. Target: 70% compute utilization (60% for SDPA)
 | 8x256 | compute | DRAM | bound | target, ms | current, ms |
 |---|---|---|---|---|---|
 | Dense layer | 57% | 16% | compute | 0.17 | 0.21 |
-| MoE layer | 48% | 35% | compute (71%) | 0.24 | 0.31 |
+| MoE layer | 48% | 36% | compute (71%) | 0.24 | 0.31 |
 | **e2e** | 51% | 28% | compute (82%) | 2.48 | 3.13 |
 
 ### 8x512: compute-bound
@@ -71,8 +71,8 @@ Bound by compute. Target: 70% compute utilization (60% for SDPA)
 | 8x512 | compute | DRAM | bound | target, ms | current, ms |
 |---|---|---|---|---|---|
 | Dense layer | 67% | 9% | compute | 0.36 | 0.37 |
-| MoE layer | 63% | 22% | compute (98%) | 0.47 | 0.51 |
-| **e2e** | 64% | 17% | compute (98%) | 5.04 | 5.33 |
+| MoE layer | 62% | 22% | compute (98%) | 0.47 | 0.51 |
+| **e2e** | 64% | 17% | compute (98%) | 5.04 | 5.35 |
 
 ## Per op
 
@@ -91,47 +91,47 @@ output convert; below it (1x128 here) every norm converts in and out.
 
 | op | ttnn call | 1x128 us | % of forward | 4x288 us | % of forward | 8x256 us | % of forward | 8x512 us | % of forward |
 |---|---|---|---|---|---|---|---|---|---|
-| token embedding lookup | `ttnn.embedding` | 6.1 | 0.3 | 11.1 | 0.4 | 14.1 | 0.5 | 24.1 | 0.5 |
-| layout conversions around the embedding norm | `ttnn.to_memory_config` x2 (1x128); `Copy` (4x288, 8x256, 8x512) | 1.8 | 0.1 | 4.6 | 0.2 | 7.0 | 0.2 | 11.6 | 0.2 |
-| embedding norm | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 7.0 | 0.4 | 7.4 | 0.3 | 9.2 | 0.3 | 14.1 | 0.3 |
-| the last norm's output to interleaved memory | `ttnn.to_memory_config` (1x128); `Copy` (4x288, 8x256, 8x512) | 1.4 | 0.1 | 3.8 | 0.2 | 6.3 | 0.2 | 11.2 | 0.2 |
-| pooling: mean_pool (sum) + L2 normalize | `ttnn.matmul` + `ttnn.multiply` + `ttnn.sum` + `ttnn.clamp / ttnn.rsqrt` x2 + `ttnn.multiply` | 20.2 | 1.1 | 23.8 | 1.0 | 26.0 | 0.8 | 31.1 | 0.6 |
+| token embedding lookup | `ttnn.embedding` | 6.3 | 0.3 | 10.7 | 0.4 | 14.1 | 0.5 | 24.1 | 0.5 |
+| layout conversions around the embedding norm | `ttnn.to_memory_config` x2 (1x128); `Copy` (4x288, 8x256, 8x512) | 1.8 | 0.1 | 3.9 | 0.2 | 6.6 | 0.2 | 13.0 | 0.2 |
+| embedding norm | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 7.0 | 0.4 | 7.5 | 0.3 | 9.1 | 0.3 | 14.2 | 0.3 |
+| the last norm's output to interleaved memory | `ttnn.to_memory_config` (1x128); `Copy` (4x288, 8x256, 8x512) | 1.3 | 0.1 | 3.8 | 0.2 | 5.9 | 0.2 | 11.0 | 0.2 |
+| pooling: mean_pool (sum) + L2 normalize | `ttnn.matmul` + `ttnn.multiply` + `ttnn.sum` + `ttnn.clamp / ttnn.rsqrt` x2 + `ttnn.multiply` | 20.1 | 1.1 | 23.7 | 1.0 | 26.0 | 0.8 | 31.1 | 0.6 |
 
 ### Dense layer
 
 | op | ttnn call | 1x128 us | % | 4x288 us | % | 8x256 us | % | 8x512 us | % |
 |---|---|---|---|---|---|---|---|---|---|
-| QKV projection | `ttnn.linear` | 12.4 | **12.9** | - | - | - | - | - | - |
-| QKV + head split + rotary (one generated op) | `ttnn.operations.nomic_qkv_rotary_heads (generated)` | - | - | 35.9 | **23.0** | 45.9 | **22.3** | 83.2 | **22.2** |
+| QKV projection | `ttnn.linear` | 12.7 | **13.1** | - | - | - | - | - | - |
+| QKV + head split + rotary (one generated op) | `ttnn.operations.nomic_qkv_rotary_heads (generated)` | - | - | 35.9 | **22.9** | 45.9 | **22.3** | 82.8 | **22.1** |
 | head split | `ttnn.experimental.nlp_create_qkv_heads` | 1.9 | **2.0** | - | - | - | - | - | - |
-| rotary on q and k | `ttnn.experimental.rotary_embedding_llama` x2 | 6.4 | **6.6** | - | - | - | - | - | - |
-| attention | `ttnn.operations.nomic_sdpa (generated)` | 4.3 | **4.5** | 15.7 | **10.1** | 19.9 | **9.7** | 52.5 | **14.0** |
-| attention output projection | `ttnn.linear` (1x128); `ttnn.experimental.nomic_embed_text_v2_moe.pirotski_matmul` (4x288, 8x256, 8x512) | 8.4 | **8.7** | 15.8 | **10.1** | 21.3 | **10.3** | 35.0 | **9.3** |
+| rotary on q and k | `ttnn.experimental.rotary_embedding_llama` x2 | 6.3 | **6.5** | - | - | - | - | - | - |
+| attention | `ttnn.operations.nomic_sdpa (generated)` | 4.3 | **4.4** | 15.8 | **10.1** | 19.9 | **9.7** | 53.7 | **14.3** |
+| attention output projection | `ttnn.linear` (1x128); `ttnn.experimental.nomic_embed_text_v2_moe.pirotski_matmul` (4x288, 8x256, 8x512) | 8.4 | **8.6** | 16.0 | **10.2** | 21.3 | **10.4** | 35.0 | **9.3** |
 | residual add + norm1 | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 7.4 | **7.6** | 7.4 | **4.7** | 9.9 | **4.8** | 16.8 | **4.5** |
-| fc1 + GELU (FFN up-projection) | `ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w1` | 20.1 | **20.8** | 32.4 | **20.8** | 48.5 | **23.6** | 86.6 | **23.1** |
-| fc2 (FFN down-projection) | `ttnn.linear` (1x128); `ttnn.experimental.nomic_embed_text_v2_moe.pirotski_matmul` (4x288, 8x256, 8x512) | 24.4 | **25.3** | 41.4 | **26.6** | 50.3 | **24.4** | 83.3 | **22.3** |
-| residual add + norm2 | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 7.3 | **7.6** | 7.4 | **4.7** | 9.9 | **4.8** | 16.8 | **4.5** |
-| layout conversions around the split norms | `ttnn.to_memory_config` x4 | 3.9 | **4.0** | - | - | - | - | - | - |
-| **layer total** | | 96.5 | **100** | 155.9 | **100** | 205.7 | **100** | 374.1 | **100** |
+| fc1 + GELU (FFN up-projection) | `ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w1` | 20.3 | **20.8** | 32.3 | **20.6** | 48.5 | **23.6** | 86.4 | **23.1** |
+| fc2 (FFN down-projection) | `ttnn.linear` (1x128); `ttnn.experimental.nomic_embed_text_v2_moe.pirotski_matmul` (4x288, 8x256, 8x512) | 24.4 | **25.1** | 41.9 | **26.8** | 50.2 | **24.4** | 83.3 | **22.2** |
+| residual add + norm2 | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 7.4 | **7.6** | 7.4 | **4.7** | 9.9 | **4.8** | 16.8 | **4.5** |
+| layout conversions around the split norms | `ttnn.to_memory_config` x4 | 4.1 | **4.2** | - | - | - | - | - | - |
+| **layer total** | | 97.2 | **100** | 156.7 | **100** | 205.6 | **100** | 374.9 | **100** |
 
 ### MoE layer
 
 | op | ttnn call | 1x128 us | % | 4x288 us | % | 8x256 us | % | 8x512 us | % |
 |---|---|---|---|---|---|---|---|---|---|
-| QKV projection | `ttnn.linear` | 12.5 | **6.0** | - | - | - | - | - | - |
-| QKV + head split + rotary (one generated op) | `ttnn.operations.nomic_qkv_rotary_heads (generated)` | - | - | 35.7 | **14.2** | 46.0 | **15.0** | 83.3 | **16.7** |
+| QKV projection | `ttnn.linear` | 12.5 | **5.9** | - | - | - | - | - | - |
+| QKV + head split + rotary (one generated op) | `ttnn.operations.nomic_qkv_rotary_heads (generated)` | - | - | 35.7 | **14.3** | 45.9 | **15.0** | 82.9 | **16.6** |
 | head split | `ttnn.experimental.nlp_create_qkv_heads` | 1.9 | **0.9** | - | - | - | - | - | - |
 | rotary on q and k | `ttnn.experimental.rotary_embedding_llama` x2 | 6.4 | **3.0** | - | - | - | - | - | - |
-| attention | `ttnn.operations.nomic_sdpa (generated)` | 4.3 | **2.0** | 15.6 | **6.2** | 19.8 | **6.5** | 54.1 | **10.8** |
-| attention output projection | `ttnn.linear` (1x128); `ttnn.experimental.nomic_embed_text_v2_moe.pirotski_matmul` (4x288, 8x256, 8x512) | 8.4 | **4.0** | 15.9 | **6.3** | 21.3 | **7.0** | 35.1 | **7.0** |
-| residual add + norm1 | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 7.3 | **3.5** | 7.4 | **3.0** | 9.9 | **3.2** | 16.8 | **3.4** |
-| router scores + top-2 + routing metadata + dispatch (one generated op) | `ttnn.operations.nomic_moe_route_dispatch (generated)` | - | - | 11.5 | **4.6** | 13.6 | **4.4** | 22.0 | **4.4** |
-| router scores | `ttnn.experimental.nomic_embed_text_v2_moe.router_front_end` | 8.4 | **4.0** | - | - | - | - | - | - |
-| routing metadata: each token's top-2, each slot's row sorted by expert | `ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata` | 6.3 | **3.0** | - | - | - | - | - | - |
+| attention | `ttnn.operations.nomic_sdpa (generated)` | 4.3 | **2.0** | 15.7 | **6.3** | 19.7 | **6.5** | 54.5 | **10.9** |
+| attention output projection | `ttnn.linear` (1x128); `ttnn.experimental.nomic_embed_text_v2_moe.pirotski_matmul` (4x288, 8x256, 8x512) | 8.4 | **3.9** | 15.8 | **6.3** | 21.3 | **7.0** | 35.0 | **7.0** |
+| residual add + norm1 | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 7.3 | **3.4** | 7.4 | **3.0** | 9.9 | **3.2** | 16.8 | **3.4** |
+| router scores + top-2 + routing metadata + dispatch (one generated op) | `ttnn.operations.nomic_moe_route_dispatch (generated)` | - | - | 11.4 | **4.6** | 13.6 | **4.4** | 22.4 | **4.5** |
+| router scores | `ttnn.experimental.nomic_embed_text_v2_moe.router_front_end` | 8.5 | **4.0** | - | - | - | - | - | - |
+| routing metadata: each token's top-2, each slot's row sorted by expert | `ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata` | 6.2 | **2.9** | - | - | - | - | - | - |
 | dispatch: each token's row into its two experts' regions (gather mode) | `ttnn.experimental.nomic_embed_text_v2_moe.routed_combine` | 4.4 | **2.1** | - | - | - | - | - | - |
-| expert w1 + GELU, each token's 2 experts | `ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w1` | 62.8 | **29.9** | 69.9 | **27.9** | 91.0 | **29.7** | 160.3 | **32.1** |
-| expert w2 | `ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w1` (1x128); `ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w2` (4x288, 8x256, 8x512) | 66.2 | **31.5** | 79.3 | **31.7** | 86.3 | **28.2** | 98.4 | **19.7** |
-| combine: each token's two rows weighted and summed, plus the bias | `ttnn.experimental.nomic_embed_text_v2_moe.routed_combine` (1x128); `ttnn.operations.nomic_moe_combine (generated)` (4x288, 8x256, 8x512) | 10.0 | **4.8** | 7.8 | **3.1** | 8.2 | **2.7** | 12.6 | **2.5** |
-| residual add + norm2 | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 8.0 | **3.8** | 7.5 | **3.0** | 9.9 | **3.2** | 16.9 | **3.4** |
-| layout conversions around the split norms | `ttnn.to_memory_config` x3 | 3.2 | **1.5** | - | - | - | - | - | - |
-| **layer total** | | 209.9 | **100** | 250.6 | **100** | 306.1 | **100** | 499.6 | **100** |
+| expert w1 + GELU, each token's 2 experts | `ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w1` | 63.1 | **29.7** | 70.0 | **28.0** | 90.9 | **29.8** | 160.5 | **32.1** |
+| expert w2 | `ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w1` (1x128); `ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul_w2` (4x288, 8x256, 8x512) | 68.1 | **32.0** | 79.0 | **31.6** | 85.7 | **28.1** | 99.0 | **19.8** |
+| combine: each token's two rows weighted and summed, plus the bias | `ttnn.experimental.nomic_embed_text_v2_moe.routed_combine` (1x128); `ttnn.operations.nomic_moe_combine (generated)` (4x288, 8x256, 8x512) | 10.1 | **4.8** | 7.5 | **3.0** | 8.4 | **2.7** | 12.7 | **2.5** |
+| residual add + norm2 | `ttnn.layer_norm` (1x128); `ttnn.operations.nomic_residual_layer_norm (generated)` (4x288, 8x256, 8x512) | 8.2 | **3.9** | 7.4 | **3.0** | 9.9 | **3.3** | 16.9 | **3.4** |
+| layout conversions around the split norms | `ttnn.to_memory_config` x3 | 3.3 | **1.5** | - | - | - | - | - | - |
+| **layer total** | | 212.6 | **100** | 250.0 | **100** | 305.5 | **100** | 500.6 | **100** |
