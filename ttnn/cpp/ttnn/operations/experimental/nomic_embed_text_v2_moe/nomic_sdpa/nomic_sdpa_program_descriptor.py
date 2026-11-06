@@ -42,6 +42,9 @@ WRITER_SLOT = 1
 READER_ADDRESS_ARGS = 3  # common RT args 0..2: q, k, v addresses
 WRITER_ADDRESS_ARGS = 4  # common RT args 0..3: output, q, v, k addresses (Q / V / a K part under split_reads)
 COMPUTE_ADDRESS_ARGS = 0  # compute reads only the table
+# key_padding: the reader's and the writer's common RT args end with L_b (valid keys) of every sequence b, right after
+# the table (kernels: lengths offset = table_arg + num_cores + 1). Rewritten by bind_call on every call: the lengths are
+# per call, never part of the cache key. The [V | 1] producer zeroes the rows of keys >= L_b (nomic_sdpa_key_mask.hpp).
 
 # ---------------------------------------------------------------------------
 # K/V pair multicast (Refinement 2; op_design.md § Regimes "row-split + pair multicast")
@@ -176,8 +179,13 @@ def _block_named_args(p):
     ]
 
 
-def bind_call(descriptor, query, key, value, output):
-    """Rebind a cached descriptor to this call's tensors: only the buffer addresses change between calls of a key."""
+def _lengths_args(p, key_lengths):
+    return [] if key_lengths is None else [int(length) for length in key_lengths]
+
+
+def bind_call(descriptor, query, key, value, output, key_lengths=None):
+    """Rebind a cached descriptor to this call's tensors and key lengths: only the buffer addresses and, under
+    key_padding, the per-sequence valid key counts change between calls of a key."""
     kernels = descriptor.kernels
     reader_common = kernels[READER_SLOT].common_runtime_args
     addresses = (query, key, value)
@@ -189,13 +197,20 @@ def bind_call(descriptor, query, key, value, output):
     writer_common[1] = query.buffer_address()
     writer_common[2] = value.buffer_address()
     writer_common[3] = key.buffer_address()
+    if key_lengths is not None:
+        for common, offset in ((reader_common, READER_ADDRESS_ARGS), (writer_common, WRITER_ADDRESS_ARGS)):
+            first = len(common) - len(key_lengths)
+            assert first > offset, "a key_padding descriptor ends with the key lengths"
+            for b, length in enumerate(key_lengths):
+                common[first + b] = int(length)
 
 
-def create_program_descriptor(p, query, key, value, output, compute_config, scale):
+def create_program_descriptor(p, query, key, value, output, compute_config, scale, key_lengths=None):
     cores = p.cores
     cbs = [_cb(cores, index, pages, page_bytes) for index, pages, page_bytes in circular_buffer_specs(p)]
     table = list(p.core_row_start)
-    block_args = _block_named_args(p)
+    block_args = [*_block_named_args(p), ("key_padding", int(key_lengths is not None))]
+    lengths = _lengths_args(p, key_lengths)
 
     # ---------------- reader: K (K^T order), V (+ ones column), Q blocks ----------------
     reader_ct = []
@@ -219,7 +234,7 @@ def create_program_descriptor(p, query, key, value, output, compute_config, scal
             *block_args,
         ],
         defines=_ablation_defines(),
-        common_runtime_args=[query.buffer_address(), key.buffer_address(), value.buffer_address(), *table],
+        common_runtime_args=[query.buffer_address(), key.buffer_address(), value.buffer_address(), *table, *lengths],
         config=ttnn.ReaderConfigDescriptor(),
     )
     roles, sender_words = kv_multicast_topology(p, query.device())
@@ -256,6 +271,7 @@ def create_program_descriptor(p, query, key, value, output, compute_config, scal
             value.buffer_address(),
             key.buffer_address(),
             *table,
+            *lengths,
         ],
         config=ttnn.WriterConfigDescriptor(),
     )

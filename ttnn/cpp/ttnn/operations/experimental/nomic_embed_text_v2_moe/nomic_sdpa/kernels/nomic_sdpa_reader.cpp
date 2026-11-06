@@ -60,6 +60,10 @@
 // (slot, K | V). The host Mcast / McastArgs channel cannot express this topology: its groups are equal-size disjoint
 // partitions, while a pair group here is an irregular core run (size set by the row table) and a core belongs to up to
 // kv_depth groups, so the pipes are built straight from per-core RT args (the rectangles in the wire's field order).
+//
+// Key padding (CT arg key_padding; nomic_sdpa_key_mask.hpp): when this RISC produces cb_value_aug (split_reads = 0) it
+// zeroes the [V | 1] rows of keys >= L_b in each slot once its data has landed, just before the push; as cb_key_t's
+// only producer it zeroes the K rows of keys >= L_b the same way (every padded score is then exactly 0).
 
 #include <cstdint>
 
@@ -68,6 +72,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "nomic_sdpa_key_mask.hpp"
 #include "nomic_sdpa_schedule.hpp"
 
 // Permanent per-stage device zones (Perf 1): reader_q_reserve (back-pressure from compute on cb_query), reader_q_lead /
@@ -131,6 +136,9 @@ void kernel_main() {
     constexpr uint32_t q_lead_rows = get_named_compile_time_arg_val("q_lead_rows");
     constexpr bool kv_bank_stagger = get_named_compile_time_arg_val("kv_bank_stagger") == 1;
     constexpr bool split_reads = get_named_compile_time_arg_val("split_reads") == 1;
+    constexpr bool key_padding = get_named_compile_time_arg_val("key_padding") == 1;
+    constexpr uint32_t heads = get_named_compile_time_arg_val("heads");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr bool own_q = !split_reads;  // cb_query producer: this RISC, or the writer under split_reads
     constexpr bool own_v = !split_reads;  // cb_value_aug producer (own reads, receives, ones column)
     // Split startup (file header): the key rows of segment 0 this RISC reads (N: all of them, no K split), and the
@@ -148,6 +156,18 @@ void kernel_main() {
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t kTableArg = get_named_compile_time_arg_val("table_arg");  // after the io addresses
+    constexpr uint32_t kLengthsArg = kTableArg + num_cores + 1;  // key_padding: L_b of every sequence, after the table
+    // key_padding: a pair's real keys L_b, and its key tile-rows that hold any (reads and multicasts skip the rest)
+    auto valid_keys_of = [&](uint32_t pair) -> uint32_t {
+        return get_common_arg_val<uint32_t>(kLengthsArg + pair / heads);
+    };
+    auto key_rows_of = [&](uint32_t pair) -> uint32_t {
+        if constexpr (key_padding) {
+            return nomic_sdpa::valid_tile_rows(valid_keys_of(pair));
+        } else {
+            return N;
+        }
+    };
     const uint32_t q_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t v_addr = get_common_arg_val<uint32_t>(2);
@@ -234,10 +254,16 @@ void kernel_main() {
         const uint32_t pair_first_page = pair * seq_tiles * HD;
         const uint32_t rows = split_k && first_segment ? k_split_rows : N;
         const uint32_t rotation = kv_row_rotation % rows;
+        const uint32_t key_rows = key_rows_of(pair);
         {
             MaybeDeviceZoneScope("reader_kv_issue");
             for (uint32_t i = 0; i < rows; ++i) {
                 const uint32_t st = i + rotation < rows ? i + rotation : i + rotation - rows;
+                if constexpr (key_padding) {
+                    if (st >= key_rows) {
+                        continue;  // wholly padded: zeroed in L1 instead (mask_key_slot)
+                    }
+                }
                 for (uint32_t dt = 0; dt < HD; ++dt) {
                     READ_PAGE(pair_first_page + st * HD + dt, k_acc, k_base + (dt * N + st) * tile_bytes);
                     throttle(first_segment);
@@ -257,10 +283,16 @@ void kernel_main() {
     auto read_value = [&](uint32_t pair, uint32_t v_base, uint32_t rows, uint32_t segment, auto&& under_reads) {
         const uint32_t pair_first_page = pair * seq_tiles * HD;
         const uint32_t rotation = kv_row_rotation % rows;
+        const uint32_t key_rows = key_rows_of(pair);
         {
             MaybeDeviceZoneScope("reader_kv_issue");
             for (uint32_t i = 0; i < rows; ++i) {
                 const uint32_t st = i + rotation < rows ? i + rotation : i + rotation - rows;
+                if constexpr (key_padding) {
+                    if (st >= key_rows) {
+                        continue;  // wholly padded: zeroed in L1 instead (mask_value_slot)
+                    }
+                }
                 for (uint32_t dt = 0; dt < HD; ++dt) {
                     READ_PAGE(pair_first_page + st * HD + dt, v_acc, v_base + (st * PV + dt) * tile_bytes);
                     throttle(segment == 0);
@@ -291,8 +323,17 @@ void kernel_main() {
             read_key(pair, k_base, k == 0);
             const auto args = sender_args(k);
             with_slot<kv_depth>(slot, [&](auto s) {
-                KvSender<kv_sem_base + 2 * decltype(s)::value, max_rects>(noc, args).send(
-                    k_base, k_base, key_slot_bytes);
+                KvSender<kv_sem_base + 2 * decltype(s)::value, max_rects> sender(noc, args);
+                if constexpr (key_padding) {  // only the valid key tile-rows of each dt (receivers zero the rest)
+                    const uint32_t key_rows = key_rows_of(pair);
+                    for (uint32_t dt = 0; dt < HD; ++dt) {
+                        const uint32_t run = k_base + dt * N * tile_bytes;
+                        sender.send_payload(run, run, key_rows * tile_bytes);
+                    }
+                    sender.send_signal();
+                } else {
+                    sender.send(k_base, k_base, key_slot_bytes);
+                }
             });
         });
     };
@@ -309,7 +350,8 @@ void kernel_main() {
             const auto args = sender_args(k);
             with_slot<kv_depth>(slot, [&](auto s) {
                 KvSender<kv_sem_base + 2 * decltype(s)::value + 1, max_rects> sender(noc, args);
-                for (uint32_t st = 0; st < N;
+                const uint32_t key_rows = key_rows_of(pair);  // key_padding: the valid rows (receivers zero the rest)
+                for (uint32_t st = 0; st < key_rows;
                      ++st) {  // the HD value tiles of each row, contiguous; never the ones tile
                     const uint32_t row = v_base + st * PV * tile_bytes;
                     sender.send_payload(row, row, HD * tile_bytes);
@@ -345,6 +387,25 @@ void kernel_main() {
             noc_async_read_barrier();
         }
     };
+
+    // key_padding (own_v): keys of each slot's ones column still 1.0 (a shorter earlier pair of the slot zeroed the
+    // rest) and the first key tile-row of each slot from which its [V | 1] is known zero (nomic_sdpa_key_mask.hpp)
+    uint32_t ones_keys[kv_depth] = {};
+    uint32_t value_known_zero[kv_depth] = {};
+    auto mask_padded_keys = [&](uint32_t pair, uint32_t slot, uint32_t v_base, bool ones_now) {
+        const uint32_t valid = valid_keys_of(pair);
+        if (ones_now) {  // the slot's first use: all ones, nothing known zero
+            ones_keys[slot] = N * nomic_sdpa::kTileRows;
+            value_known_zero[slot] = N;
+        }
+        if (ones_keys[slot] < valid) {  // a shorter earlier pair zeroed ones this pair needs
+            write_ones_column(v_base);
+            value_known_zero[slot] = N;
+        }
+        nomic_sdpa::mask_value_slot<N, PV, tile_bytes>(v_base, valid, value_known_zero[slot]);
+        ones_keys[slot] = valid;
+    };
+    uint32_t key_known_zero[kv_depth] = {};
 
     nomic_sdpa::for_each_block<seq_tiles, Q>(row_begin, row_end, [&](const nomic_sdpa::Block& blk) {
         const uint32_t role = blk.segment < kv_depth ? roles[blk.segment] : kRoleRead;
@@ -387,6 +448,13 @@ void kernel_main() {
             } else if (role == kRoleRead) {
                 read_key(blk.pair, k_base, blk.segment == 0);
             }
+            if constexpr (key_padding) {  // after the slot's K landed (read barrier / multicast receive / pre-send)
+                MaybeDeviceZoneScope("reader_k_mask");
+                if (blk.segment < kv_depth) {
+                    key_known_zero[slot] = N;  // the slot's first use: nothing known zero
+                }
+                nomic_sdpa::mask_key_slot<N, HD, tile_bytes>(k_base, valid_keys_of(blk.pair), key_known_zero[slot]);
+            }
             cb_push_back(cb_key_t, N * HD);
         }
 
@@ -427,6 +495,10 @@ void kernel_main() {
                         write_ones_column(v_base);
                     }
                 });
+            }
+            if constexpr (key_padding) {
+                MaybeDeviceZoneScope("reader_v_mask");
+                mask_padded_keys(blk.pair, slot, v_base, ones_now);
             }
             cb_push_back(cb_value_aug, N * PV);
         }

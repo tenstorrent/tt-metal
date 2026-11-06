@@ -464,3 +464,51 @@ Medians of 5; the focus is a median of 11; the configs are medians of 3.
   - the split reads use the op's existing `noc_async_read_page`;
   - the reordered windows reuse Perf 1's raw `mm_window` (already recorded).
 - The kernel-head / site comments carry the measured justification at every bypass.
+
+## Key padding: `mask_mode = key_padding` by zeroing padded keys in L1 (by hand, outside the pipeline)
+- **Date**: 2026-11-06. Blackhole p300c, 1350 MHz. SUPPORTED: `mask_mode` gains `key_padding`; `alignment` stays
+  `tile_aligned` (ragged is still open, op_requirements.md).
+- **Mechanism** (not the queued runtime-N plan, which the perf rounds made costly: N is a template / MOP constant in the
+  raw-LLK windows, `reduce_block_max_row<N>`, `pack_runs` and `pv_ones`). The compute kernel is unchanged. With CT arg
+  `key_padding` the producers zero, for keys j >= L_b, after a slot's data has landed and before its push
+  (`kernels/nomic_sdpa_key_mask.hpp`):
+  - the reader (cb_key_t's only producer): the K rows, so every padded score is exactly 0;
+  - the cb_value_aug producer (writer under split_reads, else reader): the rows of the HD value tiles and of the ones
+    tile, so a padded key takes exactly zero weight in O and in l.
+  Padded scores still enter the row max (m = max(valid max, 0)); padded weights exp(-m) <= 1 cannot overflow, and the
+  valid ones underflow only if every valid score of a row is below the fast exp's range (~-88). Zeroing K was needed:
+  with the padded keys' own K, a padded score ~60 above a row's only valid key (golden peaky profile, L_b = 1) made
+  l = 0 (one NaN row at 8x512).
+  - Reads and the K / V multicasts skip wholly padded key tile-rows; each producer tracks, per ring slot, the first
+    tile-row known zero, so a slot's padded tiles are zeroed about once with a length-sorted batch; a range is zeroed by
+    a 2 KiB seed from MEM_ZEROS plus doubling local copies. The ones column is rewritten when a later pair of a slot has
+    more valid keys than the slot keeps ones for.
+  - Host: the lengths are common RT args after the core table (reader and writer), rewritten by `bind_call` every call;
+    `mask_mode` is in the cache key, the lengths are not. key_lengths all equal to S run the unpadded kernels.
+- **Perf** (device us, L1, median of 5; `test_nomic_sdpa_key_padding_perf.py`: lengths sorted longest first, the first
+  row full, falling to 1 token):
+
+  | shape | no padding | key_lengths (first form) | key_lengths | stock SDPA + additive mask |
+  |---|---|---|---|---|
+  | 2x512 | 20.6 | 21.0 | 21.1 | 38.4 |
+  | 4x512 | 30.3 | 34.0 | 31.3 | 57.2 |
+  | 8x512 | 52.3 | 63.2 | 53.9 | 106.0 |
+
+  The first form re-read every padded tile and zeroed it in 512-byte pieces; with every row one token short (boundary
+  rows only) it already cost nothing (8x512 52.8 vs 52.8), which located the cost. The unpadded kernels compile to
+  the code they had (`if constexpr`).
+- **Accuracy**: golden suite 76 passed / 13 xfailed (was 45 / 45: every tile-aligned key_padding cell passes, L1 and
+  DRAM, the DRAM S_t <= 8 shapes on the reader-produced [V | 1] path); `test_regression.py::test_key_padding[3-400]`
+  now fails with UnsupportedAxisValue (alignment ragged) instead of xfailing: the test gates on key_padding only.
+  Model operator test `test_generated_sdpa_with_key_lengths_is_no_less_accurate_than_stock` (relative RMS no worse
+  than stock SDPA with the mask, 7 cases incl. NaN in the padded K / V rows): passed. Real-text pooled embeddings
+  (`scratch/sdpa_key_padding/accuracy_kp.py`, seeds 0-3, ragged 2x512 / 4x512 / 8x512) against the CPU reference,
+  worst row 1 - cos: key_lengths 3.85e-4 / 5.75e-4 / 5.75e-4, stock + mask 3.43e-4 / 3.54e-4 / 4.02e-4 (full batches,
+  same op: up to 5.03e-4; the model's bar 1e-2).
+- **Model** (models/experimental/nomic_embed_text_v2_moe; `tt_config.generated_sdpa_key_padding`, default on): a
+  right-padded batch with every row >= 1 token passes `key_lengths` (tt.model `right_padded_lengths`) down to
+  `_generated_sdpa`; the additive mask is still built (DRAM) for the calls the op refuses. Signposted embed() on
+  `profile_variant.py --padded` real text (SciFact, the first row full, the rest shorter), two paired rounds, against
+  the `no_sdpa_key_padding` variant: device time 2x512 2.583 -> 2.351 ms (-9.0%), 4x512 3.786 -> 3.330 (-12.1%),
+  8x512 6.155 -> 5.486 (-10.9%); attention over the 12 layers 481 -> 250, 833 -> 374, 1310 -> 652 us. Model tests
+  (`tests/pcc/test_ttnn_model.py`, padded and not) 49 passed.

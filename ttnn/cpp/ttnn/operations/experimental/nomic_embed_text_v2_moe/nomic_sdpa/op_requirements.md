@@ -209,6 +209,12 @@ Next, not done here because each is a separate lever outside this heading:
 
 ### Deferred (supervisor: until the op is faster than stock SDPA) — Key padding and ragged sequence lengths (boundary-masked key extent)
 
+**Status (2026-11-06, by hand, outside the pipeline)**: `key_padding` is done (changelog, "Key padding"), by a different
+mechanism than the one below: N stays the compile-time S_t and the producers zero the padded keys' K and [V | 1] rows
+in L1, so the compute kernel is unchanged. `ragged` is still open: the same zeroing with L_b = S looks like it covers
+the key side (the tile padding of K / V can hold anything), but it is not built or tested; the padded query rows and
+the output's tile padding need checking too.
+
 **Goal**: add `"key_padding"` to `SUPPORTED["mask_mode"]` and `"ragged"` to `SUPPORTED["alignment"]`, with native
 in-kernel support, following op_design.md § "TARGET axes against the scheme":
 

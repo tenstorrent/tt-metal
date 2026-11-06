@@ -12,6 +12,12 @@ two-pass softmax per block of its rows: scores = Q K^T, m = rowmax, P = exp(scal
 [O | l] = P [V | 1], out = O / l. The cores sharing a pair at a fresh K/V slot read its K/V once (the group's first
 core whose first segment it is) and receive it by NoC multicast (kv_multicast_topology in the program descriptor).
 
+Key padding (mask_mode = key_padding: key_lengths[b] = L_b real keys of a right-padded sequence b): the compute kernel
+is unchanged. The reader and writer zero the K rows and the [V | 1] rows of keys j >= L_b in L1 before pushing a slot
+(kernels/nomic_sdpa_key_mask.hpp), so a padded score is exactly 0 and takes exactly zero weight in O and in l. Reads
+and multicasts skip wholly padded key tile-rows. The lengths are per-call common RT args, never in the cache key;
+key_lengths all equal to S run the unpadded kernels.
+
 Every block knob (q_block_rows, key_block_tiles, the buffer depths, the core-assignment table) is defined once in
 `plan()` and handed to the kernels as CT / common-RT args; nothing downstream restates it.
 """
@@ -174,7 +180,7 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "buffer": ["l1", "dram"],
-    "mask_mode": ["none"],
+    "mask_mode": ["none", "key_padding"],
     "alignment": ["tile_aligned"],
 }
 
@@ -551,6 +557,9 @@ def nomic_sdpa(
     )
     from .nomic_sdpa_program_descriptor import bind_call, create_program_descriptor  # noqa: PLC0415
 
+    # key_padding: every L_b = S masks nothing, so it runs the unmasked kernels (no mask work at all).
+    if key_lengths is not None and all(int(length) == p.seqlen for length in key_lengths):
+        key_lengths = None
     device = query.device()
     out_config = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
     compute = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
@@ -602,6 +611,8 @@ def nomic_sdpa(
         _CALL_CACHE[cache_key] = state
 
     if state.descriptor is None:
-        state.descriptor = create_program_descriptor(state.plan, query, key, value, output, state.compute, scale)
-    bind_call(state.descriptor, query, key, value, output)
+        state.descriptor = create_program_descriptor(
+            state.plan, query, key, value, output, state.compute, scale, key_lengths
+        )
+    bind_call(state.descriptor, query, key, value, output, key_lengths)
     return ttnn.generic_op([query, key, value, output], state.descriptor)
