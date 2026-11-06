@@ -2162,6 +2162,8 @@ class MTPSpecEngine:
                 self._prepare_fused()
 
         if self._paged_state() is not None:
+            # the fused steps' result buffers: QWEN36_MAMBA_COPY_TRACE selects chained copies from their counts
+            self._paged_state().chain_results = [d.result_out for d in (self._fa, self._fs) if d is not None]
             self._paged_state().warmup()
         ttnn.synchronize_device(self.mesh)
         self.prepared = True

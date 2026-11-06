@@ -340,6 +340,11 @@ def test_copy_traces_match_the_eager_block_ops(device, geo_block_layout):
     dn.verify_win_cur = lambda: dn._verify_win_pair[dn._spec_win_par]
     zeros = lambda shape, dt: ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
     dn.rec_state, dn.conv_carry = zeros((1, g.Nv, 128, 128), ttnn.float32), zeros((1, 3, g.C), ttnn.bfloat16)
+    # a fused step's result buffer (row RES_COUNTS = accepted counts by engine row), as the engine hands it over
+    res_dev = ttnn.from_torch(
+        torch.zeros(3, 32, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    st.chain_results = [res_dev]
     ct = sbs._CopyTraces(st)
     ct.capture()
     ct.capture_restore()
@@ -370,16 +375,25 @@ def test_copy_traces_match_the_eager_block_ops(device, geo_block_layout):
             st.materialize(u, t, 0, dst, pts)
         assert torch.equal(conv_at(dst), windows[par][u : u + 1, t + 1 : t + 4]), f"window half {par}"
     dn._spec_win_par = 0
-    # chained copy with the count on the device: row 2 selects its copy (column 1, block 21 -> 18)
+    # chained copies with the counts on the device (traced selection): row 2 selects its copy (column 1, block 21 -> 18),
+    # row 5 does not (counts 3..4 copy column 2, block 32 -> 12; its count is 2)
+    recs[32] = torch.randn(1, g.Nv, 128, 128)
+    with sbs._PageTables(st) as pts:
+        st._write_rec(
+            dn, 32, ttnn.from_torch(recs[32], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device), pts
+        )
     w = torch.zeros(B, T, dtype=torch.int64)
-    w[2] = torch.tensor([20, 21, 22, 23])
-    st.book.set_step([w], torch.zeros(B, dtype=torch.int64), [2])
+    w[2], w[5] = torch.tensor([20, 21, 22, 23]), torch.tensor([30, 31, 32, 33])
+    st.book.set_step([w], torch.zeros(B, dtype=torch.int64), [2, 5])
     cp = torch.zeros(B, T, 2, dtype=torch.int64)
     cp[2, 1:] = torch.tensor([21, 18])
-    st.capture_chain_copies([cp], [2])
+    cp[5, 2:] = torch.tensor([32, 12])
+    st.capture_chain_copies([cp], [2, 5])
     res = torch.zeros(3, 32, dtype=torch.int32)
-    res[RES_COUNTS, 2] = 3
-    st.run_chain_copies(result=ttnn.from_torch(res, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device))
+    res[RES_COUNTS, 2], res[RES_COUNTS, 5] = 3, 2
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(res, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT), res_dev)
+    assert ct.result_index(res_dev) == 0, "the result buffer's select trace"
+    st.run_chain_copies(result=res_dev)
     assert torch.equal(rec_at(18), recs[21]), "chained copy: state"
     assert torch.equal(conv_at(18), windows[0][2:3, 2:5]), "chained copy: conv rows"
     assert torch.equal(rec_at(12), recs[12]) and torch.equal(

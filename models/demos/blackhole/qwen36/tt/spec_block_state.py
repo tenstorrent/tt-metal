@@ -845,7 +845,10 @@ class SpecGdnBlockState:
 
         heads = lambda b: lay.head_pages(torch.tensor([b]))[0]
         ct = getattr(self, "_copy_traces", None)
+        ri = None if ct is None or not ct.tids else ct.result_index(result)
         for u, g, src, dst, t, cs in todo:
+            if ri is not None and ct.chained_select(ri, src, u, t, g, cs, dst):  # the selection traced too
+                continue
             # per entry: a trace replay may overwrite buffers allocated after its capture, so nothing computed before
             # one entry's replays is read after them
             cu = ttnn.slice(counts_row(), [0, u], [1, u + 1])  # [1, 1]
@@ -1493,6 +1496,27 @@ class _CopyTraces:
         self._ctl("u", torch.zeros(3, dtype=torch.int32))
         self._ctl("uend", torch.tensor([1, Lp, C], dtype=torch.int32))
         self._ctl("mdst", torch.zeros(1, cp, dtype=torch.int32))
+        # chained copies: the destination pages selected on the device from a fused step's counts (one trace per result
+        # buffer), written straight into this object's copy and conv tables
+        self.results = list(getattr(st, "chain_results", None) or [])
+        if self.results:
+            self.W = int(self.results[0].shape[1])
+            if any(int(r.shape[1]) != self.W for r in self.results):
+                self.results = []
+        if self.results:
+            self._ctl("onehot", torch.zeros(1, self.W), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            self._ctl("smask", torch.zeros(1, st.T), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            self._ctl(
+                "iota1",
+                torch.arange(1, st.T + 1, dtype=torch.float32).reshape(1, -1),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            for k, h0, h1, _ in self.pools:
+                for name in (f"base{k}", f"step{k}"):
+                    self._ctl(name, torch.zeros(1, 2 * (h1 - h0)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            for name in ("basec", "stepc"):
+                self._ctl(name, torch.zeros(1, cp), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         # restore: block pages of each group into the bound prefill scratch
         for g in range(st.G):
             for k, _, _, _ in self.pools:
@@ -1595,6 +1619,8 @@ class _CopyTraces:
 
         mesh = self.state.mesh
         bodies = {"block": self._block_body, "copy": self._copy_body}
+        for i, r in enumerate(self.results):
+            bodies[("select", i)] = lambda r=r: self._select_body(r)
         for g in range(self.state.G):
             for par in (0, 1):
                 for t in range(self.state.T):
@@ -1609,7 +1635,35 @@ class _CopyTraces:
                 ttnn.end_trace_capture(mesh, tid, cq_id=0)
             self.tids[key] = tid
         ttnn.synchronize_device(mesh)
+        for name in [f"dst{k}" for k, _, _, _ in self.pools] + ["cdst", "mdst"]:  # the select bodies wrote them
+            self.host[name] = (None,) + self.host[name][1:]
         self.fp = self.fingerprint()
+
+    def _select_body(self, r):
+        """Destination page tables of one chained copy from result buffer ``r`` (row RES_COUNTS = accepted counts by
+        engine row): m = 1 when the count of the row in "onehot" is one of "smask", then each table = base + m * step,
+        written into the copy and conv tables. Integers below 2^24: exact in fp32."""
+        import ttnn
+        from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
+
+        f32, mc, TL = ttnn.float32, ttnn.DRAM_MEMORY_CONFIG, ttnn.TILE_LAYOUT
+        row = ttnn.slice(r, [RES_COUNTS, 0], [RES_COUNTS + 1, self.W], memory_config=mc)
+        cnt = ttnn.typecast(ttnn.to_layout(row, TL), f32)
+        ttnn.deallocate(row)
+        cu = ttnn.sum(ttnn.multiply(cnt, self.dev["onehot"]), dim=1, keepdim=True)  # [1, 1]: the row's count
+        ttnn.deallocate(cnt)
+        hit = ttnn.typecast(ttnn.to_layout(ttnn.eq(self.dev["iota1"], cu), TL), f32)  # [1, T]: 1 at count - 1
+        m = ttnn.sum(ttnn.multiply(hit, self.dev["smask"]), dim=1, keepdim=True)  # [1, 1]
+        targets = [(f"dst{k}", f"base{k}", f"step{k}") for k, _, _, _ in self.pools]
+        targets += [("cdst", "basec", "stepc"), ("mdst", "basec", "stepc")]
+        for name, base, step in targets:
+            sel = ttnn.add(ttnn.multiply(self.dev[step], m), self.dev[base])
+            out = ttnn.to_layout(ttnn.typecast(sel, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.copy(out, self.dev[name])
+            ttnn.deallocate(sel)
+            ttnn.deallocate(out)
+        for x in (cu, hit, m):
+            ttnn.deallocate(x)
 
     def _restore_body(self):
         """SpecGdnBlockState.restore's ops for every GDN layer, each group's block by index, into the bound scratch."""
@@ -1730,6 +1784,49 @@ class _CopyTraces:
         else:
             self._set_dev("cdst", tables["conv"])
         self._replay("copy")
+        return True
+
+    def result_index(self, result):
+        """Index of a fused step's result buffer among the captured select traces, or None."""
+        addr = result.buffer_address()
+        return next(
+            (i for i, r in enumerate(self.results) if r.buffer_address() == addr and ("select", i) in self.tids), None
+        )
+
+    def chained_select(self, ri, src, u, t, g, counts, dst):
+        """A chained copy whose destination the device selects (dst where row u's count of result buffer ``ri`` is in
+        ``counts``, else the null block 0): the select, copy and conv replays, every control staged before them."""
+        lay = self.state.layout
+        qs, qd, q0 = self._conv_q(src), self._conv_q(dst), self._conv_q(0)
+        par = {dn._spec_win_par for _, dn, _ in self.state.layers}
+        if None in (qs, qd, q0) or len(par) != 1 or (t is not None and self.fingerprint() != self.fp):
+            return False
+        onehot = torch.zeros(1, self.W)
+        onehot[0, int(u)] = 1.0
+        smask = torch.zeros(1, self.state.T)
+        for c in counts:
+            smask[0, int(c) - 1] = 1.0
+        self._stage("onehot", onehot)
+        self._stage("smask", smask)
+        ps, pd, p0 = (lay.head_pages(torch.tensor([int(b)]))[0] for b in (src, dst, 0))
+        for k, h0, h1, off in self.pools:
+            n = 2 * (h1 - h0)
+            d0, n0 = (int(pd[h0]) - off) // HALF_PAGES, (int(p0[h0]) - off) // HALF_PAGES
+            self._stage(f"base{k}", (n0 + torch.arange(n, dtype=torch.float32)).reshape(1, n))
+            self._stage(f"step{k}", torch.full((1, n), float(d0 - n0)))
+            self._stage(f"src{k}", torch.tensor([(int(ps[h0]) - off) // HALF_PAGES, 0, 0, 0], dtype=torch.int32))
+        cp = lay.conv_pages
+        self._stage("basec", (q0 + torch.arange(cp, dtype=torch.float32)).reshape(1, cp))
+        self._stage("stepc", torch.full((1, cp), float(qd - q0)))
+        self._stage("csrc", torch.tensor([qs, 0, 0, 0], dtype=torch.int32))
+        if t is not None:
+            self._stage("u", torch.tensor([int(u), 0, 0], dtype=torch.int32))
+        self._replay(("select", ri))
+        for name in [f"dst{k}" for k, _, _, _ in self.pools] + ["cdst", "mdst"]:
+            self.host[name] = (None,) + self.host[name][1:]
+        self._replay("copy")
+        if t is not None:
+            self._replay(("conv", int(g), par.pop(), int(t)))
         return True
 
     def chained(self, src, u, t, g, tables):
