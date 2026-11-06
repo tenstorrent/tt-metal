@@ -13,7 +13,6 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.modules import LinearLayer
 from sync_gradients_placements_common import (
     DIM,
     NATIVE,
@@ -30,7 +29,7 @@ from sync_gradients_placements_common import (
     is_sharded_on_axis,
 )
 from tp_block import TPBlock
-from two_device_gradients import exact_mean, make_gradients, to_bf16
+from two_device_gradients import exact_mean, make_gradients, sharded_linear, to_bf16, upload
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -136,22 +135,15 @@ class TestHSDP:
         dp = hsdp_mesh.axis_index("dp")
         D, F = hsdp_mesh.axis_size("dp"), hsdp_mesh.axis_size("fsdp")
         values = make_gradients(64, 128, seed=8, devices=D * F)  # device k in mesh row-major order holds values[k]
-        mapper = ttnn.create_mesh_mapper(
-            _device(), ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
-        )
         exact = values.astype(np.float64).mean(axis=0, keepdims=True)
 
         def reduce(round_shard_to_bf16: bool):
-            layer = LinearLayer(128, 64, has_bias=False)
-            ttml.fsdp.fully_shard(layer, reduce_dtype=ttnn.DataType.FLOAT32)
-            layer.unshard()
-            ((parameter, shard_dim),) = layer._fsdp_state.managed
-            tensor = parameter.tensor
-            gradients = ttml.autograd.Tensor.from_numpy(
-                values.reshape(D, F, *values.shape[2:]), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper
+            _layer, state, tensor, shard_dim = sharded_linear(ttnn.DataType.FLOAT32)
+            gradients = upload(
+                values.reshape(D, F, *values.shape[2:]), [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]
             )
             tensor.set_grad(gradients.get_value())
-            layer._fsdp_state.backward_post()
+            state.backward_post()
             assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
             if round_shard_to_bf16:
                 tensor.set_grad(ttnn.typecast(tensor.get_grad(), ttnn.DataType.BFLOAT16))
@@ -159,7 +151,8 @@ class TestHSDP:
             parameters["weight"] = tensor
             ttml.core.distributed.synchronize_gradients(parameters, [dp], reduce_dtype=ttnn.DataType.FLOAT32)
             grad = tensor.get_grad()
-            shards = np.stack(_shards(grad)).reshape(D, F, *_shards(grad)[0].shape)
+            device_shards = _shards(grad)
+            shards = np.stack(device_shards).reshape(D, F, *device_shards[0].shape)
             for row in range(1, D):
                 np.testing.assert_array_equal(shards[row], shards[0])  # every dp rank holds the same mean
             return grad.dtype, np.concatenate(list(shards[0]), axis=shard_dim)

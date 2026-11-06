@@ -27,6 +27,13 @@ def value(tensor):
     return tensor.get_value(NATIVE)
 
 
+def stored_dtypes(parameters) -> set:
+    """The dtypes ``parameters`` (a model, or a mapping of names to tensors) are stored in."""
+    if hasattr(parameters, "parameters"):
+        parameters = parameters.parameters()
+    return {value(tensor).dtype for tensor in parameters.values()}
+
+
 def to_host(ttnn_tensor):
     return ttml.autograd.create_tensor(ttnn_tensor).to_numpy().astype(np.float64)
 

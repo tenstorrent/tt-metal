@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <memory>
-#include <random>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -18,6 +16,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
+#include "test_utils/random_data.hpp"
 
 class AutogradTest : public ::testing::Test {
 public:
@@ -141,28 +140,22 @@ namespace {
 
 const ttnn::Shape kGradShape({1, 1, 32, 32});
 
-// Random gradient values in [-1, 1) as bf16 on the device, with `first` as element 0.
-ttnn::Tensor bf16_gradient(uint32_t seed, float first) {
-    std::mt19937 gen(seed);
-    std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
-    std::vector<float> values(kGradShape.volume());
-    for (auto& value : values) {
-        value = dist(gen);
-    }
+// Random values in [-1, 1) with `first` as element 0.
+std::vector<float> random_values(uint32_t seed, float first) {
+    auto values = ttml::test_utils::make_uniform_vector<float>(kGradShape.volume(), -1.0F, 1.0F, seed);
     values[0] = first;
-    return ttml::core::from_vector(values, kGradShape, &ttml::autograd::ctx().get_device());
+    return values;
 }
 
-// The values a gradient holds, as floats (bf16 and fp32 values are exact in float).
-std::vector<float> values_of(const ttnn::Tensor& tensor) {
-    return ttml::core::to_vector(tensor);
+ttnn::Tensor bf16_gradient(uint32_t seed, float first) {
+    return ttml::core::from_vector(random_values(seed, first), kGradShape, &ttml::autograd::ctx().get_device());
 }
 
 // IEEE fp32 sums of the gradients' values, added one at a time: what an exact fp32 accumulation gives.
 std::vector<float> fp32_sums(const std::vector<ttnn::Tensor>& gradients) {
-    auto sums = values_of(gradients.front());
+    auto sums = ttml::core::to_vector(gradients.front());
     for (size_t i = 1; i < gradients.size(); ++i) {
-        const auto values = values_of(gradients[i]);
+        const auto values = ttml::core::to_vector(gradients[i]);
         for (size_t j = 0; j < sums.size(); ++j) {
             sums[j] += values[j];
         }
@@ -176,30 +169,31 @@ ttml::autograd::TensorPtr trainable_tensor() {
 
 }  // namespace
 
-// With an fp32 accumulation dtype, the gradient turns fp32 at its second add and holds the IEEE fp32 sum: 1 + 2^-9 is
-// below half a bf16 step at 1, so a bf16 sum would stay 1.
+// With fp32 accumulation set, the gradient turns fp32 at its second add and holds the IEEE fp32 sum: 1 + 2^-9 is below
+// half a bf16 step at 1, so a bf16 sum would stay 1.
 TEST_F(AutogradTest, AccumulatesGradientsInFp32FromTheSecondAdd) {
     auto tensor = trainable_tensor();
-    tensor->set_grad_accumulation_dtype(ttnn::DataType::FLOAT32);
+    tensor->set_accumulate_grad_in_fp32(true);
+    EXPECT_TRUE(tensor->accumulates_grad_in_fp32());
     const std::vector<ttnn::Tensor> gradients = {
         bf16_gradient(2U, 1.0F), bf16_gradient(3U, std::ldexp(1.0F, -9)), bf16_gradient(4U, 0.25F)};
 
     tensor->add_grad(gradients[0]);
     tensor->add_grad(gradients[1]);
     ASSERT_EQ(tensor->get_grad().dtype(), ttnn::DataType::FLOAT32);
-    const auto two = values_of(tensor->get_grad());
+    const auto two = ttml::core::to_vector(tensor->get_grad());
     EXPECT_EQ(two, fp32_sums({gradients[0], gradients[1]}));
     EXPECT_EQ(two[0], 1.0F + std::ldexp(1.0F, -9));
 
     tensor->add_grad(gradients[2]);
     EXPECT_EQ(tensor->get_grad().dtype(), ttnn::DataType::FLOAT32);
-    EXPECT_EQ(values_of(tensor->get_grad()), fp32_sums(gradients));
+    EXPECT_EQ(ttml::core::to_vector(tensor->get_grad()), fp32_sums(gradients));
 }
 
 // A gradient that is never added to stays the tensor it came as: no cast, no copy.
 TEST_F(AutogradTest, KeepsTheFirstGradientAsItCame) {
     auto tensor = trainable_tensor();
-    tensor->set_grad_accumulation_dtype(ttnn::DataType::FLOAT32);
+    tensor->set_accumulate_grad_in_fp32(true);
     const auto gradient = bf16_gradient(2U, 1.0F);
 
     tensor->add_grad(gradient);
@@ -208,10 +202,10 @@ TEST_F(AutogradTest, KeepsTheFirstGradientAsItCame) {
     EXPECT_EQ(tensor->get_grad().buffer()->address(), gradient.buffer()->address());
 }
 
-// Without an accumulation dtype, bf16 gradients add in bf16 as before: the same bits as one ttnn::add.
-TEST_F(AutogradTest, AddsBf16GradientsInBf16WithoutAnAccumulationDtype) {
+// Without fp32 accumulation, bf16 gradients add in bf16 as before: the same bits as one ttnn::add.
+TEST_F(AutogradTest, AddsBf16GradientsInBf16WithoutFp32Accumulation) {
     auto tensor = trainable_tensor();
-    EXPECT_EQ(tensor->get_grad_accumulation_dtype(), std::nullopt);
+    EXPECT_FALSE(tensor->accumulates_grad_in_fp32());
     const auto first = bf16_gradient(2U, 1.0F);
     const auto second = bf16_gradient(3U, std::ldexp(1.0F, -9));
 
@@ -219,41 +213,22 @@ TEST_F(AutogradTest, AddsBf16GradientsInBf16WithoutAnAccumulationDtype) {
     tensor->add_grad(second);
 
     ASSERT_EQ(tensor->get_grad().dtype(), ttnn::DataType::BFLOAT16);
-    EXPECT_EQ(values_of(tensor->get_grad()), values_of(ttnn::add(first, second)));
-    EXPECT_EQ(values_of(tensor->get_grad())[0], 1.0F);
+    EXPECT_EQ(ttml::core::to_vector(tensor->get_grad()), ttml::core::to_vector(ttnn::add(first, second)));
+    EXPECT_EQ(ttml::core::to_vector(tensor->get_grad())[0], 1.0F);
 }
 
-// A gradient that is already fp32 (an FSDP shard summed in fp32, say) takes a bf16 one exactly with no accumulation
-// dtype set too. Added as they are, the fp32 operand would lose its low 13 bits.
+// A gradient that is already fp32 (an FSDP shard summed in fp32, say) takes a bf16 one exactly without fp32
+// accumulation set too. Added as they are, the fp32 operand would lose its low 13 bits.
 TEST_F(AutogradTest, AddsBf16GradientsIntoAnFp32GradientExactly) {
     auto tensor = trainable_tensor();
-    std::vector<float> fp32_values(kGradShape.volume());
-    std::mt19937 gen(5U);
-    std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
-    for (auto& value : fp32_values) {
-        value = dist(gen);
-    }
-    fp32_values[0] = 1.0F + std::ldexp(1.0F, -20);
     const auto accumulated = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(
-        fp32_values, kGradShape, &ttml::autograd::ctx().get_device());
+        random_values(5U, 1.0F + std::ldexp(1.0F, -20)), kGradShape, &ttml::autograd::ctx().get_device());
     const auto gradient = bf16_gradient(2U, 1.0F);
 
     tensor->set_grad(accumulated);
     tensor->add_grad(gradient);
 
     ASSERT_EQ(tensor->get_grad().dtype(), ttnn::DataType::FLOAT32);
-    EXPECT_EQ(values_of(tensor->get_grad()), fp32_sums({accumulated, gradient}));
-    EXPECT_EQ(values_of(tensor->get_grad())[0], 2.0F + std::ldexp(1.0F, -20));
-}
-
-TEST_F(AutogradTest, GradAccumulationDtypeIsFp32OrUnset) {
-    auto tensor = trainable_tensor();
-    EXPECT_THAT(
-        [&] { tensor->set_grad_accumulation_dtype(ttnn::DataType::BFLOAT16); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("The gradient accumulation dtype is FLOAT32 or unset")));
-    tensor->set_grad_accumulation_dtype(ttnn::DataType::FLOAT32);
-    EXPECT_EQ(tensor->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
-    tensor->set_grad_accumulation_dtype(std::nullopt);
-    EXPECT_EQ(tensor->get_grad_accumulation_dtype(), std::nullopt);
+    EXPECT_EQ(ttml::core::to_vector(tensor->get_grad()), fp32_sums({accumulated, gradient}));
+    EXPECT_EQ(ttml::core::to_vector(tensor->get_grad())[0], 2.0F + std::ldexp(1.0F, -20));
 }

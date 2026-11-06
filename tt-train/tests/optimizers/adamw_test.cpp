@@ -33,6 +33,7 @@
 #include "xtensor/core/xtensor_forward.hpp"
 
 using ttml::test_utils::adamw::error_metrics;
+using ttml::test_utils::adamw::to_tt_fp32;
 
 struct AdamWCase {
     std::array<std::size_t, 4> shape;  // (B, H, S, C)
@@ -83,10 +84,6 @@ protected:
 
 static ttnn::Tensor to_tt_bf16(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
-}
-
-static ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
-    return ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(x, &ttml::autograd::ctx().get_device());
 }
 
 // CPU reference implementation of AdamW

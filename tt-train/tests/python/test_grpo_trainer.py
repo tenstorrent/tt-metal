@@ -47,6 +47,8 @@ from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
 from ttml.trainers.grpo_trainer import save_checkpoint
 
+from tensor_helpers import stored_dtypes
+
 # The ``LlamaGRPOCompleter`` reference implementation lives under the
 # examples tree, not under ``ttml`` proper. Surface its package on the
 # import path so this test can use it without copy-pasting the completer.
@@ -188,10 +190,17 @@ def patch_llama_weight_loading(monkeypatch, tmp_path_factory):
 
 
 def _tiny_completer(
-    max_tokens_to_complete: int = 4, model_source: str = HF_MODEL_ID, precision: dict | None = None
+    max_tokens_to_complete: int = 4,
+    model_source: str = HF_MODEL_ID,
+    precision: dict | None = None,
+    completions_per_prompt: int = 1,
 ) -> LlamaGRPOCompleter:
     return LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(max_tokens_to_complete=max_tokens_to_complete, temperature=1.0),
+        ctx=LlamaCompletionCtx(
+            max_tokens_to_complete=max_tokens_to_complete,
+            temperature=1.0,
+            completions_per_prompt=completions_per_prompt,
+        ),
         transformer_config=TINY_TRANSFORMER_CONFIG,
         device_config=DEVICE_CONFIG,
         model_source=model_source,
@@ -199,8 +208,24 @@ def _tiny_completer(
     )
 
 
-def _stored_dtypes(model) -> set:
-    return {p.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for p in model.parameters().values()}
+def _tiny_grpo_config(tmp_path, **overrides) -> GRPOConfig:
+    """``_HOST_GRPO_CONFIG`` writing to ``tmp_path``, with ``overrides``."""
+    return GRPOConfig(**{**_HOST_GRPO_CONFIG, "output_dir": str(tmp_path), **overrides})
+
+
+def _chat_dataset(tokenizer, prompts: list[str], answers: list[str]) -> Dataset:
+    """The prompts as user turns in the tokenizer's chat template, with their answers."""
+    return Dataset.from_dict(
+        {
+            "prompt": [
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True
+                )
+                for p in prompts
+            ],
+            "answer": answers,
+        }
+    )
 
 
 @pytest.mark.requires_device
@@ -267,7 +292,7 @@ def test_resumes_fp32_master_weights_from_a_trainer_checkpoint(
 
     precision = {"master_dtype": "float32"}
     saved = _tiny_completer(precision=precision)
-    assert _stored_dtypes(saved.model) == {ttnn.DataType.FLOAT32}
+    assert stored_dtypes(saved.model) == {ttnn.DataType.FLOAT32}
     checkpoint_dir = _save_trainer_checkpoint(saved, tmp_path)
     expected = {name: param.to_numpy(ttnn.DataType.FLOAT32) for name, param in saved.model.parameters().items()}
     assert all(
@@ -276,7 +301,7 @@ def test_resumes_fp32_master_weights_from_a_trainer_checkpoint(
 
     resumed = _tiny_completer(model_source=checkpoint_dir, precision=precision)
 
-    assert _stored_dtypes(resumed.model) == {ttnn.DataType.FLOAT32}
+    assert stored_dtypes(resumed.model) == {ttnn.DataType.FLOAT32}
     for name, param in resumed.model.parameters().items():
         assert np.array_equal(param.to_numpy(ttnn.DataType.FLOAT32), expected[name]), f"{name} was not resumed exactly"
     ttml.autograd.AutoContext.get_instance().reset_graph()
@@ -316,16 +341,7 @@ def test_grpo_trainer_one_step_smoke(
     """
     np.random.seed(0)
 
-    completer = LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(
-            max_tokens_to_complete=4,
-            temperature=1.0,
-            completions_per_prompt=2,
-        ),
-        transformer_config=TINY_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=HF_MODEL_ID,
-    )
+    completer = _tiny_completer(completions_per_prompt=2)
 
     # Snapshot a single parameter so we can prove training mutated it.
     params = completer.model.parameters()
@@ -333,39 +349,13 @@ def test_grpo_trainer_one_step_smoke(
     snapshot_name, snapshot_param = next(iter(params.items()))
     before = snapshot_param.to_numpy(ttnn.DataType.FLOAT32).copy()
 
-    grpo_cfg = GRPOConfig(
-        epsilon=0.2,
-        per_device_train_batch_size=4,
-        num_iterations=1,
-        gradient_accumulation_steps=1,
-        logging_steps=1,
-        output_dir=str(tmp_path),
-        checkpointing=False,
-        checkpoint_interval=999,
-        prompts_to_train=2,
-        temperature=1.0,
-        max_completion_length=4,
-        num_generations=2,
+    grpo_cfg = _tiny_grpo_config(
+        tmp_path,
         warmup_steps=warmup_steps,
         lr_scheduler_type=lr_scheduler_type,
         use_clip_grad_norm=use_clip_grad_norm,
     )
-
-    tokenizer = completer.tokenizer
-    user_prompts = ["What is 1+1?", "Name a color."]
-    dataset = Dataset.from_dict(
-        {
-            "prompt": [
-                tokenizer.apply_chat_template(
-                    [{"role": "user", "content": p}],
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                for p in user_prompts
-            ],
-            "answer": ["2", "blue"],
-        }
-    )
+    dataset = _chat_dataset(completer.tokenizer, ["What is 1+1?", "Name a color."], ["2", "blue"])
 
     reward_calls: list[list[float]] = []
 
@@ -454,44 +444,18 @@ def test_grpo_trainer_applies_precision_before_creating_its_optimizer(
     nothing still trains fp32 master weights: one step over two micro-batches with fused AdamW adds the gradients up in
     fp32, and AdamW steps with them as they are."""
     np.random.seed(0)
-    completer = LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(max_tokens_to_complete=4, temperature=1.0, completions_per_prompt=2),
-        transformer_config=TINY_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=HF_MODEL_ID,
-    )
-    assert _stored_dtypes(completer.model) == {ttnn.DataType.BFLOAT16}, "premise: the completer applied nothing"
+    completer = _tiny_completer(completions_per_prompt=2)
+    assert stored_dtypes(completer.model) == {ttnn.DataType.BFLOAT16}, "premise: the completer applied nothing"
     before = {name: p.to_numpy(ttnn.DataType.FLOAT32) for name, p in completer.model.parameters().items()}
 
     # 4 completions per micro-batch = 2 prompts x 2 generations; two micro-batches make the one step of 4 prompts.
-    grpo_cfg = GRPOConfig(
-        epsilon=0.2,
-        per_device_train_batch_size=4,
-        num_iterations=1,
-        gradient_accumulation_steps=2,
-        logging_steps=1,
-        output_dir=str(tmp_path),
-        checkpointing=False,
-        checkpoint_interval=999,
-        prompts_to_train=4,
-        temperature=1.0,
-        max_completion_length=4,
-        num_generations=2,
-        warmup_steps=0,
-        lr_scheduler_type="constant",
+    grpo_cfg = _tiny_grpo_config(
+        tmp_path, gradient_accumulation_steps=2, prompts_to_train=4, lr_scheduler_type="constant"
     )
-    tokenizer = completer.tokenizer
-    prompts = ["What is 1+1?", "Name a color.", "Name a fruit.", "What is 2+2?"]
-    dataset = Dataset.from_dict(
-        {
-            "prompt": [
-                tokenizer.apply_chat_template(
-                    [{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True
-                )
-                for p in prompts
-            ],
-            "answer": ["2", "blue", "apple", "4"],
-        }
+    dataset = _chat_dataset(
+        completer.tokenizer,
+        ["What is 1+1?", "Name a color.", "Name a fruit.", "What is 2+2?"],
+        ["2", "blue", "apple", "4"],
     )
 
     def reward_func(completions, **_kwargs):
@@ -509,7 +473,7 @@ def test_grpo_trainer_applies_precision_before_creating_its_optimizer(
     ).train()
 
     assert recorder.step_end == 1, "expected exactly one optimizer step"
-    assert _stored_dtypes(completer.model) == {ttnn.DataType.FLOAT32}
+    assert stored_dtypes(completer.model) == {ttnn.DataType.FLOAT32}
     assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
     assert gradients.dtypes == {ttnn.DataType.FLOAT32}, gradients.dtypes
     after = completer.model.parameters()

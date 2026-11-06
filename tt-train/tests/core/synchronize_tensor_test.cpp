@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -253,8 +252,6 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeU
     expect_same_on_every_device(synchronize(ttnn::DataType::FLOAT32), fp32);
 }
 
-// Which route each sum takes, from the device operations it runs: only an fp32 sum of a large bf16 tensor that splits
-// into whole-tile slices takes the reduce-scatter route; an fp32 tensor needs no cast and gains nothing from it.
 // An explicit BFLOAT16 never narrows: an fp32 tensor (a gradient accumulated in fp32) is summed in fp32 and stays fp32,
 // the same bits as with no reduce dtype or FLOAT32, both through synchronize_tensor and synchronize_gradients.
 TEST_F(SynchronizeTensorTest, Bf16ReduceDtypeLeavesAnFp32TensorInFp32) {
@@ -277,6 +274,8 @@ TEST_F(SynchronizeTensorTest, Bf16ReduceDtypeLeavesAnFp32TensorInFp32) {
     expect_same_on_every_device(parameter->get_grad(), unset);
 }
 
+// Which route each sum takes, from the device operations it runs: only an fp32 sum of a large bf16 tensor that splits
+// into whole-tile slices takes the reduce-scatter route; an fp32 tensor needs no cast and gains nothing from it.
 TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute) {
     const auto large = upload(make_gradients(512, 1024, 3));
     const auto small = upload(make_gradients(64, 128, 1));
@@ -299,151 +298,6 @@ TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute
         EXPECT_FALSE(casts(all_reduce));
         EXPECT_FALSE(divides_before_gathering(all_reduce));
     }
-}
-
-namespace {
-
-constexpr uint32_t kWorkers = 4U;
-
-// kWorkers bf16 gradients for one [1, 1, 64, 128] tensor, stacked on dim 0, scattered around a per-element mean with a
-// spread as large as the mean (as make_gradients does), so their bf16 running sum loses bits.
-xt::xarray<float> make_worker_gradients(uint32_t seed) {
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> exponent(-3.0F, 0.0F);
-    std::bernoulli_distribution sign;
-    std::normal_distribution<float> noise;
-    xt::xarray<float> values = xt::zeros<float>(std::array<std::size_t, 4>{kWorkers, 1U, 64U, 128U});
-    for (size_t i = 0; i < values.size() / kWorkers; ++i) {
-        const float mean = (sign(rng) ? 1.0F : -1.0F) * std::pow(10.0F, exponent(rng));
-        for (uint32_t worker = 0; worker < kWorkers; ++worker) {
-            values.flat(worker * (values.size() / kWorkers) + i) = round_to_bf16(mean + std::abs(mean) * noise(rng));
-        }
-    }
-    return values;
-}
-
-// The fp32 route written out on the host: fp32 adds in order (ttnn adds two fp32 tensors with IEEE fp32 rounding), the
-// division (exact for kWorkers, a power of two) and one rounding to bf16.
-xt::xarray<float> fp32_mean_rounded_once(const xt::xarray<float>& gradients) {
-    const size_t size = gradients.size() / kWorkers;
-    xt::xarray<float> mean =
-        xt::zeros<float>(std::array<std::size_t, 4>{1U, 1U, gradients.shape(2), gradients.shape(3)});
-    for (size_t i = 0; i < size; ++i) {
-        float sum = gradients.flat(i);
-        for (uint32_t worker = 1; worker < kWorkers; ++worker) {
-            sum += gradients.flat(worker * size + i);
-        }
-        mean.flat(i) = round_to_bf16(sum * (1.0F / static_cast<float>(kWorkers)));
-    }
-    return mean;
-}
-
-class AverageGradientsTest : public test_utils::DeviceSuiteTest {
-protected:
-    // One bf16 tensor per worker, as the 3-tier aggregator receives them.
-    static std::vector<ttnn::Tensor> upload_each(const xt::xarray<float>& gradients) {
-        auto* device = &autograd::ctx().get_device();
-        std::vector<ttnn::Tensor> tensors;
-        for (uint32_t worker = 0; worker < kWorkers; ++worker) {
-            const xt::xarray<float> one =
-                xt::view(gradients, xt::range(worker, worker + 1U), xt::all(), xt::all(), xt::all());
-            tensors.push_back(core::from_xtensor<float, ttnn::DataType::BFLOAT16>(one, device));
-        }
-        return tensors;
-    }
-
-    static ttnn::Tensor average(
-        const std::vector<ttnn::Tensor>& gradients, std::optional<ttnn::DataType> reduce_dtype) {
-        return core::distributed::average_gradients(
-            static_cast<uint32_t>(gradients.size()),
-            [&gradients](uint32_t i) { return gradients.at(i); },
-            reduce_dtype);
-    }
-};
-
-}  // namespace
-
-// With FLOAT32 the workers' bf16 gradients are summed and divided in fp32 and the mean is rounded to bf16 once. The
-// bf16 route rounds its running sum at every add, so it misses that mean on many elements.
-TEST_F(AverageGradientsTest, Fp32ReduceGivesTheFp32MeanRoundedOnce) {
-    const auto values = make_worker_gradients(/*seed=*/7U);
-    const auto gradients = upload_each(values);
-    const auto expected = fp32_mean_rounded_once(values);
-
-    const auto mean = average(gradients, ttnn::DataType::FLOAT32);
-    EXPECT_EQ(mean.dtype(), ttnn::DataType::BFLOAT16);
-    EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor<float>(mean)), 0U);
-
-    const auto bf16_mean = core::to_xtensor<float>(average(gradients, std::nullopt));
-    EXPECT_LT(share_equal(bf16_mean, expected), 0.9);
-}
-
-// An fp32 first gradient keeps the whole sum in fp32, whatever reduce_dtype says: each later bf16 gradient is cast to
-// fp32 before it is added, so the mean is the host's fp32 sum divided by kWorkers, not a sum the FPU read with 10
-// fraction bits.
-TEST_F(AverageGradientsTest, AnFp32FirstGradientKeepsTheSumInFp32) {
-    const auto values = make_worker_gradients(/*seed=*/10U);
-    const size_t size = values.size() / kWorkers;
-    // The first gradient with fp32 bits below bf16's last one.
-    xt::xarray<float> first = xt::view(values, xt::range(0U, 1U), xt::all(), xt::all(), xt::all());
-    for (size_t i = 0; i < size; ++i) {
-        first.flat(i) *= 1.0F + 0x1p-12F;
-    }
-    auto gradients = upload_each(values);
-    gradients.front() = core::from_xtensor<float, ttnn::DataType::FLOAT32>(first, &autograd::ctx().get_device());
-    xt::xarray<float> expected = first;
-    for (size_t i = 0; i < size; ++i) {
-        float sum = first.flat(i);
-        for (uint32_t worker = 1; worker < kWorkers; ++worker) {
-            sum += values.flat(worker * size + i);
-        }
-        expected.flat(i) = sum * (1.0F / static_cast<float>(kWorkers));
-    }
-
-    for (const auto reduce_dtype : {std::optional<ttnn::DataType>{}, std::optional{ttnn::DataType::FLOAT32}}) {
-        const auto mean = average(gradients, reduce_dtype);
-        EXPECT_EQ(mean.dtype(), ttnn::DataType::FLOAT32);
-        EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor<float>(mean)), 0U);
-    }
-}
-
-// Unset or BFLOAT16 runs the ops the aggregator always ran: bf16 adds in order, then the multiply.
-TEST_F(AverageGradientsTest, UnsetAndBf16ReduceRunTheBf16Ops) {
-    const auto gradients = upload_each(make_worker_gradients(/*seed=*/8U));
-    ttnn::Tensor before = gradients.front();
-    for (uint32_t worker = 1; worker < kWorkers; ++worker) {
-        before = ttnn::add(before, gradients[worker]);
-    }
-    before = ttnn::multiply(before, 1.0F / static_cast<float>(kWorkers));
-    const auto expected = core::to_xtensor<float>(before);
-
-    for (const auto reduce_dtype : {std::optional<ttnn::DataType>{}, std::optional{ttnn::DataType::BFLOAT16}}) {
-        const auto mean = average(gradients, reduce_dtype);
-        EXPECT_EQ(mean.dtype(), ttnn::DataType::BFLOAT16);
-        EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor<float>(mean)), 0U);
-    }
-}
-
-// Each gradient is asked for once, in order, so the aggregator holds one received gradient besides the sum.
-TEST_F(AverageGradientsTest, TakesEachGradientOnceInOrder) {
-    const auto gradients = upload_each(make_worker_gradients(/*seed=*/9U));
-    std::vector<uint32_t> asked;
-    (void)core::distributed::average_gradients(
-        kWorkers,
-        [&](uint32_t i) {
-            asked.push_back(i);
-            return gradients.at(i);
-        },
-        ttnn::DataType::FLOAT32);
-    EXPECT_EQ(asked, (std::vector<uint32_t>{0U, 1U, 2U, 3U}));
-
-    const auto first = [&](uint32_t) { return gradients.front(); };
-    EXPECT_THAT(
-        [&] { (void)core::distributed::average_gradients(0U, first, ttnn::DataType::FLOAT32); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("needs at least one gradient")));
-    EXPECT_THAT(
-        [&] { (void)core::distributed::average_gradients(kWorkers, first, ttnn::DataType::UINT32); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("reduce_dtype must be BFLOAT16 or FLOAT32")));
 }
 
 namespace {

@@ -15,6 +15,8 @@ from ttml.models.llama import Llama, LlamaConfig
 from ttml.modules import LoraConfig
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
+from tensor_helpers import stored_dtypes
+
 FP32_PRECISION = {"master_dtype": "float32", "reduce_dtype": "float32"}
 VOCAB_SIZE = 64
 SEQ_LEN = 32
@@ -51,10 +53,6 @@ def _config(**overrides):
     )
 
 
-def _stored_dtype(parameter):
-    return parameter.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype
-
-
 def _split(model):
     parameters = model.parameters()
     trainable = {name: p for name, p in parameters.items() if p.get_requires_grad()}
@@ -78,10 +76,10 @@ def test_applies_precision_before_building_the_optimizer(gradient_reduce_default
 
     trainable, frozen = _split(trainer.model)
     assert trainable and frozen, "premise: LoRA leaves a frozen base and trainable adapters"
-    assert {_stored_dtype(p) for p in trainable.values()} == {ttnn.DataType.FLOAT32}
-    assert {p.get_grad_accumulation_dtype() for p in trainable.values()} == {ttnn.DataType.FLOAT32}
-    assert {_stored_dtype(p) for p in frozen.values()} == {ttnn.DataType.BFLOAT16}
-    assert {p.get_grad_accumulation_dtype() for p in frozen.values()} == {None}
+    assert stored_dtypes(trainable) == {ttnn.DataType.FLOAT32}
+    assert {p.accumulates_grad_in_fp32() for p in trainable.values()} == {True}
+    assert stored_dtypes(frozen) == {ttnn.DataType.BFLOAT16}
+    assert {p.accumulates_grad_in_fp32() for p in frozen.values()} == {False}
     assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
 
 
@@ -93,8 +91,8 @@ def test_without_precision_nothing_changes(gradient_reduce_default):
     trainer = SFTTrainer(_toy_llama(), [], None, _config(), optimizer={"type": "AdamW", "lr": 1e-3})
 
     parameters = trainer.model.parameters()
-    assert {_stored_dtype(p) for p in parameters.values()} == {ttnn.DataType.BFLOAT16}
-    assert {p.get_grad_accumulation_dtype() for p in parameters.values()} == {None}
+    assert stored_dtypes(parameters) == {ttnn.DataType.BFLOAT16}
+    assert {p.accumulates_grad_in_fp32() for p in parameters.values()} == {False}
     assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
 
 
@@ -142,7 +140,7 @@ def test_trains_fp32_master_weights_with_fp32_gradient_accumulation(gradient_red
 
     assert len(losses.losses) == 2 and all(np.isfinite(losses.losses)), losses.losses
     parameters = model.parameters()
-    assert {_stored_dtype(p) for p in parameters.values()} == {ttnn.DataType.FLOAT32}
+    assert stored_dtypes(parameters) == {ttnn.DataType.FLOAT32}
     assert {p.get_grad().dtype for p in parameters.values()} == {ttnn.DataType.FLOAT32}
     moved = [
         name for name, p in parameters.items() if not np.array_equal(p.to_numpy(ttnn.DataType.FLOAT32), before[name])
