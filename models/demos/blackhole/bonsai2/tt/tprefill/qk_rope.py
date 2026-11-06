@@ -26,6 +26,7 @@ class QKNormRope:
         tiles = [torch.ones(32, 32)] + [w[32 * j : 32 * j + 32].reshape(1, 32).expand(32, 32) for j in range(D // 32)]
         self.consts = ttnn.from_torch(torch.cat(tiles, 0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         self.D, self.eps, self.device = D, eps, device
+        self.c_off = 0  # the consts' first tile in self.consts (stream/decode.py packs every layer's into one tensor)
 
     @staticmethod
     def run_parts(*parts):
@@ -134,7 +135,8 @@ class QKNormRope:
                     ]
                     + span
                     + [H, Mt, Dt, Rt]
-                    + ([v.buffer_address()] if cache is not None else []),  # fmt: skip
+                    + ([v.buffer_address()] if cache is not None else [])
+                    + [self.c_off],  # fmt: skip
                     defines=([("KV_CACHE", "1")] if cache is not None else []) + off,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),

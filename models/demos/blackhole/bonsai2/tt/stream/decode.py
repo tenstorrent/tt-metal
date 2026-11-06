@@ -60,10 +60,24 @@ class StreamDecode:
             span_keys.add((n, (lin.N // 32) // (2 if getattr(lin, "glu", False) else 1)))
         # (before the stream's sub-devices load: a copy op on the whole grid) the decode q / k norm + RoPE consts in
         # L1 while the stream runs (a DRAM read waits behind the senders'); DRAM again for prefill (its CBs need that L1)
+        # all of them in one L1 tensor (one per op reserved a page on every L1 bank: 34 x 4 KB of every core's L1)
+        ops = [
+            op for layer in model.layers for op in (getattr(layer.attention.ternary, "pre_qkr", None) or {}).values()
+        ]
         self.qkr = []
-        for layer in model.layers:
-            for op in (getattr(layer.attention.ternary, "pre_qkr", None) or {}).values():
-                self.qkr.append((op, op.consts, ttnn.to_memory_config(op.consts, ttnn.L1_MEMORY_CONFIG)))
+        if ops:
+            host = [ttnn.to_torch(op.consts).float() for op in ops]
+            l1 = ttnn.from_torch(
+                torch.cat(host, 0),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            off = 0
+            for op, h in zip(ops, host):
+                self.qkr.append((op, op.consts, l1, off))
+                off += h.shape[0] // 32
         # compact sender groups; each linear's tiles split so every sender takes an equal share (Stream span_keys)
         self.st = st = Stream(device, span_keys=sorted(span_keys, reverse=True))
         core_ranges.set_layout(st.rx_order, st.defines())
@@ -230,14 +244,14 @@ class StreamDecode:
             self._oplog = True
         self.st.activate()
         core_ranges.set_layout(self.st.rx_order, self.st.defines())
-        for op, _, l1 in self.qkr:
-            op.consts = l1
+        for op, _, l1, off in self.qkr:
+            op.consts, op.c_off = l1, off
         self.on = True
 
     def deactivate(self):
         self.on = False
-        for op, dram, _ in getattr(self, "qkr", []):
-            op.consts = dram
+        for op, dram, _, _ in getattr(self, "qkr", []):
+            op.consts, op.c_off = dram, 0
         core_ranges.set_layout(None)
         self.st.deactivate()
 

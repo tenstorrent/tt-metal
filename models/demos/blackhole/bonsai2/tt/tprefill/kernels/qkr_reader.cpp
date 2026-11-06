@@ -38,11 +38,16 @@ void kernel_main() {
     const uint32_t TB = get_tile_size(cb_x), CT = get_tile_size(cb_c);
     const auto xs = TensorAccessor(x_args, x_addr, TB);
     const auto cs = TensorAccessor(c_args, c_addr, CT);
+#ifdef KV_CACHE
+    const uint32_t c_off = get_common_arg_val<uint32_t>(12);  // the consts' first tile (one tensor for many ops)
+#else
+    const uint32_t c_off = get_common_arg_val<uint32_t>(11);
+#endif
     const auto coss = TensorAccessor(cos_args, cos_addr, TB);
     const auto sins = TensorAccessor(sin_args, sin_addr, TB);
     cb_reserve_back(cb_c, 1 + Dt);
     for (uint32_t t = 0; t < 1 + Dt; ++t) {
-        noc_async_read(cs.get_noc_addr(t), get_write_ptr(cb_c) + t * CT, CT);
+        noc_async_read(cs.get_noc_addr(c_off + t), get_write_ptr(cb_c) + t * CT, CT);
     }
     noc_async_read_barrier();
     cb_push_back(cb_c, 1 + Dt);
