@@ -7,6 +7,7 @@ import torch
 import ttnn
 import torch.nn as nn
 import numpy as np
+from loguru import logger
 from models.experimental.vadv2.reference import head
 from models.experimental.vadv2.tt.tt_head import TtVADHead
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -343,10 +344,14 @@ def create_vadv2_model_parameters_head(model: ResNet, device=None):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
+# 0.1 lets some of the predicted map vectors through on these inputs, so the motion queries'
+# map keys are masked by score and distance; at 0.5 none passes.
+@pytest.mark.parametrize("map_thresh", [0.5, 0.1])
 def test_vadv2_head(
     device,
     reset_seeds,
     model_location_generator,
+    map_thresh,
 ):
     torch_model = head.VADHead(
         with_box_refine=True,
@@ -398,7 +403,7 @@ def test_vadv2_head(
         motion_map_decoder=True,
         use_pe=True,
         motion_det_score=None,
-        map_thresh=0.5,
+        map_thresh=map_thresh,
         dis_thresh=0.2,
         pe_normalization=True,
         ego_his_encoder=None,
@@ -520,6 +525,8 @@ def test_vadv2_head(
     ]
 
     model_outputs = torch_model(mlvl_feats, img_metas)
+    num_maps_kept = int((model_outputs["map_all_cls_scores"][-1].sigmoid().max(-1)[0] > map_thresh).sum())
+    logger.info(f"map vectors above map_thresh {map_thresh}: {num_maps_kept}")
     tt_model = TtVADHead(
         params=parameter,
         device=device,
@@ -568,7 +575,7 @@ def test_vadv2_head(
         motion_map_decoder=True,
         use_pe=True,
         motion_det_score=None,
-        map_thresh=0.5,
+        map_thresh=map_thresh,
         dis_thresh=0.2,
         pe_normalization=True,
         ego_his_encoder=None,
