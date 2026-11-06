@@ -104,7 +104,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     log_debug(tt::LogOp, "Accumulated Input : {}", accumulated_input_total_per_dim);
 
     using namespace tt::tt_metal::experimental;
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
@@ -236,7 +236,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteRMShardedInputProgramFactory:
 
     const uint32_t num_input_sticks_per_core = shard_spec.shape[0];
     const uint32_t input_row_size_bytes = shard_spec.shape[1] * input.element_size();
-    const auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    const auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                           ? ::hal::get_dram_alignment()
                                           : ::hal::get_l1_alignment();
     const uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);

@@ -80,10 +80,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
 
@@ -218,13 +218,13 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     uint32_t slice_row_size_bytes = (actual_output_shape[-1] * a.element_size()) / num_cores_channels;
 
     TT_FATAL(
-        output.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+        output.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
         "padded_slice output buffer must be L1 (sharded).");
 
-    auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = a.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     TT_FATAL(

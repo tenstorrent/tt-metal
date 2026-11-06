@@ -401,8 +401,8 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     // Roofline assumes all device compute cores drive DRAM concurrently
     // (hardware max parallelism). DRAM bandwidth and its read/write fill-drain
     // latency are two more floors; all of these overlap, so all feed the final max().
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
     const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
     const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
 

@@ -431,7 +431,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     // A row-major input stays on the generic schedule: its tilize kernel converts whole tile rows in order.
     const bool use_bank_owned_schedule =
         !tilize_input && payload_capacity_pages > 4 &&
-        tensor_return_value.buffer()->buffer_type() == BufferType::DRAM &&
+        tensor_return_value.memory_config().buffer_type() == BufferType::DRAM &&
         tensor_return_value.mesh_buffer().device_local_config().sharding_args.buffer_layout() ==
             TensorMemoryLayout::INTERLEAVED &&
         num_dram_banks > 0 && num_blocks >= num_dram_banks;

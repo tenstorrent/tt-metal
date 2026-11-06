@@ -179,8 +179,8 @@ AllGatherDeviceOperation::create_op_performance_model(
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
     // Roofline assumes all device compute cores drive DRAM concurrently
     // (hardware max parallelism). DRAM terms compete (overlap) with Fabric.
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
     const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
     const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
 

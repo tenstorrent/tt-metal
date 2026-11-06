@@ -98,7 +98,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     }
 
     using namespace tt::tt_metal::experimental;
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     uint32_t page_alignment_offset = (output_tensor_start[-1] * input_tensor.element_size()) % src_buffer_alignment;
@@ -217,10 +217,10 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
 
     uint32_t max_read_size = 4096;
 
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);

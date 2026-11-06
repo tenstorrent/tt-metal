@@ -156,7 +156,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
             (tilize_input && operation_attributes.in_dim == rank - 2 && operation_attributes.out_dim < rank - 2 &&
              input_shape[rank - 1] % tt::constants::TILE_WIDTH == 0 &&
              input_shape[rank - 2] % tt::constants::TILE_HEIGHT == 0 &&
-             input_tensor.buffer()->buffer_type() == BufferType::DRAM),
+             input_tensor.memory_config().buffer_type() == BufferType::DRAM),
         "Unsupported input layout {} (a row-major input must concatenate along dim {} with whole tiles, in DRAM).",
         input_tensor.layout(),
         rank - 2);
@@ -215,9 +215,9 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_hit(
             output_tensor.storage_type() == StorageType::DEVICE,
             "Output tensor for all_to_all_async must be on device");
         TT_FATAL(
-            output_tensor.buffer()->buffer_type() == BufferType::DRAM,
+            output_tensor.memory_config().buffer_type() == BufferType::DRAM,
             "Output tensor for all_to_all_async must be in DRAM, but is in {}",
-            output_tensor.buffer()->buffer_type());
+            output_tensor.memory_config().buffer_type());
         TT_FATAL(output_tensor.layout() == Layout::TILE, "Unsupported output layout {}.", output_tensor.layout());
 
         TT_FATAL(output_tensor.dtype() == input_tensor.dtype(), "Output tensor dtype must match input tensor dtype");
