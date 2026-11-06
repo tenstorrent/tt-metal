@@ -16,6 +16,11 @@ class TtVADPerceptionTransformer:
         params,
         params_branches,
         device,
+        bev_h,
+        bev_w,
+        feat_hw,
+        lidar2img,
+        img_shape,
         num_feature_levels=4,
         num_cams=6,
         two_stage_num_proposals=300,
@@ -44,6 +49,11 @@ class TtVADPerceptionTransformer:
         self.encoder = TtBEVFormerEncoder(
             params.encoder,
             device,
+            bev_h=bev_h,
+            bev_w=bev_w,
+            feat_hw=feat_hw,
+            lidar2img=lidar2img,
+            img_shape=img_shape,
             num_layers=3,
             pc_range=point_cloud_range,
             num_points_in_pillar=4,
@@ -62,6 +72,7 @@ class TtVADPerceptionTransformer:
                 num_layers=3,
                 embed_dim=_dim_,
                 num_heads=8,
+                spatial_shapes_hw=[(bev_h, bev_w)],
                 params=params.decoder,
                 params_branches=params_branches,
                 device=self.device,
@@ -73,6 +84,7 @@ class TtVADPerceptionTransformer:
                 num_layers=3,
                 embed_dim=_dim_,
                 num_heads=8,
+                spatial_shapes_hw=[(bev_h, bev_w)],
                 params=params.map_decoder,
                 params_branches=params_branches,
                 device=self.device,
@@ -94,13 +106,7 @@ class TtVADPerceptionTransformer:
         self.map_num_vec = map_num_vec
         self.map_num_pts_per_vec = map_num_pts_per_vec
 
-        # Caches for the static spatial_shapes / level_start_index tensors
-        # built per forward. Same values every time; trace-replay-blocking
-        # `torch.tensor + ttnn.from_torch` upload only needed once.
-        self._encoder_spatial_shapes_cache = {}  # keyed by tuple of (h, w) per level
-        self._decoder_spatial_shapes_cache = {}  # keyed by (bev_h, bev_w)
-        self._decoder_level_start_index_cache = None  # ttnn.zeros((1,)) uint32 TILE
-        self._map_decoder_level_start_index_cache = None  # ttnn.zeros((1,)) bfloat16 TILE
+        self.feat_hw = tuple(feat_hw)
 
         # Persistent device buffers for the only dynamic per-call uploads in
         # the warm path (shift / can_bus, built from img_metas). Allocated on
@@ -110,11 +116,6 @@ class TtVADPerceptionTransformer:
         self._shift_buffer = None
         self._can_bus_buffer = None
         self._skip_dynamic_upload = False
-
-        # Encoder's level_start_index is a constant (0,) uint32 tensor. ttnn.zeros
-        # does a host->device write of the fill, which is forbidden inside trace
-        # capture — build once and reuse.
-        self._encoder_level_start_index_cache = None
 
     def update_dynamic_inputs(self, img_metas, bev_h, bev_w, grid_length=[0.512, 0.512]):
         """Build shift / can_bus on host and write them into persistent device buffers.
@@ -217,10 +218,9 @@ class TtVADPerceptionTransformer:
         bev_queries = bev_queries + can_bus * self.use_can_bus
 
         feat_flatten = []
-        spatial_shapes = []
         for lvl, feat in enumerate(mlvl_feats):
             bs, num_cam, c, h, w = feat.shape
-            spatial_shape = (h, w)
+            assert (h, w) == self.feat_hw, f"feature map {(h, w)} does not match the configured {self.feat_hw}"
             feat = ttnn.reshape(feat, (feat.shape[0], feat.shape[1], feat.shape[2], feat.shape[3] * feat.shape[4]))
             feat = ttnn.permute(feat, (1, 0, 3, 2))
             # ss
@@ -234,27 +234,9 @@ class TtVADPerceptionTransformer:
             level_embeds = ttnn.reshape(level_embeds, (1, 1, level_embeds.shape[0], level_embeds.shape[-1]))
             feat = feat + level_embeds
             ttnn.deallocate(level_embeds)
-            spatial_shapes.append(spatial_shape)
             feat_flatten.append(feat)
 
         feat_flatten = ttnn.concat(feat_flatten, 2)
-        # spatial_shapes is built from the feat shapes which are static across
-        # warm calls — cache the device tensor.
-        ss_key = tuple(spatial_shapes)
-        spatial_shapes_dev = self._encoder_spatial_shapes_cache.get(ss_key)
-        if spatial_shapes_dev is None:
-            spatial_shapes_t = torch.as_tensor(list(ss_key), dtype=torch.long, device="cpu")
-            spatial_shapes_dev = ttnn.from_torch(
-                spatial_shapes_t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-            )
-            self._encoder_spatial_shapes_cache[ss_key] = spatial_shapes_dev
-        spatial_shapes = spatial_shapes_dev
-
-        if self._encoder_level_start_index_cache is None:
-            self._encoder_level_start_index_cache = ttnn.zeros(
-                (1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
-        level_start_index = self._encoder_level_start_index_cache
         feat_flatten = ttnn.permute(feat_flatten, (0, 2, 1, 3))  # (num_cam, H*W, bs, embed_dims)
         bev_embed = self.encoder(
             bev_queries,
@@ -263,8 +245,6 @@ class TtVADPerceptionTransformer:
             bev_h=bev_h,
             bev_w=bev_w,
             bev_pos=bev_pos,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
             prev_bev=prev_bev,
             shift=shift,
             **kwargs,
@@ -365,18 +345,6 @@ class TtVADPerceptionTransformer:
         bev_embed = ttnn.permute(bev_embed, (1, 0, 2))
 
         if self.decoder is not None:
-            dec_key = (bev_h, bev_w, "bfloat16")
-            spatial_shapes = self._decoder_spatial_shapes_cache.get(dec_key)
-            if spatial_shapes is None:
-                spatial_shapes_t = torch.tensor([[bev_h, bev_w]], device="cpu")
-                spatial_shapes = ttnn.from_torch(
-                    spatial_shapes_t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                )
-                self._decoder_spatial_shapes_cache[dec_key] = spatial_shapes
-            if self._decoder_level_start_index_cache is None:
-                self._decoder_level_start_index_cache = ttnn.zeros(
-                    (1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device
-                )
             inter_states, inter_references = self.decoder(
                 query=query,
                 key=None,
@@ -385,8 +353,6 @@ class TtVADPerceptionTransformer:
                 reference_points=reference_points,
                 reg_branches=reg_branches,
                 cls_branches=cls_branches,
-                spatial_shapes=spatial_shapes,
-                level_start_index=self._decoder_level_start_index_cache,
                 **kwargs,
             )
             inter_references_out = inter_references
@@ -396,18 +362,6 @@ class TtVADPerceptionTransformer:
 
         if self.map_decoder is not None:
             # [L, Q, B, D], [L, B, Q, D]
-            map_key = (bev_h, bev_w, "bfloat16_map")
-            spatial_shapes = self._decoder_spatial_shapes_cache.get(map_key)
-            if spatial_shapes is None:
-                spatial_shapes_t = torch.tensor([[bev_h, bev_w]], device="cpu")
-                spatial_shapes = ttnn.from_torch(
-                    spatial_shapes_t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                )
-                self._decoder_spatial_shapes_cache[map_key] = spatial_shapes
-            if self._map_decoder_level_start_index_cache is None:
-                self._map_decoder_level_start_index_cache = ttnn.zeros(
-                    (1,), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-                )
             map_inter_states, map_inter_references = self.map_decoder(
                 query=map_query,
                 key=None,
@@ -416,8 +370,6 @@ class TtVADPerceptionTransformer:
                 reference_points=map_reference_points,
                 map_reg_branches=map_reg_branches,
                 cls_branches=map_cls_branches,
-                spatial_shapes=spatial_shapes,
-                level_start_index=self._map_decoder_level_start_index_cache,
                 **kwargs,
             )
             map_inter_references_out = map_inter_references

@@ -17,6 +17,11 @@ class TtBEVFormerEncoder:
         self,
         params,
         device,
+        bev_h,
+        bev_w,
+        feat_hw,
+        lidar2img,
+        img_shape,
         num_layers=3,
         pc_range=None,
         num_points_in_pillar=4,
@@ -41,10 +46,16 @@ class TtBEVFormerEncoder:
 
         transformer_layers = dict(
             attn_cfgs=[
-                dict(type="TemporalSelfAttention", embed_dims=embed_dims, num_levels=1),
+                dict(
+                    type="TemporalSelfAttention",
+                    embed_dims=embed_dims,
+                    num_levels=1,
+                    spatial_shapes_hw=[(bev_h, bev_w)],
+                ),
                 dict(
                     type="SpatialCrossAttention",
                     pc_range=pc_range,
+                    spatial_shapes_hw=[tuple(feat_hw)],
                     attention=dict(
                         embed_dims=embed_dims,
                         num_heads=num_heads,
@@ -65,11 +76,22 @@ class TtBEVFormerEncoder:
         for i in range(self.num_layers):
             self.layers.append(TtBEVFormerLayer(self.device, params.layers[f"layer{i}"], **transformer_layers))
 
-        # ref_3d, ref_2d, reference_points_cam, bev_mask depend only on (bev_h, bev_w)
-        # and the static lidar2img / img_shape in img_metas. Caching them avoids
-        # re-running get_reference_points_ttnn + point_sampling_ttnn (~50 ops including
-        # reshape/permute/matmul/divide/concat) on every forward call.
-        self._ref_cache = {}
+        # The reference points and their camera projection depend only on the BEV
+        # grid and the camera rig, which are fixed for the lifetime of the model.
+        self.bev_h = bev_h
+        self.bev_w = bev_w
+        self.ref_3d = self.get_reference_points_ttnn(
+            bev_h, bev_w, pc_range[5] - pc_range[2], num_points_in_pillar, dim="3d", bs=1, device=device
+        )
+        self.ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=1, device=device)
+        # Both live for the whole model lifetime; keep them out of L1.
+        self.ref_3d = ttnn.to_memory_config(self.ref_3d, ttnn.DRAM_MEMORY_CONFIG)
+        self.ref_2d = ttnn.to_memory_config(self.ref_2d, ttnn.DRAM_MEMORY_CONFIG)
+        reference_points_cam, bev_mask = self.point_sampling_ttnn(self.ref_3d, pc_range, lidar2img, img_shape)
+        for layer in self.layers:
+            layer.attentions[1].prepare(reference_points_cam, bev_mask)
+        ttnn.deallocate(reference_points_cam)
+        ttnn.deallocate(bev_mask)
 
     @staticmethod
     def get_reference_points_ttnn(H, W, Z=8, num_points_in_pillar=4, dim="3d", bs=1, device=None, dtype=ttnn.bfloat16):
@@ -140,18 +162,22 @@ class TtBEVFormerEncoder:
 
             return ref
 
-    def point_sampling_ttnn(self, reference_points, pc_range, img_metas):
-        lidar2img = []
-        for img_meta in img_metas:
-            lidar2img.append(img_meta["lidar2img"])
-        lidar2img = np.asarray(lidar2img)
-        reference_points = ttnn.to_torch(reference_points)
-        lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
-        reference_points = ttnn.from_torch(
-            reference_points, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+    def point_sampling_ttnn(self, reference_points, pc_range, lidar2img, img_shape):
+        """Project the 3D BEV reference points into every camera.
+
+        lidar2img: (num_cams, 4, 4) lidar-to-image matrices; img_shape: (H, W) of
+        the network input the projections are normalized by.
+        """
+        # Round to bf16 in torch so the matrices do not depend on ttnn's host conversion.
+        lidar2img = torch.as_tensor(np.asarray(lidar2img), dtype=torch.float32).to(torch.bfloat16)
+        lidar2img = lidar2img.reshape(1, -1, 4, 4)  # (B=1, N, 4, 4)
         lidar2img = ttnn.from_torch(lidar2img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
         ref = ttnn.clone(reference_points)
+        if ref.layout != ttnn.TILE_LAYOUT:
+            # The projection matmul below needs tile-aligned operands.
+            ref_rm = ref
+            ref = ttnn.to_layout(ref_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(ref_rm)
 
         x, y, z = ttnn.split(ref, (1, 1, 1), dim=3)
 
@@ -194,8 +220,8 @@ class TtBEVFormerEncoder:
         x = reference_points_cam[..., 0]
         y = reference_points_cam[..., 1]
 
-        x = ttnn.divide(x, img_metas[0]["img_shape"][0][1])
-        y = ttnn.divide(y, img_metas[0]["img_shape"][0][0])
+        x = ttnn.divide(x, img_shape[1])
+        y = ttnn.divide(y, img_shape[0])
         x = ttnn.unsqueeze(x, dim=-1)
         y = ttnn.unsqueeze(y, dim=-1)
         reference_points_cam = ttnn.concat([x, y], dim=-1)
@@ -236,8 +262,6 @@ class TtBEVFormerEncoder:
         bev_h=None,
         bev_w=None,
         bev_pos=None,
-        spatial_shapes=None,
-        level_start_index=None,
         valid_ratios=None,
         prev_bev=None,
         shift=0.0,
@@ -246,25 +270,10 @@ class TtBEVFormerEncoder:
         output = bev_query
         intermediate = []
 
-        cache_key = (bev_h, bev_w, bev_query.shape[1])
-        cached = self._ref_cache.get(cache_key)
-        if cached is not None:
-            ref_3d, ref_2d, reference_points_cam, bev_mask = cached
-        else:
-            ref_3d = self.get_reference_points_ttnn(
-                bev_h,
-                bev_w,
-                self.pc_range[5] - self.pc_range[2],
-                self.num_points_in_pillar,
-                dim="3d",
-                bs=bev_query.shape[1],
-                device=self.device,
-            )
-
-            ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=bev_query.shape[1], device=self.device)
-
-            reference_points_cam, bev_mask = self.point_sampling_ttnn(ref_3d, self.pc_range, kwargs["img_metas"])
-            self._ref_cache[cache_key] = (ref_3d, ref_2d, reference_points_cam, bev_mask)
+        assert (bev_h, bev_w) == (self.bev_h, self.bev_w)
+        assert bev_query.shape[1] == 1, "reference points are built for bs=1"
+        ref_3d = self.ref_3d
+        ref_2d = self.ref_2d
 
         shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
@@ -284,9 +293,6 @@ class TtBEVFormerEncoder:
             hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         ttnn.deallocate(shift)
         ttnn.deallocate(shift_ref_2d)
-        # reference_points_cam stays on device: the layer's spatial_cross_attention
-        # now does a device-side ttnn.embedding gather instead of the old torch
-        # advanced-indexing path, so the to_torch round trip is no longer needed.
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
@@ -298,10 +304,6 @@ class TtBEVFormerEncoder:
                 ref_3d=ref_3d,
                 bev_h=bev_h,
                 bev_w=bev_w,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-                reference_points_cam=reference_points_cam,
-                bev_mask=bev_mask,
                 prev_bev=prev_bev,
                 **kwargs,
             )
@@ -388,12 +390,6 @@ class TtBEVFormerLayer:
         assert len(operation_order) == 6
         assert set(operation_order) == set(["self_attn", "norm", "cross_attn", "ffn"])
 
-        # spatial_shapes_1 = [[bev_h, bev_w]] is the same on every self_attn
-        # op, every layer, every forward. Cache the device tensor here keyed
-        # by (bev_h, bev_w) so the warm path doesn't redo torch.tensor +
-        # ttnn.from_torch each time (a trace-replay blocker).
-        self._spatial_shapes_1_cache = {}
-
     def __call__(
         self,
         query,
@@ -409,10 +405,7 @@ class TtBEVFormerLayer:
         ref_3d=None,
         bev_h=None,
         bev_w=None,
-        reference_points_cam=None,
         mask=None,
-        spatial_shapes=None,
-        level_start_index=None,
         prev_bev=None,
         **kwargs,
     ):
@@ -435,14 +428,6 @@ class TtBEVFormerLayer:
 
         for layer in self.operation_order:
             if layer == "self_attn":
-                key1 = (bev_h, bev_w)
-                spatial_shapes_1 = self._spatial_shapes_1_cache.get(key1)
-                if spatial_shapes_1 is None:
-                    spatial_shapes_1 = torch.tensor([[bev_h, bev_w]])
-                    spatial_shapes_1 = ttnn.from_torch(
-                        spatial_shapes_1, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                    )
-                    self._spatial_shapes_1_cache[key1] = spatial_shapes_1
                 query = self.attentions[attn_index](
                     query,
                     prev_bev,
@@ -453,8 +438,6 @@ class TtBEVFormerLayer:
                     attn_mask=attn_masks[attn_index],
                     key_padding_mask=query_key_padding_mask,
                     reference_points=ref_2d,
-                    spatial_shapes=spatial_shapes_1,
-                    level_start_index=level_start_index,
                     **kwargs,
                 )
                 attn_index += 1
@@ -478,12 +461,9 @@ class TtBEVFormerLayer:
                     query_pos=query_pos,
                     key_pos=key_pos,
                     reference_points=ref_3d,
-                    reference_points_cam=reference_points_cam,
                     mask=mask,
                     attn_mask=attn_masks[attn_index],
                     key_padding_mask=key_padding_mask,
-                    spatial_shapes=spatial_shapes,
-                    level_start_index=level_start_index,
                     **kwargs,
                 )
                 attn_index += 1

@@ -128,6 +128,7 @@ def test_vadv2_sca(
     tt_model = tt_spatial_cross_attention.TtSpatialCrossAttention(
         device=device,
         params=parameter.spatial_cross_attention,
+        spatial_shapes_hw=[(12, 20)],
         embed_dims=256,
         pc_range=point_cloud_range,
         batch_first=batch_first,
@@ -136,19 +137,17 @@ def test_vadv2_sca(
     query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16)
     key = ttnn.from_torch(key, device=device, dtype=ttnn.bfloat16)
     value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16)
-    spatial_shapes = ttnn.from_torch(spatial_shapes, device=device, dtype=ttnn.bfloat16)
+    reference_points_cam = ttnn.from_torch(
+        reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
     bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16)
-    level_start_index = ttnn.from_torch(level_start_index, device=device, dtype=ttnn.bfloat16)
+    tt_model.prepare(reference_points_cam, bev_mask)
 
     tt_output = tt_model(
         query,
         key,
         value,
         reference_points=reference_points,
-        spatial_shapes=spatial_shapes,
-        reference_points_cam=reference_points_cam,
-        bev_mask=bev_mask,
-        level_start_index=level_start_index,
     )
 
     ttnn_output = ttnn.to_torch(tt_output)

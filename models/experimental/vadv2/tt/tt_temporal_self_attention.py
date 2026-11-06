@@ -4,7 +4,7 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, build_folded_sampling_offsets
+from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, fold_sampling_offsets
 from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
@@ -13,6 +13,7 @@ class TtTemporalSelfAttention:
         self,
         device,
         params,
+        spatial_shapes_hw,
         embed_dims=256,
         num_heads=8,
         num_levels=4,
@@ -53,14 +54,9 @@ class TtTemporalSelfAttention:
         self.num_points = num_points
         self.num_bev_queue = num_bev_queue
 
-        # Cached (H, W) per level for multi_scale_deformable_attn — avoids
-        # the host-sync `.item()` cost on warm calls.
-        self._hw_cache = None
-
-        # sampling_offsets Linear weight/bias pre-scaled by 1/offset_normalizer,
-        # folding the per-call offset_normalizer DIV away. Built once (static).
-        self._so_w = None
-        self._so_b = None
+        assert len(spatial_shapes_hw) == num_levels, f"need {num_levels} (H, W) pairs, got {spatial_shapes_hw}"
+        self.spatial_shapes_hw = [(int(h), int(w)) for h, w in spatial_shapes_hw]
+        self._so_w, self._so_b = fold_sampling_offsets(params.sampling_offsets, self.spatial_shapes_hw, device)
 
     def __call__(
         self,
@@ -71,8 +67,6 @@ class TtTemporalSelfAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
-        spatial_shapes=None,
-        level_start_index=None,
         flag="decoder",
         **kwargs,
     ):
@@ -94,6 +88,7 @@ class TtTemporalSelfAttention:
         bs, num_query, embed_dims = query.shape
         _, num_value, _ = value.shape
         assert self.num_bev_queue == 2
+        assert sum(h * w for h, w in self.spatial_shapes_hw) == num_value
 
         query = ttnn.concat([value[:bs], query], dim=-1)
 
@@ -107,8 +102,6 @@ class TtTemporalSelfAttention:
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
-        if self._so_w is None:
-            self._so_w, self._so_b = build_folded_sampling_offsets(params.sampling_offsets, spatial_shapes, self.device)
         sampling_offsets = linear_flatten_batch(query, self._so_w, bias=self._so_b)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points, 2)
@@ -165,13 +158,8 @@ class TtTemporalSelfAttention:
             raise ValueError(
                 f"Last dim of reference_points must be 2 or 4, but got {reference_points.shape[-1]} instead."
             )
-        if self._hw_cache is None:
-            self._hw_cache = [
-                (int(spatial_shapes[lvl, 0].item()), int(spatial_shapes[lvl, 1].item()))
-                for lvl in range(self.num_levels)
-            ]
         output = multi_scale_deformable_attn(
-            value, spatial_shapes, sampling_locations, attention_weights, self.device, hw_py=self._hw_cache
+            value, self.spatial_shapes_hw, sampling_locations, attention_weights, self.device
         )
         ttnn.deallocate(attention_weights)
         ttnn.deallocate(sampling_locations)

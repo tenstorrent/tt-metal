@@ -4,7 +4,7 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, build_folded_sampling_offsets
+from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, fold_sampling_offsets
 from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
@@ -13,6 +13,7 @@ class TtCustomMSDeformableAttention:
         self,
         params,
         device,
+        spatial_shapes_hw,
         embed_dims=256,
         num_heads=8,
         num_levels=1,
@@ -52,14 +53,9 @@ class TtCustomMSDeformableAttention:
         self.num_heads = num_heads
         self.num_points = num_points
 
-        # Cached (H, W) per level for multi_scale_deformable_attn — avoids
-        # the host-sync `.item()` cost on warm calls.
-        self._hw_cache = None
-
-        # sampling_offsets Linear weight/bias pre-scaled by 1/offset_normalizer,
-        # folding the per-call offset_normalizer DIV away. Built once (static).
-        self._so_w = None
-        self._so_b = None
+        assert len(spatial_shapes_hw) == num_levels, f"need {num_levels} (H, W) pairs, got {spatial_shapes_hw}"
+        self.spatial_shapes_hw = [(int(h), int(w)) for h, w in spatial_shapes_hw]
+        self._so_w, self._so_b = fold_sampling_offsets(params.sampling_offsets, self.spatial_shapes_hw, device)
 
     def __call__(
         self,
@@ -70,8 +66,6 @@ class TtCustomMSDeformableAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
-        spatial_shapes=None,
-        level_start_index=None,
         flag="decoder",
         **kwargs,
     ):
@@ -90,10 +84,7 @@ class TtCustomMSDeformableAttention:
 
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
-        # NOTE: a `ttnn.sum(spatial_shapes[:,0]*spatial_shapes[:,1]) == num_value`
-        # sanity assert used to live here, but `== num_value` forces a host-side
-        # `__bool__` sync on a device tensor every call — a Metal-Trace capture
-        # blocker. spatial_shapes is static, so the invariant is structural.
+        assert sum(h * w for h, w in self.spatial_shapes_hw) == num_value
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
 
         value = linear_flatten_batch(value, params.value_proj.weight, bias=params.value_proj.bias)
@@ -103,8 +94,6 @@ class TtCustomMSDeformableAttention:
         value = ttnn.reshape(value, (bs, num_value, self.num_heads, -1))
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        if self._so_w is None:
-            self._so_w, self._so_b = build_folded_sampling_offsets(params.sampling_offsets, spatial_shapes, self.device)
         sampling_offsets = linear_flatten_batch(query, self._so_w, bias=self._so_b)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
@@ -152,13 +141,8 @@ class TtCustomMSDeformableAttention:
                 f"Last dim of reference_points must be" f" 2 or 4, but get {reference_points.shape[-1]} instead."
             )
 
-        if self._hw_cache is None:
-            self._hw_cache = [
-                (int(spatial_shapes[lvl, 0].item()), int(spatial_shapes[lvl, 1].item()))
-                for lvl in range(self.num_levels)
-            ]
         output = multi_scale_deformable_attn(
-            value, spatial_shapes, sampling_locations, attention_weights, self.device, hw_py=self._hw_cache
+            value, self.spatial_shapes_hw, sampling_locations, attention_weights, self.device
         )
 
         output = linear_flatten_batch(output, params.output_proj.weight, bias=params.output_proj.bias)

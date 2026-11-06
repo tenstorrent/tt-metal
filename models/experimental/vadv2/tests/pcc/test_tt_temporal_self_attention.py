@@ -113,21 +113,21 @@ def test_vadv2_tsa(
     )
 
     ttnn_model = tt_temporal_self_attention.TtTemporalSelfAttention(
-        params=parameter.temporal_self_attention, device=device, embed_dims=256, num_levels=1
+        params=parameter.temporal_self_attention,
+        device=device,
+        spatial_shapes_hw=[(100, 100)],
+        embed_dims=256,
+        num_levels=1,
     )
 
     query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16)
     query_pos = ttnn.from_torch(query_pos, device=device, dtype=ttnn.bfloat16)
     reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.bfloat16)
-    spatial_shapes = ttnn.from_torch(spatial_shapes, device=device, dtype=ttnn.bfloat16)
-    level_start_index = ttnn.from_torch(level_start_index, device=device, dtype=ttnn.bfloat16)
 
     ttnn_output = ttnn_model(
         query,
         query_pos=query_pos,
         reference_points=reference_points,
-        spatial_shapes=spatial_shapes,
-        level_start_index=level_start_index,
     )
 
     ttnn_output = ttnn.to_torch(ttnn_output)
