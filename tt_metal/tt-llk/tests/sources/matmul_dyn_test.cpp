@@ -367,10 +367,10 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
         if (DYN_MODE == 3) fw &= ~1u;                                                                               \
         if (DYN_MODE == 4) { fw &= ~1u; _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } \
         if (fw % 2) {                                                                                              \
-            if (dyn_status != 1) { _llk_math_matmul_init_switch_<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); dyn_status = 1; } \
+            if (dyn_status != 1) { if constexpr (matmul_true_main_key) { _llk_math_matmul_init_<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } else { _llk_math_matmul_init_switch_<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } dyn_status = 1; } \
             _llk_math_matmul_<DYN_TCALL_ARGS>(0, CT_DIM, RT_DIM);                                                   \
         } else {                                                                                                  \
-            if (dyn_status != 0) { _llk_math_matmul_init_switch_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); dyn_status = 0; } \
+            if (dyn_status != 0) { if constexpr (matmul_true_main_key) { _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } else { _llk_math_matmul_init_switch_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } dyn_status = 0; } \
             _llk_math_matmul_<DYN_CALL_ARGS>(0, CT_DIM, RT_DIM);                                                    \
         }                                                                                                          \
     } while (0)
