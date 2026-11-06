@@ -22,6 +22,7 @@
 #include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -686,6 +687,12 @@ TEST_P(DfbDm0DescriptorStrideTest, RoundTripsThroughDm0Copy) {
                 }
                 EXPECT_EQ(copied.image.tiles_to_post_or_ack, desc.num_entries_per_txn_id_per_tc);
                 EXPECT_EQ(copied.threshold, desc.num_entries_to_process_threshold);
+                // DM0's kernel-exit flush reads the finish record from every side's first txn id.
+                const uint16_t side_mask =
+                    is_producer ? c.configs[i].producer_risc_mask : c.configs[i].consumer_risc_mask;
+                EXPECT_EQ(copied.image.finish.issuer_hart_mask, side_mask & ((1u << ::dfb::TENSIX_RISC_OFFSET) - 1u));
+                EXPECT_EQ(copied.image.finish.num_txn_ids, desc.num_txn_ids);
+                EXPECT_NE(copied.image.finish.op_entries, 0u);
             }
         }
     }
