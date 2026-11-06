@@ -243,7 +243,59 @@ class TtVAD:
             meta["can_bus"][-1] = 0
             meta["can_bus"][:3] = 0
         self.pts_bbox_head.prepare_frame(img_metas[0][0])
-        self._pending_frame = (tmp_pos, tmp_angle)
+        self._pending_frame = (tmp_pos, tmp_angle, img_metas[0][0])
+
+    def predict(self, img):
+        """The forward of the frame prepare_frame() prepared: the (1, num_cams, 3, H, W) row-major
+        device image to the head's outputs, on device. Keeps the frame's BEV for the next one."""
+        assert self._pending_frame is not None, "call prepare_frame(img_metas) before every forward"
+        tmp_pos, tmp_angle, img_metas = self._pending_frame
+        self._pending_frame = None
+        img_feats = self.extract_feat(img=img, img_metas=img_metas)
+        img_feats[0] = ttnn.to_layout(img_feats[0], layout=ttnn.TILE_LAYOUT)
+        outs = self.pts_bbox_head(
+            img_feats, img_metas, prev_bev=self.prev_frame_info["prev_bev"], ego_his_trajs=None, ego_lcf_feat=None
+        )
+        # The next frame's temporal self-attention reads this BEV on device.
+        self.prev_frame_info["prev_pos"] = tmp_pos
+        self.prev_frame_info["prev_angle"] = tmp_angle
+        self.prev_frame_info["prev_bev"] = outs["bev_embed"]
+        if self.read_raw_outputs:
+            self._last_outs = {}
+            for key in RAW_OUTPUTS:
+                tensor = outs[key]
+                # bev_embed is (10000, 1, 256): in TILE layout its size-1 dim pads to a whole tile,
+                # which a host untilize would copy 32 times over; untilize on device first.
+                if tensor.layout == ttnn.TILE_LAYOUT and tensor.shape[-2] == 1:
+                    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+                self._last_outs[key] = ttnn.to_torch(tensor).float()
+        return outs
+
+    def detect(self, outs):
+        """predict()'s outputs to the frame's top detections and map elements, decoded on device."""
+        return self.pts_bbox_head.detect(outs)
+
+    def compact(self, outs, detected):
+        """detect()'s tensors to one frame's results on the host: the valid detections with their
+        agents' trajectories, the valid map elements, and the ego plan for each driving command."""
+        bboxes, scores, labels, trajs, map_bboxes, map_scores, map_labels, map_pts = self.pts_bbox_head.compact(
+            detected
+        )
+        return dict(
+            boxes_3d=bboxes,
+            scores_3d=scores,
+            labels_3d=labels,
+            trajs_3d=trajs,
+            map_boxes_3d=map_bboxes,
+            map_scores_3d=map_scores,
+            map_labels_3d=map_labels,
+            map_pts_3d=map_pts,
+            ego_fut_preds=ttnn.to_torch(outs["ego_fut_preds"]).float()[0],
+        )
+
+    def decode(self, outs):
+        """detect() and compact()."""
+        return self.compact(outs, self.detect(outs))
 
     def forward_test(
         self,
@@ -263,111 +315,19 @@ class TtVAD:
                 raise TypeError("{} must be a list, but got {}".format(name, type(var)))
         img = [img] if img is None else img
 
-        assert self._pending_frame is not None, "call prepare_frame(img_metas) before every forward"
-        tmp_pos, tmp_angle = self._pending_frame
-        self._pending_frame = None
-        img = ttnn.unsqueeze(img[0][0], 0)
-        new_prev_bev, bbox_results = self.simple_test(
-            img_metas=img_metas[0][0],
-            img=img,
-            prev_bev=self.prev_frame_info["prev_bev"],
-            gt_bboxes_3d=gt_bboxes_3d,
-            gt_labels_3d=gt_labels_3d,
-            ego_his_trajs=ego_his_trajs[0][0],
-            ego_fut_trajs=ego_fut_trajs[0][0],
-            ego_fut_cmd=ego_fut_cmd[0][0],
-            ego_lcf_feat=ego_lcf_feat[0][0],
-            gt_attr_labels=gt_attr_labels,
-            **kwargs,
-        )
-        # During inference, we save the BEV features and ego motion of each timestamp.
-        self.prev_frame_info["prev_pos"] = tmp_pos
-        self.prev_frame_info["prev_angle"] = tmp_angle
-        self.prev_frame_info["prev_bev"] = new_prev_bev
-
-        return bbox_results
-
-    def simple_test(
-        self,
-        img_metas,
-        gt_bboxes_3d,
-        gt_labels_3d,
-        img=None,
-        prev_bev=None,
-        points=None,
-        fut_valid_flag=None,
-        rescale=False,
-        ego_his_trajs=None,
-        ego_fut_trajs=None,
-        ego_fut_cmd=None,
-        ego_lcf_feat=None,
-        gt_attr_labels=None,
-        **kwargs,
-    ):
-        img_feats = self.extract_feat(img=img, img_metas=img_metas)
-        bbox_list = [dict() for i in range(len(img_metas))]
-        new_prev_bev, bbox_list = self.simple_test_pts(
-            img_feats,
-            img_metas,
-            gt_bboxes_3d,
-            gt_labels_3d,
-            prev_bev,
-            fut_valid_flag=fut_valid_flag,
-            rescale=rescale,
-            start=None,
-            ego_his_trajs=ego_his_trajs,
-            ego_fut_trajs=ego_fut_trajs,
-            ego_fut_cmd=ego_fut_cmd,
-            ego_lcf_feat=ego_lcf_feat,
-            gt_attr_labels=gt_attr_labels,
-        )
-
-        return new_prev_bev, bbox_list
-
-    def simple_test_pts(
-        self,
-        x,
-        img_metas,
-        gt_bboxes_3d,
-        gt_labels_3d,
-        prev_bev=None,
-        fut_valid_flag=None,
-        rescale=False,
-        start=None,
-        ego_his_trajs=None,
-        ego_fut_trajs=None,
-        ego_fut_cmd=None,
-        ego_lcf_feat=None,
-        gt_attr_labels=None,
-    ):
-        x[0] = ttnn.to_layout(x[0], layout=ttnn.TILE_LAYOUT)
-        outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
-        # The next frame's temporal self-attention reads this BEV on device.
-        new_prev_bev = outs["bev_embed"]
-
-        if self.read_raw_outputs:
-            self._last_outs = {}
-            for key in RAW_OUTPUTS:
-                tensor = outs[key]
-                # bev_embed is (10000, 1, 256): in TILE layout its size-1 dim pads to a whole tile,
-                # which a host untilize would copy 32 times over; untilize on device first.
-                if tensor.layout == ttnn.TILE_LAYOUT and tensor.shape[-2] == 1:
-                    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
-                self._last_outs[key] = ttnn.to_torch(tensor).float()
-
+        outs = self.predict(ttnn.unsqueeze(img[0][0], 0))
         bbox_results = self.post_process_with_metrics(
             outs,
-            img_metas,
+            img_metas[0][0],
             gt_bboxes_3d,
             gt_labels_3d,
             gt_attr_labels,
-            ego_fut_trajs,
-            ego_fut_cmd,
-            fut_valid_flag,
-            rescale,
+            ego_fut_trajs[0][0],
+            ego_fut_cmd[0][0],
+            kwargs.get("fut_valid_flag"),
+            kwargs.get("rescale", False),
         )
-
-        return new_prev_bev, bbox_results
+        return bbox_results
 
     def post_process_with_metrics(
         self,
