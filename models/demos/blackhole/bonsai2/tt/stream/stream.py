@@ -284,10 +284,18 @@ class Stream:
         for i in range(n):
             active[g_of[i]].append(i)
         busy = [b for b in range(len(self.groups)) if active[b]]
-        base, extra = divmod(U, len(busy))
+        # alpha: 1 every sender U / NS, 0 the even per-core split's sender shares (in between: the mix)
+        alpha = float(os.environ.get("STREAM_BALANCE_ALPHA", "1"))
+        ub, ue = divmod(U, n)
+        even = {b: sum(ub + (1 if i < ue else 0) for i in active[b]) for b in busy}
+        want = {b: (1 - alpha) * even[b] + alpha * U / len(busy) for b in busy}
+        quota = {b: int(want[b]) for b in busy}
+        left = U - sum(quota.values())
+        for b in sorted(busy, key=lambda b: want[b] - quota[b], reverse=True)[:left]:
+            quota[b] += 1
         count = {}
-        for k, b in enumerate(busy):
-            q = base + (1 if k < extra else 0)
+        for b in busy:
+            q = quota[b]
             if q < len(active[b]):
                 return None
             qb, qe = divmod(q, len(active[b]))
