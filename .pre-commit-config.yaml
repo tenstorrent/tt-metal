@@ -85,14 +85,14 @@ repos:
       # starts. The script returns immediately unless the API tree or the checker
       # changed, and a deleted header still counts.
       always_run: true
-      files: ^(tt_metal/api/|scripts/validate_api/)
+      files: ^(tt_metal/api/|scripts/validate_api/|scripts/precommit_common\.py$)
       pass_filenames: true
       require_serial: true
     - id: test-metalium-api
       name: test-metalium-api
       entry: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
       language: system
-      files: ^scripts/validate_api/
+      files: ^(scripts/validate_api/|scripts/precommit_common\.py$)
       pass_filenames: false
 - repo: local
   hooks:

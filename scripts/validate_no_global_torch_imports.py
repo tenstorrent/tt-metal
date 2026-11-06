@@ -57,11 +57,15 @@ class TorchImportVisitor(ast.NodeVisitor):
         self.scope_level -= 1
 
 
-def is_exception(path):
+def ttnn_relative(path):
+    """The path relative to TTNN_DIR, or None when it lies outside."""
     try:
-        rel = path.resolve().relative_to(TTNN_DIR)
+        return path.resolve().relative_to(TTNN_DIR)
     except ValueError:
-        return False
+        return None
+
+
+def is_exception(rel):
     if rel.parts and rel.parts[0] in EXCEPTION_DIRS:
         return True
     return rel.as_posix() in EXCEPTION_FILES
@@ -79,25 +83,21 @@ def check_file(filepath):
             return [(0, f"Failed to parse {filepath}")]
 
 
-def _under_ttnn(path):
-    try:
-        path.resolve().relative_to(TTNN_DIR)
-    except ValueError:
-        return False
-    return True
-
-
 def iter_files(filenames):
     if filenames:
         for name in filenames:
             path = Path(name)
             if not path.is_absolute():
                 path = Path.cwd() / path
-            if path.suffix == ".py" and path.is_file() and _under_ttnn(path) and not is_exception(path):
+            if path.suffix != ".py" or not path.is_file():
+                continue
+            rel = ttnn_relative(path)
+            if rel is not None and not is_exception(rel):
                 yield path
         return
     for path in TTNN_DIR.rglob("*.py"):
-        if path.is_file() and not is_exception(path):
+        rel = ttnn_relative(path)
+        if path.is_file() and rel is not None and not is_exception(rel):
             yield path
 
 
