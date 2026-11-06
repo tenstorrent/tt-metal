@@ -66,39 +66,13 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
 // "home-made" tokens and when will they send tokens from the forwarding buffer.
 //
-// Pages one stream's region has to hold. The kernels pack their chunks densely, computing each chunk's
-// length from expert_offsets, so this only has to bound the region's TOTAL — which is why splitting the same
-// tokens into more chunks does not grow it.
-//
-// A destination chip's whole return volume is seq_len_per_chip * num_experts_per_tok copies — that is just
-// its output buffer, so it holds however the router spread the copies over chips and experts, and whether or
-// not the top-k picks are distinct. Chunks heading to the same destination therefore SHARE that volume
-// rather than each reaching it. A stream relays half_extent - 1 distinct destinations: the nearer ones can
-// have their whole volume on an origin that splits the run num_links ways, while the farthest is reachable
-// only from the diametrically opposite chip, whose run is split across every stream. One page per chunk
-// covers the integer slicing of each share.
-// What the DENSE region cost per stream, which args.fwd_reduction divides. Same split by movement class as
-// the standalone op, and for the same reason: every chain of classes ends in one that delivers to the next
-// chip's output and so needs no space anywhere, which is what makes capacity a free parameter here too.
-uint32_t dense_pages_per_stream(const CombineFabric2dParams& args) {
-    const uint32_t per_destination = args.seq_len_per_chip * args.num_experts_per_tok;
-    const uint32_t half_extent = ring_extent(args) / 2;
-    return (half_extent - 2) * (per_destination / args.num_links) + per_destination / stream_count(args.num_links) +
-           relay_chunks_per_stream(ring_extent(args)) * args.experts_per_chip;
-}
-
-// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1, and a
-// channel shallower than a read batch spends all its time announcing.
-constexpr uint32_t MIN_VC_PAGES = 4;
-
-uint32_t fwd_vc_pages(const CombineFabric2dParams& args) {
-    const uint32_t per_stream = dense_pages_per_stream(args) / args.fwd_reduction;
-    const uint32_t pages = per_stream / num_vcs(ring_extent(args));
-    return pages < MIN_VC_PAGES ? MIN_VC_PAGES : pages;
-}
-
+// Pages one stream's region holds, given rather than computed. Same split by movement class as the
+// standalone op, and for the same reason: every chain of classes ends in one that delivers to the next
+// chip's output and so needs no space anywhere, which is what makes the depth a free parameter here too.
+// It used to be derived from a destination's whole return volume and then divided by a reduction factor;
+// credit return made that bound obsolete, and a pipeline buffer does not scale with a launch's volume.
 uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
-    return num_vcs(ring_extent(args)) * fwd_vc_pages(args);
+    return num_vcs(ring_extent(args)) * args.fwd_vc_pages;
 }
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
@@ -391,7 +365,7 @@ KernelPlan make_kernel_plan(
     plan.ring_freed_slot = RingSemaphores::FREED;
     plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
     plan.credit_done_addr = static_cast<uint32_t>(sems.credit_done.address());
-    plan.vc_pages = fwd_vc_pages(args);
+    plan.vc_pages = args.fwd_vc_pages;
     for (uint32_t v = 0; v < num_vcs(ring_extent(args)); v++) {
         plan.vc_arrived_addr.push_back(static_cast<uint32_t>(sems.vc_arrived[v].address()));
         plan.vc_freed_addr.push_back(static_cast<uint32_t>(sems.vc_freed[v].address()));
