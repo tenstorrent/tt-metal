@@ -88,6 +88,9 @@ in another argument. Python has no varargs, the positional arguments that Metal 
 array arguments replace them. Of the advanced options, Python binds only ``DFBAdvancedOptions.alias_with``, which lets
 two buffers share memory; the others are C++ only.
 
+The lists and dicts these classes return are copies, so a change to one is lost: assign the whole field instead, as
+in ``kernel.compile_time_args = {"block": 2}`` rather than ``kernel.compile_time_args["block"] = 2``.
+
 Tensors
 *******
 
