@@ -1267,7 +1267,8 @@
   artifact_subdir: gemma4_mock256k  # the serving test's runner / producer logs and reports
   cmd: |
     export TT_METAL_HOME=/home/user/tt-metal
-    export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
+    export PYTHONPATH="$TT_METAL_HOME"
+    export PYTHONUNBUFFERED=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export HF_MODEL=google/gemma-4-31B-it
