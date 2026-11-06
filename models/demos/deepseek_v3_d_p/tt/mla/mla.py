@@ -744,7 +744,7 @@ class ttMLA:
         # pipeline stage (layer_num counts the stage's layers) and reuses this layer's top-k, so its rows are known now.
         # A kv_only successor (next_kv_only) fills its cache and stops before attention, so it reads nothing.
         next_layer = layer_idx + 1
-        next_in_stage = next_layer - self._first_layer_idx < self.layer_num
+        next_in_stage = self.layer_num is not None and next_layer - self._first_layer_idx < self.layer_num
         self._push_prefetch_grids = None
         if (
             self._push is not None
