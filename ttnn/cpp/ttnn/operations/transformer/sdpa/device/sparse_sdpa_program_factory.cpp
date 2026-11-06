@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
@@ -238,8 +239,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         for (const auto& c : desc.cbs) {
             cb_bytes += (c.total_size + cb_align - 1) / cb_align * cb_align;
         }
-        const uint64_t l1_budget =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const uint64_t l1_budget = ttnn::operations::data_movement::get_static_l1_space(t.q);
         if (cb_bytes > l1_budget) {
             desc.cbs.erase(desc.cbs.begin() + whole_token_cbs, desc.cbs.end());
             split_k = false;
