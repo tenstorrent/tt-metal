@@ -438,10 +438,11 @@ class TtKimiK3Transformer(LightweightModule):
             def attn_input_tap(local_idx, hidden):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
-        if (index_kv_cache is not None) != self.has_indexer:
+        has_indexer = getattr(self, "has_indexer", False)
+        if (index_kv_cache is not None) != has_indexer:
             raise ValueError(
                 "Kimi-K3.1's indexer needs index_kv_cache"
-                if self.has_indexer
+                if has_indexer
                 else "Kimi-K3 has no DSA indexer; index_kv_cache must be None"
             )
         if return_intermediates:
