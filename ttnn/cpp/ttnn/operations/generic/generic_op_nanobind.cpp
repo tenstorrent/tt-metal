@@ -104,7 +104,8 @@ void bind_generic_operation_preparation(nb::module_& mod) {
 
         Raises:
             RuntimeError: If a kernel does not compile, if the program configuration does not fit the
-                kernel-configuration buffer, or if the tensors' MeshDevice has no local devices.
+                kernel-configuration buffer, or if the tensors' MeshDevice has no local devices. With a ProgramSpec,
+                also for each error ``ttnn.experimental.generic_op`` raises.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_preparation.py and
@@ -157,8 +158,9 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         mod,
         "MeshProgramSpec",
         R"doc(
-        Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range. The
-        ranges must not overlap. Lists are copied in and out.
+        Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range.
+        generic_op raises if two ranges overlap, if a device in a range does not hold every tensor, or if the
+        MeshProgramRunArgs does not give run args for exactly these ranges. Lists are copied in and out.
         )doc")
         .def(
             "__init__",
@@ -176,7 +178,15 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         std::vector<std::pair<MeshCoordinateRange, ProgramRunArgs>> run_args;
         nb::list tensors;
         run_args.reserve(programs.size());
-        for (const auto& [range, program_run_args] : programs) {
+        for (std::size_t i = 0; i < programs.size(); ++i) {
+            const auto& [range, program_run_args] = programs[i];
+            // Unchecked, nb::cast would report only std::bad_cast.
+            if (!nb::isinstance<ProgramRunArgs>(program_run_args)) {
+                throw nb::type_error(("MeshProgramRunArgs: programs[" + std::to_string(i) + "] holds a " +
+                                      nb::cast<std::string>(program_run_args.type().attr("__name__")) +
+                                      ", not a ttnn.experimental.ProgramRunArgs")
+                                         .c_str());
+            }
             run_args.emplace_back(range, nb::cast<const ProgramRunArgs&>(program_run_args));
             tensors.append(nb::getattr(program_run_args, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
         }
@@ -208,6 +218,10 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             },
             nb::arg("name"),
             nb::arg("value").none())
+        .def(
+            "__delattr__",
+            [](nb::handle self, const nb::str& name) { ttnn::program_spec::delete_known_attribute(self, name); },
+            nb::arg("name"))
         .def_prop_rw(
             "programs",
             [](nb::pointer_and_handle<MeshProgramRunArgs> self) {
@@ -233,7 +247,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         arguments, each array with its declared length, and each tensor parameter gets a tensor from io_tensors that
         matches its spec.
         Whether every core got its per-core values is checked on later calls only when
-        ttnn.CONFIG.validate_program_args is on.
+        ttnn.CONFIG.validate_program_args is on; with it off, a core that a later call leaves out keeps the values it
+        was given before.
 
         Args:
             io_tensors (List[ttnn.Tensor]): The tensors the program uses, with the preallocated output last. Each
@@ -247,6 +262,12 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors.
+
+        Raises:
+            RuntimeError: If the run args do not match the spec, naming the kernel, argument or tensor parameter at
+                fault; if a tensor is on another MeshDevice or misses a device the program runs on; if mesh ranges
+                overlap or the run args' ranges differ from the spec's; if a tensor is allocated per core; or, on a
+                first call, if a kernel does not compile.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for usage examples

@@ -387,6 +387,24 @@ TEST(GenericOpProgramSpecHash, VarargCountsChangeHash) {
     spec = make_hash_spec();
     spec.kernels[0].advanced_options.num_common_runtime_varargs = 1;
     EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
+
+    spec = make_hash_spec();
+    spec.kernels[0].advanced_options.num_runtime_varargs_per_node = {{CoreCoord{0, 0}, 1}};
+    EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
+}
+
+// PrefetcherPipe parameters are C++ only too. A call with another pipe needs another parameter name, which must then
+// give another cache entry.
+TEST(GenericOpProgramSpecHash, PrefetcherPipeParameterNamesChangeHash) {
+    auto spec = make_hash_spec();
+    spec.advanced_options.prefetcher_pipe_parameters = {
+        {.unique_id = m2::PrefetcherPipeParamName{"pipe"},
+         .receivers = CoreCoord{0, 1},
+         .ring_size = 4,
+         .entry_size = 256}};
+    const auto base = ttnn::experimental::compute_program_spec_hash(spec);
+    spec.advanced_options.prefetcher_pipe_parameters[0].unique_id = m2::PrefetcherPipeParamName{"other_pipe"};
+    EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
 }
 
 TEST(GenericOpProgramSpecHash, NamesForMessagesKeepHash) {
