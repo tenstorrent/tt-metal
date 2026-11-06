@@ -300,3 +300,35 @@ Tests:
 
     patterns:
       - type: all_to_all
+
+  # Channel trimming: each test runs twice, first capturing which router channels the traffic uses (channel trimming capture), then on a
+  # fabric rebuilt with only those channels (channel trimming replay). All-to-all makes chips in the middle of a route send their own traffic
+  # and forward upstream chips' traffic over the same link, where both ends of the link must agree on credits and acks.
+  # 256 packets run any sender whose credits aren't returned out of buffer slots.
+  - name: "ChannelTrimmingMeshUnicastAllToAll"
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 256
+
+    patterns:
+      - type: all_to_all
+
+  - name: "ChannelTrimmingMeshMulticastAllToAll"
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 256
+
+    patterns:
+      - type: all_to_all

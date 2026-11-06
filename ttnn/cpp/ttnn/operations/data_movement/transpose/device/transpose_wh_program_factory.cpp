@@ -37,7 +37,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     const auto& output = output_tensor.mesh_tensor();
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
@@ -173,15 +173,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
 
     // ---- compute ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (row_major && (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32)) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
 
     // Legacy built a ComputeConfigDescriptor directly (no TTNN ComputeKernelConfig feeding it),
     // setting only fp32_dest_acc_en and unpack_to_dest_mode; every other field kept its Metal
     // default, which ComputeHardwareConfig's defaults reproduce.
+    // Int32/UInt32 unpack to Dest as Float32 does: Quasar's tilize and transpose unpack to Dest only
+    // when UnpackToDest is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
     ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (src0_dfb_data_format == tt::DataFormat::Float32) {
+    if (fp32_dest_acc_en) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
         if (row_major) {
             compute_hw.unpack_modes.insert({TILIZE, UnpackMode::UnpackToDest});

@@ -8,7 +8,6 @@ struct SeluBf16Config {
     static constexpr uint32_t kSegments = 2u;
     static constexpr uint32_t kCoefficientOffset = kSegments + 1;
     static constexpr uint32_t kCoefficientsPerSegment = 9u;
-    // Fit: degree-8 polynomial on [-6.0625, 10], 2 segments, max pure (continuous) ULP 0.5.
     static constexpr uint32_t kDegree[] = {8, 1};
     static constexpr uint32_t kLutBits[] = {
         0xc0c20000u, 0x00000000u, 0x41200000u, 0x00000000u, 0x3fe10966u, 0x3f6118f6u, 0x3e95c291u,
@@ -45,7 +44,7 @@ inline bool bf16_dest_selu() {
 #endif
 }
 template <int ITERATIONS = 32>
-inline void calculate_selu_bf16() {
+__attribute__((noinline)) inline void calculate_selu_bf16() {
     ckernel::sfpu::bf16::selu::calculate_dense_polynomial<ckernel::sfpu::SeluBf16Config, ITERATIONS>();
 }
 
