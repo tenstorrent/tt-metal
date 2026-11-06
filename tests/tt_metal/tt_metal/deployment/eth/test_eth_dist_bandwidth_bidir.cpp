@@ -43,6 +43,7 @@ struct chip_core {
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     IDevice* chip;
     CoreCoord core;
+    int direction;
 };
 
 std::map<std::string, struct chip_core> get_coreuid_to_core(
@@ -64,15 +65,37 @@ std::map<std::string, struct chip_core> get_coreuid_to_core(
     return ret;
 }
 
-std::vector<struct chip_core> get_cores_to_test(
-    std::span<std::shared_ptr<distributed::MeshDevice>> devices_, std::span<std::string> test_endpoints) {
+std::vector<struct chip_core> get_cores_to_test(std::span<std::shared_ptr<distributed::MeshDevice>> devices_) {
     /* =================== */
     std::vector<struct chip_core> ret;
 
     std::map<std::string, struct chip_core> coreuid_to_core = get_coreuid_to_core(devices_);
-    for (auto& uid : test_endpoints) {
-        auto core = coreuid_to_core.at(uid);
-        ret.push_back(core);
+
+    char* endpointp = getenv("ETH_TEST_ENDPOINTS");
+    auto endpoints = std::string(endpointp ? endpointp : "");
+    std::vector<std::string> test_endpoints = split_string(endpoints, " ");
+
+    log_info(tt::LogTest, "endpoints:");
+    for (auto& e : test_endpoints) {
+        std::vector<std::string> pair = split_string(e, ",");
+
+        if (pair.size() != 2) {
+            throw std::runtime_error("Invalid format for the test link specification");
+        }
+
+        for (int i = 0; i < pair.size(); i++) {
+            if (coreuid_to_core.contains(pair[i])) {
+                auto& core = coreuid_to_core[pair[i]];
+                core.direction = i;
+                ret.push_back(core);
+                goto next;
+            }
+        }
+
+        throw std::runtime_error(fmt::format("Couldn't match a link to hardware: {}", pair));
+
+    next:
+        (void)0;
     }
 
     return ret;
@@ -84,7 +107,8 @@ static bool run_test_bandwidth_bidir(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
     DataMovementProcessor processor0,
-    span<uint32_t> inputs) {
+    span<uint32_t> inputs,
+    int direction) {
     /* =================== */
     auto* const device = mesh_device->impl().get_devices()[0];
 
@@ -119,8 +143,8 @@ static bool run_test_bandwidth_bidir(
         iter_l1_address,
         send_l1_address,
         recv_l1_address,
-        0,  // TODO should be swapped on two hosts
-        1,  // TODO should be swapped on two hosts
+        direction,
+        !direction,
         programs[mesh_device].get());
 
     vector<struct core_setup> cores = {
@@ -133,7 +157,7 @@ static bool run_test_bandwidth_bidir(
         },
     };
     using namespace std::chrono_literals;
-    wait_to_finish_eth_timeout_cores(fixture, cores, programs, 1s);
+    wait_to_finish_eth_timeout_cores(fixture, cores, programs, 100ms);
 
     double threshold = get_eth_bw() * 0.7;
 
@@ -155,17 +179,13 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDist02BandwidthBidir) {
     print_detected_devices();
     ASSERT_TRUE(ensure_links(devices_));
 
-    std::vector<std::string> test_endpoints = {
-        "asic:0x2fb57e3b70ec5ed7/eth11",
-    };
-
     delay_until_env();
 
-    for (auto& core : get_cores_to_test(devices_, test_endpoints)) {
+    for (auto& core : get_cores_to_test(devices_)) {
         log_info(tt::LogTest, "running {}", core);
         const auto processor = static_cast<DataMovementProcessor>(0);
 
-        bool passed = run_test_bandwidth_bidir(this, core.mesh_device, core.core, processor, inputs);
+        bool passed = run_test_bandwidth_bidir(this, core.mesh_device, core.core, processor, inputs, core.direction);
 
         if (!passed) {
             errors.emplace_back(core.chip->id(), core.chip->id(), core.core, core.core, processor);

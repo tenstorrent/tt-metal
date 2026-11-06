@@ -30,6 +30,10 @@ void kernel_main() {
 
         eth_wait_for_bytes_on_channel(transfer_size, channel1);
 
+        if (!i) {
+            start = timestamp();
+        }
+
         eth_receiver_channel_done(channel1);
 
         eth_wait_for_receiver_channel_done(channel0);

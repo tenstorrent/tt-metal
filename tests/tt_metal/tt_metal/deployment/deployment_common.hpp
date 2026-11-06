@@ -104,4 +104,15 @@ static void get_env(const char* varname, uint32_t* var) {
     }
 }
 
+[[maybe_unused]]
+static std::vector<std::string> split_string(std::string str, std::string_view d) {
+    std::vector<std::string> ret;
+
+    for (auto part : str | std::views::split(d)) {
+        ret.emplace_back(part.begin(), part.end());
+    }
+
+    return ret;
+}
+
 #endif /* DEPLOYMENT_COMMON_H */
