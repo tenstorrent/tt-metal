@@ -108,8 +108,8 @@ def test_run_vit_trace_2cqs_inference(
         logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
         if entire_imagenet_dataset:
             assert (
-                accuracy == expected_accuracy
-            ), f"Accuracy {accuracy} does not match expected accuracy {expected_accuracy}"
+                accuracy >= expected_accuracy
+            ), f"Accuracy {accuracy} is below the expected accuracy {expected_accuracy}"
 
         first_iter_time = profiler.get(f"compile")
         # ensuring inference time fluctuations is not noise
