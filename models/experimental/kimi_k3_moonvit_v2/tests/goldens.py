@@ -13,16 +13,12 @@ are saved instead of recomputed. One folder per case under `$MOONVIT_GOLDEN_DIR`
     mm_projector.pt        the model's output: `tpool_patch_merger`, then `mm_projector` (h*w/4 rows)
     meta.json              what the files were made from, and the time each step took
 
-Two precisions:
-
-- `fp32` (default, `<grid>-seed<seed>-fp32`): the reference model cast to fp32, with attention
-  computed `CHUNK_SIZE` query rows at a time (`chunked_attention`). The device tests compare against
-  these. Upstream's eager attention holds several 12 x L x L tensors at once, more than the host
-  has. The norms keep the bf16 model's eps (2^-7): upstream `nn.RMSNorm(eps=None)` takes eps from
-  the input dtype, so fp32 would otherwise change the model, not only the precision.
-- `bf16` (`<grid>-seed<seed>`): the reference as it runs, bf16 with upstream eager attention. Its
-  own rounding (bf16 attention probabilities and residual stream) is large where activations are
-  large: in deeper layers it is larger than the device's error, and after the projector it is worse.
+The outputs are fp32 (folder `<grid>-seed<seed>-fp32`): the reference model cast to fp32, with
+attention computed `CHUNK_SIZE` query rows at a time (`chunked_attention`). Upstream's eager attention
+holds several 12 x L x L tensors at once, more than the host has. The norms keep the bf16 model's eps
+(2^-7): upstream `nn.RMSNorm(eps=None)` takes eps from the input dtype, so fp32 would otherwise change
+the model, not only the precision. The bf16 reference is not used: its own rounding (bf16 attention
+probabilities and residual stream) is larger than the device's error in deeper layers.
 
 Pixels are `random_patches(config, grid, seed)`. The loop is `MoonViT3dEncoder.forward` with every
 block's output kept: each block gets the arguments `forward` gives it (`reference_rope`).
@@ -32,7 +28,7 @@ finished folder only redoes the final norm and the model output). `meta.json` re
 checkpoint index, the reference code and `chunked_attention`; `load` refuses a folder made from
 different ones.
 
-    python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid 256x256 [--dtype bf16] [--blocks 1]
+    python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid 256x256 [--blocks 1]
 """
 
 from __future__ import annotations
@@ -46,14 +42,19 @@ import math
 import os
 import resource
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.reference import modeling_kimi_k3 as upstream
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
-from models.experimental.kimi_k3_moonvit_v2.tests.common import REAL_MARK, random_patches, reference_rope
+from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    REAL_MARK,
+    build_reference,
+    random_patches,
+    reference_rope,
+)
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
 
 GOLDEN_DIR_ENV = "MOONVIT_GOLDEN_DIR"
@@ -68,8 +69,9 @@ REFERENCE_FILES = (
     "modeling_kimi_k3.py",
     "config.json",
 )
-DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 CHUNK_SIZE = 2048
+# Query rows per chunk in `use_sampled_attention`: it runs against all 65,536 keys, so smaller chunks.
+SAMPLED_CHUNK_SIZE = 256
 # The bf16 model's RMSNorm eps (`nn.RMSNorm(eps=None)` on bf16 input), kept when running in fp32. The
 # device uses the same value (`MoonViTConfig.norm_eps`).
 NORM_EPS = MoonViTConfig().norm_eps
@@ -81,12 +83,11 @@ def golden_dir() -> Path | None:
     return Path(value) if value else None
 
 
-def case_dir(h: int, w: int, seed: int, dtype: str = "fp32") -> Path:
+def case_dir(h: int, w: int, seed: int) -> Path:
     root = golden_dir()
     if root is None:
         raise RuntimeError(f"set ${GOLDEN_DIR_ENV} to the folder that holds the saved outputs")
-    suffix = "" if dtype == "bf16" else f"-{dtype}"
-    return root / f"{h}x{w}-seed{seed}{suffix}"
+    return root / f"{h}x{w}-seed{seed}-fp32"
 
 
 def block_file(index: int) -> str:
@@ -101,39 +102,21 @@ def sha256(paths) -> str:
     return digest.hexdigest()
 
 
-def chunked_attention(q, k, v, q_cu_seqlens=None, k_cu_seqlens=None, chunk_size: int = CHUNK_SIZE, **kwargs):
+def chunked_attention(
+    q, k, v, q_cu_seqlens=None, k_cu_seqlens=None, *, query_rows=None, chunk_size: int = CHUNK_SIZE, **kwargs
+):
     """Upstream `eager_attention` for one image, `chunk_size` query rows at a time: the same scores,
     fp32 softmax and cast back to the input dtype, without the 12 x L x L tensors. One image means
-    `cu_seqlens == [0, L]`, where eager's mask is all true, so there is nothing to mask."""
+    `cu_seqlens == [0, L]`, where eager's mask is all true, so there is nothing to mask.
+
+    With `query_rows`, only those rows are computed, each against every key, and the other rows of the
+    output are zero. At the full padded length this is the part of attention the CPU can afford: the
+    rows after attention (`wo`, the residual, norm1, the MLP) each depend on their own row alone, so a
+    block run with it is exact on `query_rows`."""
     if q_cu_seqlens.tolist() != [0, q.shape[0]] or k_cu_seqlens.tolist() != [0, k.shape[0]]:
         raise ValueError("chunked_attention handles one image (cu_seqlens [0, L]) only")
-    q, k, v = (t.transpose(0, 1) for t in (q, k, v))  # [heads, L, head_dim]
-    out = torch.empty_like(q)
-    for start in range(0, q.shape[1], chunk_size):
-        rows = slice(start, start + chunk_size)
-        weight = q[:, rows] @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
-        out[:, rows] = torch.softmax(weight, dim=-1, dtype=torch.float32).to(q.dtype) @ v
-    return out.transpose(0, 1).reshape(q.shape[1], -1)
-
-
-@contextmanager
-def use_chunked_attention():
-    """Run upstream's `eager` attention path as `chunked_attention` inside the block."""
-    previous = upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"]
-    upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"] = chunked_attention
-    try:
-        yield
-    finally:
-        upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"] = previous
-
-
-def sampled_attention(q, k, v, q_cu_seqlens=None, k_cu_seqlens=None, *, query_rows, chunk_size=256, **kwargs):
-    """`chunked_attention` for the query rows `query_rows` only, each against every key; the other rows
-    of the output are zero. At the full padded length this is the part of attention the CPU can afford:
-    the rows after attention (`wo`, the residual, norm1, the MLP) each depend on their own row alone, so
-    a block run with it is exact on `query_rows`."""
-    if q_cu_seqlens.tolist() != [0, q.shape[0]] or k_cu_seqlens.tolist() != [0, k.shape[0]]:
-        raise ValueError("sampled_attention handles one image (cu_seqlens [0, L]) only")
+    if query_rows is None:
+        query_rows = torch.arange(q.shape[0])
     q, k, v = (t.transpose(0, 1) for t in (q, k, v))  # [heads, L, head_dim]
     out = torch.zeros_like(q)
     for start in range(0, len(query_rows), chunk_size):
@@ -144,14 +127,26 @@ def sampled_attention(q, k, v, q_cu_seqlens=None, k_cu_seqlens=None, *, query_ro
 
 
 @contextmanager
-def use_sampled_attention(query_rows: torch.Tensor):
-    """Run upstream's `eager` attention path as `sampled_attention` for `query_rows` (raster order)."""
+def _eager_attention_as(attention):
+    """Run upstream's `eager` attention path as `attention` inside the block."""
     previous = upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"]
-    upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"] = functools.partial(sampled_attention, query_rows=query_rows)
+    upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"] = attention
     try:
         yield
     finally:
         upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"] = previous
+
+
+def use_chunked_attention():
+    """Upstream's `eager` attention as `chunked_attention` over every row."""
+    return _eager_attention_as(chunked_attention)
+
+
+def use_sampled_attention(query_rows: torch.Tensor):
+    """Upstream's `eager` attention as `chunked_attention` for `query_rows` (raster order) only."""
+    return _eager_attention_as(
+        functools.partial(chunked_attention, query_rows=query_rows, chunk_size=SAMPLED_CHUNK_SIZE)
+    )
 
 
 def to_fp32(reference):
@@ -164,21 +159,17 @@ def to_fp32(reference):
     return reference
 
 
-def fingerprint(checkpoint: Path, dtype: str) -> dict:
+def fingerprint(checkpoint: Path) -> dict:
     """What a golden depends on besides the grid and seed."""
-    attention = "eager"
-    if dtype == "fp32":
-        attention = "chunked " + hashlib.sha256(inspect.getsource(chunked_attention).encode()).hexdigest()
     return {
-        "dtype": dtype,
-        "attention": attention,
+        "attention": "chunked " + hashlib.sha256(inspect.getsource(chunked_attention).encode()).hexdigest(),
         "checkpoint_index_sha256": sha256([checkpoint / "model.safetensors.index.json"]),
         "reference_sha256": sha256([REFERENCE_DIR / name for name in REFERENCE_FILES]),
         "torch": torch.__version__,
     }
 
 
-IDENTITY = ("grid", "seed", "dtype", "attention", "checkpoint_index_sha256", "reference_sha256")
+IDENTITY = ("grid", "seed", "attention", "checkpoint_index_sha256", "reference_sha256")
 
 
 def model_output(reference, x: torch.Tensor, grid_thws: torch.Tensor) -> torch.Tensor:
@@ -206,36 +197,31 @@ def encoder_steps(reference, x: torch.Tensor, grid_thws: torch.Tensor, start: in
         yield "mm_projector", model_output(reference, x, grid_thws)
 
 
-def load(h: int, w: int, seed: int, name: str, dtype: str = "fp32") -> torch.Tensor:
+def load(h: int, w: int, seed: int, name: str) -> torch.Tensor:
     """A saved output (`patch_embed`, `block_00`, ..., `final_layernorm`, `mm_projector`), checked
-    against the current checkpoint, reference code and (fp32) `chunked_attention`."""
-    folder = case_dir(h, w, seed, dtype)
+    against the current checkpoint, reference code and `chunked_attention`."""
+    folder = case_dir(h, w, seed)
     meta = json.loads((folder / "meta.json").read_text())
-    current = fingerprint(checkpoint_path(), dtype)
+    current = fingerprint(checkpoint_path())
     for key in ("checkpoint_index_sha256", "reference_sha256", "attention"):
-        # Folders written before `attention` was recorded are bf16 eager.
-        if meta.get(key, "eager") != current[key]:
+        if meta.get(key) != current[key]:
             raise RuntimeError(f"{folder} was made from a different {key}; regenerate it")
     return torch.load(folder / f"{name}.pt")
 
 
-def generate(h: int, w: int, seed: int, dtype: str, blocks: int | None) -> None:
-    from models.experimental.kimi_k3_moonvit_v2.tests.conftest import build_reference
-
+def generate(h: int, w: int, seed: int, blocks: int | None) -> None:
     checkpoint = checkpoint_path()
     if checkpoint is None:
         raise SystemExit("set KIMI_K3_HF_MODEL to the checkpoint folder")
     if golden_dir() is None:
         raise SystemExit(f"set {GOLDEN_DIR_ENV} to the folder to write the outputs to")
-    folder = case_dir(h, w, seed, dtype)
+    folder = case_dir(h, w, seed)
     folder.mkdir(parents=True, exist_ok=True)
     meta_path = folder / "meta.json"
-    meta = {"grid": [1, h, w], "seed": seed, **fingerprint(checkpoint, dtype), "seconds": {}}
+    meta = {"grid": [1, h, w], "seed": seed, **fingerprint(checkpoint), "seconds": {}}
     if meta_path.exists():
         old = json.loads(meta_path.read_text())
-        old.setdefault("dtype", "bf16")
-        old.setdefault("attention", "eager")
-        if any(old[k] != meta[k] for k in IDENTITY):
+        if any(old.get(k) != meta[k] for k in IDENTITY):
             raise SystemExit(f"{folder} holds outputs of different inputs; move it away first")
         meta["seconds"] = old["seconds"]
 
@@ -247,22 +233,17 @@ def generate(h: int, w: int, seed: int, dtype: str, blocks: int | None) -> None:
         print(f"[goldens] {name}: {seconds:.1f} s, peak RSS so far {peak_gb:.1f} GB", flush=True)
 
     t = time.time()
-    reference = build_reference(REAL_MARK)
-    if dtype == "fp32":
-        reference = to_fp32(reference)
+    reference = to_fp32(build_reference(REAL_MARK))
     config = MoonViTConfig.from_hf_config(checkpoint)
-    print(
-        f"[goldens] {dtype} reference built in {time.time() - t:.1f} s, {config.num_hidden_layers} blocks", flush=True
-    )
+    print(f"[goldens] fp32 reference built in {time.time() - t:.1f} s, {config.num_hidden_layers} blocks", flush=True)
     pixels, grid_thws = random_patches(config, [(1, h, w)], seed)
 
-    attention = use_chunked_attention() if dtype == "fp32" else nullcontext()
-    with torch.no_grad(), attention:
+    with torch.no_grad(), use_chunked_attention():
         if (folder / "patch_embed.pt").exists():
             x = torch.load(folder / "patch_embed.pt")
         else:
             t = time.time()
-            x = reference.vision_tower.patch_embed(pixels.to(DTYPES[dtype]), grid_thws)
+            x = reference.vision_tower.patch_embed(pixels.float(), grid_thws)
             save("patch_embed", x, time.time() - t)
 
         start = 0
@@ -283,11 +264,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--grid", default="256x256", help="HxW in patches")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--dtype", choices=list(DTYPES), default="fp32")
     parser.add_argument("--blocks", type=int, default=None, help="stop after this many blocks (default: all)")
     args = parser.parse_args()
     h, w = (int(v) for v in args.grid.split("x"))
-    generate(h, w, args.seed, args.dtype, args.blocks)
+    generate(h, w, args.seed, args.blocks)
 
 
 if __name__ == "__main__":

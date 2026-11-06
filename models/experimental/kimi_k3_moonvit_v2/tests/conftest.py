@@ -10,15 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import torch
 
 import ttnn
-from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import (
-    CHECKPOINT_ENV,
-    checkpoint_path,
-    load_vision_state_dict,
-)
-from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel, load_vision_config
+from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
+from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     LOUDBOX_SHAPE,
     ON_SIMULATOR,
@@ -27,6 +22,7 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     SIMULATOR_MARK,
     SYNTHETIC_MARK,
     WEIGHTS,
+    build_reference,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
 from tests.scripts.common import get_updated_device_params
@@ -115,25 +111,6 @@ def config() -> MoonViTConfig:
     """From the checkpoint's `config.json` when $KIMI_K3_HF_MODEL is set, else the K3 defaults."""
     path = checkpoint_path()
     return MoonViTConfig.from_hf_config(path) if path is not None else MoonViTConfig()
-
-
-def build_reference(weights: str) -> KimiK3VisionModel:
-    """bf16, eval mode, as the checkpoint runs (upstream RMSNorm eps follows the input dtype)."""
-    path = checkpoint_path()
-    if weights == REAL_MARK and path is None:
-        pytest.skip(f"set ${CHECKPOINT_ENV} to a Kimi-K3 checkpoint folder")
-    vision_config = load_vision_config(path)
-    torch.manual_seed(0)
-    model = KimiK3VisionModel(vision_config)
-    if weights == REAL_MARK:
-        model.load_state_dict(load_vision_state_dict(path))
-    else:
-        # RMSNorm initializes to ones, which would hide a norm weight that fails to load.
-        with torch.no_grad():
-            for name, param in model.named_parameters():
-                if "norm" in name:
-                    param.copy_(1.0 + 0.1 * torch.randn_like(param))
-    return model.to(torch.bfloat16).eval()
 
 
 @pytest.fixture(scope="session")

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import os
 import time
@@ -16,10 +17,23 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import (
+    CHECKPOINT_ENV,
+    checkpoint_path,
+    load_vision_state_dict,
+)
+from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel, load_vision_config
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tt.ccl import ParallelFactor, TT_CCL
 from models.experimental.kimi_k3_moonvit_v2.tt.device_input import sp_mesh_mapper
-from models.experimental.kimi_k3_moonvit_v2.tt.model_config import RING_SIZE, MoonViTConfig
+from models.experimental.kimi_k3_moonvit_v2.tt.model_config import (
+    RING_SIZE,
+    MoonViTConfig,
+    check_grid,
+    compute_kernel_config,
+    resolve_parallel,
+)
+from models.experimental.kimi_k3_moonvit_v2.tt.rope import TT_Rope
 
 # Weights. A test that builds `reference` carries one or both of these marks,
 # and conftest.py runs it once per mark: SYNTHETIC with random weights, REAL with the checkpoint at
@@ -309,6 +323,25 @@ def random_patches(config: MoonViTConfig, grid_thws: list[tuple[int, int, int]],
     return pixels, torch.tensor(grid_thws, dtype=torch.int64)
 
 
+def build_reference(weights: str) -> KimiK3VisionModel:
+    """bf16, eval mode, as the checkpoint runs (upstream RMSNorm eps follows the input dtype)."""
+    path = checkpoint_path()
+    if weights == REAL_MARK and path is None:
+        pytest.skip(f"set ${CHECKPOINT_ENV} to a Kimi-K3 checkpoint folder")
+    vision_config = load_vision_config(path)
+    torch.manual_seed(0)
+    model = KimiK3VisionModel(vision_config)
+    if weights == REAL_MARK:
+        model.load_state_dict(load_vision_state_dict(path))
+    else:
+        # RMSNorm initializes to ones, which would hide a norm weight that fails to load.
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if "norm" in name:
+                    param.copy_(1.0 + 0.1 * torch.randn_like(param))
+    return model.to(torch.bfloat16).eval()
+
+
 def reference_rope(reference, grid_thws: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """`(cu_seqlens, max_seqlen, rope_freqs_cis)` as `MoonViT3dEncoder.forward` builds them."""
     rope_freqs_cis = reference.vision_tower.encoder.rope_2d.get_freqs_cis(
@@ -469,6 +502,69 @@ class Trace:
         seconds = (time.perf_counter() - start) / iterations
         logger.info(f"{label}: {seconds * 1e3:.3f} ms per traced replay ({iterations} replays)")
         return seconds
+
+
+def check_ring_layer(
+    mesh_device,
+    sp_axis: int,
+    num_links: int,
+    config: MoonViTConfig,
+    reference,
+    layer: int,
+    grid: list[tuple[int, int, int]],
+    *,
+    tt_class,
+    reference_call,
+    state_prefixes: tuple[str, ...] | None = None,
+    input_dtype=ttnn.bfloat16,
+    relative_rmse: float,
+    real_rows_from_each_chip: bool,
+) -> None:
+    """`tt_class` (built like `TT_Vision_Attention`, loaded from encoder block `layer`, only the keys
+    starting with `state_prefixes` when given) on the ring against `reference_call(block, x, cu_seqlens,
+    max_seqlen, rope_freqs_cis)`. The device runs window-ordered rows.
+
+    By default the golden is the bf16 block over every row, compared as a whole in raster order. With
+    `real_rows_from_each_chip` (an image with real rows on every chip, at the production padded length)
+    the fp32 golden covers `sampled_rows` of each chip only, each against every key
+    (`goldens.use_sampled_attention`), and each chip's rows are checked on their own."""
+    # Imported here: goldens.py imports this module.
+    from models.experimental.kimi_k3_moonvit_v2.tests.goldens import to_fp32, use_sampled_attention
+
+    parallel = resolve_parallel(mesh_device, *ring_parallel(mesh_device, sp_axis, num_links), config)
+    tt = tt_class(
+        config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config(mesh_device)
+    )
+    block = reference.vision_tower.encoder.blocks[layer]
+    state = block.state_dict()
+    if state_prefixes is not None:
+        state = {k: v for k, v in state.items() if k.startswith(state_prefixes)}
+    tt.load_torch_state_dict(state)
+
+    grid_thws = torch.tensor(grid)
+    h, w = check_grid(grid_thws, config)
+    kernel = config.merge_kernel_size
+    x = random_tensor(h * w, config.hidden_size)
+    cu_seqlens, max_seqlen, rope_freqs_cis = reference_rope(reference, grid_thws)
+    if real_rows_from_each_chip:
+        chips = sampled_rows(h * w, config.max_patches)
+        query_rows = host_prep.window_order(h, w, kernel)[torch.cat(chips)].sort().values
+        with torch.no_grad(), use_sampled_attention(query_rows):
+            golden = reference_call(to_fp32(copy.deepcopy(block)), x.float(), cu_seqlens, max_seqlen, rope_freqs_cis)
+    else:
+        with torch.no_grad():
+            golden = reference_call(block, x, cu_seqlens, max_seqlen, rope_freqs_cis)
+
+    rope = TT_Rope(config, mesh_device=mesh_device, parallel=parallel).write(*host_prep.rope_tables(config, h, w))
+    x_window = host_prep.to_window_order(x, h, w, kernel)
+    logical_n = logical_length_tensor(mesh_device, h * w)
+    out = tt(sp_shard(x_window, mesh_device, sp_axis, config.max_patches, input_dtype), rope, logical_n)
+    out = sp_gather(out, mesh_device, sp_axis, h * w)
+    if real_rows_from_each_chip:
+        golden = host_prep.to_window_order(golden, h, w, kernel)
+        assert_quality_per_chip(golden, out, chips, relative_rmse=relative_rmse)
+    else:
+        assert_quality(golden, host_prep.from_window_order(out, h, w, kernel), relative_rmse=relative_rmse)
 
 
 def assert_same_as_untraced(untraced: torch.Tensor, traced: torch.Tensor, label: str = "") -> None:

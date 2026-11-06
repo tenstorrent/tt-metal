@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2025-2026 The Moonshot AI Team.
+# SPDX-License-Identifier: LicenseRef-LICENSE-FILE
+# `__init__` and `_extract_image_features` are adapted from upstream `KimiK3ForConditionalGeneration`
+# (https://huggingface.co/moonshotai/Kimi-K3), under the Kimi K3 License (LICENSE-Kimi-K3 beside this file).
 
 """The vision path of upstream `KimiK3ForConditionalGeneration`, without the language model.
 

@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: © 2025-2026 The Moonshot AI Team and The HuggingFace Inc. team.
-# SPDX-License-Identifier: Apache-2.0
-# Modified: language model removed (KimiK3PreTrainedModel, KimiK3ForConditionalGeneration and their imports).
+# SPDX-License-Identifier: LicenseRef-LICENSE-FILE
+# Vendored from https://huggingface.co/moonshotai/Kimi-K3 under the Kimi K3 License (LICENSE-Kimi-K3 beside this file);
+# the parts derived from llava are Apache-2.0, as the upstream header below says.
+# Modified: language model removed (KimiK3PreTrainedModel, KimiK3ForConditionalGeneration and their imports);
+# VisionTowerConfig and ProjectorConfig are annotated with KimiK3VisionConfig, the config they are given.
 
 # coding=utf-8
 # Copyright 2025-2026 The Moonshot AI Team and HuggingFace Inc. team. All rights reserved.
@@ -49,7 +52,7 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import is_flash_attn_2_available
 
-from .configuration_kimi_k3 import KimiK3Config
+from .configuration_kimi_k3 import KimiK3VisionConfig
 
 # Flash attention imports
 if is_flash_attn_2_available():
@@ -754,7 +757,7 @@ class PatchMergerMLPV2(nn.Module):
 class VisionTowerConfig(PretrainedConfig):
     model_type = "moonvit3d"
 
-    def __init__(self, config: KimiK3Config, **kwargs):
+    def __init__(self, config: KimiK3VisionConfig, **kwargs):
         super().__init__(**kwargs)
         self.patch_size = config.patch_size
         self.init_pos_emb_height = config.init_pos_emb_height
@@ -778,7 +781,7 @@ class VisionTowerConfig(PretrainedConfig):
 
 
 class ProjectorConfig:
-    def __init__(self, config: KimiK3Config):
+    def __init__(self, config: KimiK3VisionConfig):
         self.mm_projector_type = config.mm_projector_type
         self.mm_hidden_size = config.mm_hidden_size
         self.hidden_size = config.text_hidden_size

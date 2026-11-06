@@ -2,40 +2,45 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device: `TT_Vision_Block` against each reference block. The device runs window-ordered rows; the
-output is put back in raster order to compare."""
+"""Device: `TT_Vision_Block` against each reference block (`common.check_ring_layer`). The block's
+input is the fp32 residual stream."""
 
 from __future__ import annotations
 
-import copy
-
-import torch
-
 import ttnn
 
-from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
-    SYNTHETIC,
-    REAL,
-    SAMPLED_LAYERS,
-    random_tensor,
-    assert_quality,
     ATTENTION_GRIDS,
-    RING,
-    reference_rope,
-    ring_parallel,
-    sp_gather,
-    sp_shard,
-    assert_quality_per_chip,
+    REAL,
     REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS,
+    RING,
+    SAMPLED_LAYERS,
+    SYNTHETIC,
+    check_ring_layer,
     padding_layout_grid,
-    sampled_rows,
-    logical_length_tensor,
 )
-from models.experimental.kimi_k3_moonvit_v2.tests.goldens import to_fp32, use_sampled_attention
-from models.experimental.kimi_k3_moonvit_v2.tt.model_config import check_grid, compute_kernel_config, resolve_parallel
-from models.experimental.kimi_k3_moonvit_v2.tt.rope import TT_Rope
 from models.experimental.kimi_k3_moonvit_v2.tt.vision_block import TT_Vision_Block
+
+RELATIVE_RMSE = 0.012
+
+
+def check_vision_block(mesh_device, sp_axis, num_links, config, reference, layer, grid, **kwargs) -> None:
+    check_ring_layer(
+        mesh_device,
+        sp_axis,
+        num_links,
+        config,
+        reference,
+        layer,
+        grid,
+        tt_class=TT_Vision_Block,
+        reference_call=lambda block, x, cu_seqlens, max_seqlen, rope: block(
+            x, cu_seqlens, max_seqlen, rope_freqs_cis=rope
+        ),
+        input_dtype=ttnn.float32,
+        relative_rmse=RELATIVE_RMSE,
+        **kwargs,
+    )
 
 
 @RING
@@ -44,26 +49,7 @@ from models.experimental.kimi_k3_moonvit_v2.tt.vision_block import TT_Vision_Blo
 @SAMPLED_LAYERS
 @ATTENTION_GRIDS
 def test_vision_block(mesh_device, sp_axis, num_links, config, reference, grid, layer):
-    parallel = resolve_parallel(mesh_device, *ring_parallel(mesh_device, sp_axis, num_links), config)
-    tt = TT_Vision_Block(
-        config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config(mesh_device)
-    )
-    block = reference.vision_tower.encoder.blocks[layer]
-    tt.load_torch_state_dict(block.state_dict())
-
-    grid_thws = torch.tensor(grid)
-    h, w = check_grid(grid_thws, config)
-    x = random_tensor(h * w, config.hidden_size)
-    cu_seqlens, max_seqlen, rope_freqs_cis = reference_rope(reference, grid_thws)
-    with torch.no_grad():
-        golden = block(x, cu_seqlens, max_seqlen, rope_freqs_cis=rope_freqs_cis)
-
-    rope = TT_Rope(config, mesh_device=mesh_device, parallel=parallel).write(*host_prep.rope_tables(config, h, w))
-    x_window = host_prep.to_window_order(x, h, w, config.merge_kernel_size)
-    logical_n = logical_length_tensor(mesh_device, h * w)
-    out = tt(sp_shard(x_window, mesh_device, sp_axis, config.max_patches, ttnn.float32), rope, logical_n)
-    out = sp_gather(out, mesh_device, sp_axis, h * w)
-    assert_quality(golden, host_prep.from_window_order(out, h, w, config.merge_kernel_size), relative_rmse=0.012)
+    check_vision_block(mesh_device, sp_axis, num_links, config, reference, layer, grid, real_rows_from_each_chip=False)
 
 
 @RING
@@ -72,28 +58,14 @@ def test_vision_block(mesh_device, sp_axis, num_links, config, reference, grid, 
 @SAMPLED_LAYERS
 @REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS
 def test_vision_block_real_rows_from_each_chip(mesh_device, sp_axis, num_links, config, reference, size, layer):
-    """The ring at the production padded length (`max_patches`), on an image with real rows on every
-    chip. The fp32 golden covers `sampled_rows` of each chip only, each against every key
-    (`use_sampled_attention`), and each chip's rows are checked on their own."""
-    parallel = resolve_parallel(mesh_device, *ring_parallel(mesh_device, sp_axis, num_links), config)
-    tt = TT_Vision_Block(
-        config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config(mesh_device)
+    """The ring at the production padded length (`max_patches`), on an image with real rows on every chip."""
+    check_vision_block(
+        mesh_device,
+        sp_axis,
+        num_links,
+        config,
+        reference,
+        layer,
+        padding_layout_grid(size),
+        real_rows_from_each_chip=True,
     )
-    block = reference.vision_tower.encoder.blocks[layer]
-    tt.load_torch_state_dict(block.state_dict())
-    grid_thws = torch.tensor(padding_layout_grid(size))
-    h, w = check_grid(grid_thws, config)
-    x = random_tensor(h * w, config.hidden_size)
-    chips = sampled_rows(h * w, config.max_patches)
-    query_rows = host_prep.window_order(h, w, config.merge_kernel_size)[torch.cat(chips)].sort().values
-    cu_seqlens, max_seqlen, rope_freqs_cis = reference_rope(reference, grid_thws)
-    with torch.no_grad(), use_sampled_attention(query_rows):
-        golden = to_fp32(copy.deepcopy(block))(x.float(), cu_seqlens, max_seqlen, rope_freqs_cis=rope_freqs_cis)
-    golden = host_prep.to_window_order(golden, h, w, config.merge_kernel_size)
-
-    rope = TT_Rope(config, mesh_device=mesh_device, parallel=parallel).write(*host_prep.rope_tables(config, h, w))
-    x_window = host_prep.to_window_order(x, h, w, config.merge_kernel_size)
-    logical_n = logical_length_tensor(mesh_device, h * w)
-    out = tt(sp_shard(x_window, mesh_device, sp_axis, config.max_patches, ttnn.float32), rope, logical_n)
-    out = sp_gather(out, mesh_device, sp_axis, h * w)
-    assert_quality_per_chip(golden, out, chips, relative_rmse=0.012)

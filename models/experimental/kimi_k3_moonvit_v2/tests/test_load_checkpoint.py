@@ -17,6 +17,7 @@ from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import (
     load_vision_state_dict,
 )
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel, load_vision_config
+from models.experimental.kimi_k3_moonvit_v2.tests.common import REAL
 
 
 def test_fake_checkpoint(tmp_path):
@@ -38,6 +39,7 @@ def test_fake_checkpoint(tmp_path):
     assert all(torch.equal(state[k], expected[k]) for k in state)
 
 
+@REAL
 def test_real_checkpoint():
     path = checkpoint_path()
     if path is None:
