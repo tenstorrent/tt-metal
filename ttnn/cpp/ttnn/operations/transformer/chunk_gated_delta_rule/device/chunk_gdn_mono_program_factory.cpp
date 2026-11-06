@@ -193,10 +193,30 @@ tt::tt_metal::ProgramDescriptor ChunkGdnMonoProgramFactory::create_descriptor(
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
 
+    // The gates' source: value heads per batch row, tokens and each tensor's tile size (fp32 or bf16).
+    const uint32_t HV = in.g.logical_shape()[2];
+    const uint32_t T = in.g.logical_shape()[1];
+    const uint32_t g_tile_bytes = in.g.buffer()->page_size();
+    const uint32_t beta_tile_bytes = in.beta.buffer()->page_size();
     for (uint32_t h = 0; h < BH; h++) {
         const auto& core = head_cores[h];
         reader.emplace_runtime_args(
-            core, {h, NC, q_buf, k_buf, v_buf, g_buf, beta_buf, eye_buf, tril_buf, ones_buf, s0_buf});
+            core,
+            {h,
+             NC,
+             q_buf,
+             k_buf,
+             v_buf,
+             g_buf,
+             beta_buf,
+             eye_buf,
+             tril_buf,
+             ones_buf,
+             s0_buf,
+             HV,
+             T,
+             g_tile_bytes,
+             beta_tile_bytes});
         writer.emplace_runtime_args(core, {h, NC, o_buf, fs_buf});
         compute.emplace_runtime_args(core, {NC});
     }

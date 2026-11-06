@@ -5,8 +5,8 @@
 #include "node.hpp"
 #include "node_types.hpp"
 
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
 #include <map>

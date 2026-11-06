@@ -78,6 +78,7 @@ void ValidateComputeSemaphores(const ValidationContext& ctx);
 // tensor.cpp
 void ValidateTensorBindings(const KernelSpec& kernel);
 void ValidateTensorParametersUsed(const ValidationContext& ctx);
+void ValidatePerNodeTensorPlacement(const ValidationContext& ctx);
 
 // ----------------------------------------------------------------------------
 // Shared by every resource's binding checks

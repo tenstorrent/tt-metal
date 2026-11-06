@@ -4,6 +4,10 @@
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
+#ifdef REDUCE_FP32_IN_DEST
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+#endif
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -31,7 +35,27 @@ void kernel_main() {
     // loop. The inner loop processes the number of tiles specified by
     // input_granularity. The outer loop executes num_input_tiles / input_granularity
     // times.
+#ifdef REDUCE_FP32_IN_DEST
+    copy_init(dfb::in0);
+    add_binary_tile_init();
+#endif
     for (uint32_t i = 0; i < num_output_tiles; i++) {
+#ifdef REDUCE_FP32_IN_DEST
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
+            cb_in0_obj.wait_front(input_granularity);
+            for (uint32_t k = 0; k < input_granularity; k++) {
+                if (j == 0 && k == 0) {
+                    copy_tile(dfb::in0, k, dst0);
+                } else {
+                    copy_tile(dfb::in0, k, dst1);
+                    add_binary_tile(dst0, dst1, dst0);
+                }
+            }
+            cb_in0_obj.pop_front(input_granularity);
+        }
+        tile_regs_commit();
+#else
         add_init(dfb::in0, dfb::in1, true);
         reconfig_data_format(dfb::in0, dfb::in1);
         tile_regs_acquire();
@@ -43,6 +67,7 @@ void kernel_main() {
             cb_in0_obj.pop_front(input_granularity);
         }
         tile_regs_commit();
+#endif
         cb_out0_obj.reserve_back(onetile);
         pack_reconfig_data_format(dfb::out0);
         tile_regs_wait();

@@ -101,7 +101,7 @@ constexpr uint64_t kStartupRaceSlackCycles = 100'000;
 constexpr double kMaxBadTimestampFraction = 0.01;
 
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     // Blank kernels on BRISC + NCRISC + TRISC on a single core. Single-core
     // minimizes dispatch payload (one launch_msg per RISC, one core's worth

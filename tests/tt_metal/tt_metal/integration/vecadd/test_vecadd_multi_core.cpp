@@ -77,7 +77,7 @@ bool vecadd_multi_core(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     // designate 4 cores for utilization - cores (0,0), (0,1), (0,2), (0,3)
     CoreCoord start_core = {0, 0};

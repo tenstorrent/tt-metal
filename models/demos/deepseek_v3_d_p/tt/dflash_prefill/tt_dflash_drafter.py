@@ -24,6 +24,7 @@ SHARDING (sequence-parallel):
 
 from __future__ import annotations
 
+import math
 from typing import Callable, Optional, Tuple, Union
 
 import torch
@@ -220,6 +221,11 @@ class TtDFlashDrafter:
             # kw'[h*D + j, :] = kw[h*D + src[j], :] for every head h; kn'[j] = kn[src[j]].
             kw = kw.view(cfg.num_key_value_heads, D, H)[:, src, :].reshape(kv_dim, H).contiguous()
             kn = kn[src].contiguous()
+            if cfg.is_dspark:
+                # DSpark's yarn scales cos/sin by this but mla/rope.py's tables don't; RoPE is linear, so it folds
+                # exactly into the gain.
+                dspark_attention_factor = 0.1 * math.log(cfg.rope_factor) + 1.0
+                kn = kn * dspark_attention_factor
             self.k_proj.append(_linear_w(kw, mapper_col))
             self.v_proj.append(_linear_w(vw, mapper_col))
             self.k_norm.append(_norm_w(kn))
@@ -400,7 +406,7 @@ class TtDFlashDrafter:
 
         ``layer_ack_base`` is the global layer id this drafter's layer 0 acks as, i.e. the verifier's total
         layer count (draft layer i -> global ``layer_ack_base + i``). Used by the host-callback path only;
-        the device path is counted positionally by ``LayerAckService`` and ignores the record's contents.
+        the device path labels records by position (``LayerAckService``) and checks the record's identity.
 
         ``metadata``: (slot_id, actual_start, actual_end) device tensors, replacing the host scalars for
         tracing. ``trace_controller`` routes the host-callback ack via ``layer_ack``.
