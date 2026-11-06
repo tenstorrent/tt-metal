@@ -57,6 +57,23 @@ targets:
               gpqa_tolerance: 0.2
             owner_id: U03HY7MK4BT
             team: models
+  glm53-flash:
+    # Tier 1: the perf rows fill in from the first Galaxy runs (TTFT / decode tok/s of the e2e and sweep demos).
+    skus:
+      bh_p150:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q
+            team: models
+      bh_galaxy:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q
+            team: models
   gemma4-26b-a4b-qb2:
     skus:
       p300x2:

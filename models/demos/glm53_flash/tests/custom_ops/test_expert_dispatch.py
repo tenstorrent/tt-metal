@@ -1,0 +1,577 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""custom_ops/expert_stream phase 2: the per-expert dispatch ops (ExpertDispatch) for T gathered tokens (every
+active expert's weights read once; on-device gather of each expert's routed rows; token sums from gathered slots),
+vs the torch golden on bfp8-rounded weights, and as a captured trace replayed (device time per call).
+
+    TT_VISIBLE_DEVICES=2 pytest models/demos/glm53_flash/tests/custom_ops/test_expert_dispatch.py -s
+"""
+
+from __future__ import annotations
+
+import os
+import time
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.glm53_flash.custom_ops.expert_stream.op import (
+    DOWN_SPLITS,
+    ExpertDispatch,
+    RegionsSource,
+    bfp4_round,
+    bfp8_round,
+    clamp_passes_host,
+    dispatch_passes,
+    down_stream_layout,
+    ep_base_tensor,
+    ep_index_tiles,
+    ep_rm_inputs,
+    expert_dispatch_golden,
+    expert_dispatch_golden_ep,
+    gate_up_stream_layout,
+    table_clamped,
+    upload_stream_weights,
+)
+from models.demos.glm53_flash.tests.utils import pcc
+
+K, H = 4096, 4096
+GROUPS = int(os.environ.get("GLM53_STREAM_GROUPS", "12"))
+DOWN_READERS = int(os.environ.get("GLM53_DISPATCH_DOWN_READERS", "8"))
+# E3: the hybrid (non-EP) tests build their down op with this split (cols = today's program, experts = the
+# expert-parallel split), so the whole file can be queued per form; the A/B tests below run both forms themselves
+DOWN_SPLIT = os.environ.get("GLM53_STREAM_DOWN_SPLIT", "experts")  # the default since 2026-11-03
+assert DOWN_SPLIT in DOWN_SPLITS, DOWN_SPLIT
+
+
+def skewed_routing(tokens: int, E: int, picks: int, seed: int, popular: int = 0) -> torch.Tensor:
+    """[tokens, E] bf16: `picks` experts per token drawn from a Zipf-like preference (as the real router: ~30 of 72
+    active at 256 tokens, a few experts with many rows), plus `popular` experts routed by every token (multi-pass)."""
+    g = torch.Generator().manual_seed(seed)
+    pref = 1.0 / (torch.arange(E, dtype=torch.float) + 1.0) ** 1.3
+    pref = pref[torch.randperm(E, generator=g)]
+    r = torch.zeros(tokens, E)
+    for t in range(tokens):
+        ids = torch.multinomial(pref, picks, replacement=False, generator=g)
+        r[t, ids] = torch.rand(picks, generator=g) + 0.2
+    for e in range(popular):
+        r[:, e] = torch.rand(tokens, generator=g) + 0.2
+    return r.bfloat16()
+
+
+def upload(mesh_device, E, I, seed=0, w13_dtype=ttnn.bfloat8_b):
+    g = torch.Generator().manual_seed(seed)
+    w13_host = (torch.randn(E, K, 2 * I, generator=g) * 0.02).bfloat16()
+    w2_host = (torch.randn(E, I, H, generator=g) * 0.02).bfloat16()
+    w13 = upload_stream_weights(mesh_device, gate_up_stream_layout(w13_host.float()), dtype=w13_dtype)
+    w2 = upload_stream_weights(mesh_device, down_stream_layout(w2_host.float()))
+    w13_q = (bfp4_round if w13_dtype == ttnn.bfloat4_b else bfp8_round)(w13_host.float())
+    return w13, w2, w13_q, bfp8_round(w2_host.float())
+
+
+def inputs(mesh_device, x, r):
+    T, E = r.shape
+    xd = ttnn.from_torch(x.reshape(1, 1, T, K), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    rd = ttnn.from_torch(r.reshape(1, 1, T, E), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    return xd, rd
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "T, I, E, picks, popular",
+    [(64, 256, 72, 2, 0), (256, 256, 72, 2, 0), (256, 256, 72, 2, 2), (64, 1024, 72, 2, 1)],
+    ids=["64-256", "256-256", "256-256-popular", "64-1024-popular"],
+)
+def test_expert_dispatch_vs_golden(mesh_device, T, I, E, picks, popular):
+    w13, w2, w13_q, w2_q = upload(mesh_device, E, I)
+    op = ExpertDispatch(mesh_device, E, K, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, down_split=DOWN_SPLIT)
+    x = torch.randn(T, K).bfloat16()
+    r = skewed_routing(T, E, picks, seed=T + I, popular=popular)
+    act_ref, y_ref, passes = expert_dispatch_golden(x, r, w13_q, w2_q)
+    active = int((r.abs().sum(0) > 0).sum())
+    logger.info(
+        f"T {T}, I {I}: {active} of {E} active, {len(passes)} passes (max {op.P}), gate_up {len(op.gate_up.assignments)} "
+        f"cores x {op.gate_up.ppb} pairs, down {len(op.down.assignments)} cores x {op.down.cols} columns"
+    )
+    assert len(passes) <= op.P
+    xd, rd = inputs(mesh_device, x, r)
+    x_rm, counts = op.prepare(xd, rd)
+    act, table, out = op.alloc(mesh_device)
+    op.forward(x_rm, rd, counts, w13, w2, act, table, out)
+    tab = ttnn.to_torch(table).reshape(op.P, -1).to(torch.int64)
+    for k, (e, rows) in enumerate(passes):
+        got = (int(tab[k, 0]), int(tab[k, 1]), tab[k, 2 : 2 + len(rows)].tolist())
+        assert got == (len(rows), e, rows), (k, got, (len(rows), e, rows[:8]))
+    a = ttnn.to_torch(act).float().reshape(op.P, 32, I)[: len(passes)]
+    p_act = pcc(act_ref, a)
+    y = ttnn.to_torch(out).float().reshape(T, H)
+    p = pcc(y_ref, y)
+    logger.info(
+        f"T {T}, I {I}: table ok, act pcc {p_act:.6f}, out pcc {p:.6f}, max |diff| {(y_ref - y).abs().max():.4f} "
+        f"(|y| max {y_ref.abs().max():.3f})"
+    )
+    assert p_act > 0.9999, p_act
+    assert p > 0.9999, p
+
+
+def over_budget_routing(T: int, E: int, kind: str, seed: int) -> torch.Tensor:
+    """A routing that breaks the top-k contract the way the 2026-10-27 (2,4) block hang did: a top-2 routing plus
+    33 rows routed to EVERY expert (``dense``: 72 non-zeros each, what a NaN row becomes after the selector matmul) or
+    33 NaN rows (``nan``: the raw hazard; ``routing_counts`` counts ``NaN != 0`` at every column and the kernels' row
+    scan picks the rows up with a NaN weight)."""
+    r = skewed_routing(T, E, 2, seed=seed).float()
+    r[T - 33 :, :] = 0.5 if kind == "dense" else float("nan")
+    return r.bfloat16()
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("kind", ["dense", "nan"])
+def test_expert_dispatch_over_budget_returns(mesh_device, kind):
+    """An over-budget routing (33 rows x 72 non-zeros at T = 128, E = 72, I = 1024: the block's shapes, P = 104 <
+    the 144 passes of the raw enumeration) must RETURN: the kernels truncate the enumeration to the budget
+    (``clamp_passes``: experts 0..51 keep their passes, 52..71 are dropped), flag it in the pass table, and every
+    finite output row equals the golden of what the kernels sum (``dispatch_contributions``: the surviving passes,
+    and per token its first MAX_PICKS contributions in expert order -- the down writer's gather slots; the 33 dense
+    rows keep experts 0..7). The NaN rows' own outputs are NaN by construction and excluded. On the kernels before
+    the budget this case hangs the chip (the triage signature: compute at ``cb_wait_front(cb_a)``, packer at
+    ``cb_reserve_back(cb_h)``, writer in phase 2): run it on the fixed kernels only."""
+    T, I, E = 128, 1024, 72
+    w13, w2, w13_q, w2_q = upload(mesh_device, E, I)
+    op = ExpertDispatch(mesh_device, E, K, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, down_split=DOWN_SPLIT)
+    x = torch.randn(T, K).bfloat16()
+    r = over_budget_routing(T, E, kind, seed=T + I)
+    counts_host = (r != 0).sum(0).tolist()
+    passes_e, _, total, clamped = clamp_passes_host(counts_host, op.P)
+    raw = sum(-(-c // 32) for c in counts_host)
+    assert clamped and total == op.P < raw, (total, raw, op.P)
+    xd, rd = inputs(mesh_device, x, r)
+    x_rm, counts = op.prepare(xd, rd)
+    dev_counts = ttnn.to_torch(counts).float().reshape(-1)[:E].tolist()
+    assert [int(c) for c in dev_counts] == counts_host, "routing_counts on device disagrees with the host (NaN != 0?)"
+    act, table, out = op.alloc(mesh_device)
+    t0 = time.perf_counter()
+    op.forward(x_rm, rd, counts, w13, w2, act, table, out)
+    tab = ttnn.to_torch(table).reshape(op.P, -1).to(torch.int64)  # the readback returns: no deadlock
+    logger.info(f"over-budget {kind}: {raw} raw passes clamped to {op.P} in {(time.perf_counter() - t0) * 1000:.0f} ms")
+    assert table_clamped(tab), "the gate|up writer did not flag the clamp"
+    passes = dispatch_passes(r, p_max=op.P)
+    assert len(passes) == op.P
+    for k, (e, rows) in enumerate(passes):
+        got = (int(tab[k, 0]), int(tab[k, 1]), tab[k, 2 : 2 + len(rows)].tolist())
+        assert got == (len(rows), e, rows), (k, got, (len(rows), e, rows[:8]))
+    _, y_ref, _ = expert_dispatch_golden(x, r, w13_q, w2_q, p_max=op.P)
+    y = ttnn.to_torch(out).float().reshape(T, H)
+    clean = torch.isfinite(y_ref).all(-1)  # the NaN rows (nan case) are NaN in the golden too
+    assert int(clean.sum()) == (T if kind == "dense" else T - 33)
+    assert torch.isfinite(y[clean]).all(), "a clean token's row is not finite"
+    p = pcc(y_ref[clean], y[clean])
+    capped = pcc(y_ref[T - 33 :], y[T - 33 :]) if kind == "dense" else float("nan")
+    logger.info(
+        f"over-budget {kind}: {int(clean.sum())} finite rows, out pcc {p:.6f} vs the golden of the kept contributions "
+        f"(the 33 slot-capped rows alone: {capped:.6f})"
+    )
+    assert p > 0.9999, p
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 64 * 1024 * 1024}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("T, I, E", [(256, 256, 72), (64, 1024, 72)], ids=["256-256", "64-1024"])
+def test_expert_dispatch_trace(mesh_device, T, I, E):
+    """The whole dispatch (layout conversion, counts, the two ops) captured as a trace and replayed."""
+    w13, w2, w13_q, w2_q = upload(mesh_device, E, I)
+    op = ExpertDispatch(mesh_device, E, K, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, down_split=DOWN_SPLIT)
+    x = torch.randn(T, K).bfloat16()
+    r = skewed_routing(T, E, 2, seed=11, popular=1)
+    _, y_ref, passes = expert_dispatch_golden(x, r, w13_q, w2_q)
+    active = int((r.abs().sum(0) > 0).sum())
+    xd, rd = inputs(mesh_device, x, r)
+
+    def run():
+        x_rm, counts = op.prepare(xd, rd)
+        act, table, out = op.alloc(mesh_device)
+        op.forward(x_rm, rd, counts, w13, w2, act, table, out)
+        for t_ in (x_rm, counts, act, table):
+            ttnn.deallocate(t_)
+        return out
+
+    out = run()  # compile
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(out)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = run()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    steps = 20
+    t0 = time.perf_counter()
+    for _ in range(steps):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    dt = (time.perf_counter() - t0) / steps
+    y = ttnn.to_torch(out).float().reshape(T, H)
+    p = pcc(y_ref, y)
+    logger.info(
+        f"dispatch trace replay T {T}, I {I} ({active} of {E} active, {len(passes)} passes, down split {DOWN_SPLIT}): "
+        f"{dt*1e6:.1f} us per call, pcc vs golden {p:.6f}"
+    )
+    # the two ops separately (eager, warmed)
+    x_rm, counts = op.prepare(xd, rd)
+    act, table, out2 = op.alloc(mesh_device)
+    for name, fn in (
+        ("gate_up", lambda: op.gate_up(x_rm, rd, counts, w13, act, table)),
+        ("down", lambda: op.down(act, table, counts, w2, out2)),
+    ):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(10):
+            fn()
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"  {name}: {(time.perf_counter() - t0) / 10 * 1e6:.1f} us per call (eager)")
+    ttnn.release_trace(mesh_device, tid)
+    assert p > 0.9999, p
+
+
+def _regions_down(device, E: int, I: int, seed: int = 0) -> RegionsSource:
+    """The regions prefill path's per-expert lists (test_expert_stream.py ``_regions_lists``) of ``upload``'s
+    weights (the same seed, the same bfp8 rounding) as a ``RegionsSource`` for the down op's regions-sourced twin."""
+    from models.demos.glm53_flash.tests.custom_ops.test_expert_stream import _regions_lists
+
+    g = torch.Generator().manual_seed(seed)
+    w13_host = (torch.randn(E, K, 2 * I, generator=g) * 0.02).bfloat16()
+    w2_host = (torch.randn(E, I, H, generator=g) * 0.02).bfloat16()
+    gate, up, down = _regions_lists(device, w13_host, w2_host, E, I)
+    return RegionsSource(gate, up, down, device.dram_grid_size().x)
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "T, I, E, picks, popular",
+    [(64, 256, 72, 2, 0), (256, 256, 72, 2, 0), (256, 256, 72, 2, 2), (256, 256, 72, 8, 3), (64, 1024, 72, 2, 1)],
+    ids=["64-256", "256-256", "256-256-popular", "256-256-top8-cap", "64-1024-popular"],
+)
+def test_expert_dispatch_down_split_exact(mesh_device, T, I, E, picks, popular):
+    """E3: the down op's ``experts`` split against the ``cols`` form on the SAME act / table / counts (one gate|up
+    run): ``torch.equal`` on the outputs (the same products in the same order, the same slot sums: bit-identical by
+    construction), both within the golden bar; then the regions-sourced twin of the ``experts`` split on the same
+    inputs, bit-identical too. ``256-256-top8-cap`` routes 8 picks per token plus 3 experts routed by every token, so
+    some tokens exceed the J gather slots: both writers must drop the same rows."""
+    w13, w2, w13_q, w2_q = upload(mesh_device, E, I)
+    ops = {
+        split: ExpertDispatch(mesh_device, E, K, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, down_split=split)
+        for split in DOWN_SPLITS
+    }
+    x = torch.randn(T, K).bfloat16()
+    r = skewed_routing(T, E, picks, seed=T + I + picks, popular=popular)
+    _, y_ref, passes = expert_dispatch_golden(x, r, w13_q, w2_q)
+    active = int((r.abs().sum(0) > 0).sum())
+    lay = ops["experts"].down.split
+    logger.info(
+        f"down split A/B T {T}, I {I}: {active} of {E} active, {len(passes)} passes; experts split: {lay['upe']} units x "
+        f"{lay['unit_cols']} columns per expert, {lay['cols_own']} owned columns per core, L1 {lay['l1_bytes']} B"
+    )
+    xd, rd = inputs(mesh_device, x, r)
+    x_rm, counts = ops["cols"].prepare(xd, rd)
+    act, table, out_cols = ops["cols"].alloc(mesh_device)
+    ops["cols"].gate_up(x_rm, rd, counts, w13, act, table)
+    ops["cols"].down(act, table, counts, w2, out_cols)
+    y_cols = ttnn.to_torch(out_cols).float().reshape(T, H)
+    _, _, out_exp = ops["experts"].alloc(mesh_device)
+    ops["experts"].down(act, table, counts, w2, out_exp)
+    y_exp = ttnn.to_torch(out_exp).float().reshape(T, H)
+    p_cols, p_exp = pcc(y_ref, y_cols), pcc(y_ref, y_exp)
+    diff = (y_cols - y_exp).abs()
+    logger.info(
+        f"down split A/B T {T}, I {I}: cols pcc {p_cols:.6f}, experts pcc {p_exp:.6f}, max |cols - experts| "
+        f"{diff.max():.4g} ({int((diff > 0).sum())} differing elements of {diff.numel()})"
+    )
+    assert p_cols > 0.9999, p_cols
+    assert p_exp > 0.9999, p_exp
+    assert torch.equal(y_cols, y_exp), "the experts split must be bit-identical to the cols form"
+    # the regions-sourced twin of the experts split (one packet per K tile of the unit's columns, k-major)
+    src = _regions_down(mesh_device, E, I)
+    op_reg = ExpertDispatch(
+        mesh_device, E, K, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, down_split="experts", regions_src=True
+    )
+    _, _, out_reg = op_reg.alloc(mesh_device)
+    op_reg.down(act, table, counts, src, out_reg)
+    y_reg = ttnn.to_torch(out_reg).float().reshape(T, H)
+    logger.info(f"down split A/B T {T}, I {I}: regions-sourced experts split pcc {pcc(y_ref, y_reg):.6f}")
+    assert torch.equal(y_cols, y_reg), "the regions-sourced experts split must be bit-identical too"
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 64 * 1024 * 1024}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "T, I, E, picks, popular",
+    [(256, 256, 72, 2, 1), (256, 256, 72, 8, 0)],
+    ids=["256-256-zipf2", "256-256-top8"],
+)
+def test_expert_dispatch_down_split_trace(mesh_device, T, I, E, picks, popular):
+    """E3 timing: the whole dispatch traced (20 replays) and the down op alone (eager, warmed) for BOTH splits on the
+    same inputs; bit-identical outputs. ``256-256-top8`` is the 32-users/row routing shape (8 picks per token over
+    the chip's 72 experts). The README's cost model predicts ~155 us for the experts down op at ~37 active / 55 passes
+    and ~225 us at 58 / 72 (the ``cols`` form measured 376 us on the 8x4 profile, ~595 us eager on this test)."""
+    w13, w2, w13_q, w2_q = upload(mesh_device, E, I)
+    x = torch.randn(T, K).bfloat16()
+    r = skewed_routing(T, E, picks, seed=11 + picks, popular=popular)
+    _, y_ref, passes = expert_dispatch_golden(x, r, w13_q, w2_q)
+    active = int((r.abs().sum(0) > 0).sum())
+    xd, rd = inputs(mesh_device, x, r)
+    results = {}
+    for split in DOWN_SPLITS:
+        op = ExpertDispatch(mesh_device, E, K, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, down_split=split)
+
+        def run():
+            x_rm, counts = op.prepare(xd, rd)
+            act, table, out = op.alloc(mesh_device)
+            op.forward(x_rm, rd, counts, w13, w2, act, table, out)
+            for t_ in (x_rm, counts, act, table):
+                ttnn.deallocate(t_)
+            return out
+
+        out = run()  # compile
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(out)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        out = run()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        steps = 20
+        t0 = time.perf_counter()
+        for _ in range(steps):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.perf_counter() - t0) / steps
+        y = ttnn.to_torch(out).float().reshape(T, H)
+        # the down op alone (eager, warmed; the act / table of one gate|up run)
+        x_rm, counts = op.prepare(xd, rd)
+        act, table, out2 = op.alloc(mesh_device)
+        op.gate_up(x_rm, rd, counts, w13, act, table)
+        op.down(act, table, counts, w2, out2)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(10):
+            op.down(act, table, counts, w2, out2)
+        ttnn.synchronize_device(mesh_device)
+        down_us = (time.perf_counter() - t0) / 10 * 1e6
+        ttnn.release_trace(mesh_device, tid)
+        results[split] = (dt * 1e6, down_us, y)
+        logger.info(
+            f"down split {split:8s} T {T} ({active} of {E} active, {len(passes)} passes): trace {dt * 1e6:.1f} us per "
+            f"call, down eager {down_us:.1f} us, pcc {pcc(y_ref, y):.6f}"
+        )
+    y_cols, y_exp = results["cols"][2], results["experts"][2]
+    logger.info(
+        "DOWN-SPLIT "
+        + "; ".join(f"{k} trace {v[0]:.0f} down {v[1]:.0f}" for k, v in results.items())
+        + f"; experts/cols down {results['experts'][1] / results['cols'][1]:.2f}x"
+    )
+    assert pcc(y_ref, y_cols) > 0.9999 and pcc(y_ref, y_exp) > 0.9999
+    assert torch.equal(y_cols, y_exp), "the experts split must be bit-identical to the cols form"
+
+
+def topk_lists(tokens: int, E_total: int, K: int, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """[T, K] global expert ids (distinct per token, Zipf-skewed) and positive weights."""
+    g = torch.Generator().manual_seed(seed)
+    pref = 1.0 / (torch.arange(E_total, dtype=torch.float) + 1.0) ** 1.1
+    pref = pref[torch.randperm(E_total, generator=g)]
+    idx = torch.stack([torch.multinomial(pref, K, replacement=False, generator=g) for _ in range(tokens)])
+    wts = (torch.rand(tokens, K, generator=g) + 0.2).bfloat16().float()
+    return idx, wts
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "T, E_local, base",
+    [(64, 9, 9), (256, 9, 27), (64, 36, 36), (256, 36, 72)],
+    ids=["64-9", "256-9", "64-36", "256-36"],
+)
+def test_expert_dispatch_ep(mesh_device, T, E_local, base):
+    """EP mode: this chip owns experts [base, base + E_local) at full width (I = 2048, 8 column pairs per bank);
+    the routing arrives as top-k lists over all 288 experts (index + weight tiles) and the chip's expert base."""
+    I, E_total, K = 2048, 288, 8
+    w13, w2, w13_q, w2_q = upload(mesh_device, E_local, I, seed=base)
+    op = ExpertDispatch(mesh_device, E_local, 4096, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, ep=True)
+    x = torch.randn(T, 4096).bfloat16()
+    idx, wts = topk_lists(T, E_total, K, seed=T + base)
+    act_ref, y_ref, passes = expert_dispatch_golden_ep(x, idx, wts, base, E_local, w13_q, w2_q)
+    local = int(((idx >= base) & (idx < base + E_local)).sum())
+    logger.info(
+        f"EP T {T}, experts [{base}, {base + E_local}): {local} routed rows, {len(passes)} passes (max {op.P}), "
+        f"down slots a {op.down.a_slots} w {op.down.w_slots}"
+    )
+    xd = ttnn.from_torch(x.reshape(1, 1, T, 4096), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    x_rm = ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    it, wt = ep_index_tiles(idx, wts, mesh_device, K)
+    bt = ep_base_tensor(base, mesh_device)
+    act, table, out = op.alloc(mesh_device)
+    op.forward(x_rm, wt, it, w13, w2, act, table, out, base=bt)
+    tab = ttnn.to_torch(table).reshape(op.P, -1).to(torch.int64)
+    for k, (e, rows) in enumerate(passes):
+        got = (int(tab[k, 0]), int(tab[k, 1]), tab[k, 2 : 2 + len(rows)].tolist())
+        assert got == (len(rows), e, rows), (k, got, (len(rows), e, rows[:8]))
+    a = ttnn.to_torch(act).float().reshape(op.P, 32, I)[: len(passes)]
+    y = ttnn.to_torch(out).float().reshape(T, H)
+    p_act, p = pcc(act_ref, a), pcc(y_ref, y)
+    logger.info(f"EP T {T}, E_local {E_local}: table ok, act pcc {p_act:.6f}, out pcc {p:.6f}")
+    assert p_act > 0.9999, p_act
+    assert p > 0.9999, p
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_expert_dispatch_ep_bfp4(mesh_device):
+    """The gate|up weights in bfp4 (576 B tiles; the dtype policy knob): EP mode, T = 64, 9 full-width experts,
+    vs the torch golden on the bfp4-rounded weights."""
+    T, E_local, base, I, K = 64, 9, 9, 2048, 8
+    w13, w2, w13_q, w2_q = upload(mesh_device, E_local, I, seed=base, w13_dtype=ttnn.bfloat4_b)
+    op = ExpertDispatch(
+        mesh_device, E_local, 4096, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, ep=True, w13_dtype=ttnn.bfloat4_b
+    )
+    x = torch.randn(T, 4096).bfloat16()
+    idx, wts = topk_lists(T, 288, K, seed=T + base)
+    act_ref, y_ref, passes = expert_dispatch_golden_ep(x, idx, wts, base, E_local, w13_q, w2_q)
+    xd = ttnn.from_torch(x.reshape(1, 1, T, 4096), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    x_rm = ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    it, wt = ep_index_tiles(idx, wts, mesh_device, K)
+    bt = ep_base_tensor(base, mesh_device)
+    act, table, out = op.alloc(mesh_device)
+    op.forward(x_rm, wt, it, w13, w2, act, table, out, base=bt)
+    a = ttnn.to_torch(act).float().reshape(op.P, 32, I)[: len(passes)]
+    y = ttnn.to_torch(out).float().reshape(T, H)
+    p_act, p = pcc(act_ref, a), pcc(y_ref, y)
+    logger.info(
+        f"EP bfp4 gate|up T {T}, E_local {E_local}: act pcc {p_act:.6f}, out pcc {p:.6f} (vs bfp4-rounded golden)"
+    )
+    assert p_act > 0.9999, p_act
+    assert p > 0.9999, p
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 64 * 1024 * 1024}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "T, active, rows_per", [(32, 2, 5), (256, 3, 27), (256, 9, 28)], ids=["32-2", "256-3", "256-9"]
+)
+def test_expert_dispatch_ep_trace(mesh_device, T, active, rows_per):
+    """EP mode at the 8x4 shape (9 full-width experts, I = 2048) with `active` of them routed by `rows_per` tokens
+    each: traced total and the eager split (gate|up / down). GLM53_STREAM_KERNEL_DIR= an alternative kernel set for
+    an A/B."""
+    I, E_local, base, K = 2048, 9, 9, 8
+    w13, w2, w13_q, w2_q = upload(mesh_device, E_local, I, seed=base)
+    units = os.environ.get("GLM53_STREAM_UNITS", "0") == "1"
+    op = ExpertDispatch(
+        mesh_device, E_local, 4096, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, ep=True, units=units
+    )
+    g = torch.Generator().manual_seed(T + active)
+    idx = torch.full((T, K), 4000, dtype=torch.long)  # other chips' experts
+    for a in range(active):
+        toks = torch.randperm(T, generator=g)[:rows_per]
+        idx[toks, a % K] = base + a  # one local expert per routed token slot
+    wts = (torch.rand(T, K, generator=g) + 0.2).bfloat16().float()
+    _, y_ref, passes = expert_dispatch_golden_ep(
+        x := torch.randn(T, 4096).bfloat16(), idx, wts, base, E_local, w13_q, w2_q
+    )
+    xd = ttnn.from_torch(x.reshape(1, 1, T, 4096), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    it, wt = ep_index_tiles(idx, wts, mesh_device, K)
+    bt = ep_base_tensor(base, mesh_device)
+
+    def run():
+        x_rm = ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        act, table, out = op.alloc(mesh_device)
+        op.forward(x_rm, wt, it, w13, w2, act, table, out, base=bt)
+        for t_ in (x_rm, act, table):
+            ttnn.deallocate(t_)
+        return out
+
+    out = run()
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(out)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = run()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    t0 = time.perf_counter()
+    for _ in range(20):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    dt = (time.perf_counter() - t0) / 20
+    p = pcc(y_ref, ttnn.to_torch(out).float().reshape(T, H))
+    x_rm = ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    act, table, out2 = op.alloc(mesh_device)
+    split = {}
+    for name, fn in (
+        ("gate_up", lambda: op.gate_up(x_rm, wt, it, w13, act, table, base=bt)),
+        ("down", lambda: op.down(act, table, it, w2, out2, base=bt)),
+    ):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(10):
+            fn()
+        ttnn.synchronize_device(mesh_device)
+        split[name] = (time.perf_counter() - t0) / 10 * 1e6
+    logger.info(
+        f"EP trace T {T}, {active} of 9 active x {rows_per} rows ({len(passes)} passes), "
+        f"{'units' if units else 'per-expert'} kernels: {dt*1e6:.1f} us per call "
+        f"(eager gate_up {split['gate_up']:.1f} us, down {split['down']:.1f} us), pcc {p:.6f}"
+    )
+    ttnn.release_trace(mesh_device, tid)
+    assert p > 0.9999, p
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "T, t_valid, E_local, base",
+    [(32, 20, 36, 252), (64, 64, 9, 9), (256, 256, 36, 72)],
+    ids=["32-20-36-252", "64-9", "256-36"],
+)
+def test_expert_dispatch_ep_rm(mesh_device, T, t_valid, E_local, base):
+    """EP row-major mode (the mesh path): the ids arrive as the all_to_all_dispatch metadata rows [t_valid, K] UINT16
+    (exact for ids 257..287, which BF16 tiles cannot hold: base 252 covers them) and the weights as the K-wide BF16
+    tail of every token row; t_valid < T = the tile-padded short batch (rows >= t_valid never scanned)."""
+    I, E_total, K = 2048, 288, 8
+    w13, w2, w13_q, w2_q = upload(mesh_device, E_local, I, seed=base)
+    op = ExpertDispatch(
+        mesh_device, E_local, 4096, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, ep=True, ep_rm=True
+    )
+    x = torch.randn(t_valid, 4096).bfloat16()
+    idx, wts = topk_lists(t_valid, E_total, K, seed=T + base + 1)
+    if base + E_local == E_total:  # make sure the ids beyond 256 are exercised (distinct ids, as topk makes them)
+        idx[0] = torch.tensor([257, 263, 271, 287, 3, 60, 130, 200])
+    act_ref, y_ref, passes = expert_dispatch_golden_ep(x, idx, wts, base, E_local, w13_q, w2_q)
+    local = int(((idx >= base) & (idx < base + E_local)).sum())
+    logger.info(
+        f"EP-RM T {T} (valid {t_valid}), experts [{base}, {base + E_local}): {local} routed rows, {len(passes)} passes"
+    )
+    xw, meta = ep_rm_inputs(x, idx, wts, mesh_device)
+    bt = ep_base_tensor(base, mesh_device)
+    act, table, out = op.alloc(mesh_device, t_valid=t_valid)
+    assert tuple(out.shape) == (1, 1, t_valid, H), out.shape
+    op.forward(xw, xw, meta, w13, w2, act, table, out, base=bt, t_valid=t_valid)
+    tab = ttnn.to_torch(table).reshape(op.P, -1).to(torch.int64)
+    for k, (e, rows) in enumerate(passes):
+        got = (int(tab[k, 0]), int(tab[k, 1]), tab[k, 2 : 2 + len(rows)].tolist())
+        assert got == (len(rows), e, rows), (k, got, (len(rows), e, rows[:8]))
+    a = ttnn.to_torch(act).float().reshape(op.P, 32, I)[: len(passes)]
+    y = ttnn.to_torch(out).float().reshape(t_valid, H)
+    y_rm = ttnn.to_torch(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)).float()
+    assert tuple(y_rm.shape) == (1, 1, t_valid, H), y_rm.shape
+    p_act, p = pcc(act_ref, a), pcc(y_ref, y)
+    logger.info(f"EP-RM T {T} (valid {t_valid}), E_local {E_local}: table ok, act pcc {p_act:.6f}, out pcc {p:.6f}")
+    assert p_act > 0.9999, p_act
+    assert p > 0.9999, p

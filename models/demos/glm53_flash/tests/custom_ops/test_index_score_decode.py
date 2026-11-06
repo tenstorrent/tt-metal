@@ -1,0 +1,355 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""``custom_ops/index_score_decode`` (batched one-query-per-user indexer scores, a model-local generic op) vs the
+torch golden sum_h relu(q_h . k_p) w_h: PCC and the top-512 selected-set overlap per user (the quantity the sparse
+decode consumes) for W = 1280 and 262400 (the 1 M-position pool width) with B = 1 / 4 / 8 / 32; trace replay with
+refreshed queries; the pooled-key streaming rate; the shared-slot / scored-width form (every user = one cache slot,
+B = 70 users, per-row bounds) and that form against the shared ``indexer_score_dsa`` on prefill rows.
+
+    TT_VISIBLE_DEVICES=0 pytest models/demos/glm53_flash/tests/custom_ops/test_index_score_decode.py -s
+"""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
+from models.demos.glm53_flash.tests.utils import pcc
+
+Hi, D, K = 32, 128, 512
+
+
+def _inputs(B, W, seed):
+    g = torch.Generator().manual_seed(seed)
+    q = (torch.randn(B, Hi, D, generator=g) * 0.5).bfloat16()
+    k = (torch.randn(B, W, D, generator=g) * 0.5).bfloat16()
+    w = (torch.randn(B, Hi, generator=g) * 0.2).bfloat16()
+    return q, k, w
+
+
+def _device(mesh_device, q, k, w, slots=None):
+    B, W = k.shape[0], k.shape[1]
+    slots = slots or B
+    kk = torch.zeros(slots, 1, W, D)
+    kk[:B, 0] = k.float()
+    q_t = ttnn.from_torch(q.reshape(1, B, Hi, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    w_t = ttnn.from_torch(w.reshape(1, 1, B, Hi), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    k_t = ttnn.from_torch(kk.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    o_t = ttnn.zeros((B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    return q_t, w_t, k_t, o_t
+
+
+def _compare(ref, got, B):
+    worst_pcc, worst_ov = 1.0, 1.0
+    for b in range(B):
+        worst_pcc = min(worst_pcc, pcc(ref[b], got[b]))
+        top_r = set(torch.topk(ref[b], K).indices.tolist())
+        top_g = set(torch.topk(got[b], K).indices.tolist())
+        worst_ov = min(worst_ov, len(top_r & top_g) / K)
+    return worst_pcc, worst_ov
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("W", [1280, 262400])
+@pytest.mark.parametrize("B", [1, 4, 8, 32])
+def test_index_score_decode_vs_golden(mesh_device, W, B):
+    op = IndexScoreDecode(mesh_device)
+    q, k, w = _inputs(B, W, W + B)
+    ref = op.golden(q, k, w)
+    q_t, w_t, k_t, o_t = _device(mesh_device, q, k, w, slots=B + 1)
+    op(q_t, w_t, k_t, o_t)
+    got = ttnn.to_torch(o_t).float().reshape(B, W)
+    p, ov = _compare(ref, got, B)
+    logger.info(
+        f"index_score_decode W={W} B={B}: worst per-user pcc {p:.6f}, worst top-512 overlap {ov:.4f}, max|diff| {(ref - got).abs().max():.3f} (ref absmax {ref.abs().max():.2f})"
+    )
+    assert p > 0.999 and ov > 0.97
+    for t in (q_t, w_t, k_t, o_t):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("B", [1, 8])
+def test_index_score_decode_bfp8_keys(mesh_device, B):
+    """bfp8_b pooled keys (GLM53_POOL_DTYPE=bfloat8_b: half the bytes of the budget's floor term) vs the bf16 run on the
+    same keys: per-user PCC of the scores and the top-512 selected-set overlap bf16 -> bfp8 (and both vs the golden)."""
+    W = 262400
+    op = IndexScoreDecode(mesh_device)
+    q, k, w = _inputs(B, W, 17)
+    ref = op.golden(q, k, w)
+    q_t, w_t, k16, o16 = _device(mesh_device, q, k, w)
+    op(q_t, w_t, k16, o16)
+    got16 = ttnn.to_torch(o16).float().reshape(B, W)
+    k8 = ttnn.typecast(k16, ttnn.bfloat8_b)
+    o8 = ttnn.zeros((B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k8, o8)
+    got8 = ttnn.to_torch(o8).float().reshape(B, W)
+    p16, ov16 = _compare(ref, got16, B)
+    p8, ov8 = _compare(ref, got8, B)
+    p88, ov88 = _compare(got16, got8, B)
+    logger.info(
+        f"bfp8 keys B={B}: vs golden pcc {p8:.6f} / top-512 overlap {ov8:.4f} (bf16 keys: {p16:.6f} / {ov16:.4f}); "
+        f"bfp8 vs bf16 run pcc {p88:.6f}, selected-set overlap {ov88:.4f}"
+    )
+    assert p8 > 0.995 and ov8 > 0.95
+    for t in (q_t, w_t, k16, o16, k8, o8):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 16 * 1024 * 1024, "l1_small_size": 32768}], indirect=True
+)
+def test_index_score_decode_trace_replay(mesh_device):
+    W, B = 262400, 8
+    op = IndexScoreDecode(mesh_device)
+    q, k, w = _inputs(B, W, 9)
+    q_t, w_t, k_t, o_t = _device(mesh_device, q, k, w)
+    op(q_t, w_t, k_t, o_t)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    op(q_t, w_t, k_t, o_t)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    for step in range(3):
+        q2, _, w2 = _inputs(B, 1, 100 + step)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(q2.reshape(1, B, Hi, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), q_t
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(w2.reshape(1, 1, B, Hi), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), w_t
+        )
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        p, ov = _compare(op.golden(q2, k, w2), ttnn.to_torch(o_t).float().reshape(B, W), B)
+        logger.info(f"trace replay {step}: worst pcc {p:.6f}, worst top-512 overlap {ov:.4f}")
+        assert p > 0.999 and ov > 0.97
+    ttnn.release_trace(mesh_device, tid)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_index_score_decode_timing(mesh_device):
+    W = 262400
+    op = IndexScoreDecode(mesh_device)
+    for B in (1, 4, 8):
+        q, k, w = _inputs(B, W, 3)
+        q_t, w_t, k_t, o_t = _device(mesh_device, q, k, w)
+        op(q_t, w_t, k_t, o_t)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        n = 5
+        for _ in range(n):
+            op(q_t, w_t, k_t, o_t)
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.perf_counter() - t0) / n
+        mb = B * W * D * 2 / 2**20
+        logger.info(
+            f"index_score_decode W={W} B={B}: {dt * 1e3:.3f} ms per call = {mb / dt / 1024:.0f} GB/s of pooled keys ({mb:.0f} MiB)"
+        )
+        for t in (q_t, w_t, k_t, o_t):
+            ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("B", [1, 8])
+def test_index_score_decode_masked_segmented(mesh_device, B):
+    """The writer-v2 modes: ``valid_rows`` writes -inf at and beyond each user's bound; ``segments`` lays the row out as
+    S pages of W/S columns (the two-stage top-k's input); both vs the plain output."""
+    W = 262400
+    op = IndexScoreDecode(mesh_device)
+    q, k, w = _inputs(B, W, 23)
+    q_t, w_t, k_t, o_plain = _device(mesh_device, q, k, w)
+    op(q_t, w_t, k_t, o_plain)
+    plain = ttnn.to_torch(o_plain).float().reshape(B, W)
+    g = torch.Generator().manual_seed(23)
+    valid = torch.randint(K, W + 1, (B,), generator=g)
+    valid[0] = W - 1000
+    v_t = ttnn.from_torch(valid.reshape(B, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    o_mask = ttnn.zeros((B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_mask, valid_rows=v_t)
+    masked = ttnn.to_torch(o_mask).float().reshape(B, W)
+    ok = True
+    for b in range(B):
+        n = int(valid[b])
+        ok &= (
+            torch.equal(masked[b, :n], plain[b, :n])
+            and bool(torch.isinf(masked[b, n:]).all())
+            and bool((masked[b, n:] < 0).all())
+        )
+    S = 5
+    o_seg = ttnn.zeros((B * S, 1, 1, W // S), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_seg, valid_rows=v_t, segments=S)
+    segd = ttnn.to_torch(o_seg).float().reshape(B, W)
+    ok_seg = torch.equal(segd, masked)
+    logger.info(f"writer v2 B={B}: masked prefix equal / tail -inf {ok}; segmented layout equal to masked {ok_seg}")
+    assert ok and ok_seg
+    for t in (q_t, w_t, k_t, o_plain, v_t, o_mask, o_seg):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("B,cols", [(4, None), (70, 768)])
+def test_index_score_decode_shared_slot(mesh_device, B, cols):
+    """``slot``: every user scores the same cache slot (the prefill form: the T queries of one prompt as T users);
+    ``cols``: only the first ``cols`` pools are scored (the out row is ``cols`` wide, the slot stride stays the cache
+    width); B = 70 spans three w tile rows (b >= 32). Per-row bounds through ``valid_rows``: the golden on the prefix,
+    -inf at and beyond."""
+    W, slots, slot = 1280, 4, 2
+    cols_eff = cols or W
+    op = IndexScoreDecode(mesh_device)
+    g = torch.Generator().manual_seed(300 + B)
+    q = (torch.randn(B, Hi, D, generator=g) * 0.5).bfloat16()
+    kk = (torch.randn(slots, 1, W, D, generator=g) * 0.5).bfloat16()
+    w = (torch.randn(B, Hi, generator=g) * 0.2).bfloat16()
+    ref = op.golden(q, kk[slot, 0].unsqueeze(0).expand(B, W, D), w)[:, :cols_eff]
+    bounds = torch.tensor([[K + (b * 37) % (cols_eff - K)] for b in range(B)], dtype=torch.int32)
+    q_t = ttnn.from_torch(q.reshape(1, B, Hi, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    w_t = ttnn.from_torch(w.reshape(1, 1, B, Hi), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    k_t = ttnn.from_torch(kk, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    v_t = ttnn.from_torch(bounds, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    o_t = ttnn.zeros((B, 1, 1, cols_eff), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_t, valid_rows=v_t, slot=slot, cols=cols)
+    got = ttnn.to_torch(o_t).float().reshape(B, cols_eff)
+    worst_pcc, worst_ov = 1.0, 1.0
+    for b in range(B):
+        n = int(bounds[b, 0])
+        assert torch.isinf(got[b, n:]).all() and (got[b, n:] < 0).all(), (b, n, got[b, n : n + 4])
+        assert torch.isfinite(got[b, :n]).all(), (b, n)
+        worst_pcc = min(worst_pcc, pcc(ref[b, :n], got[b, :n]))
+        top_r = set(torch.topk(ref[b, :n], K).indices.tolist())
+        top_g = set(torch.topk(got[b, :n], K).indices.tolist())
+        worst_ov = min(worst_ov, len(top_r & top_g) / K)
+    logger.info(
+        f"shared slot B={B} cols={cols_eff}: worst prefix pcc {worst_pcc:.6f}, worst top-512 overlap {worst_ov:.4f}"
+    )
+    assert worst_pcc > 0.999 and worst_ov > 0.97
+    for t in (q_t, w_t, k_t, v_t, o_t):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_index_score_decode_prefill_rows_vs_shared_op(mesh_device):
+    """The prefill form (``TtDSAIndexer._score_prefill_rows``: T queries of one slot, per-row causal bounds) against
+    ``ttnn.experimental.indexer_score_dsa`` on the same queries and pooled keys (chunk_start_idx = query_start,
+    cache_batch_idx = slot): the visible prefix of every row (PCC, top-512 overlap) and the mask pattern (pool p
+    visible to row t iff p < (query_start + t + 1) // P)."""
+    T, W, slots, slot, P, query_start = 96, 1280, 3, 1, 4, 2048
+    op = IndexScoreDecode(mesh_device)
+    g = torch.Generator().manual_seed(5)
+    q = (torch.randn(T, Hi, D, generator=g) * 0.5).bfloat16()
+    kk = (torch.randn(slots, 1, W, D, generator=g) * 0.5).bfloat16()
+    w = (torch.randn(T, Hi, generator=g) * 0.2).bfloat16()
+    pools = ttnn.from_torch(kk, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    w_t = ttnn.from_torch(w.reshape(1, 1, T, Hi), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    q_h = ttnn.from_torch(
+        q.transpose(0, 1).reshape(1, Hi, T, D).contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
+    ref_t = ttnn.experimental.indexer_score_dsa(
+        q_h,
+        pools,
+        w_t,
+        chunk_start_idx=query_start,
+        key_compression_ratio=P,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0),
+        cache_batch_idx=slot,
+        kv_len=W,
+        seq_shard_axes=[0],
+    )
+    ref = ttnn.to_torch(ref_t).float().reshape(T, W)
+    q_r = ttnn.from_torch(q.reshape(1, T, Hi, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    bounds = torch.tensor([[min(W, (query_start + t + 1) // P)] for t in range(T)], dtype=torch.int32)
+    v_t = ttnn.from_torch(bounds, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    o_t = ttnn.zeros((T, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_r, w_t, pools, o_t, valid_rows=v_t, slot=slot, cols=W)
+    got = ttnn.to_torch(o_t).float().reshape(T, W)
+    worst_pcc, worst_ov = 1.0, 1.0
+    for t in range(T):
+        n = int(bounds[t, 0])
+        assert (ref[t, n:] == float("-inf")).all(), (t, n, ref[t, n : n + 4])
+        assert (got[t, n:] == float("-inf")).all(), (t, n, got[t, n : n + 4])
+        assert torch.isfinite(ref[t, :n]).all() and torch.isfinite(got[t, :n]).all(), (t, n)
+        worst_pcc = min(worst_pcc, pcc(ref[t, :n], got[t, :n]))
+        top_r = set(torch.topk(ref[t, :n], K).indices.tolist())
+        top_g = set(torch.topk(got[t, :n], K).indices.tolist())
+        worst_ov = min(worst_ov, len(top_r & top_g) / K)
+    logger.info(
+        f"prefill rows vs indexer_score_dsa T={T}: worst prefix pcc {worst_pcc:.6f}, worst top-512 overlap {worst_ov:.4f}"
+    )
+    assert worst_pcc > 0.999 and worst_ov > 0.97
+    for t in (pools, w_t, q_h, ref_t, q_r, v_t, o_t):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 16 * 1024 * 1024, "l1_small_size": 32768}], indirect=True
+)
+@pytest.mark.parametrize("B", [1, 4, 8])
+def test_index_score_decode_live_bound(mesh_device, B):
+    """The live bound (``bound`` [1, 1] uint32, custom_ops/sparse_bound.py; the decode knob GLM53_SPARSE_DECODE_BOUND):
+    the scorer scores and writes the first ``ceil(min(bound, W) / 256)`` chunks of every user's row only, bit-identical
+    to the masked (v2) output there, and leaves the columns beyond untouched (the pre-filled marker survives); in the
+    segmented layout too; under trace with the bound refreshed in place (a wider bound writes more columns)."""
+    from models.demos.glm53_flash.custom_ops.sparse_bound import live_bound_pools, live_chunks
+
+    W = 262400
+    op = IndexScoreDecode(mesh_device)
+    q, k, w = _inputs(B, W, 41 + B)
+    q_t, w_t, k_t, o_mask = _device(mesh_device, q, k, w)
+    g = torch.Generator().manual_seed(41 + B)
+    valid = torch.randint(K, 3000, (B,), generator=g)
+    valid[0] = K
+    v_t = ttnn.from_torch(valid.reshape(B, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_mask, valid_rows=v_t)
+    masked = ttnn.to_torch(o_mask).float().reshape(B, W)
+    bound = live_bound_pools(valid.tolist())
+    live_cols = live_chunks(bound, W) * 256
+    b_t = ttnn.from_torch(
+        torch.tensor([[bound]], dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+    marker = torch.full((B, 1, 1, W), 7.0).bfloat16()  # a finite marker: untouched columns keep it
+    o_b = ttnn.from_torch(marker, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_b, valid_rows=v_t, bound=b_t)
+    got = ttnn.to_torch(o_b).float().reshape(B, W)
+    ok_live = torch.equal(got[:, :live_cols], masked[:, :live_cols])
+    ok_rest = bool((got[:, live_cols:] == 7.0).all())
+    logger.info(
+        f"live bound B={B}: valid {valid.tolist()} -> bound {bound} ({live_cols} columns scored of {W}); live columns "
+        f"equal {ok_live}, columns beyond untouched {ok_rest}"
+    )
+    assert ok_live and ok_rest
+    # the segmented layout (S = 5 pages of W/5 columns per user): the live columns land in page 0 of every user
+    S = 5
+    o_seg = ttnn.from_torch(
+        marker.reshape(B * S, 1, 1, W // S).contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+    )
+    op(q_t, w_t, k_t, o_seg, valid_rows=v_t, segments=S, bound=b_t)
+    segd = ttnn.to_torch(o_seg).float().reshape(B, W)
+    assert torch.equal(segd[:, :live_cols], masked[:, :live_cols]) and bool((segd[:, live_cols:] == 7.0).all())
+    # trace: the captured program follows the refreshed bound (wider: 3 x the live chunks)
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(marker, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), o_b)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    op(q_t, w_t, k_t, o_b, valid_rows=v_t, bound=b_t)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    bound2 = 3 * live_cols
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(torch.tensor([[bound2]], dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        b_t,
+    )
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    got2 = ttnn.to_torch(o_b).float().reshape(B, W)
+    live2 = live_chunks(bound2, W) * 256
+    ok2 = torch.equal(got2[:, :live2], masked[:, :live2]) and bool((got2[:, live2:] == 7.0).all())
+    logger.info(f"live bound B={B} trace replay at bound {bound2}: {live2} columns scored, equal {ok2}")
+    assert ok2
+    ttnn.release_trace(mesh_device, tid)
+    for t in (q_t, w_t, k_t, o_mask, v_t, b_t, o_b, o_seg):
+        ttnn.deallocate(t)

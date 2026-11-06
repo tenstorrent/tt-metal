@@ -463,3 +463,20 @@
   team: models
   budget_type: sweep
 # END GENERATED TRACE ALLOCATION SWEEPS
+
+- name: GLM-5.3-Flash seqlen sweep (Galaxy)
+  cmd: |
+    export HF_MODEL=zai-org/GLM-5.3-Flash TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/zai-org/GLM-5.3-Flash
+    export GLM53_MESH_CACHE=$TT_CACHE_PATH/glm53_mesh GLM53_MESH_SHAPE=8,4
+    # 1 K and 4 K prompts, 4 users per row (32 users), 64 greedy tokens: the eager prefill at two chunk shapes and
+    # the traced decode at two contexts (TTFT and tok/s logged)
+    pytest --timeout 1500 models/demos/glm53_flash/demo/text_demo.py -k "long_1k-4users or long_4k-4users"
+  model: glm53-flash
+  model_family: GLM
+  skus:
+    bh_galaxy:
+      timeout: 30
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: sweep

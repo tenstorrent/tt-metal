@@ -1,0 +1,106 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Writer of the fused KDA decode block -- the GATED VARIANT (KdaDecode(gated=True): the speculative commit's
+// launches; writer_kda_decode.cpp is the default-path source shared by v1 / v2 and must stay byte-identical to the
+// shipped kernel). Per work item, the updated recurrent state of every user of the part (in place) -- written only
+// for the users whose write gate is non-zero (gate: one more accessor block after the recurrent state's, runtime
+// arg 7 = the address of the [Bt, 32] int32 ROW_MAJOR gate pages, page tb = tile row tb; the page is read per item
+// into the writer's slot (+2048) of the scratch region after the Vt weight tiles of cb_onw, a region the CB
+// protocol never reserves); a gated-off user's tiles are popped unwritten, so its state bytes stay its input.
+// Then the part's output block goes to the slot's part-0 core (gather CB + semaphore), where the part-0 writer
+// stores the head's normed output tiles of the tile row (bf16 TILE output), as in the default writer.
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+
+constexpr uint32_t cb_onw = 6, cb_out = 10, cb_state_out = 11, cb_gather = 24, cb_ofin = 31;
+constexpr uint32_t SEM_GATHER = 3;
+constexpr uint32_t GATE_BYTES = 32 * 4;        // one gate page: 32 int32 write gates (op.py GATE_BYTES)
+constexpr uint32_t GATE_WRITER_OFFSET = 2048;  // the writer's landing slot inside the scratch region's first page
+
+void kernel_main() {
+    constexpr uint32_t Kt = get_compile_time_arg_val(0);
+    constexpr uint32_t Vt = get_compile_time_arg_val(1);
+    constexpr uint32_t Bt = get_compile_time_arg_val(2);
+    constexpr uint32_t B = get_compile_time_arg_val(3);
+    constexpr uint32_t H = get_compile_time_arg_val(4);
+    constexpr uint32_t parts = get_compile_time_arg_val(5);
+    constexpr uint32_t HV_t = get_compile_time_arg_val(6);
+
+    constexpr auto o_a = TensorAccessorArgs<7>();
+    constexpr auto st_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
+    constexpr auto gate_a = TensorAccessorArgs<st_a.next_compile_time_args_offset()>();  // the write gate pages
+
+    const uint32_t item0 = get_arg_val<uint32_t>(0);
+    const uint32_t n_items = get_arg_val<uint32_t>(1);
+    const uint32_t stride = get_arg_val<uint32_t>(2);
+    const uint32_t o_addr = get_arg_val<uint32_t>(3);
+    const uint32_t st_addr = get_arg_val<uint32_t>(4);
+    const uint32_t p0_x = get_arg_val<uint32_t>(5);
+    const uint32_t p0_y = get_arg_val<uint32_t>(6);
+    const uint32_t gate_addr = get_arg_val<uint32_t>(7);  // the write gate pages ([Bt, 32] int32)
+
+    const uint32_t t32 = get_tile_size(cb_state_out);
+    const uint32_t t16 = get_tile_size(cb_out);
+    const auto o_acc = TensorAccessor(o_a, o_addr, t16);
+    const auto st_acc = TensorAccessor(st_a, st_addr, t32);
+    const auto gate_acc = TensorAccessor(gate_a, gate_addr, GATE_BYTES);
+    // this core's copy of the gate page: the writer's slot of the scratch region after the Vt weight tiles of cb_onw
+    // (the reader's copy sits at +0 of the same region; this RISC never moves the cb_onw pointers)
+    const uint32_t gate_l1 = CircularBuffer(cb_onw).get_write_ptr() + Vt * t32 + GATE_WRITER_OFFSET;
+    volatile tt_l1_ptr uint32_t* gate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gate_l1);
+
+    Noc noc;
+    CircularBuffer out(cb_out), st(cb_state_out), ofin(cb_ofin), gather(cb_gather);
+    for (uint32_t it = 0; it < n_items; it++) {
+        const uint32_t item = item0 + it * stride;
+        const uint32_t h = item / (Bt * parts);
+        const uint32_t rem = item % (Bt * parts);
+        const uint32_t tb = rem / parts;
+        const uint32_t part = rem % parts;
+        const uint32_t n_row = (B - tb * 32u < 32u) ? (B - tb * 32u) : 32u;
+        const uint32_t up = (n_row + parts - 1) / parts;
+        const uint32_t u0 = part * up;
+        const uint32_t u1 = (u0 + up < n_row) ? (u0 + up) : n_row;
+        if (u0 >= u1) {
+            continue;
+        }
+        noc_async_read(gate_acc.get_noc_addr(tb), gate_l1, GATE_BYTES);  // this tile row's write gates
+        noc_async_read_barrier();
+        for (uint32_t r = u0; r < u1; r++) {
+            st.wait_front(Kt * Vt);
+            if (gate[r] != 0u) {  // gated off: the tiles are consumed unwritten (the state keeps its bytes)
+                const uint32_t base = ((tb * 32 + r) * H + h) * Kt * Vt;
+                for (uint32_t t = 0; t < Kt * Vt; t++) {
+                    noc.async_write(st, st_acc, t32, {.offset_bytes = t * t32}, {.page_id = base + t});
+                }
+                noc.async_write_barrier();
+            }
+            st.pop_front(Kt * Vt);
+        }
+        if (part != 0) {
+            // this part's (masked) output block -> slot part-1 of the part-0 core's gather CB
+            ofin.wait_front(Vt);
+            const uint64_t dst = get_noc_addr(p0_x, p0_y, gather.get_write_ptr() + (part - 1) * Vt * t32);
+            noc_async_write(ofin.get_read_ptr(), dst, Vt * t32);
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(p0_x, p0_y, get_semaphore(SEM_GATHER)), 1);
+            ofin.pop_front(Vt);
+        } else {
+            out.wait_front(Vt);
+            for (uint32_t n = 0; n < Vt; n++) {
+                noc.async_write(out, o_acc, t16, {.offset_bytes = n * t16}, {.page_id = tb * HV_t + h * Vt + n});
+            }
+            noc.async_write_barrier();
+            out.pop_front(Vt);
+        }
+    }
+    // every NoC transaction this kernel issued (the cross-core semaphore increments above included) must be
+    // acknowledged before the kernel returns: an atomic acked after the next kernel's noc_local_state_init
+    // leaves that kernel's atomic counters unequal forever (its noc_async_atomic_barrier hangs; seen on the 8x4
+    // o_proj matmul in0 receiver after kda_decode, 2026-10-20)
+    noc_async_full_barrier();
+}
