@@ -13,7 +13,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
+namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap {
 
 namespace {
 
@@ -250,4 +250,4 @@ void validate_forwarding_buffer(
         expected.memory_config());
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap
+}  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap

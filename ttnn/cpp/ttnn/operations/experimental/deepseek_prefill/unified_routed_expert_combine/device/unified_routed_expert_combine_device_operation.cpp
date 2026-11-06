@@ -5,21 +5,19 @@
 #include "unified_routed_expert_combine_device_operation.hpp"
 
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/routed_expert_combine_overlap/device/routed_expert_handoff.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_combine/device/routed_expert_handoff.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine {
 
 namespace {
 
-namespace overlap = ::ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap;
-
 constexpr const char* kOpName = "unified_routed_expert_moe_combine";
 
 // Below three tiles of tokens the first walk could end in a partial eighth wave, which leaves rows' rings behind.
 constexpr uint32_t kMinBigFirstThreshold = 3 * 32;
 
-void validate(const UnifiedRoutedExpertCombineParams& op, const UnifiedRoutedExpertCombineInputs& t) {
+void validate_routed_expert(const UnifiedRoutedExpertCombineParams& op, const UnifiedRoutedExpertCombineInputs& t) {
     TT_FATAL(
         op.big_first_threshold == 0 || op.big_first_threshold >= kMinBigFirstThreshold,
         "{}: big_first_threshold must be 0 or at least {} tokens, got {}",
@@ -37,7 +35,7 @@ void validate(const UnifiedRoutedExpertCombineParams& op, const UnifiedRoutedExp
         kOpName,
         t.x.dtype(),
         t.x.layout());
-    // Combine's untilizers read the routed expert's output as bfloat8_b tiles, as combine does back to back.
+    // The row-major path tilizes x into bfloat8_b tiles, which is also what combine's untilizers read.
     TT_FATAL(
         t.output.layout() == tt::tt_metal::Layout::TILE && t.output.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "{}: the routed expert writes a bfloat8_b TILE output, got {} {}",
@@ -46,6 +44,15 @@ void validate(const UnifiedRoutedExpertCombineParams& op, const UnifiedRoutedExp
         t.output.layout());
     // The framework resolves cache-hit bindings by buffer, and x and the output are both inputs here.
     TT_FATAL(t.output.buffer() != t.x.buffer(), "{} needs an output distinct from dispatched_buffer", kOpName);
+}
+
+void validate_overlap(const UnifiedRoutedExpertCombineParams& op, const UnifiedRoutedExpertCombineInputs& t) {
+    TT_FATAL(
+        t.dispatched_metadata.has_value() && t.expert_offsets.has_value() &&
+            t.replicated_global_expert_idx_table.has_value(),
+        "{} overlapped with combine needs dispatched_metadata, expert_offsets and the replicated "
+        "global_expert_idx_table",
+        kOpName);
     overlap::validate_overlap_semaphores(
         kOpName,
         t.x.device(),
@@ -63,11 +70,22 @@ void validate(const UnifiedRoutedExpertCombineParams& op, const UnifiedRoutedExp
         validate_on_program_cache_miss(combine_attributes(op, t), combine_inputs(t));
 }
 
+void validate(const UnifiedRoutedExpertCombineParams& op, const UnifiedRoutedExpertCombineInputs& t) {
+    validate_routed_expert(op, t);
+    if (op.overlap_combine) {
+        validate_overlap(op, t);
+    }
+}
+
 }  // namespace
 
 UnifiedRoutedExpertCombineDeviceOperation::program_factory_t
-UnifiedRoutedExpertCombineDeviceOperation::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-    return UnifiedRoutedExpertCombineProgramFactory{};
+UnifiedRoutedExpertCombineDeviceOperation::select_program_factory(
+    const operation_attributes_t& op, const tensor_args_t&) {
+    if (op.overlap_combine) {
+        return UnifiedRoutedExpertCombineProgramFactory{};
+    }
+    return UnifiedRoutedExpertSoloProgramFactory{};
 }
 
 void UnifiedRoutedExpertCombineDeviceOperation::validate_on_program_cache_miss(
@@ -85,14 +103,20 @@ void UnifiedRoutedExpertCombineDeviceOperation::validate_on_program_cache_hit(
 UnifiedRoutedExpertCombineDeviceOperation::spec_return_value_t
 UnifiedRoutedExpertCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& op, const tensor_args_t& t) {
-    return ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation::
-        compute_output_specs(combine_attributes(op, t), combine_inputs(t));
+    if (op.overlap_combine) {
+        return ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation::
+            compute_output_specs(combine_attributes(op, t), combine_inputs(t));
+    }
+    return t.output.tensor_spec();
 }
 
 UnifiedRoutedExpertCombineDeviceOperation::tensor_return_value_t
 UnifiedRoutedExpertCombineDeviceOperation::create_output_tensors(
     const operation_attributes_t& op, const tensor_args_t& t) {
-    return create_device_tensor(compute_output_specs(op, t), t.x.device());
+    if (op.overlap_combine) {
+        return create_device_tensor(compute_output_specs(op, t), t.x.device());
+    }
+    return t.output;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine

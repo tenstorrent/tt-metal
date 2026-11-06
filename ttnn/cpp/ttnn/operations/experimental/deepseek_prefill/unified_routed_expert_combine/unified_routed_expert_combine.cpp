@@ -14,6 +14,14 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine {
 
+namespace {
+
+uint32_t semaphore_addr(const std::optional<GlobalSemaphore>& sem) {
+    return sem.has_value() ? static_cast<uint32_t>(sem->address()) : 0u;
+}
+
+}  // namespace
+
 ttnn::Tensor unified_routed_expert_moe_combine(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_region_offsets,
@@ -23,23 +31,23 @@ ttnn::Tensor unified_routed_expert_moe_combine(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const ttnn::Tensor& dispatched_metadata,
-    const ttnn::Tensor& expert_offsets,
-    const ttnn::Tensor& replicated_global_expert_idx_table,
-    uint32_t num_experts_per_tok,
-    uint32_t seq_len_per_chip,
-    const GlobalSemaphore& fwd_arrived_semaphore,
-    const GlobalSemaphore& final_arrived_semaphore,
-    const GlobalSemaphore& expert_go_semaphore,
-    const std::vector<GlobalSemaphore>& channel_semaphores,
-    uint32_t combine_axis,
-    uint32_t combine_num_links,
     uint32_t big_first_threshold,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     RoutedExpertActivation activation,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
     const std::optional<std::vector<ttnn::Tensor>>& down_biases,
+    const std::optional<ttnn::Tensor>& dispatched_metadata,
+    const std::optional<ttnn::Tensor>& expert_offsets,
+    const std::optional<ttnn::Tensor>& replicated_global_expert_idx_table,
+    uint32_t combine_axis,
+    uint32_t combine_num_links,
+    uint32_t num_experts_per_tok,
+    uint32_t seq_len_per_chip,
+    const std::optional<GlobalSemaphore>& fwd_arrived_semaphore,
+    const std::optional<GlobalSemaphore>& final_arrived_semaphore,
+    const std::optional<GlobalSemaphore>& expert_go_semaphore,
+    const std::vector<GlobalSemaphore>& channel_semaphores,
     const std::optional<ttnn::Tensor>& forwarding_buffer) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
@@ -68,8 +76,10 @@ ttnn::Tensor unified_routed_expert_moe_combine(
             down_biases->size());
     }
 
-    // The routed expert's output: the bfloat8_b tiles the row-major path writes, which combine's untilizers read --
-    // the same handoff as running the two ops back to back.
+    const bool overlap_combine = dispatched_metadata.has_value();
+
+    // The routed expert's output: the bfloat8_b tiles the row-major path writes, which combine's untilizers read
+    // when overlapped -- the same handoff as running the two ops back to back.
     const ttnn::Tensor output = ttnn::empty(
         dispatched_buffer.logical_shape(),
         tt::tt_metal::DataType::BFLOAT8_B,
@@ -93,9 +103,12 @@ ttnn::Tensor unified_routed_expert_moe_combine(
                                      ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                      : std::nullopt,
         .big_first_threshold = big_first_threshold,
+        .overlap_combine = overlap_combine,
         // Combine's hand-placed L1 stays under every buffer already allocated: see combine_l1_floor.
         .combine_l1_floor =
-            static_cast<uint32_t>(dispatched_buffer.device()->lowest_occupied_compute_l1_address().value_or(0)),
+            overlap_combine
+                ? static_cast<uint32_t>(dispatched_buffer.device()->lowest_occupied_compute_l1_address().value_or(0))
+                : 0u,
         .combine_axis = combine_axis,
         .combine_num_links = combine_num_links,
         .num_experts_per_tok = num_experts_per_tok,
@@ -104,9 +117,9 @@ ttnn::Tensor unified_routed_expert_moe_combine(
         .final_arrived = final_arrived_semaphore,
         .expert_go = expert_go_semaphore,
         .channel_semaphores = channel_semaphores,
-        .fwd_arrived_addr = static_cast<uint32_t>(fwd_arrived_semaphore.address()),
-        .final_arrived_addr = static_cast<uint32_t>(final_arrived_semaphore.address()),
-        .expert_go_addr = static_cast<uint32_t>(expert_go_semaphore.address()),
+        .fwd_arrived_addr = semaphore_addr(fwd_arrived_semaphore),
+        .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
+        .expert_go_addr = semaphore_addr(expert_go_semaphore),
         .channel_semaphore_addrs = std::move(channel_addrs)};
     OperationType::tensor_args_t tensor_args{
         .x = dispatched_buffer,

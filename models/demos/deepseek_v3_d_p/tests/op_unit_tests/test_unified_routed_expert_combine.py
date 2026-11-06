@@ -17,8 +17,8 @@ Every case runs the model's hybrid threshold as big_first_threshold, the experts
 runs it: balanced, hot-expert, and real-L45c3 / real-L11c9 (Kimi K2.7, 8x4 only), measured routing from that
 layer and chunk.
 
-The perf test times the op replayed from a trace, as the model runs it, against unified_routed_expert_moe then
-combine_fabric2d back to back. TtMoe runs this op in the traced prefill of GLM 5.3 and Kimi K2.7
+The solo test runs the op without combine's arguments, then combine_fabric2d on its output. The perf test times the
+overlap replayed from a trace, as the model runs it, against the op alone then combine_fabric2d back to back. TtMoe runs this op in the traced prefill of GLM 5.3 and Kimi K2.7
 (ROUTED_EXPERT_COMBINE_OVERLAP_UNIFIED_WAVES). The perf cases, the 8x1 Galaxy submesh and dg0-only are run by
 hand, so CI never collects them.
 """
@@ -458,9 +458,8 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         activation=ttnn.RoutedExpertActivation.Silu,
     )
 
-    # unified_routed_expert_moe alone, every expert, as the model runs it outside the overlap.
-    def solo_routed_expert():
-        return ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+    def routed_expert(**overlap):
+        return ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_combine(
             tt_x,
             tt_region_offsets,
             tt_counts,
@@ -468,10 +467,16 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             tt_expert.gate_projs,
             tt_expert.up_projs,
             tt_expert.down_projs,
-            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            max_dispatched_tokens_per_expert,
+            big_first_threshold=big_first_threshold,
             compute_kernel_config=tt_expert.compute_kernel_config,
             activation=ttnn.RoutedExpertActivation.Silu,
+            **overlap,
         )
+
+    # Alone, the routed expert writes the same bfloat8_b tiles it hands combine inside the overlap.
+    def solo_routed_expert():
+        return routed_expert()
 
     def combine(re_output, widen=True):
         # The standalone op takes bfloat16 only; bfloat8_b widens exactly, so this is the bytes the
@@ -514,29 +519,18 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             )
             ttnn.synchronize_device(mesh_device)
         fwd_arrived, final_arrived, expert_go = overlap_semaphores[:3]
-        return ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_combine(
-            tt_x,
-            tt_region_offsets,
-            tt_counts,
-            tt_idx_slice,
-            tt_expert.gate_projs,
-            tt_expert.up_projs,
-            tt_expert.down_projs,
-            max_dispatched_tokens_per_expert,
+        return routed_expert(
             dispatched_metadata=tt_metadata,
             expert_offsets=tt_expert_offsets,
             replicated_global_expert_idx_table=tt_idx_full,
+            combine_axis=sp_axis,
+            combine_num_links=num_links,
             num_experts_per_tok=num_experts_per_tok,
             seq_len_per_chip=_SEQ_LEN_PER_CHIP,
             fwd_arrived_semaphore=fwd_arrived,
             final_arrived_semaphore=final_arrived,
             expert_go_semaphore=expert_go,
             channel_semaphores=overlap_semaphores[3:],
-            combine_axis=sp_axis,
-            combine_num_links=num_links,
-            big_first_threshold=big_first_threshold,
-            compute_kernel_config=tt_expert.compute_kernel_config,
-            activation=ttnn.RoutedExpertActivation.Silu,
         )
 
     reference = []
@@ -615,13 +609,34 @@ def test_unified_routed_expert_combine(mesh_device, device_params, threshold_id,
     if variant == "8x1-submesh":
         mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
     case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
+    _assert_matches_reference(case, case.overlapped, "unified_routed_expert_moe_combine")
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
+@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
+@pytest.mark.parametrize(
+    "mesh_device, device_params, threshold_id, model_id, variant",
+    _mesh_params(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_unified_routed_expert_combine_solo(mesh_device, device_params, threshold_id, model_id, variant):
+    """The op alone (no combine arguments), then combine_fabric2d on its output."""
+    if variant == "8x1-submesh":
+        mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
+    _assert_matches_reference(
+        case, lambda: case.combine(case.solo_routed_expert()), "unified_routed_expert_moe_combine alone, then combine"
+    )
+
+
+def _assert_matches_reference(case, run, label):
     # Run the device first: the reference rewrites the host dispatched buffer in place.
-    actuals = [ttnn.to_torch(case.overlapped(), mesh_composer=case.composer)]
+    actuals = [ttnn.to_torch(run(), mesh_composer=case.composer)]
     # Twice: the second run is a program-cache hit over the case's semaphores.
-    actuals.append(ttnn.to_torch(case.overlapped(), mesh_composer=case.composer))
+    actuals.append(ttnn.to_torch(run(), mesh_composer=case.composer))
     expected = case.torch_reference()
 
-    for run, actual in enumerate(actuals):
+    for run_idx, actual in enumerate(actuals):
         result = validate_combine_output(
             expected,
             actual,
@@ -636,10 +651,10 @@ def test_unified_routed_expert_combine(mesh_device, device_params, threshold_id,
         )
         worst = min((m[-1] for m in result.mismatches), default=None)
         logger.info(
-            f"run {run}: {result.matches}/{result.total} combine slots match the PyTorch RE + combine reference"
+            f"run {run_idx}: {result.matches}/{result.total} combine slots match the PyTorch RE + combine reference"
             + (f", worst slot PCC {worst:.6f}" if worst is not None else "")
         )
-        result.assert_passed(f"run {run}: unified_routed_expert_moe_combine vs PyTorch RE + combine")
+        result.assert_passed(f"run {run_idx}: {label} vs PyTorch RE + combine")
 
 
 def _capture(mesh_device, run_fn):
@@ -680,9 +695,9 @@ def _replay_us(mesh_device, trace_id, iters):
     indirect=["mesh_device", "device_params"],
 )
 def test_unified_routed_expert_combine_perf(mesh_device, device_params, threshold_id, model_id, variant):
-    """The op against unified_routed_expert_moe then combine_fabric2d back to back. Sequential is the sum of the
-    two programs' times, so it assumes no gap between them. Reported, not asserted: the standalone routed expert is
-    main's program, not this op's wave-planned one.
+    """The op overlapped with combine against the same two programs back to back: the op alone, then
+    combine_fabric2d. Sequential is the sum of the two programs' times, so it assumes no gap between them and is the
+    best a sequential dispatch can do; the overlap must beat it.
 
     Every program is replayed from a trace, as the model runs it, and timed as wall time per replay. One eager
     call of each first compiles it: compiling writes to the device, which a capture does not allow.
@@ -720,4 +735,8 @@ def test_unified_routed_expert_combine_perf(mesh_device, device_params, threshol
     logger.info(
         f"UNIFIED-WAVES+combine {model_id} {threshold_id} traced: overlap {traced_overlap_us:.1f} us; sequential "
         f"{traced_sequential_us:.1f} us (RE {traced_re_us:.1f} + combine {traced_combine_us:.1f})"
+    )
+    assert traced_overlap_us < traced_sequential_us, (
+        f"traced overlap {traced_overlap_us:.1f} us is not faster than the routed expert then combine "
+        f"({traced_re_us:.1f} + {traced_combine_us:.1f} = {traced_sequential_us:.1f} us)"
     )

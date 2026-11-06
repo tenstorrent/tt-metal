@@ -10,13 +10,12 @@
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/routed_expert_combine_overlap/device/routed_expert_handoff.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_combine/device/routed_expert_handoff.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_combine/device/wave_routed_expert_program_factory.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine {
 
 namespace ure = ::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn;
-namespace overlap = ::ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap;
 
 ure::UnifiedRoutedExpertFfnParams routed_expert_attributes(const UnifiedRoutedExpertCombineParams& op) {
     // Every expert runs here, so the band is wide open, as unified_routed_expert_moe alone builds it.
@@ -64,12 +63,45 @@ overlap::CombineFabric2dParams combine_attributes(
 overlap::CombineFabric2dInputs combine_inputs(const UnifiedRoutedExpertCombineInputs& t) {
     return overlap::CombineFabric2dInputs{
         .dispatched_buffer = t.output,
-        .dispatched_metadata = t.dispatched_metadata,
+        .dispatched_metadata = t.dispatched_metadata.value(),
         .expert_token_counts = t.counts,
         .expert_region_offsets = t.expert_region_offsets,
-        .expert_offsets = t.expert_offsets,
-        .global_expert_idx_table = t.replicated_global_expert_idx_table,
+        .expert_offsets = t.expert_offsets.value(),
+        .global_expert_idx_table = t.replicated_global_expert_idx_table.value(),
     };
+}
+
+namespace {
+
+// The routed expert sizes its circular buffers from the free L1, and combine predicts its finish order from the plan
+// that gives; both were fixed when the op was called.
+void check_l1_plan(
+    const UnifiedRoutedExpertCombineParams& op,
+    const ure::UnifiedRoutedExpertFfnParams& re_args,
+    const ure::UnifiedRoutedExpertFfnInputs& re_inputs) {
+    const auto plan = WaveRoutedExpertProgramFactory::select_l1_plan(re_args, re_inputs);
+    TT_FATAL(
+        plan.first == op.wave_per_core_M && plan.second == op.wave_in0_block_w,
+        "unified_routed_expert_moe_combine was called with L1 plan ({}, {}) but would now build ({}, {}); the free L1 "
+        "changed between the call and the program build",
+        op.wave_per_core_M,
+        op.wave_in0_block_w,
+        plan.first,
+        plan.second);
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertSoloProgramFactory::create_descriptor(
+    const UnifiedRoutedExpertCombineParams& op, const UnifiedRoutedExpertCombineInputs& t, ttnn::Tensor& output) {
+    const auto re_args = routed_expert_attributes(op);
+    const auto re_inputs = routed_expert_inputs(t);
+    check_l1_plan(op, re_args, re_inputs);
+    return WaveRoutedExpertProgramFactory::create_embedded_descriptor(
+        re_args,
+        re_inputs,
+        output,
+        WaveRoutedExpertProgramFactory::EmbeddedOptions{.big_first_threshold = op.big_first_threshold});
 }
 
 tt::tt_metal::WorkloadDescriptor UnifiedRoutedExpertCombineProgramFactory::create_workload_descriptor(
@@ -82,17 +114,7 @@ tt::tt_metal::WorkloadDescriptor UnifiedRoutedExpertCombineProgramFactory::creat
     const auto re_args = routed_expert_attributes(op);
     const auto re_inputs = routed_expert_inputs(t);
 
-    // The routed expert sizes its circular buffers from the free L1, and combine predicts its finish order from the
-    // plan that gives; both were fixed when the op was called.
-    const auto plan = WaveRoutedExpertProgramFactory::select_l1_plan(re_args, re_inputs);
-    TT_FATAL(
-        plan.first == op.wave_per_core_M && plan.second == op.wave_in0_block_w,
-        "unified_routed_expert_moe_combine was called with L1 plan ({}, {}) but would now build ({}, {}); the free L1 "
-        "changed between the call and the program build",
-        op.wave_per_core_M,
-        op.wave_in0_block_w,
-        plan.first,
-        plan.second);
+    check_l1_plan(op, re_args, re_inputs);
     ttnn::Tensor re_output = t.output;
     const auto re_descriptor = WaveRoutedExpertProgramFactory::create_embedded_descriptor(
         re_args,
@@ -147,7 +169,8 @@ tt::tt_metal::WorkloadDescriptor UnifiedRoutedExpertCombineProgramFactory::creat
             .arena = nullptr,
             .forwarding = t.forwarding_buffer.has_value() ? t.forwarding_buffer->buffer() : nullptr},
         &collectors);
-    overlap::merge_routed_expert(workload, collectors, re_descriptor, combine_args, t.expert_offsets.buffer(), go_addr);
+    overlap::merge_routed_expert(
+        workload, collectors, re_descriptor, combine_args, t.expert_offsets->buffer(), go_addr);
 
     // The caller owns all three semaphores; holding them here as well only keeps them alive with the program.
     // combine already holds fwd_arrived and final_arrived through its semaphore list.

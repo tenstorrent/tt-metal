@@ -16,9 +16,9 @@ set_target_properties(
             api
 )
 
-# The routed expert's kernels; combine's are combine_fabric2d's. GLOB_RECURSE: they sit in compute/ and dataflow/,
-# and the headers beside them are included BY those kernels (and by combine's) at JIT compile time, so they are
-# install artifacts too.
+# The routed expert's kernels and the hook its writers report to combine with; combine's kernels are combine_fabric2d's.
+# GLOB_RECURSE: they sit in compute/ and dataflow/, and the headers beside them are included BY those kernels (and by
+# combine's) at JIT compile time, so they are install artifacts too.
 file(
     GLOB_RECURSE kernels
     device/kernels/*.cpp
@@ -45,7 +45,6 @@ target_link_libraries(
     ttnn_op_experimental_deepseek_prefill_unified_routed_expert_combine
     PRIVATE
         TT::Metalium
-        TTNN::Ops::Experimental::DeepSeekPrefill::RoutedExpertCombineOverlap
         TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertFfn
     PUBLIC
         TTNN::Core

@@ -38,7 +38,7 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
+namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap {
 
 // Placement, assignments and the geometry helpers are combine_fabric2d's; this op walks the same ring.
 using namespace ::ttnn::operations::experimental::deepseek_prefill::
@@ -964,4 +964,4 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     return workload_descriptor;
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap
+}  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap

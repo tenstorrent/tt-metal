@@ -7,6 +7,9 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_UNIFIED_ROUTED_EXPERT_COMBINE_API_HEAD
 )
 
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_UNIFIED_ROUTED_EXPERT_COMBINE_SRCS
+    device/combine_overlap_collector.cpp
+    device/combine_overlap_program_factory.cpp
+    device/routed_expert_handoff.cpp
     device/unified_routed_expert_combine_device_operation.cpp
     device/unified_routed_expert_combine_program_factory.cpp
     device/wave_routed_expert_program_factory.cpp

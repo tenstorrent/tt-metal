@@ -11,7 +11,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_types.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
+namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap {
 
 using ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dParams;
 using ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::DevicePlacement;
@@ -38,4 +38,4 @@ void add_collector(
     bool gate_untilizers,
     uint32_t order_sem = kNoOrderSem);
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap
+}  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap

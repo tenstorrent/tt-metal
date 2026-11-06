@@ -16,7 +16,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
+namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap {
 
 // The routed expert's side of a program it shares with combine_fabric2d: what its writers report to combine's
 // collector, and how its descriptor is folded into each chip's combine program (unified_routed_expert_moe_combine).
@@ -73,4 +73,4 @@ void validate_forwarding_buffer(
     const CombineFabric2dParams& combine_args,
     const CombineFabric2dInputs& combine_inputs);
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap
+}  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap

@@ -14,14 +14,15 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine {
 
-// The routed expert and combine_fabric2d as ONE program per chip: see UnifiedRoutedExpertCombineProgramFactory.
-// Returns combine's output.
+// The wave-planned routed expert alone, or overlapped with combine_fabric2d in ONE program per chip (overlap_combine),
+// when it returns combine's output.
 struct UnifiedRoutedExpertCombineDeviceOperation {
     using operation_attributes_t = UnifiedRoutedExpertCombineParams;
     using tensor_args_t = UnifiedRoutedExpertCombineInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
-    using program_factory_t = std::variant<UnifiedRoutedExpertCombineProgramFactory>;
+    using program_factory_t =
+        std::variant<UnifiedRoutedExpertSoloProgramFactory, UnifiedRoutedExpertCombineProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

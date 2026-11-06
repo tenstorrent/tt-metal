@@ -11,7 +11,7 @@
 
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_collector_ct_args.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
+namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap {
 
 void add_collector(
     tt::tt_metal::ProgramDescriptor& desc,
@@ -59,4 +59,4 @@ void add_collector(
     desc.kernels.push_back(std::move(kernel));
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap
+}  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine::overlap

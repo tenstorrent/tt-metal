@@ -29,27 +29,29 @@ struct UnifiedRoutedExpertCombineParams {
     // Either 0 or at least 96.
     uint32_t big_first_threshold = 0;
     // The L1 plan (per_core_M, gate/up K-block width) the routed expert sizes its circular buffers with, picked from
-    // the free L1 when the op is called. Hashed, as unified_routed_expert_moe hashes it, and combine predicts the
-    // routed expert's finish order with it.
+    // the free L1 when the op is called. Hashed, and combine predicts the routed expert's finish order with it.
     uint32_t wave_per_core_M = 0;
     uint32_t wave_in0_block_w = 0;
+
+    // Overlapped with combine_fabric2d in the same program: the routed expert runs on rows 2-9, combine on rows 0-1
+    // takes each expert as soon as it is written, and the op returns combine's output. The fields below are
+    // combine's and are read only in this mode.
+    bool overlap_combine = false;
     // The lowest occupied L1 address when the op is called. There is no L1 arena: combine lays its rings, control
     // tables and the routed expert's L1 slots out below it, by hand, so they must stay under every buffer that holds
     // data across launches -- including persistent state another op allocates after this one's first call. Hashed,
     // so such an allocation rebuilds the program over the smaller region instead of a cached program writing over
     // it.
     uint32_t combine_l1_floor = 0;
-
-    // combine_fabric2d, on rows 0-1 of the same program.
     uint32_t combine_axis = 0;
     uint32_t combine_num_links = 2;
     uint32_t num_experts_per_tok = 0;
     uint32_t seq_len_per_chip = 0;
 
     // The overlap's counters: combine's per-stream receive counts, the routed expert's start signal and combine's
-    // per-channel credits (routed_expert_combine_overlap::channel_semaphore_count of them). They must outlive every
-    // launch -- an upstream chip may bump one for the next launch before this chip starts it -- so the caller owns
-    // them and passes the same ones every call.
+    // per-channel credits (overlap::channel_semaphore_count of them). They must outlive every launch -- an upstream
+    // chip may bump one for the next launch before this chip starts it -- so the caller owns them and passes the same
+    // ones every call.
     std::optional<GlobalSemaphore> fwd_arrived;
     std::optional<GlobalSemaphore> final_arrived;
     std::optional<GlobalSemaphore> expert_go;
@@ -70,6 +72,7 @@ struct UnifiedRoutedExpertCombineParams {
         "big_first_threshold",
         "wave_per_core_M",
         "wave_in0_block_w",
+        "overlap_combine",
         "combine_l1_floor",
         "combine_axis",
         "combine_num_links",
@@ -90,6 +93,7 @@ struct UnifiedRoutedExpertCombineParams {
             big_first_threshold,
             wave_per_core_M,
             wave_in0_block_w,
+            overlap_combine,
             combine_l1_floor,
             combine_axis,
             combine_num_links,
@@ -116,15 +120,17 @@ struct UnifiedRoutedExpertCombineInputs {
     std::vector<Tensor> gate_biases;
     std::vector<Tensor> up_biases;
     std::vector<Tensor> down_biases;
-    // The routed expert's bfloat8_b TILE output, which combine's untilizers read: combine's dispatched buffer.
+    // The routed expert's bfloat8_b TILE output: what the op returns alone, and combine's dispatched buffer when
+    // overlapped.
     Tensor output;
 
-    // Combine's. The index table is the full one, replicated on every device.
-    Tensor dispatched_metadata;
-    Tensor expert_offsets;
-    Tensor replicated_global_expert_idx_table;
-    // Combine's DRAM forwarding buffer, of routed_expert_combine_overlap::forwarding_buffer_spec. Absent: combine
-    // allocates its own at cache miss and the cached program keeps it.
+    // Combine's, present exactly when overlap_combine is set. The index table is the full one, replicated on every
+    // device.
+    std::optional<Tensor> dispatched_metadata;
+    std::optional<Tensor> expert_offsets;
+    std::optional<Tensor> replicated_global_expert_idx_table;
+    // Combine's DRAM forwarding buffer, of overlap::forwarding_buffer_spec. Absent: combine allocates its own at cache
+    // miss and the cached program keeps it.
     std::optional<Tensor> forwarding_buffer;
 };
 

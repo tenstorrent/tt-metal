@@ -25,7 +25,6 @@ add_subdirectory(per_token_cast_back)
 add_subdirectory(per_token_cast_to_fp8)
 add_subdirectory(post_combine_reduce)
 add_subdirectory(rotary_embedding_indexed)
-add_subdirectory(routed_expert_combine_overlap)
 add_subdirectory(unified_routed_expert_combine)
 add_subdirectory(unified_routed_expert_ffn)
 add_subdirectory(update_padded_kv_cache)
@@ -64,7 +63,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
         TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
-        TTNN::Ops::Experimental::DeepSeekPrefill::RoutedExpertCombineOverlap
         TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertCombine
         TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertFfn
         TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
@@ -110,7 +108,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::RoutedExpertCombineOverlap>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertCombine>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertFfn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache>
