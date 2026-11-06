@@ -15,6 +15,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 BUILD_DIR=${BUILD_DIR:-./build}
 BIN=$BUILD_DIR/test/tt_metal/tt_fabric/fabric_unit_tests
+CAPTURE_BIN=$BUILD_DIR/test/tt_metal/tt_fabric/fabric_capture_unit_tests
 OUT_DIR=$PWD/generated/fabric_manifest_tests
 CHECK_SCHEMA=tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py
 CHECK_RANKS=tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_ranks.py
@@ -83,6 +84,8 @@ mkdir -p "$OUT_DIR"
 # ---------------------------------------------------------------------------
 echo "== Device-free tests"
 "$BIN" --gtest_filter='ManifestNames.*:ManifestTypeRegistry.*:ManifestArgs.*:ManifestRouterArgs.*:ManifestPublishedChips.*:ManifestWriter.*:ManifestDocs.*'
+echo "== Capture device-free tests"
+"$CAPTURE_BIN"
 
 # ---------------------------------------------------------------------------
 # Single rank

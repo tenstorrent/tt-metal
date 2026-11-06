@@ -11,6 +11,9 @@ target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
+        # The manifest fixtures check capture's reading of the manifests they write (CapturePlan), and capture's UMD
+        # cluster facts on the mock cluster.
+        fabric_capture_umd
         # FSD proto (tt::scaleout_tools::fsd::proto) constructed directly by test_physical_descriptor_builder.cpp;
         # those symbols are hidden in libtt_metal.so (see tools/scaleout/CMakeLists.txt), so link explicitly.
         TT::ScaleoutTools
@@ -43,6 +46,21 @@ add_dependencies(
 
 set_target_properties(
     fabric_unit_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+# Fabric capture's device-free tests. They link the capture library and gmock only, not tt_metal.
+add_executable(fabric_capture_unit_tests ${UNIT_TESTS_FABRIC_CAPTURE_SRC})
+target_link_libraries(
+    fabric_capture_unit_tests
+    PRIVATE
+        fabric_capture_core
+        gmock_main
+)
+set_target_properties(
+    fabric_capture_unit_tests
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
