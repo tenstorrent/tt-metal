@@ -230,6 +230,16 @@ ParallelismContext::ParallelismContext(
             m_num_tp_devices = mesh_shape[m_tp_axis.value()];
         }
     }
+
+    // Ring attention moves K/V around the CP axis with ring_shift, which needs an even ring (its even->odd and
+    // odd->even phases). Reject an odd CP axis here, when the configuration is set up, rather than at the first
+    // ring step of the first forward pass. A CP axis of size 1 never shifts and is fine.
+    TT_FATAL(
+        !m_cp_axis.has_value() || m_num_cp_devices == 1U || m_num_cp_devices % 2U == 0U,
+        "Context parallelism needs an even number of devices on the CP axis (mesh shape {}, CP axis {} has {})",
+        mesh_shape,
+        m_cp_axis.value_or(0U),
+        m_num_cp_devices);
 }
 
 [[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {
