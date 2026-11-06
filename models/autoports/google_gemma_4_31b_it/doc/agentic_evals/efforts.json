@@ -92,6 +92,74 @@
         "boundary": "Device-dependent imports stubbed; no native live CI/serving validation"
       },
       "evidence": "runs/source-packaging/AUTOFIX.md"
+    },
+    {
+      "problem": "harness-registration",
+      "owner": "harness_registration",
+      "goal": "Stock-main model registry selects this autoport and exact benchmark matrix",
+      "plan": "runs/harness-registration/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond",
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Host model/spec resolve tests and old consumer parity; live remains pending",
+        "success": "Exact host registration with no generic harness changes"
+      },
+      "box_hours": 0.1,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": {
+        "host_tests_passed": 110,
+        "live_validation": false
+      },
+      "evidence": "runs/harness-registration/result.json"
+    },
+    {
+      "problem": "suite-registration",
+      "owner": "suite_registration",
+      "goal": "Exact three requested suites with frozen two-task smoke and release-safe limits",
+      "plan": "runs/suite-registration/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond",
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Stock route task selection, exact document/task IDs, no blanket resource overrides",
+        "success": "Exact host registration with no generic harness changes"
+      },
+      "box_hours": 0.1,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": {
+        "host_tests_passed": 7,
+        "live_validation": false
+      },
+      "evidence": "runs/suite-registration/RESULT.md"
     }
   ],
   "rankings": [
@@ -216,6 +284,95 @@
         }
       ],
       "reason": "Packaging confirmed host-only; remaining local runtime issue needs external provisioning. Source-only tree preparation proceeds, live checks remain blocked."
+    },
+    {
+      "after": "harness-registration-host-tests",
+      "order": [
+        {
+          "problem": "local-sandbox-runtime",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0,
+          "saving_hours": 0
+        },
+        {
+          "problem": "suite-registration",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0,
+          "saving_hours": 0
+        },
+        {
+          "problem": "gpqa-local-credential",
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "device_hours": null,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Continue source/harness preparation despite externally blocked local route; validity precedes speed."
+    },
+    {
+      "after": "suite-registration",
+      "order": [
+        {
+          "problem": "local-sandbox-runtime",
+          "saving_hours": null,
+          "device_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "harness-registration",
+          "saving_hours": null,
+          "device_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "suite-registration",
+          "saving_hours": null,
+          "device_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "gpqa-local-credential",
+          "saving_hours": null,
+          "device_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": null,
+          "device_hours": null
+        }
+      ],
+      "reason": "Host registration confirmed; live CI smoke validity next. Local backend requires host intervention. No measured speed ranking yet."
     }
   ]
 }

@@ -1,0 +1,286 @@
+{
+  "source": "cohorts.json catalog_source; original task.toml definitions",
+  "tasks": {
+    "pylint-dev__pylint-7080": {
+      "repository": "pylint-dev",
+      "agent": {
+        "timeout_sec": 3000
+      },
+      "verifier": {
+        "timeout_sec": 3000
+      },
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      },
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1"
+    },
+    "django__django-11265": {
+      "repository": "django",
+      "agent": {
+        "timeout_sec": 3000
+      },
+      "verifier": {
+        "timeout_sec": 3000
+      },
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      },
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1"
+    },
+    "psf__requests-1766": {
+      "repository": "psf",
+      "agent": {
+        "timeout_sec": 3000
+      },
+      "verifier": {
+        "timeout_sec": 3000
+      },
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      },
+      "definition_sha256": "e9a5d7dd94ed43a89396fc12e7b7b32578c9114806bf017620aa694525dd9cba"
+    },
+    "pydata__xarray-4966": {
+      "repository": "pydata",
+      "agent": {
+        "timeout_sec": 3000
+      },
+      "verifier": {
+        "timeout_sec": 3000
+      },
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      },
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1"
+    },
+    "astropy__astropy-14598": {
+      "repository": "astropy",
+      "agent": {
+        "timeout_sec": 3000
+      },
+      "verifier": {
+        "timeout_sec": 3000
+      },
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      },
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1"
+    },
+    "terminal-bench/llm-inference-batching-scheduler": {
+      "category": "machine-learning",
+      "agent": {
+        "timeout_sec": 1800.0
+      },
+      "verifier": {
+        "timeout_sec": 1800.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/llm-inference-batching-scheduler:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "52aaac942f917e6a91ff658e0272195bd1cd842d41d71e302414c52603cc588b"
+    },
+    "terminal-bench/mailman": {
+      "category": "system-administration",
+      "agent": {
+        "timeout_sec": 1800.0
+      },
+      "verifier": {
+        "timeout_sec": 1800.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/mailman:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "a04f4d0e9be25056d2cd79d6a018bc875b6e6fb51d429a9241f282272cc660d1"
+    },
+    "terminal-bench/db-wal-recovery": {
+      "category": "file-operations",
+      "agent": {
+        "timeout_sec": 900.0
+      },
+      "verifier": {
+        "timeout_sec": 900.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/db-wal-recovery:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "1cdc2c615e259bc10265efbe71b518332070c1c002e226566399e9788f18d0aa"
+    },
+    "terminal-bench/winning-avg-corewars": {
+      "category": "software-engineering",
+      "agent": {
+        "timeout_sec": 3600.0
+      },
+      "verifier": {
+        "timeout_sec": 3600.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/winning-avg-corewars:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "a9b48765d03a66d966f6a162be203bc31e1d9d6e4abe616a2f4b42bac5dc246f"
+    },
+    "terminal-bench/feal-linear-cryptanalysis": {
+      "category": "mathematics",
+      "agent": {
+        "timeout_sec": 1800.0
+      },
+      "verifier": {
+        "timeout_sec": 1800.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/feal-linear-cryptanalysis:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "a39ec2c427af534c96c719dc87f70eb536956b487ce909d04b6365160e7c9fc4"
+    },
+    "terminal-bench/fix-code-vulnerability": {
+      "category": "security",
+      "agent": {
+        "timeout_sec": 900.0
+      },
+      "verifier": {
+        "timeout_sec": 900.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/fix-code-vulnerability:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "9aa2bd14ce9408289d199d0608bc3fa65b8b5e23374c9641020de62197dbf1e2"
+    },
+    "terminal-bench/constraints-scheduling": {
+      "category": "personal-assistant",
+      "agent": {
+        "timeout_sec": 1200.0
+      },
+      "verifier": {
+        "timeout_sec": 1200.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/constraints-scheduling:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "7b9842de16d74e8faf8c7c0aa03b0b81145941cb12dd322d81ae23fc48607250"
+    },
+    "terminal-bench/sparql-university": {
+      "category": "data-querying",
+      "agent": {
+        "timeout_sec": 900.0
+      },
+      "verifier": {
+        "timeout_sec": 900.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/sparql-university:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "47a6f6dd9ce0fc7631ef607e900fcd039b2d064ea90545645b49c678cddc9585"
+    },
+    "terminal-bench/dna-insert": {
+      "category": "scientific-computing",
+      "agent": {
+        "timeout_sec": 1800.0
+      },
+      "verifier": {
+        "timeout_sec": 1800.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/dna-insert:20251031",
+        "cpus": 1,
+        "memory_mb": 4096,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "1a9efd5c826d64d31c4874b395f1f9c488b2f26581b0c752fc4619ff177f25eb"
+    },
+    "terminal-bench/video-processing": {
+      "category": "video-processing",
+      "agent": {
+        "timeout_sec": 3600.0
+      },
+      "verifier": {
+        "timeout_sec": 3600.0,
+        "env": {}
+      },
+      "environment": {
+        "build_timeout_sec": 600.0,
+        "docker_image": "alexgshaw/video-processing:20251031",
+        "cpus": 1,
+        "memory_mb": 2048,
+        "storage_mb": 10240,
+        "gpus": 0,
+        "allow_internet": true
+      },
+      "definition_sha256": "be4fb42fccc5faa4862789cedd2c560eaa5758a2971989649a6dafeaeccc17aa"
+    }
+  },
+  "policy": "Use task definitions unchanged; no blanket CPU/memory overrides. These metadata alone do not prove local/CI admission."
+}

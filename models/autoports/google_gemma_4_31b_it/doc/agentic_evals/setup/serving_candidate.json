@@ -34,6 +34,8 @@
     "No default policy read from doc/ in source-only deployment",
     "Provide pinned transformers/vLLM/plugin combination from stage11 provenance",
     "Request-local eval settings must preserve pinned release limits; defaults do not override eval protocol",
-    "Fresh harness entry remains to be added and validated; candidate is not dispatchable"
-  ]
+    "Host registration passes; live identity/build validation remains pending"
+  ],
+  "max_num_batched_tokens": 2048,
+  "smoke_max_num_seqs": 8
 }

@@ -10,7 +10,35 @@
     32
   ],
   "evidence": "../agentic_serving.json stage10; no fresh stage12 configuration measurement",
-  "batch_by_eval": {},
+  "batch_by_eval": {
+    "smoke2-r1_gpqa_diamond": {
+      "eval": "r1_gpqa_diamond",
+      "batch": 8,
+      "planned_clients": 2,
+      "reason": "smallest validated batch at or above planned clients; no measured alternative yet",
+      "max_num_seqs": 8,
+      "pool_basis": "stage10 validated batch8 growing contexts; actual smoke occupancy will be audited",
+      "host_limit_basis": "operator stock runner approx31 networks; planned2; no added admission wrapper"
+    },
+    "smoke2-swe_bench_verified": {
+      "eval": "swe_bench_verified",
+      "batch": 8,
+      "planned_clients": 2,
+      "reason": "smallest validated batch at or above planned clients; no measured alternative yet",
+      "max_num_seqs": 8,
+      "pool_basis": "stage10 validated batch8 growing contexts; actual smoke occupancy will be audited",
+      "host_limit_basis": "operator stock runner approx31 networks; planned2; no added admission wrapper"
+    },
+    "smoke2-terminal_bench_2_1": {
+      "eval": "terminal_bench_2_1",
+      "batch": 8,
+      "planned_clients": 2,
+      "reason": "smallest validated batch at or above planned clients; no measured alternative yet",
+      "max_num_seqs": 8,
+      "pool_basis": "stage10 validated batch8 growing contexts; actual smoke occupancy will be audited",
+      "host_limit_basis": "operator stock runner approx31 networks; planned2; no added admission wrapper"
+    }
+  },
   "release_limits": "preflight.json release_values; incomplete for requested tool suites",
   "agent_time_limit": null,
   "request_time_limit": null,

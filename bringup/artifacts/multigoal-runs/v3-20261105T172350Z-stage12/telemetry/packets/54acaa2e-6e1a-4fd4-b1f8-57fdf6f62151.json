@@ -36,14 +36,14 @@
   "accuracy": [],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited. Host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "No scored runs. AutoFix could not restore missing local Docker backend under current mounts/namespace policy; GPQA local credential unavailable by operator decision.",
+    "stage12_accuracy": "No scored runs yet. Three secondary smoke jobs queued; local Docker AutoFix failed and local GPQA credential unavailable by operator decision.",
     "stage12_performance": "No stage12 eval timings or release measurement. Headline performance reuses exact-target stage11 evidence."
   },
   "notes": [
     "Stage11 accepted complete by operator decision7.",
     "Reused stage11 headline: eight serial requests, full60-layer model, pinned HF revision842da3794eaa0b77d5f08bae87a17459d91ff475.",
     "No new benchmark or profiler run for telemetry.",
-    "Stage12 blocked before smoke; functional_at0 all suites; no CI dispatch or release.",
+    "Stage12 functional_at0; three authorized CI smoke2 jobs queued:42166117505,42166151590,42166175324. Local Docker unavailable; no release.",
     "Source packaging repaired with host checks; selected policy and generator class bodies unchanged. No new live performance claim."
   ]
 }

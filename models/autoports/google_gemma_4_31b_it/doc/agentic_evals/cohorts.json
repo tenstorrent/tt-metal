@@ -1,17 +1,81 @@
 {
   "r1_gpqa_diamond": {
-    "source": "harness",
-    "rule": "Freeze named tasks before any score; inputs has no task_lists. No task list selected in this blocked preflight.",
-    "rungs": {}
+    "source": "default_rule",
+    "rule": "Sort strata and their tasks by SHA256(seed + NUL + name), then round-robin across strata; GPQA uses hash-ranked string document IDs. Nested smoke2 and nightly sizes10/5/10. No score-dependent choices and no lexical prefix.",
+    "seed": "gemma4-goal12-v3-842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "stratum": null,
+    "catalog_source": "Pinned lm-eval r1_gpqa_diamond document indices,198 documents; no dataset contents accessed.",
+    "rungs": {
+      "smoke": [
+        152,
+        189
+      ],
+      "nightly": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187
+      ]
+    },
+    "selected_before_scores_at": "2026-11-06T04:49:25.562725+00:00",
+    "selection_note": "Inputs has no task_lists; requested tool suites absent from model config. GPQA has no explicit nightly task list, so skill default10 is used rather than an implicit full-dataset run.",
+    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score."
   },
   "swe_bench_verified": {
     "source": "default_rule",
-    "rule": "Freeze named tasks before any score; inputs has no task_lists. No task list selected in this blocked preflight.",
-    "rungs": {}
+    "rule": "Sort strata and their tasks by SHA256(seed + NUL + name), then round-robin across strata; GPQA uses hash-ranked string document IDs. Nested smoke2 and nightly sizes10/5/10. No score-dependent choices and no lexical prefix.",
+    "seed": "gemma4-goal12-v3-842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "stratum": "repository",
+    "catalog_source": "Harbor registry@e76c762fca5267dfb36e1f900f0a7724ed72e735; swebench-verified1.0 task refs@86723674f04e4209ac479d0fb75d9d9f44b4377e",
+    "rungs": {
+      "smoke": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265"
+      ],
+      "nightly": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265",
+        "psf__requests-1766",
+        "pydata__xarray-4966",
+        "astropy__astropy-14598"
+      ]
+    },
+    "selected_before_scores_at": "2026-11-06T04:49:25.562736+00:00",
+    "selection_note": "Inputs has no task_lists; requested tool suites absent from model config. GPQA has no explicit nightly task list, so skill default10 is used rather than an implicit full-dataset run.",
+    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score."
   },
   "terminal_bench_2_1": {
     "source": "default_rule",
-    "rule": "Freeze named tasks before any score; inputs has no task_lists. No task list selected in this blocked preflight.",
-    "rungs": {}
+    "rule": "Sort strata and their tasks by SHA256(seed + NUL + name), then round-robin across strata; GPQA uses hash-ranked string document IDs. Nested smoke2 and nightly sizes10/5/10. No score-dependent choices and no lexical prefix.",
+    "seed": "gemma4-goal12-v3-842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "stratum": "category",
+    "catalog_source": "harbor-framework/terminal-bench-2-1@12b7565679ce5006230b820666353673a133db93 task.toml metadata",
+    "rungs": {
+      "smoke": [
+        "terminal-bench/llm-inference-batching-scheduler",
+        "terminal-bench/mailman"
+      ],
+      "nightly": [
+        "terminal-bench/llm-inference-batching-scheduler",
+        "terminal-bench/mailman",
+        "terminal-bench/db-wal-recovery",
+        "terminal-bench/winning-avg-corewars",
+        "terminal-bench/feal-linear-cryptanalysis",
+        "terminal-bench/fix-code-vulnerability",
+        "terminal-bench/constraints-scheduling",
+        "terminal-bench/sparql-university",
+        "terminal-bench/dna-insert",
+        "terminal-bench/video-processing"
+      ]
+    },
+    "selected_before_scores_at": "2026-11-06T04:49:25.562738+00:00",
+    "selection_note": "Inputs has no task_lists; requested tool suites absent from model config. GPQA has no explicit nightly task list, so skill default10 is used rather than an implicit full-dataset run.",
+    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score."
   }
 }

@@ -31,10 +31,9 @@
     "diff_from_base": "none"
   },
   "pending": [
-    "TTI autoport registration and eval cohorts",
     "native dependency and live adapter import proof on authorized route"
   ],
-  "dispatch_allowed_now": false,
+  "dispatch_allowed_now": true,
   "execution_commit": "4f291ceaf336ca9bc87ca9cbea0077b5eb2c6765",
   "files": {
     "models/autoports/google_gemma_4_31b_it/tt/batched_prefill.py": {

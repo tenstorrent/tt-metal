@@ -19,6 +19,26 @@
     {
       "fact": "Source-only publication must include runtime precision configuration and must not require locally installed readiness runtime. Generic base sources are unchanged from d80d9482.",
       "evidence": "runs/source-packaging/AUTOFIX.md; setup/source_publication.json"
+    },
+    {
+      "fact": "Stock agentic workflow skips common GPQA; use stock evals workflow for GPQA. Explicit CI_NIGHTLY and SMOKE_TEST task maps prevent arbitrary tool smoke selection.",
+      "evidence": "TTI main7a51c2f; test_module/llm_tests/agentic_eval_tests.py; runs/suite-registration/RESULT.md"
+    },
+    {
+      "fact": "EvalTask priority=should preserves reference comparisons as informational; trajectory validity and completeness require separate audit. Eval catalog keyed by HF repo applies across implementations on dedicated branch.",
+      "evidence": "TTI report_module/acceptance_criteria.py; workflows/target_pack_provider.py"
+    },
+    {
+      "fact": "GPQA API client independently loads tokenizer; model_kwargs revision pins it. Stock common client reserves64 context tokens.",
+      "evidence": "lm-evaluation-harness@af401ef3 lm_eval/models/api_models.py; runs/suite-registration/RESULT.md"
+    },
+    {
+      "fact": "Use repository-pinned Ruff0.15.0. Unset inherited TT_METAL_HOME for CLI-default unit test.",
+      "evidence": "bringup/artifacts/stage12-tti-hooks-clean.log; requirements-dev.txt"
+    },
+    {
+      "fact": "Installed gh run list lacks displayTitle; use supported fields plus REST display_title to identify dispatch by immutable SHAs.",
+      "evidence": "gh run list field validation; operator stock workflow run-name"
     }
   ],
   "suite_timings": [],

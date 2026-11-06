@@ -1,0 +1,25 @@
+{
+  "base_main": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+  "registration_commit": "bde062f89c89b9b2957835a6724c43208dc27d3d",
+  "suite_commits": {
+    "r1_gpqa_diamond": "e070c90450defcb6859120fe4976255375040a4f",
+    "swe_bench_verified": "f278fb527bc7195f93b5ba5e0f8b050455581220",
+    "terminal_bench_2_1": "bb321bf0f066dd472f51bd0b3f8875d47a0b3cfb"
+  },
+  "branch": "mvasiljevic/gemma4-31b-goal12-v3",
+  "published": true,
+  "host_validation": "3737 passed,15 skipped; frozen precommit hooks all pass; 29 isolated arm tests pass each",
+  "files": [
+    "reference_config/benchmarking/benchmark_targets/model_performance_reference.json",
+    "reference_config/evals/eval_config.py",
+    "tests/llm_module/test_harbor_dataset_ref.py",
+    "tests/test_eval_shard.py",
+    "tests/workflows/test_eval_config_mode_reference.py",
+    "tests/workflows/test_eval_config_quetzal_refs.py",
+    "tests/workflows/test_gemma4_31b_autoport_v3.py",
+    "tests/workflows/test_gemma4_autoport_smoke_suites.py",
+    "workflows/model_spec.py",
+    "workflows/model_specs/dev/llm.yaml"
+  ],
+  "scope": "model registration/eval config and affected tests only; no runtime harness/plugin change"
+}

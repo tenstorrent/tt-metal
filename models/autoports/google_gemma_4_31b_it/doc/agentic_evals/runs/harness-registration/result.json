@@ -1,0 +1,65 @@
+{
+  "status": "host_validated_pending_live",
+  "goal": "Register source-only autoport and exact stage11 release benchmark on stock-main TTI",
+  "branch": "mvasiljevic/gemma4-31b-goal12-v3",
+  "base_commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+  "impl": "gemma4-31b-autoport-v3",
+  "model": "google/gemma-4-31B-it",
+  "source_commit": "08ee8790bcbcd9e85cb799593b2bbaf40b785134",
+  "tests": [
+    {
+      "command": "python -m pytest tests/workflows/test_gemma4_31b_autoport_v3.py tests/test_model_catalog_yaml.py tests/test_model_specification.py -q --disable-warnings",
+      "passed": 110
+    },
+    {
+      "command": "Compare get_perf_reference_map output against HEAD reference JSON for tt_transformers, gemma4_dflash_contract, gemma4_31b_qb2 on every device",
+      "result": "all equal"
+    }
+  ],
+  "used_device_hours": 0,
+  "box_hours": 0.1,
+  "change": "kept",
+  "problem_status": "open",
+  "confirmed": {
+    "adapter_override": true,
+    "model_and_tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "context": 262144,
+    "batches_selectable": [
+      1,
+      8,
+      16,
+      32
+    ],
+    "top_k": 32,
+    "benchmark_matrix": [
+      [
+        128,
+        128,
+        1,
+        8
+      ]
+    ],
+    "benchmark_host_environment": "ONLY_BENCHMARK_TARGETS=1",
+    "max_num_batched_tokens": 2048,
+    "initial_server_max_num_seqs": 8,
+    "initial_max_concurrency": 8
+  },
+  "evidence": [
+    "doc/benchmark/run/perf-b1-server.json",
+    "doc/benchmark/run/configuration-b1.json through configuration-b32.json startup_log show max_num_batched_tokens=2048",
+    "doc/benchmark/release_benchmark_matrix.json"
+  ],
+  "pending": [
+    "Live build/import/health and observed module_file still required; host spec resolution is not live registration proof",
+    "Stock release route must propagate ONLY_BENCHMARK_TARGETS=1 on host to avoid generic benchmark sweep",
+    "Dev entry has no fabricated docker_image. Source-build route at TT_VLLM_COMMIT_SHA_OR_TAG=ca7a18246e4111629ed6cb4a7d1192002749fccf installs stock plugin and vLLM0.31.0; resolved transformers package must be checked in built image (script range >=5.10.4,<5.15.0 is not exact dependency lock).",
+    "Suite entries and task cohorts belong to coordinator; untouched by this effort"
+  ],
+  "coordinator_smoke_sizing_decision": {
+    "planned_clients_per_suite": 2,
+    "batch": 8,
+    "reason": "Smallest validated batch at or above planned_clients; coordinator selection, not a measured fastest claim. Adapter captures only selected batch8.",
+    "benchmark_note": "Matrix remains128/128/C1 prompts8. Eventual release benchmark selects batch1 separately."
+  },
+  "route_evidence": "setup/shield-run-tests.yml lines336/344: stock shield adds --dev-mode and forwards dispatch --impl (verified by coordinator)"
+}
