@@ -54,6 +54,7 @@ class TtHcMixes:
     axis 1. Does not consume its input."""
 
     out_sites = (None, None)  # FORK_OUT_BUFFERS=on (P.16, tt/host_alloc.reserve_forks): fused()'s hc / y sites
+    _given = (None, None)  # POST_COLLAPSE (P.34): the site outputs of the last collapse_kwargs call
 
     def __init__(
         self, mesh, fn, scale, base, hidden: int, norm_eps: float, hc_eps: float, iters: int, rows: bool = False
@@ -119,6 +120,34 @@ class TtHcMixes:
         )  # column 24 = this chip's sum of x^2 (exact)
         dealloc(mix)
         return packed
+
+    def collapse_kwargs(self, pre: ttnn.Tensor, rows: int, cols: int, dtype) -> dict:
+        """POST_COLLAPSE=on (P.34): the mhc_post(collapse_pre=) arguments that make the previous residual's pass do
+        this step's work (fused() with that pass's row, bit for bit): the pre, this step's scalars (the ones fused()
+        passes mhc_pre_xing) and its load-time hc / y outputs (FORK_OUT_BUFFERS, the sites fused() writes)."""
+        hs, ys = self.out_sites
+        self._given = (
+            host_alloc.fork_out(self.mesh, hs, (1, 1, rows, HC * (HC + 2)), ttnn.float32),
+            host_alloc.fork_out(self.mesh, ys, (1, 1, rows, cols), dtype),
+        )
+        return dict(
+            collapse_pre=pre,
+            hc_scale=self.scale,
+            hc_base=self.base,
+            hc_norm_width=float(HC * self.hidden),
+            hc_norm_eps=self.norm_eps,
+            hc_eps=self.hc_eps,
+            hc_sinkhorn_iters=self.iters,
+            hc_output=self._given[0],
+            y_output=self._given[1],
+        )
+
+    def collapse_outputs(self, hc: ttnn.Tensor, y: ttnn.Tensor):
+        """(hc, y) of a collapse_kwargs call: the kept site objects where given (the op returns new wrappers of their
+        buffers, DS41-149)."""
+        hco, yo = self._given
+        self._given = (None, None)
+        return (hc if hco is None else hco), (y if yo is None else yo)
 
     def fused(self, x: ttnn.Tensor, pre: ttnn.Tensor, row: ttnn.Tensor | None = None):
         """MHC_FUSED=on: (hc [1, 1, R, 24], y [1, 1, R, H/TP]) = this step's coefficients and the collapse

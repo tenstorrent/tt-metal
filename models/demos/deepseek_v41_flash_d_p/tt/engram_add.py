@@ -234,9 +234,11 @@ class TtEngramAdd:
         out, pre, _ = self.add(h, kv, pre)
         return out, pre
 
-    def add(self, h: ttnn.Tensor, kv: ttnn.Tensor, pre: ttnn.Tensor | None = None, hc=None):
+    def add(self, h: ttnn.Tensor, kv: ttnn.Tensor, pre: ttnn.Tensor | None = None, hc=None, collapse: bool = False):
         """(new streams, pre, row): with MHC_FUSED=on and ``hc`` (this layer's attn_hc, tt/mhc.py:TtHcMixes) the
-        mhc_post pass also emits that step's partial row of the new streams (stats_weight), else row is None."""
+        mhc_post pass also emits that step's partial row of the new streams (stats_weight), else row is None.
+        ``collapse`` (POST_COLLAPSE=on, P.34): row is that step's finished (hc, y) instead (mhc_post collapse_pre=
+        the pending pre, which attn_hc collapses with: DS41-3)."""
         # h bf16: BF16_ACTIVATIONS=on (P.20, MHC_FUSED=on): bf16 streams and keys, the gate sums fp32 on their exact
         # values (the fork's engram pass), the new streams bf16 (mhc_post: one rounding of the fp32 h + g v)
         assert h.dtype == ttnn.float32 or self.fused, "bf16 streams need MHC_FUSED=on"
@@ -255,7 +257,28 @@ class TtEngramAdd:
             dealloc(kv32)
         if self.fused:
             row = None
-            if hc is not None:  # X'_n = gate_n value + h_n, and attn_hc's partial row of X'
+            if (
+                hc is not None
+                and collapse
+                and pre is not None
+                and pre.shape[-1] == HC * (HC + 2)
+                and h.dtype == ttnn.bfloat16
+                and value.dtype == ttnn.bfloat16
+            ):  # POST_COLLAPSE=on: the same pass also makes attn_hc's (hc, y)
+                out, srow, hcn, yn = ttnn.bringup.mhc_post(
+                    value,
+                    h,
+                    gate,
+                    self.eye(rows),
+                    stats_weight=hc.fn_t,
+                    compute_kernel_config=hc.post_cfg,
+                    post_col=self.gate_col,
+                    max_grid=max_grid(),
+                    **hc.collapse_kwargs(pre, rows, w, h.dtype),
+                )
+                dealloc(srow)
+                row = hc.collapse_outputs(hcn, yn)
+            elif hc is not None:  # X'_n = gate_n value + h_n, and attn_hc's partial row of X'
                 out, row = ttnn.bringup.mhc_post(
                     value,
                     h,

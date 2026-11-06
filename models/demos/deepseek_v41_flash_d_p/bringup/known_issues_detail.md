@@ -1194,3 +1194,44 @@ DS41-209: see "Golden rows before the cut (DS41-209)" in the next section (P.33 
   are the drift of the 128-row ring at the rung's end (adjacent rows), not of [cut - 128, cut) itself.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.33 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (via devjob).
+
+## P.34 POST_COLLAPSE (perf, 8x4, 2026-11-06)
+- **What**: setting POST_COLLAPSE (default on). A residual whose mhc_post already emits the next hc step's stats row now
+  also writes that step's inputs: ffn_hc's from attn_residual, the next layer's attn_hc's from ffn_residual, an engram
+  layer's attn_hc's from the engram add. Fork option `ttnn.bringup.mhc_post(collapse_pre=, hc_scale=, hc_base=,
+  hc_norm_width=, hc_norm_eps=, hc_eps=, hc_sinkhorn_iters=, hc_output=, y_output=)` returns (X', stats, hc, y).
+  - y = sum_k pre_k X'_k. Per column, one DEST window after the mix: the pre-block tile plus the bf16 X' tiles already
+    in cb_xs for the matmul, mhc_pre_xing's ymix, then packed to bf16.
+  - hc = DeepSeek's coefficients + Sinkhorn of the summed stats row, on the row's root core.
+  - The SFPU bodies are copied line for line from mhc_pre_xing_compute.cpp into kernels/mhc_post_hc_sfpu.hpp; keep the
+    two in step.
+  - The pre is the residual's own mixes (DS41-3), columns 0..3. Pinned site buffers are reused
+    (fork.ffn_hc.y; fork.attn_hc.hc / .y; DS41-174), so no new allocation.
+  - DevH.stats carries (hc, y) instead of a row. attn_hc / ffn_hc take a tuple as finished; layer 0 and any attn_hc
+    without an emitted row keep mhc_pre_xing.
+  - Conditions: MHC_FUSED, OWN_ROWS, BF16_ACTIVATIONS, GLUE_FOLD on and HC_SINKHORN=sfpu_fp32
+    (tt/model.py:post_collapse). Otherwise the old path runs.
+- **Removed a chunk** (40 layers, layer 0's attn_hc and both engram layers' attn_hc counted): 79 mhc_pre_xing
+  launches. 40 are ffn_hc. 39 are attn_hc of layers 1..39: 37 from ffn_residual, 2 from engram_add (layers 1 and 14).
+  Each launch re-read [160, 4 x 5120] bf16 a chip (6.5 MB) and wrote hc + y.
+  - Added per mhc_post call: one DEST window a column (5 tile copies from L1, ymix), the y write (1.6 MB), one Sinkhorn
+    tile a row on the roots, 3 + 33 common runtime args.
+  - X.3 numbers: attn_hc 2.66 + ffn_hc 2.46 ms device and 3.13 + 4.54 ms host a chunk, almost all of it these calls.
+    The orchestrator's A/B (51200 / 512000) gives the measured before / after.
+- **Bit identity**: tests/unit/test_mhc_post_collapse.py (8x4, 8 passed). X', stats, hc and y are byte-equal to
+  mhc_post(stats_weight=) + mhc_pre_xing(stats, X', deepseek=True, collapse_pre=). Covered:
+  - shapes [160, 5120], [640, 1280], [64, 640];
+  - the 11 x 10 grid;
+  - the pre as the packed mixes and as its own tensor;
+  - a cache hit with other scalars into given buffers.
+- **Gotcha (DS41-210)**: on a cache hit, override_runtime_arguments sees every core's per-core args padded to the
+  kernel's longest list. The first version appended the 3 addresses after the writer's variable-length lists, so only
+  the 5 root cores (13 args, the max) were patched. 760 of 800 y tiles went stale and later calls corrupted outputs.
+  Fixed with common runtime args.
+- **Quick, switch on** (`measure --task P.34 --part quick`, code 57b8b781c453d8a7, DS41_POST_COLLAPSE=on,
+  ENGRAM_TABLE=resident). rc 0, all 102 layer limits held. Worst layer L39: 0.62766 vs limit 1.5332. L10: 0.11294 vs
+  0.17737. host_transfers_per_layer 0. chunk_wall 183.2 ms, but spread 278.7 ms (a noisy host); the first run of the
+  same kernels gave 172.9 ms, spread 8.2. The layer errors are identical in both runs.
+- **Not run** (brief): the off side, the profiles, the gate. The orchestrator measures off / on at 51200 and 512000.
+- **Re-run**: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_collapse.py`;
+  `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.34`.

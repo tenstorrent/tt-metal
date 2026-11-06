@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -33,6 +34,31 @@ struct MhcPostStatsParams {
     // Fork option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18): the op runs on the rectangle (0, 0) ..
     // (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid. Hashed when set.
     std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
+    // Fork option collapse_pre (deepseek_v41_flash_d_p P.34, POST_COLLAPSE; false = off: every program, arg and hash as
+    // before): the same pass also writes the next mHC step's inputs, y = sum_i pre_i X'_i (the collapse with the given
+    // pre, tensor_args.collapse_pre columns 0..n-1; mhc_pre_xing(collapse_pre=)'s arithmetic on the bf16 X') and, on
+    // each row's root after the partials' sum, that step's hc = DeepSeek's coefficients + Sinkhorn of the stats row
+    // (mhc_pre_xing(deepseek=True)'s arithmetic). The scalars are runtime args patched on every call (not hashed).
+    bool collapse = false;
+    std::array<double, 3> hc_scale{};
+    std::vector<double> hc_base;  // n (n + 2)
+    double hc_inv_nc = 0.0;
+    double hc_norm_eps = 1e-6;
+    double hc_eps = 1e-6;
+    uint32_t hc_sinkhorn_iters = 20;
+};
+
+// The collapse option's call arguments (P.34): the next step's pre, its coefficient scalars, the caller's buffers.
+struct MhcPostCollapseArgs {
+    Tensor collapse_pre;
+    std::array<double, 3> scale{};
+    std::vector<double> base;
+    double inv_nc = 0.0;
+    double norm_eps = 1e-6;
+    double hc_eps = 1e-6;
+    uint32_t sinkhorn_iters = 20;
+    std::optional<Tensor> hc_output;
+    std::optional<Tensor> y_output;
 };
 
 struct MhcPostStatsInputs {
@@ -45,6 +71,10 @@ struct MhcPostStatsInputs {
     std::optional<Tensor> output;
     std::optional<Tensor> stats_output;
     std::optional<Tensor> stats_scratch;
+    // P.34 (collapse): the pre y collapses with (fp32 (..., T, n..32), columns 0..n-1) and the caller's hc / y buffers
+    std::optional<Tensor> collapse_pre;
+    std::optional<Tensor> hc_output;
+    std::optional<Tensor> y_output;
 };
 
 // The work plan (host): column blocks of `cols_per_block` tiles; a unit = one block of one token tile-row, units
@@ -74,7 +104,7 @@ struct MhcPostStatsDeviceOperation {
     using operation_attributes_t = MhcPostStatsParams;
     using tensor_args_t = MhcPostStatsInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
-    using tensor_return_value_t = std::vector<Tensor>;  // [X', stats, scratch]
+    using tensor_return_value_t = std::vector<Tensor>;  // [X', stats, scratch] (+ [hc, y] with collapse)
     using program_factory_t = std::variant<MhcPostStatsProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -100,5 +130,6 @@ std::vector<ttnn::Tensor> mhc_post_stats(
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& stats_output = std::nullopt,
     const std::optional<ttnn::Tensor>& stats_scratch = std::nullopt,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    const std::optional<ttnn::operations::bringup::mhc_post_ttnn::MhcPostCollapseArgs>& collapse = std::nullopt);
 }  // namespace ttnn::prim::bringup

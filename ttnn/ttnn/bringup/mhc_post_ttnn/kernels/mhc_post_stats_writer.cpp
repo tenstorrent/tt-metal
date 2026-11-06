@@ -9,6 +9,10 @@
 //      compute's row totals (cb_soa_out slot 0) -> column ss_col of the X' @ W tile (cb_mfin) -> scratch page r NB + b,
 //      then one semaphore increment on row r's root core.
 // Root phase: each rooted row's sum (cb_fin) -> stats page r.
+// MHC_POST_COLLAPSE (P.34): step 1 also reads the collapse_pre row tile r and builds the unit's pre-block tile (cb_pb,
+//   mhc_pre_xing_writer.cpp build_pre_blocks); after the X' tiles, the unit's y tiles (cb_y) -> y pages r Ct + b B + c.
+//   Root phase: the row's sum (cb_fin) also -> coefficient-major (cb_hsoa); the compute's hc (cb_hsoa_out) -> the
+//   row-major stage (columns n (n + 2)..31 zero) -> hc page r. All moves are fp32 word copies (bit-exact).
 
 #include <cstdint>
 
@@ -74,6 +78,41 @@ inline void build_coefficients(
     }
 }
 
+#ifdef MHC_POST_COLLAPSE
+// Pre-block tile (mhc_pre_xing_writer.cpp, the same words): slot 8 i + b, lane l <- pre_i (row-major column i) of
+// token row 4 b + (l >> 3).
+template <uint32_t N>
+inline void build_pre_blocks(const volatile tt_l1_ptr uint32_t* src, volatile tt_l1_ptr uint32_t* dst) {
+#pragma GCC unroll 1
+    for (uint32_t q = 0; q < 8 * N; ++q) {
+        const uint32_t i = q >> 3, b = q & 7u;
+        volatile tt_l1_ptr uint32_t* d = dst + slot_index(q, 0);
+#pragma GCC unroll 1
+        for (uint32_t g = 0; g < 4; ++g) {  // lanes 8 g .. 8 g + 7 share token row 4 b + g
+            const uint32_t v = src[rc_index(4 * b + g, i)];
+#pragma GCC unroll 8
+            for (uint32_t e = 0; e < 8; ++e) {
+                d[2u * (8u * g + e)] = v;
+            }
+        }
+    }
+}
+
+// dst row-major columns [0, COUNT) <- src coefficient-major slots [0, COUNT)
+template <uint32_t COUNT>
+inline void soa_to_cols(const volatile tt_l1_ptr uint32_t* src, volatile tt_l1_ptr uint32_t* dst) {
+#pragma GCC unroll 1
+    for (uint32_t l = 0; l < 32; ++l) {
+        const volatile tt_l1_ptr uint32_t* s = src + slot_index(0, l);
+        volatile tt_l1_ptr uint32_t* d = dst + rc_index(l, 0);
+#pragma GCC unroll 32
+        for (uint32_t k = 0; k < COUNT; ++k) {
+            d[rc_index(0, k)] = s[slot_index(k, 0)];
+        }
+    }
+}
+#endif
+
 }  // namespace
 
 void kernel_main() {
@@ -116,6 +155,22 @@ void kernel_main() {
     const uint32_t n_rooted = get_arg_val<uint32_t>(7);
     const uint32_t root_arg0 = 8 + n_rooted;  // root core (x << 16 | y) of each unit's row
     const uint32_t sem_addr = get_semaphore(sem_id);
+#ifdef MHC_POST_COLLAPSE
+    constexpr uint32_t cx0 = st_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_pb = get_compile_time_arg_val(cx0);
+    constexpr uint32_t cb_y = get_compile_time_arg_val(cx0 + 1);
+    constexpr uint32_t cb_hsoa = get_compile_time_arg_val(cx0 + 2);
+    constexpr uint32_t cb_hsoa_out = get_compile_time_arg_val(cx0 + 3);
+    constexpr uint32_t cb_hstage = get_compile_time_arg_val(cx0 + 4);
+    constexpr auto pre_args = TensorAccessorArgs<cx0 + 5>();
+    constexpr auto hc_args = TensorAccessorArgs<pre_args.next_compile_time_args_offset()>();
+    constexpr auto y_args = TensorAccessorArgs<hc_args.next_compile_time_args_offset()>();
+    constexpr uint32_t hc_cols = n * (n + 2);
+    // the collapse_pre, hc and y addresses: common runtime args (the same on every core; DS41-145, DS41-210)
+    const auto pre_acc = TensorAccessor(pre_args, get_common_arg_val<uint32_t>(0), page);
+    const auto hc_acc = TensorAccessor(hc_args, get_common_arg_val<uint32_t>(1), page);
+    const auto y_acc = TensorAccessor(y_args, get_common_arg_val<uint32_t>(2), o_page);
+#endif
 
     auto build = [&](uint32_t u) {
         const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
@@ -123,6 +178,9 @@ void kernel_main() {
         const uint32_t raw = get_write_ptr(cb_raw);
         noc_async_read_page(U.r, p_acc, raw);
         noc_async_read_page(U.r, c_acc, raw + page);
+#ifdef MHC_POST_COLLAPSE
+        noc_async_read_page(U.r, pre_acc, raw + 2 * page);
+#endif
         noc_async_read_barrier();
         cb_reserve_back(cb_cf, 2 * cf);
         build_coefficients<n, cf, comb_t>(
@@ -130,6 +188,11 @@ void kernel_main() {
             reinterpret_cast<ptr_t>(raw + page),
             reinterpret_cast<ptr_t>(get_write_ptr(cb_cf)));
         cb_push_back(cb_cf, 2 * cf);
+#ifdef MHC_POST_COLLAPSE
+        cb_reserve_back(cb_pb, 1);
+        build_pre_blocks<n>(reinterpret_cast<ptr_t>(raw + 2 * page), reinterpret_cast<ptr_t>(get_write_ptr(cb_pb)));
+        cb_push_back(cb_pb, 1);
+#endif
     };
 
     if (count) {
@@ -151,6 +214,17 @@ void kernel_main() {
             noc_async_writes_flushed();
             cb_pop_front(cb_out, n * bw);
         }
+#ifdef MHC_POST_COLLAPSE
+        cb_wait_front(cb_y, bw);  // the unit's y tiles, tile c = y[r, b B + c]
+        {
+            const uint32_t src = get_read_ptr(cb_y);
+            for (uint32_t c = 0; c < U.valid; ++c) {
+                noc_async_write_page(U.r * ct + U.col0 + c, y_acc, src + c * o_page);
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_y, bw);
+        }
+#endif
         // the unit's partial row
         cb_wait_front(cb_sfin, 1);
         cb_reserve_back(cb_soa, 1);
@@ -172,12 +246,34 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, sem_addr), 1);
     }
 
+#ifdef MHC_POST_COLLAPSE
+    ptr_t stage = nullptr;
+    if (n_rooted) {  // private scratch page (never pushed): the row-major hc tile, padding columns zeroed once
+        cb_reserve_back(cb_hstage, 1);
+        stage = reinterpret_cast<ptr_t>(get_write_ptr(cb_hstage));
+        for (uint32_t w = 0; w < 1024; ++w) {
+            stage[w] = 0;
+        }
+    }
+#endif
     for (uint32_t i = 0; i < n_rooted; ++i) {
         const uint32_t r = get_arg_val<uint32_t>(8 + i);
         cb_wait_front(cb_fin, 1);
         noc_async_write_page(r, st_acc, get_read_ptr(cb_fin));
+#ifdef MHC_POST_COLLAPSE
+        cb_reserve_back(cb_hsoa, 1);
+        cols_to_soa(reinterpret_cast<ptr_t>(get_read_ptr(cb_fin)), reinterpret_cast<ptr_t>(get_write_ptr(cb_hsoa)));
+        cb_push_back(cb_hsoa, 1);
+#endif
         noc_async_writes_flushed();
         cb_pop_front(cb_fin, 1);
+#ifdef MHC_POST_COLLAPSE
+        cb_wait_front(cb_hsoa_out, 1);
+        noc_async_write_barrier();  // the previous row's hc write has left the stage
+        soa_to_cols<hc_cols>(reinterpret_cast<ptr_t>(get_read_ptr(cb_hsoa_out)), stage);
+        cb_pop_front(cb_hsoa_out, 1);
+        noc_async_write_page(r, hc_acc, reinterpret_cast<uint32_t>(stage));
+#endif
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

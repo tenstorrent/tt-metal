@@ -491,6 +491,19 @@ TABLE = {
         "identity comb. off = the P.13 chain (matmul + pack per hc step, the multiply / addcmul collapses, the "
         "engram op chains)",
     ),
+    "POST_COLLAPSE": Setting(
+        "on",
+        ("on", "off"),
+        "P.34 (owner 2026-11-06, mHC study opportunity #1; needs MHC_FUSED=on, BF16_ACTIVATIONS=on, OWN_ROWS=on, "
+        "HC_SINKHORN=sfpu_fp32). on = a residual whose mhc_post already emits the next hc step's row (attn_residual "
+        "for ffn_hc, ffn_residual for the next layer's attn_hc, the engram add for its layer's attn_hc) also writes that "
+        "step's inputs in the same pass (fork option mhc_post collapse_pre): y = sum_k pre_k X'_k of the bf16 X' it "
+        "just wrote (pre = the residual's own mixes columns 0..3, DS41-3) and, on each row's root after the partials' "
+        "sum, the step's hc (DeepSeek's coefficients + Sinkhorn); the hc step then runs no mhc_pre_xing (one program "
+        "and a 4 x H stream re-read fewer a call). Bit-identical to off (the same SFPU code and bf16 rounding points). "
+        "Layer 0's attn_hc and the hc steps after a layer the model does not run keep their mhc_pre_xing. off = the "
+        "P.23 path (mhc_post stats row + mhc_pre_xing(collapse_pre=) a hc step)",
+    ),
     "HC_SINKHORN": Setting(
         "sfpu_fp32",
         ("sfpu_fp32", "fpu"),

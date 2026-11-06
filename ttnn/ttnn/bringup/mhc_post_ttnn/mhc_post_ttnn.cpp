@@ -4,6 +4,7 @@
 
 #include "mhc_post_ttnn.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -231,7 +232,108 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
     return {out.at(0), out.at(1)};  // out[2] is the partials scratch, freed with the vector
 }
 
-std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
+std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
+    const Tensor& input_tensor,
+    const Tensor& residual,
+    const Tensor& post,
+    const Tensor& comb,
+    const Tensor& stats_weight,
+    const Tensor& collapse_pre,
+    const std::vector<double>& hc_scale,
+    const std::vector<double>& hc_base,
+    double hc_norm_width,
+    double hc_norm_eps,
+    double hc_eps,
+    int64_t hc_sinkhorn_iters,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    bool comb_transposed,
+    int64_t post_col,
+    int64_t comb_col,
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<Tensor>& stats_output,
+    const std::optional<Tensor>& stats_scratch,
+    const std::optional<Tensor>& hc_output,
+    const std::optional<Tensor>& y_output,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    // the stats_weight checks first (the same refusals), then the collapse's own
+    const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
+    check_supported(input_tensor, residual, cfg);
+    check_shapes(input_tensor, residual, post, comb, post_col, comb_col);
+    if (residual.dtype() != DataType::BFLOAT16 || input_tensor.dtype() != DataType::BFLOAT16) {
+        throw ValueErrorCpp("mhc_post: collapse_pre needs a bfloat16 residual and a bfloat16 input_tensor");
+    }
+    const int64_t C = dims(input_tensor).back();
+    const int64_t n = dims(residual).back() / C;
+    if (n > 4) {
+        throw ValueErrorCpp(fmt::format("mhc_post: collapse_pre needs n <= 4, got {}", n));
+    }
+    const auto pd = dims(collapse_pre);
+    const auto fd = dims(input_tensor);
+    if (pd.size() != fd.size() || !std::equal(pd.begin(), pd.end() - 1, fd.begin()) || pd.back() < n ||
+        pd.back() > TILE_HW) {
+        throw ValueErrorCpp(fmt::format(
+            "mhc_post: collapse_pre must be (..., T, n..32) with input_tensor's leading dims, got {}", dims_str(pd)));
+    }
+    const auto& pmc = collapse_pre.memory_config();
+    if (collapse_pre.dtype() != DataType::FLOAT32 || collapse_pre.layout() != Layout::TILE ||
+        pmc.memory_layout() != TensorMemoryLayout::INTERLEAVED || pmc.buffer_type() != BufferType::DRAM) {
+        throw ValueErrorCpp("mhc_post: collapse_pre must be float32 TILE, DRAM interleaved");
+    }
+    if (hc_scale.size() != 3) {
+        throw ValueErrorCpp("mhc_post: hc_scale must be (a_pre, a_post, a_res)");
+    }
+    if (static_cast<int64_t>(hc_base.size()) != n * (n + 2)) {
+        throw ValueErrorCpp(fmt::format("mhc_post: hc_base has {} values, want {}", hc_base.size(), n * (n + 2)));
+    }
+    if (!(hc_norm_width > 0.0)) {
+        throw ValueErrorCpp("mhc_post: hc_norm_width must be > 0");
+    }
+    if (hc_sinkhorn_iters < 1) {
+        throw ValueErrorCpp("mhc_post: hc_sinkhorn_iters must be >= 1");
+    }
+    const auto w = dims(stats_weight);
+    int64_t lead = 1;
+    for (size_t i = 0; i + 2 < w.size(); ++i) {
+        lead *= w[i];
+    }
+    if (w.size() < 2 || w.size() > 4 || lead != 1 || w[w.size() - 2] != n * C || w.back() != TILE_HW) {
+        throw ValueErrorCpp(fmt::format(
+            "mhc_post: stats_weight must be (..., n*C = {}, 32) with leading dims 1, got {}", n * C, dims_str(w)));
+    }
+    const auto& mc = stats_weight.memory_config();
+    if (stats_weight.dtype() != DataType::FLOAT32 || stats_weight.layout() != Layout::TILE ||
+        mc.memory_layout() != TensorMemoryLayout::INTERLEAVED || mc.buffer_type() != BufferType::DRAM) {
+        throw ValueErrorCpp("mhc_post: stats_weight must be float32 TILE, DRAM interleaved");
+    }
+    MhcPostCollapseArgs ca{
+        .collapse_pre = collapse_pre,
+        .scale = {hc_scale[0], hc_scale[1], hc_scale[2]},
+        .base = hc_base,
+        .inv_nc = 1.0 / hc_norm_width,
+        .norm_eps = hc_norm_eps,
+        .hc_eps = hc_eps,
+        .sinkhorn_iters = static_cast<uint32_t>(hc_sinkhorn_iters),
+        .hc_output = hc_output,
+        .y_output = y_output};
+    auto out = ttnn::prim::bringup::mhc_post_stats(
+        input_tensor,
+        residual,
+        post,
+        comb,
+        stats_weight,
+        cfg,
+        comb_transposed,
+        static_cast<uint32_t>(post_col),
+        static_cast<uint32_t>(comb_col),
+        output_tensor,
+        stats_output,
+        stats_scratch,
+        max_grid,
+        ca);
+    return {out.at(0), out.at(1), out.at(3), out.at(4)};  // out[2] is the partials scratch
+}
+
+std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tensor, Tensor>> mhc_post_py(
     const Tensor& input_tensor,
     const Tensor& residual,
     const Tensor& post,
@@ -244,7 +346,47 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
     const std::optional<Tensor>& output_tensor,
     const std::optional<Tensor>& stats_output,
     const std::optional<Tensor>& stats_scratch,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    const std::optional<Tensor>& collapse_pre,
+    const std::optional<std::vector<double>>& hc_scale,
+    const std::optional<std::vector<double>>& hc_base,
+    double hc_norm_width,
+    double hc_norm_eps,
+    double hc_eps,
+    int64_t hc_sinkhorn_iters,
+    const std::optional<Tensor>& hc_output,
+    const std::optional<Tensor>& y_output) {
+    if (collapse_pre.has_value()) {  // P.34
+        if (!stats_weight.has_value() || !hc_scale.has_value() || !hc_base.has_value()) {
+            throw ValueErrorCpp("mhc_post: collapse_pre needs stats_weight, hc_scale and hc_base");
+        }
+        return mhc_post_with_collapse(
+            input_tensor,
+            residual,
+            post,
+            comb,
+            *stats_weight,
+            *collapse_pre,
+            *hc_scale,
+            *hc_base,
+            hc_norm_width,
+            hc_norm_eps,
+            hc_eps,
+            hc_sinkhorn_iters,
+            compute_kernel_config,
+            comb_transposed,
+            post_col,
+            comb_col,
+            output_tensor,
+            stats_output,
+            stats_scratch,
+            hc_output,
+            y_output,
+            max_grid);
+    }
+    if (hc_output.has_value() || y_output.has_value() || hc_scale.has_value() || hc_base.has_value()) {
+        throw ValueErrorCpp("mhc_post: hc_scale / hc_base / hc_output / y_output need collapse_pre");
+    }
     if (stats_weight.has_value()) {
         return mhc_post_with_stats(
             input_tensor,
