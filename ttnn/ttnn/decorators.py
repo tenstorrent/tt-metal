@@ -1557,7 +1557,6 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
-                operation_id = ttnn._ttnn.get_python_operation_id()
                 is_top_level_operation = len(_operation_call_stack.frames) == 1
 
                 decorated_function = function
