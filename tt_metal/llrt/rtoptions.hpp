@@ -313,7 +313,9 @@ class RunTimeOptions {
 
     std::filesystem::path simulator_path = "";
     std::string emu_server;
-    std::string emu_soc_desc_path;
+    std::vector<std::string> emu_soc_desc_paths;
+    std::string emu_cluster_desc_path;
+    bool quasar_mock_jit = false;
     std::string grendel_jtag_server;
     std::string grendel_jtag_soc_desc_path;
     std::string grendel_jtag_transport = "jtag2axi_v2";
@@ -859,7 +861,13 @@ public:
     }
     bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
     const std::string& get_emu_server() const { return emu_server; }
-    const std::string& get_emu_soc_desc_path() const { return emu_soc_desc_path; }
+    // TT_METAL_EMU_SOC_DESC: one SoC descriptor for the emulated package, or a comma-separated list that gives logical
+    // chip i the i-th, so a test cluster descriptor can present the package as several chips. The Mock target uses the
+    // list too, when set, so host-only runs see the same chips.
+    const std::vector<std::string>& get_emu_soc_desc_paths() const { return emu_soc_desc_paths; }
+    // TT_METAL_EMU_CLUSTER_DESC: test cluster descriptor for the EmuAxi target, or empty for the single chip 0.
+    // Set only together with TT_METAL_EMU_SERVER.
+    const std::string& get_emu_cluster_desc_path() const { return emu_cluster_desc_path; }
     const std::string& get_grendel_jtag_server() const { return grendel_jtag_server; }
     const std::string& get_grendel_jtag_soc_desc_path() const { return grendel_jtag_soc_desc_path; }
     const std::string& get_grendel_jtag_transport() const { return grendel_jtag_transport; }
@@ -986,7 +994,13 @@ public:
     const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
 
     // Mock cluster accessors
-    bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
+    // True on the Mock target only. Simulator and Emule runs may also carry a mock cluster descriptor path.
+    bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
+    // TT_METAL_QUASAR_MOCK_JIT: a Quasar Mock device builds its firmware and JIT-compiles program kernels; otherwise
+    // Mock skips both for Quasar.
+    bool get_quasar_mock_jit() const { return quasar_mock_jit; }
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH, or the programmatic mock descriptor; empty when unset. The Mock and Emule
+    // targets require it, and the Simulator target uses it when set.
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
     // Set mock cluster descriptor from a filename.
     // Searches the tt-cluster-descriptors submodule first (these take precedence when
