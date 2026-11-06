@@ -590,3 +590,30 @@ shapes, mesh, row-major y).
   line once); deepseek_v41_flash_d_p/tests/test_expert_cache_layout.py (the converter's file == the miss path's,
   under tt-metal's mock cluster).
 - Files: bank_major.py, flat_expert.py
+
+### Pinned host memory raised only during the expert upload, released after (2026-11-06, owner)
+- What: four bindings on `ttnn._ttnn.operations.bringup` (device/flat_pinned.cpp, compiled with tt_metal's internal
+  include dirs like flat_drisc.cpp): `pinned_memory_limit(device)`, `set_pinned_memory_limit(device, bytes) -> previous`
+  (the mesh's MetalEnvImpl rtoptions, read by PinnedMemoryCache::try_pin at every pin request),
+  `release_pinned(host_tensor) -> bytes` (PinnedMemoryCache::release of every shard's host address: the pin is undone
+  now, or when a transfer still holding it lets go) and `pinned_cache_entries()`. `bank_major.pinned_upload(mesh,
+  limit_bytes=None)`: a nesting window per mesh; the first window given a limit raises tt-metal's limit to it (not when
+  TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES is set: an explicit value, e.g. 0, is kept; never lowered); the outermost
+  exit (try/finally, also on an error) waits for read-ahead, unpins every staging shard, frees the staging
+  (`PinnedStager.release`, the stager dropped) and restores the previous limit. One `FLAT_CACHE pinned limit raised`
+  line and one `FLAT_CACHE pinned staging released` line (bytes staged, cache entries dropped, limit restored).
+  `PinnedStager`'s below-the-limit line reads tt-metal's actual limit (was the environment variable).
+- Why: the model set TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES (16 / 32 GiB) for the whole process before the mesh
+  opened, and the staging (2 layers of experts) stayed pinned until the process ended. Lowering the limit alone frees
+  nothing (the cache evicts only when a later pin needs room), hence the explicit release. Freeing a staging tensor
+  without it was already safe (HostBuffer's final-release hook drops the cache entry before the memory goes); the
+  release makes the unpin explicit and immediate.
+- Needed by: deepseek_v41_flash_d_p (tt/experts.py: a window around each layer's expert load with
+  2 x a layer's experts, held by tt/model.py over the layer loop; the global setting in bringup/hooks.py
+  device_params and tt/runners/adapter.py removed). glm53_flash_d_p uses the stager without a window (unchanged:
+  default limit, staging kept).
+- Test: tests/unit/test_bank_major_cache.py (CPU: raised only inside the outermost window, staging unpinned before it
+  is dropped, limit restored, also on an error; an explicit / higher limit kept; the real bindings under tt-metal's
+  mock cluster).
+- Files: device/flat_pinned.cpp, device/flat_pinned.hpp, flat_routed_expert_nanobind.cpp, CMakeLists.txt,
+  bank_major.py, tests/unit/test_bank_major_cache.py

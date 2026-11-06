@@ -32,6 +32,7 @@ import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
@@ -39,7 +40,6 @@ import torch
 EXT = ".bm.bin"  # the cache file suffix (flat_expert: <cache_prefix>.flat.<dtype>.lay<key>.<name>.bm.bin)
 OLD_EXT = ".tensorbin"  # the pre-2026-11-06 layout of the same stem (convert_expert_cache.py; never read)
 PINNED_LIMIT_ENV = "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES"
-PINNED_LIMIT_DEFAULT = 4 << 30  # tt-metal's default (rtoptions.cpp) when the variable is unset
 MAGIC = b"TTBMAJ01"
 HDR = 4096
 ALIGN = 4096
@@ -214,8 +214,9 @@ class PinnedStager:
     copy_host_to_device_tensor is a pure device pull over PCIe (the pinned write path; blocking, so a slot is free
     again when upload returns). ``prefetch`` fills a slot in the background (parallel preads; the GIL is released in
     the syscalls and in copy_host_to_device_tensor). Pinned bytes: depth x one layer (7.6 GB a layer at bfp4); tt-metal
-    caches at most TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES (default 4 GiB: less than the 5.1 GB gate/up tensor, so
-    some chips would take the issue-queue copy and the pins would be redone every layer): set it to >= depth x 8 GiB."""
+    caches at most its pinned-memory limit (default 4 GiB: less than the 5.1 GB gate/up tensor, so some chips would
+    take the issue-queue copy and the pins would be redone every layer): the caller raises it only while it uploads
+    (pinned_upload, >= depth x 8 GiB) and ``release`` unpins and frees the staging after the last layer."""
 
     def __init__(self, mesh, depth: int = 2, threads: int = 8):
         self.mesh, self.depth = mesh, int(depth)
@@ -252,27 +253,50 @@ class PinnedStager:
         return sum(self.depth * int(v[0][0].numel()) * len(v[0]) for v in self.views.values())
 
     def _check_pin_limit(self) -> None:
-        """One line when tt-metal's pinned-memory cache limit (read when the process first touched tt-metal) is below
-        the staging: the upload stays correct (the chips past the limit take the issue-queue copy, still one
-        contiguous range a bank), only slower. DeepSeek-V4.1 sets it before the mesh opens (tt/settings.py
-        export_pinned_limit)."""
+        """One line when tt-metal's pinned-memory cache limit (now: pinned_upload raises it while a model uploads) is
+        below the staging: the upload stays correct (the chips past the limit take the issue-queue copy, still one
+        contiguous range a bank), only slower."""
         if self._warned_pin:
             return
-        raw = os.environ.get(PINNED_LIMIT_ENV)  # diagnostic: only the log line below reads it
         try:
-            limit = PINNED_LIMIT_DEFAULT if raw is None else int(raw, 0)
-        except ValueError:
+            limit = pinned_limit(self.mesh)
+        except Exception:  # (no tt-metal binding / no device: a diagnostic only)
             return
         need = self.staged_bytes()
         if limit < need:
             from loguru import logger
 
             self._warned_pin = True
+            raw = os.environ.get(PINNED_LIMIT_ENV)
             logger.warning(
-                f"FLAT_CACHE pinned staging {need / 2**30:.1f} GiB > {PINNED_LIMIT_ENV}="
-                f"{raw if raw is not None else f'unset ({PINNED_LIMIT_DEFAULT >> 30} GiB default)'}: some chips take "
-                f"the slower issue-queue copy (same bytes); set it to >= {-(-need // 2**30)} GiB before the mesh opens"
+                f"FLAT_CACHE pinned staging {need / 2**30:.1f} GiB > tt-metal's pinned-memory limit "
+                f"{limit / 2**30:.1f} GiB ({PINNED_LIMIT_ENV}={raw if raw is not None else 'unset'}): some chips take "
+                f"the slower issue-queue copy (same bytes); bank_major.pinned_upload raises it for the upload when "
+                f"{PINNED_LIMIT_ENV} is unset"
             )
+
+    def release(self) -> tuple[int, int]:
+        """After the last upload: wait for any read-ahead, unpin every staging shard (tt-metal's PinnedMemoryCache
+        entries of their host addresses, release_pinned) and drop the staging (freed; a later upload allocates it
+        again). Returns (staging bytes, cache entries dropped)."""
+        for _, fut in list(self._jobs.values()):
+            try:
+                fut.result()
+            except Exception:  # (a failed read-ahead: its slot is dropped below anyway)
+                pass
+        self._jobs.clear()
+        staged = self.staged_bytes()
+        ops = _ops()
+        before = ops.pinned_cache_entries()
+        with self._lock:
+            for tensors in self.sets.values():
+                for t in tensors:
+                    ops.release_pinned(t)  # (unpinned BEFORE the host memory goes)
+            dropped = before - ops.pinned_cache_entries()
+            self.views.clear()  # (the torch views hold the shards too)
+            self.sets.clear()
+        self._warned_pin = False
+        return staged, dropped
 
     def fill(self, path, slot: int) -> int:
         hdr = read_header(path)
@@ -342,6 +366,89 @@ def stager(mesh, depth: int | None = None) -> PinnedStager:
         d = depth if depth is not None else int(os.environ.get("FLAT_CACHE_STAGING_DEPTH", "2"))
         st = _STAGERS[id(mesh)] = PinnedStager(mesh, depth=d)
     return st
+
+
+# ------------------------------------------------------------------------------------------------ the pinned window
+def _ops():
+    import ttnn
+
+    return ttnn._ttnn.operations.bringup
+
+
+def pinned_limit(mesh) -> int:
+    """tt-metal's pinned host memory cache limit of ``mesh``'s environment (bytes; read at every pin request)."""
+    return int(_ops().pinned_memory_limit(mesh))
+
+
+_WINDOWS: dict = {}  # id(mesh) -> {"mesh", "depth", "prev" (limit before the raise, None: not raised), "raised"}
+
+
+@contextmanager
+def pinned_upload(mesh, limit_bytes: int | None = None):
+    """The routed experts' upload window (owner 2026-11-06: tt-metal's pinned host memory limit is raised only around
+    it, not for the whole process). Nests per mesh; the outermost window owns the state:
+
+      - ``limit_bytes`` (a layer's experts x the staging depth): the first window given one raises tt-metal's limit to
+        it (set_pinned_memory_limit: read at every pin request), unless TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES is set
+        (an explicit value is the owner's: e.g. 0, the KMD 2.9 file-backed pin workaround; the upload then takes the
+        unpinned copy, slower, correct) or the limit is already at least that. None: only hold the window (a model's
+        layer loop holds it so each layer's window does not release the staging the next one reuses).
+      - on the outermost exit (also on an exception): the stager's staging is unpinned and freed (PinnedStager.release:
+        pins dropped BEFORE their host memory goes; lowering the limit alone would unpin nothing), then the previous
+        limit is restored. One FLAT_CACHE line each for the raise and the release."""
+    from loguru import logger
+
+    key = id(mesh)
+    w = _WINDOWS.get(key)
+    if w is None or w["mesh"] is not mesh:
+        w = _WINDOWS[key] = {"mesh": mesh, "depth": 0, "prev": None, "raised": 0}
+    w["depth"] += 1
+    try:
+        if limit_bytes is not None and w["prev"] is None and not os.environ.get(PINNED_LIMIT_ENV):
+            cur = pinned_limit(mesh)
+            if cur < int(limit_bytes):
+                w["prev"] = int(_ops().set_pinned_memory_limit(mesh, int(limit_bytes)))
+                w["raised"] = int(limit_bytes)
+                logger.info(
+                    f"FLAT_CACHE pinned limit raised {w['prev'] / 2**30:.1f} GiB -> {w['raised'] / 2**30:.1f} GiB "
+                    f"for the routed-expert upload"
+                )
+        yield
+    finally:
+        w["depth"] -= 1
+        if w["depth"] == 0:
+            _WINDOWS.pop(key, None)
+            _close_window(mesh, w, logger)
+
+
+def _close_window(mesh, w, logger) -> None:
+    staged = dropped = 0
+    err = None
+    st = _STAGERS.pop(id(mesh), None)
+    try:
+        if st is not None and st.mesh is mesh:
+            staged, dropped = st.release()
+    except Exception as e:  # (the limit is restored regardless; the error is re-raised after)
+        err = e
+    finally:
+        if st is not None:
+            st.pool.shutdown(wait=False)
+            st._bg.shutdown(wait=False)
+        now = pinned_limit(mesh)
+        if w["prev"] is not None:
+            _ops().set_pinned_memory_limit(mesh, w["prev"])
+            now = w["prev"]
+        logger.info(
+            f"FLAT_CACHE pinned staging released: {staged / 2**30:.1f} GiB ({staged} B) staged for the routed-expert upload, "
+            f"{dropped} pinned-memory cache entries dropped, staging freed; pinned limit "
+            + (
+                f"restored {w['raised'] / 2**30:.1f} -> {now / 2**30:.1f} GiB"
+                if w["prev"] is not None
+                else f"unchanged {now / 2**30:.1f} GiB"
+            )
+        )
+    if err is not None:
+        raise err
 
 
 def write_from_host(cache_file, host_tensor) -> str:

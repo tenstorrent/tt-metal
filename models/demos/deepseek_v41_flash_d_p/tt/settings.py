@@ -361,8 +361,8 @@ TABLE = {
         "(set_load_order) is read into the fork's pinned host staging in the background (flat_expert.prefetch_cached: "
         "its bank-major files), so the read overlaps that layer's dense weight load. No effect on a miss. off = each "
         "layer reads its own files when it loads them. Device bytes identical either way. The staging (2 slots x a "
-        "layer) stays pinned only when TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES covers it: export_pinned_limit below "
-        "sets it before the mesh opens",
+        "layer) stays pinned only when tt-metal's pinned-memory limit covers it: the upload raises it to "
+        "pinned_limit_bytes() while it runs (bank_major.pinned_upload) and restores it after",
     ),
     "EXPERTS_PRECISION": Setting(
         "glm",
@@ -989,29 +989,17 @@ TABLE = {
 settings = Settings("DS41_", TABLE)
 
 
-# ---- the routed experts' pinned weight staging (flat_routed_expert bank_major.PinnedStager): not a switch, a fact of
-# the process. tt-metal reads TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES once, when the process first touches it (before
-# the mesh opens), and keeps at most that many bytes of host memory pinned (default 4 GiB). The stager's 2 slots hold 2
-# layers' routed experts (7.6 GB a layer at bfp4 / bfp4_mse, 13.6 GB at bfp8): below that, the chips past the limit
-# take the slower issue-queue copy (same bytes) and their pins are redone every layer.
+# ---- the routed experts' pinned weight staging (flat_routed_expert bank_major.PinnedStager): tt-metal keeps at most its
+# pinned-memory limit of host memory pinned (default 4 GiB, read at every pin request). The stager's 2 slots hold 2
+# layers' routed experts (7.6 GB a layer at bfp4 / bfp4_mse, 13.6 GB at bfp8): below that, the chips past the limit take
+# the slower issue-queue copy (same bytes) and their pins are redone every layer. Owner 2026-11-06: the limit is raised
+# only while the routed experts upload (tt/experts.py: bank_major.pinned_upload around each layer's load, held across
+# the model's layer loop) and restored after the last layer, the staging unpinned and freed; an explicit
+# TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES (e.g. 0, the KMD 2.9 file-backed pin workaround) is kept as it is.
 PINNED_LIMIT_ENV = "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES"
 
 
-def pinned_limit_bytes() -> int:
-    """2 staging slots x one layer's routed experts, rounded up: 16 GiB at bfp4 / bfp4_mse, 32 GiB with bfp8 weights."""
-    return (32 if settings.get("EXPERTS_IMPL").startswith("bfp8") else 16) << 30
-
-
-def export_pinned_limit(env=None) -> str | None:
-    """Set TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES to pinned_limit_bytes() in this process's environment when unset,
-    before anything opens the device: bringup/hooks.py:device_params (every bring-up test's mesh, at collection, and
-    harness.open_mesh) and tt/runners/adapter.py (the prefill runner, at import). An explicit value is kept (e.g. 0,
-    the KMD 2.9 file-backed pin workaround some runner tests set): the stager then logs one line and stays correct.
-    Returns the value set, or None."""
-    import os
-
-    env = os.environ if env is None else env
-    if env.get(PINNED_LIMIT_ENV):
-        return None
-    env[PINNED_LIMIT_ENV] = str(pinned_limit_bytes())
-    return env[PINNED_LIMIT_ENV]
+def pinned_limit_bytes(impl: str | None = None) -> int:
+    """2 staging slots x one layer's routed experts, rounded up: 16 GiB at bfp4 / bfp4_mse, 32 GiB with bfp8 weights
+    (impl: an EXPERTS_IMPL value; None: the setting)."""
+    return (32 if (impl or settings.get("EXPERTS_IMPL")).startswith("bfp8") else 16) << 30

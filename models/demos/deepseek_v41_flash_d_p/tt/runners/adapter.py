@@ -42,11 +42,6 @@ from pathlib import Path
 from typing import Optional
 
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
-from models.demos.deepseek_v41_flash_d_p.tt.settings import export_pinned_limit
-
-# The routed experts' pinned weight staging needs tt-metal's pinned-memory limit raised before the runner first touches
-# tt-metal (it initialises the distributed context, then opens the mesh, after importing this adapter): set when unset
-export_pinned_limit()
 
 MODEL_NAME = "deepseek_v41_flash_d_p"
 SPEC_PATH = Path(__file__).resolve().parents[2] / "bringup" / "spec.yaml"

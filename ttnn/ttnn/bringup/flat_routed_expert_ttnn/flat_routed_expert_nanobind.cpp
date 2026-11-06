@@ -17,6 +17,7 @@
 
 #include "flat_routed_expert.hpp"
 #include "device/flat_drisc.hpp"
+#include "device/flat_pinned.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::bringup::detail {
@@ -386,6 +387,34 @@ void bind_flat_routed_expert(nb::module_& mod) {
         },
         nb::arg("device"),
         "Logs the flat expert's DRISC senders' words (debug).");
+    // the routed-expert upload's pinned host memory window (bank_major.py pinned_upload; device/flat_pinned.hpp)
+    mod.def(
+        "pinned_memory_limit",
+        [](tt::tt_metal::distributed::MeshDevice* device) { return fre::pinned_memory_limit(device); },
+        nb::arg("device"),
+        "tt-metal's pinned host memory cache limit (bytes) of this mesh device's environment (default 4 GiB, "
+        "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES).");
+    mod.def(
+        "set_pinned_memory_limit",
+        [](tt::tt_metal::distributed::MeshDevice* device, size_t limit_bytes) {
+            return fre::set_pinned_memory_limit(device, limit_bytes);
+        },
+        nb::arg("device"),
+        nb::arg("limit_bytes"),
+        "Sets tt-metal's pinned host memory cache limit (read at every pin request) and returns the previous one. "
+        "Lowering it unpins nothing already pinned (the cache evicts only when a later pin needs room): "
+        "release_pinned does.");
+    mod.def(
+        "release_pinned",
+        [](const ttnn::Tensor& host_tensor) { return fre::release_pinned(host_tensor); },
+        nb::arg("host_tensor"),
+        "Unpins every shard of a host tensor (drops their pinned-memory cache entries; a pin a transfer still holds "
+        "goes when the transfer lets go). Returns the shards' bytes. Freeing the tensor also does this (tt-metal's "
+        "HostBuffer final-release hook), before the memory goes.");
+    mod.def(
+        "pinned_cache_entries",
+        []() { return fre::pinned_cache_entries(); },
+        "The number of entries tt-metal's pinned-memory cache holds.");
 }
 
 }  // namespace ttnn::operations::bringup::detail
