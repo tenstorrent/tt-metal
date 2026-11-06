@@ -31,20 +31,20 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  *
  * @param dst_index: Tile index into the destination register.
  * @param num_faces: Number of faces of the tile to clear (1, 2, or 4).
- * @param clear_fp32: 1 if DEST holds 32-bit data, 0 for 16-bit.
+ * @param is_dest_32b: True if DEST holds 32-bit data, false for 16-bit.
  * @note Uses ADDR_MOD_3, which @ref eltwise_unary_configure_addrmod programs with zero increments.
  * @note Call with the DEST counter at 0: CLR_16 takes it into its bank select, so a leftover count can send
  *       the clear to the other DEST half (tt-metal#53693).
  */
-inline void _llk_math_clear_dest_zero_flags_(const std::uint32_t dst_index, const std::uint32_t num_faces, const int clear_fp32)
+inline void _llk_math_clear_dest_zero_flags_(const std::uint32_t dst_index, const std::uint32_t num_faces, const bool is_dest_32b)
 {
     // CLR_16 addresses a face relative to the current DEST bank, so use the tile's index within the bank.
-    const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
+    const std::uint32_t tiles_per_bank = is_dest_32b ? 4 : 8;
     const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
 #pragma GCC unroll 0
     for (std::uint32_t i = 0; i < num_faces; i++)
     {
-        TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear_zero_flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+        TT_ZEROACC(p_zeroacc::CLR_16, is_dest_32b ? 1 : 0, 1 /*clear_zero_flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
     }
 }
 
@@ -107,10 +107,9 @@ inline void _llk_math_eltwise_unary_datacopy_(
         // RISC-to-dest event is not currently used.
 
         const std::uint32_t dst_format_masked = masked_data_format(dst_format);
-        const int clear_fp32                  = static_cast<int>(
-            dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
-            dst_format_masked == (std::uint32_t)DataFormat::UInt32);
-        _llk_math_clear_dest_zero_flags_(dst_index, num_faces, clear_fp32);
+        const bool is_dest_32b = dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
+                                 dst_format_masked == (std::uint32_t)DataFormat::UInt32;
+        _llk_math_clear_dest_zero_flags_(dst_index, num_faces, is_dest_32b);
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
@@ -330,7 +329,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // Reset the DEST counter first: the MOP leaves it at the end of the tile, and CLR_16 derives its bank
             // select from the DEST address, so the last tile of a bank would be cleared in the other half (tt-metal#53693).
             math::clear_dst_reg_addr();
-            _llk_math_clear_dest_zero_flags_(dst_index, num_faces, is_fp32_dest_acc_en ? 1 : 0);
+            _llk_math_clear_dest_zero_flags_(dst_index, num_faces, is_fp32_dest_acc_en);
         }
         else if constexpr (type == DataCopyType::B2D)
         {
