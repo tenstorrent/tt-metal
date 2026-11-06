@@ -63,10 +63,7 @@ void bind_sort_operation(nb::module_& mod) {
                 * - UINT16, UINT32
                   - TILE, ROW_MAJOR
 
-            NaN input is unsupported (undefined ordering). The bfloat16 datapath canonicalizes NaN
-            to same-sign infinity before comparing, and FLOAT32 orders NaN by sign, so NaN placement
-            deviates from torch.sort, which treats NaN as larger than any number. Mask or replace
-            NaNs before sorting.
+            Input values must not be NaN.
 
         Memory Support:
             - Interleaved: DRAM and L1
