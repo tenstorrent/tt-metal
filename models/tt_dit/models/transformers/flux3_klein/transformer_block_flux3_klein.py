@@ -20,6 +20,31 @@ HIDDEN = 3072
 HEADS = 24
 HEAD_DIM = 128
 MLP_RATIO = 3
+# Ring SDPA (q, k) chunks by the rows each device holds (image + text), where the shared table keyed by the logical
+# length picks badly; other row counts keep the Attention defaults.
+RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
+    2560: (160, 512),
+    2816: (160, 512),
+    3072: (192, 512),
+    8960: (128, 640),
+}
+
+
+class Flux3KleinAttention(Attention):
+    def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
+        rows = per_device_seq_len // self.parallel_config.sequence_parallel.factor
+        chunks = RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows)
+        if chunks is None:
+            return super().get_ring_sdpa_program_config(per_device_seq_len)
+        key = ("local", rows)
+        if key not in self.ring_sdpa_program_config:
+            self.ring_sdpa_program_config[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
+                q_chunk_size=chunks[0],
+                k_chunk_size=chunks[1],
+                exp_approx_mode=self.ring_sdpa_exp_approx,
+            )
+        return self.ring_sdpa_program_config[key]
 
 
 class Flux3KleinTransformerBlock(Module):
@@ -40,7 +65,7 @@ class Flux3KleinTransformerBlock(Module):
         mlp_hidden_dim = MLP_RATIO * HIDDEN
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.attn = Attention(
+        self.attn = Flux3KleinAttention(
             query_dim=HIDDEN,
             head_dim=HEAD_DIM,
             heads=HEADS,
