@@ -93,6 +93,37 @@ def best_packing(lengths: Sequence[int], max_tokens: int, widths: Sequence[int] 
     return min(options, key=lambda p: (len(p), sum(x.rows * x.width**2 for x in p), p[0].width))
 
 
+# Device time model of a pass on one Blackhole p300c (nomic-v14, real text, tracy device time): a pass costs
+# PASS_US plus TOKEN_US a computed token (fit on full-length rows: 2x512 2.30, 4x512 3.26, 8x512 5.35 ms), and a
+# packed pass adds its attention on stock SDPA with the block-diagonal mask over the nomic_sdpa a chunked pass runs
+# (12 calls a pass: 106 against 53 us a call at 8 x 512 rows, 180 at 4 x 1024). Measured against it (ms): chunked
+# 7.86 / 13.25 / 7.12 / 24.02 vs model 7.69 / 12.65 / 6.94 / 24.1; packed 6.90 / 12.06 / 6.88 / 27.57 vs 6.85 /
+# 11.96 / 6.85 / 27.4. Saving a pass is worth about PASS_US, so a packing of 1024-wide rows that saves one pass in
+# five loses (51 documents: 24.0 chunked, 27.6 packed).
+PASS_US = 1170.0
+TOKEN_US = 1.02
+PACKED_ATTENTION_US = {512: 630.0, 1024: 1500.0}
+
+
+def chunked_cost_us(chunks) -> float:
+    """Modelled device time of length-sorted chunks (tt.chunking.Chunk, .tokens tile-padded)."""
+    return sum(PASS_US + TOKEN_US * chunk.tokens for chunk in chunks)
+
+
+def packed_cost_us(passes: Sequence[PackedPass]) -> float:
+    """Modelled device time of packed passes."""
+    return sum(PASS_US + TOKEN_US * p.tokens + PACKED_ATTENTION_US[p.width] for p in passes)
+
+
+def cheaper_packing(lengths: Sequence[int], max_tokens: int, chunks) -> list[PackedPass] | None:
+    """The packing with the lowest modelled time over the widths that hold the longest text, if it beats the
+    length-sorted chunks' modelled time; else None (run the chunks)."""
+    longest = max(int(length) for length in lengths)
+    options = [pack(lengths, width, max_tokens) for width in WIDTHS if width >= longest]
+    best = min(options, key=packed_cost_us)
+    return best if packed_cost_us(best) < chunked_cost_us(chunks) else None
+
+
 def packed_inputs(input_ids: torch.Tensor, packed: PackedPass, pad_token_id: int) -> tuple[torch.Tensor, torch.Tensor]:
     """(input_ids, segment_ids), both (rows, width): each text's tokens at its slots, pad_token_id elsewhere;
     segment_ids holds the text's index in the batch at its slots and -1 at slots no text fills."""

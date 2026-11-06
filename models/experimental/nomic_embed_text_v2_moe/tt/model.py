@@ -62,7 +62,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.chunking import _padded, plan_chunks, plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.packing import (
     PackedPass,
-    best_packing,
+    cheaper_packing,
     packed_inputs,
     pooling_rows,
 )
@@ -336,8 +336,8 @@ def embed(
     )
     # A padded batch whose padding costs it a pass: pack whole texts side by side instead (tt.packing).
     if model.tt_config.packed_sequences and len(chunks) > 1:
-        packed = best_packing(lengths.tolist(), model.tt_config.max_chunk_tokens)
-        if len(packed) < len(chunks):
+        packed = cheaper_packing(lengths.tolist(), model.tt_config.max_chunk_tokens, chunks)
+        if packed is not None:
             return _embed_packed(model, input_ids, packed, matryoshka_dim, kernel_config)
     pieces = []
     for chunk in chunks:

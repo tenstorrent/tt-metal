@@ -323,9 +323,9 @@ class TtModelConfig:
     # padded slots' results are never used, and one shared pad id read one embedding row and routed every padded slot
     # to the same experts. Off: the pad id.
     fill_padding_ids: bool = True
-    # embed() on a padded batch whose padding costs it a pass: whole texts packed side by side in rows of 512 or
-    # 1024 slots, attention masked to each text's own slots (tt/packing.py), when that takes fewer passes than the
-    # length-sorted chunks. Off: the length-sorted chunks only.
+    # embed() on a padded batch of several chunks: whole texts packed side by side in rows of 512 or 1024 slots,
+    # attention masked to each text's own slots (tt/packing.py), where tt.packing's device time model puts the
+    # packing below the length-sorted chunks. Off: the length-sorted chunks only.
     packed_sequences: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     min_chunk_tokens: int = MIN_CHUNK_TOKENS  # a smaller last chunk is merged with the one before and split

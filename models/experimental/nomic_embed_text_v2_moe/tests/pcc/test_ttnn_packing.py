@@ -17,7 +17,13 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
 from models.experimental.nomic_embed_text_v2_moe.tt.chunking import plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.model import TtNomicBertModel, encode
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS
-from models.experimental.nomic_embed_text_v2_moe.tt.packing import best_packing, pack, packed_inputs, pooling_rows
+from models.experimental.nomic_embed_text_v2_moe.tt.packing import (
+    best_packing,
+    cheaper_packing,
+    pack,
+    packed_inputs,
+    pooling_rows,
+)
 
 COSINE_TOLERANCE = 0.01
 
@@ -52,6 +58,71 @@ def test_the_real_batch_packs_into_one_pass_of_wide_rows():
     assert len(pack(REAL_BATCH, 512, MAX_CHUNK_TOKENS)) == 2  # 9 rows of 512: no 8-row packing exists
     packed = best_packing(REAL_BATCH, MAX_CHUNK_TOKENS)
     assert [(p.rows, p.width) for p in packed] == [(4, 1024)]
+
+
+def test_packing_is_chosen_only_where_its_modelled_time_is_lower():
+    chunks = plan_sorted_chunks(sorted(REAL_BATCH, reverse=True), MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
+    assert cheaper_packing(REAL_BATCH, MAX_CHUNK_TOKENS, chunks) is not None  # 2 chunked passes -> 1 packed
+    full = [512] * 16  # full-length rows: packing saves nothing and pays the masked attention
+    assert cheaper_packing(full, MAX_CHUNK_TOKENS, plan_sorted_chunks(full, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)) is None
+    # 51 real documents (a 16384-token budget, nomic-opt): 1024-wide packing saves 1 pass in 5 but measured slower
+    # (27.6 against 24.0 ms), and the model keeps the chunks.
+    docs = [
+        512,
+        400,
+        419,
+        260,
+        287,
+        398,
+        112,
+        246,
+        352,
+        262,
+        512,
+        487,
+        123,
+        360,
+        223,
+        463,
+        164,
+        358,
+        390,
+        459,
+        512,
+        284,
+        168,
+        340,
+        380,
+        185,
+        180,
+        409,
+        166,
+        128,
+        268,
+        207,
+        166,
+        512,
+        278,
+        308,
+        163,
+        257,
+        340,
+        232,
+        198,
+        512,
+        187,
+        386,
+        380,
+        495,
+        263,
+        247,
+        441,
+        345,
+        367,
+    ]
+    chunks = plan_sorted_chunks(sorted(docs, reverse=True), MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
+    assert len(best_packing(docs, MAX_CHUNK_TOKENS)) < len(chunks)
+    assert cheaper_packing(docs, MAX_CHUNK_TOKENS, chunks) is None
 
 
 def test_packed_inputs_and_pooling_rows_mark_each_text_slots():
