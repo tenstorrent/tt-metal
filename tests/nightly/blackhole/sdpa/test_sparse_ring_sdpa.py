@@ -902,7 +902,7 @@ def _check_dense_split(tag, case, ranges, explicit, ref, out, *, dense_rows_out=
     rows on shards owning no dense block bit-equal; the owners' other rows as the explicit run's to 1e-5 PCC (same
     math, another work split); the dense rows (dense_rows_out, default out's) within the DENSE_SPLIT bounds. Builds
     with dense units never use pair steps (kernel config buffer), which the explicit run may use with pieces of at
-    most 256 keys: then the non-owner rows are compared like the owners' other rows."""
+    most 256 keys: then every non-dense row is judged against the reference, within the explicit run's error."""
     n = case.geo.logical_n
     dense, owners = (m[:n] for m in _dense_row_masks(case.geo, case.S, ranges))
     others = ~owners
@@ -910,11 +910,23 @@ def _check_dense_split(tag, case, ranges, explicit, ref, out, *, dense_rows_out=
     if others.any() and not pair_steps_differ:
         diff = (out[0][:, others] - explicit[0][:, others]).abs().max().item()
         assert torch.equal(out[0][:, others], explicit[0][:, others]), f"{tag}: non-owner rows differ by {diff:.3e}"
-    rest, what = (~dense, "non-dense rows") if pair_steps_differ else (owners & ~dense, "owners' other rows")
-    if rest.any():
+    if pair_steps_differ:
+        # Another step grouping, so another bf16 rounding: judged against the reference like the dense rows.
+        rest = ~dense
+        r_ref = ref[0][:, rest]
+        p, e = _pcc(r_ref, out[0][:, rest]), _rel_l2(r_ref, out[0][:, rest])
+        p_exp, e_exp = _pcc(r_ref, explicit[0][:, rest]), _rel_l2(r_ref, explicit[0][:, rest])
+        logger.info(
+            f"[{tag}] non-dense rows vs reference: pcc {p:.6f} (explicit {p_exp:.6f}), rel-L2 {e:.5f} (explicit "
+            f"{e_exp:.5f})"
+        )
+        assert p > p_exp - DENSE_SPLIT_PCC_DROP, f"{tag}: non-dense rows pcc {p:.6f} vs explicit {p_exp:.6f}"
+        assert e <= 1.1 * e_exp + 1e-3, f"{tag}: non-dense rows rel-L2 {e:.5f} vs explicit {e_exp:.5f}"
+    elif (owners & ~dense).any():
+        rest = owners & ~dense
         p = _pcc(explicit[0][:, rest], out[0][:, rest])
-        logger.info(f"[{tag}] {what} vs the explicit run: pcc {p:.6f}")
-        assert p > 0.99999, f"{tag}: {what} pcc {p:.6f} vs the explicit run"
+        logger.info(f"[{tag}] owners' other rows vs the explicit run: pcc {p:.6f}")
+        assert p > 0.99999, f"{tag}: owners' other rows pcc {p:.6f} vs the explicit run"
     d_out = (out if dense_rows_out is None else dense_rows_out)[0][:, dense]
     d_ref, d_exp = ref[0][:, dense], explicit[0][:, dense]
     p, e, scale = _pcc(d_ref, d_out), _rel_l2(d_ref, d_out), _fit_scale(d_ref, d_out)
