@@ -2993,6 +2993,113 @@ class ChunkedPrefillPageTableGuardMixin:
                 read_events.append(ttnn.record_event(model.mesh_device, 0))
         return (host_outputs, read_events) if async_read else host_outputs
 
+    # ── GEMMA4_SAMPLING_TRACE: bucket-keyed replay of the device sampler (tt/model.py sampling_trace_default) ──
+    def _g4_sampling_trace_on(self, model_id: int = 0) -> bool:
+        """Whether ``model_id`` replays its sampling trace (its ``_tt_disable_sampling_trace`` is off)."""
+        model = self.model[model_id]
+        return getattr(model, "sampling", None) is not None and not getattr(model, "_tt_disable_sampling_trace", True)
+
+    def _g4_decode_warmup_open(self) -> bool:
+        """Whether sampling traces may still be captured lazily (the decode warmup sweep has not completed; a
+        generator without a warmup sweep, the metal demo, captures on first use as the shared generator does)."""
+        return not getattr(self, "_decode_warmup_complete", False)
+
+    def _g4_sampling_bucket_of(self, prepared):
+        """The decode bucket a prepared capture belongs to: the rows of its page-table input (the batch of its
+        trace key on every non-lane mesh, where the sampling trace applies), else the bucket the capturing caller
+        noted (``_g4_sampling_trace_bucket``), else None (the shared capture then lands in the sampler's current
+        namespace and no bucket replays it)."""
+        from models.tt_transformers.tt.generator import DECODE_PAGE_TABLE_INPUT_IDX
+
+        noted = self.__dict__.pop("_g4_sampling_trace_bucket", None)
+        try:
+            page_table = prepared["device_inputs"][0][DECODE_PAGE_TABLE_INPUT_IDX]
+        except (KeyError, IndexError, TypeError):
+            page_table = None
+        if page_table is not None and len(page_table.shape) == 2:
+            return int(page_table.shape[0])
+        return noted
+
+    def _g4_note_sampling_key(self, sampling_module) -> None:
+        """Record that the sampler's current key ran (eagerly or traced): its programs are warm, so a later
+        capture of that key may skip the eager pre-compile pass."""
+        warm = self.__dict__.setdefault("_g4_sampling_warm_keys", set())
+        warm.add(
+            (
+                bool(sampling_module._penalties_active),
+                bool(getattr(sampling_module, "_log_probs_active", False)),
+                bool(sampling_module.tt_sampling.force_argmax_sampling),
+            )
+        )
+
+    def _g4_sampling_trace_replay_ok(self, sampling_module, grammar_bitmask) -> bool:
+        """Whether this sample may go through the sampler's trace: the plain keys only (no penalties, log probs or
+        grammar mask: those programs allocate per step and stay eager, as the explicit-seed path does inside
+        ``SamplingGenerator.sample``), and outside the warmup only a key whose trace is already captured (a lazy
+        capture under a live request would allocate under the decode trace's allocation guard)."""
+        if grammar_bitmask is not None or sampling_module._penalties_active:
+            return False
+        if getattr(sampling_module, "_log_probs_active", False):
+            return False
+        if self.__dict__.get("_prev_decode_batch") is None:
+            return False  # no decode step named its bucket yet
+        if self._g4_decode_warmup_open():
+            return True
+        _, slot = sampling_module._trace_slot(False, False, sampling_module.tt_sampling.force_argmax_sampling, False)
+        return slot["id"] is not None
+
+    def _g4_capture_sampling_traces(self, prepared, recorded) -> None:
+        """After a decode-trace capture outside the warmup (a guard re-capture, a bucket first used late): capture
+        the plain sampling keys this bucket replays, bound to the key's logits and token-feedback buffers, so no key
+        falls back to eager sampling for the rest of the process. Only keys whose programs ran before are captured
+        (``skip_precompile``: a pre-compile pass would overwrite the feedback token of a live request)."""
+        if not prepared.get("on_device_sampling") or self._g4_decode_warmup_open():
+            return
+        _trace_ids, tt_out_trace, *device_inputs = recorded
+        warm = self.__dict__.get("_g4_sampling_warm_keys", set())
+        for i, model in enumerate(self.model):
+            sampling = getattr(model, "sampling", None)
+            if sampling is None or not self._g4_sampling_trace_on(i):
+                continue
+            logits = tt_out_trace[i]
+            logits = logits[0] if isinstance(logits, tuple) else logits
+            tt_out_tok = self._decode_token_feedback_buffer(model, device_inputs[i])
+            tt_sampling = sampling.tt_sampling
+            log_probs = tt_sampling.log_probs_calculator
+            saved = (
+                sampling._penalties_active,
+                getattr(sampling, "_log_probs_active", False),
+                tt_sampling._force_argmax_sampling,
+                list(log_probs.logprobs_enabled),
+                list(log_probs.num_logprobs),
+            )
+            try:
+                sampling._penalties_active = False
+                sampling._log_probs_active = False
+                log_probs.set_log_probs_mode(False, num_logprobs=0)
+                for force_argmax in (True, False):
+                    if (False, False, force_argmax) not in warm:
+                        continue
+                    if force_argmax and not tt_sampling._allow_force_argmax_sampling:
+                        continue
+                    if not force_argmax and not getattr(tt_sampling, "_allow_topk_sampling", True):
+                        continue
+                    tt_sampling._force_argmax_sampling = force_argmax
+                    _, slot = sampling._trace_slot(False, False, force_argmax, False)
+                    if slot["id"] is not None:
+                        continue
+                    sampling.capture_trace(logits, tt_out_tok=tt_out_tok, skip_precompile=True)
+                    logger.info(
+                        "Gemma4 sampling trace: captured bucket {} force_argmax={} after a decode-trace capture",
+                        sampling._active_trace_bucket,
+                        force_argmax,
+                    )
+            finally:
+                sampling._penalties_active = saved[0]
+                sampling._log_probs_active = saved[1]
+                tt_sampling._force_argmax_sampling = saved[2]
+                log_probs.set_log_probs_mode(saved[3], num_logprobs=saved[4])
+
     def sample_decode_on_device(
         self,
         tt_logits,
@@ -3033,18 +3140,27 @@ class ChunkedPrefillPageTableGuardMixin:
                 sampling_module = getattr(self.model[i], "sampling", None)
                 if sampling_module is None:
                     continue
+                if self._g4_sampling_trace_on(i):
+                    # the sampling trace of this decode bucket (its logits buffer and token feedback)
+                    sampling_module.set_trace_bucket(self._prev_decode_batch)
                 feedback = self._gemma4_eager_token_feedback_buffer(i)
                 if feedback is None:
                     continue
                 orig_sample = sampling_module.sample
 
-                def _make_sample(orig, fb):
+                def _make_sample(orig, fb, module):
                     def _sample(logits, *, enable_trace=True, tt_out_tok=None, **kwargs):
                         nonlocal wrote_feedback
                         if tt_out_tok is None:
                             tt_out_tok = fb
                             if not enable_trace:
                                 wrote_feedback = True
+                        if enable_trace and not self._g4_sampling_trace_replay_ok(
+                            module, kwargs.get("grammar_bitmask")
+                        ):
+                            enable_trace = False  # GEMMA4_SAMPLING_TRACE: this key samples eagerly
+                            wrote_feedback = True
+                        self._g4_note_sampling_key(module)
                         return orig(
                             logits,
                             enable_trace=enable_trace,
@@ -3054,7 +3170,7 @@ class ChunkedPrefillPageTableGuardMixin:
 
                     return _sample
 
-                sampling_module.sample = _make_sample(orig_sample, feedback)
+                sampling_module.sample = _make_sample(orig_sample, feedback, sampling_module)
                 restores.append((sampling_module, orig_sample))
 
             out = super().sample_decode_on_device(
@@ -3208,10 +3324,17 @@ class ChunkedPrefillPageTableGuardMixin:
 
     def _record_decode_trace_text(self, prepared):
         previous = [getattr(m, "_active_page_tables_per_layer", None) for m in self.model]
+        bucket = self._g4_sampling_bucket_of(prepared)
+        for i, model in enumerate(self.model):
+            sampling = getattr(model, "sampling", None)
+            if sampling is not None and bucket is not None and self._g4_sampling_trace_on(i):
+                sampling.set_trace_bucket(int(bucket))  # the shared capture below lands in this bucket's slot
         try:
             for model, tables in zip(self.model, prepared["gemma4_page_tables"]):
                 model._active_page_tables_per_layer = tables
-            return super()._record_decode_trace_text(prepared)
+            recorded = super()._record_decode_trace_text(prepared)
+            self._g4_capture_sampling_traces(prepared, recorded)
+            return recorded
         finally:
             for model, tables in zip(self.model, previous):
                 model._active_page_tables_per_layer = tables
@@ -3663,6 +3786,7 @@ class ChunkedPrefillPageTableGuardMixin:
             # count update) against that request's device state, so only the graph is recorded.
             skip_precompile = skip_precompile or bool(getattr(self, "_g4_recapture_without_precompile", False))
             self._g4_recapture_without_precompile = False
+            self._g4_sampling_trace_bucket = batch  # the sampling traces of this capture (GEMMA4_SAMPLING_TRACE)
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
                 tokens,
                 current_pos,
@@ -3894,11 +4018,12 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             self.mode = Mode.DECODE
             for model in self.model:
                 model.switch_mode(Mode.DECODE)
+            key = (can_sample_on_device, int(decode_page_table.shape[0]) // self.data_parallel)
+            self._g4_sampling_trace_bucket = key[1]  # the sampling traces of this capture (GEMMA4_SAMPLING_TRACE)
             try:
                 trace_ids, outputs, *inputs = self._record_decode_trace_text(prepared_decode)
             finally:
                 self.mode = previous_mode
-            key = (can_sample_on_device, int(decode_page_table.shape[0]) // self.data_parallel)
             self.trace_ids_decode[key] = trace_ids
             self.trace_inputs_decode[key] = inputs
             self.trace_output_decode[key] = outputs

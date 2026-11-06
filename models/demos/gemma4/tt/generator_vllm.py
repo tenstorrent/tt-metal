@@ -907,9 +907,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             for batch in sorted(sizes):
                 # Drop sampling traces from the previous batch — they bind logits
                 # tensor identity/batch and will ValueError on the next size.
-                for m in self.model:
+                for i, m in enumerate(self.model):
                     sampling = getattr(m, "sampling", None)
-                    if sampling is not None and hasattr(sampling, "reset_trace"):
+                    # bucket-keyed sampling traces (GEMMA4_SAMPLING_TRACE) outlive the sweep: each bucket replays its own
+                    if sampling is not None and hasattr(sampling, "reset_trace") and not self._g4_sampling_trace_on(i):
                         sampling.reset_trace()
                 logger.info("Gemma4 vLLM: decode warmup batch_size={}", batch)
                 super().warmup_model_decode(
@@ -923,6 +924,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         finally:
             self._g4_decode_warmup_active = False
         self._decode_warmup_complete = True
+        if any(self._g4_sampling_trace_on(i) for i in range(len(self.model))):
+            # the sweep's lazily captured sampling traces (one per bucket and plain key) are this generator's, not
+            # strays: every decode key re-takes its allocation baseline at its next replay
+            self._g4_trace_alloc_baseline = {}
         # Baseline for the decode-trace allocation guard: the level right after the captures, before
         # any request can leave a persistent allocation in the traces' scratch range.
         if enable_trace:

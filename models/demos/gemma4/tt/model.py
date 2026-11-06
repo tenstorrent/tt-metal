@@ -286,6 +286,37 @@ class _LaneSamplingGenerator(SamplingGenerator):
         self.reset_output_state()
 
 
+SAMPLING_TRACE_ENV = "GEMMA4_SAMPLING_TRACE"
+# Mesh shapes where the replayed sampling trace is the default (measured: see sampling_trace_default).
+SAMPLING_TRACE_DEFAULT_SHAPES = ()
+
+
+def sampling_trace_default(mesh_device, mesh_config=None) -> bool:
+    """Whether a decode step's device sampler replays its own captured trace (item 3c of the gemma4_12b_qb2 port)
+    instead of running its programs eagerly after every decode-trace replay.
+
+    ``Gemma4Model._tt_disable_sampling_trace`` is the inverse. The shared generator captures a sampling trace at
+    every decode-trace capture already; Gemma4 never replayed it (#48037: one trace for every decode bucket, bound
+    to the bucket that captured it). With this on the mixin keys the sampling traces by decode bucket, captures the
+    plain keys (greedy = force-argmax, and sampled) during the warmup sweep and replays them; requests with an
+    explicit seed, penalties, log probs or a grammar mask keep the eager sampler (the seed tensor is rewritten
+    every token on the host), as does any key without a captured trace outside the warmup (no capture under load).
+    ``GEMMA4_SAMPLING_TRACE=1|0`` overrides. Policy when unset: on for the mesh shapes in
+    ``SAMPLING_TRACE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact; the 12B
+    1x4 QB2 block is the measured basis), off elsewhere. Never on the lane engine or a fractured mesh, whatever the
+    env says (the lane sampler groups rows per lane column; the fracture-aware sampler drops the top-k programs).
+    """
+    if mesh_config is not None and (
+        getattr(mesh_config, "lane_sharded", False) or getattr(mesh_config, "weight_fracture", False)
+    ):
+        return False
+    env = os.environ.get(SAMPLING_TRACE_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    return shape in SAMPLING_TRACE_DEFAULT_SHAPES
+
+
 class Gemma4Model:
     # Generator-interface flag. PLI models (E2B/E4B) recompute host per-layer
     # inputs from the token every step, so their decode-trace input buffers
@@ -707,6 +738,12 @@ class Gemma4Model:
         self._dflash_taps = []
         self._dflash_tap_buffers = None
 
+        # GEMMA4_SAMPLING_TRACE: replay the sampler's trace (sampling_trace_default) or run it eagerly (#48037).
+        # A model that restages its decode inputs from the host every step (PLI: no device token feedback) has no
+        # persistent token buffer for the trace to write into and keeps the eager sampler.
+        self._tt_disable_sampling_trace = not (
+            sampling_trace_default(mesh_device, mesh_config) and not self._tt_vllm_always_refresh_decode_trace_inputs
+        )
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
         if is_mesh and tp > 1:
