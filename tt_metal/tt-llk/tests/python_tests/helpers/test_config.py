@@ -611,6 +611,17 @@ class TestConfig:
                 "-I../../hw/ckernels/quasar/metal/llk_api",
                 "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
+            # The variant's register headers, as the JIT build picks them (qa_hal.cpp).
+            # Saturn has none yet.
+            register_header_version = {
+                "": "2.0.0",
+                "horizon": "2.0.1",
+                "trinity": "2.0.2",
+            }.get(quasar_variant())
+            if register_header_version:
+                hw_specific_includes.append(
+                    f"-I../../hw/inc/internal/tt-2xx/tt-{register_header_version}/meta"
+                )
 
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (

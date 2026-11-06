@@ -425,6 +425,7 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     // too sparse for the topology mapper to embed the MGD.
     std::size_t local_links = 0;
     std::size_t global_links = 0;
+    std::size_t pruned_links = 0;
     std::set<std::pair<tt::tt_metal::experimental::PhysicalNodeId, tt::tt_metal::experimental::PhysicalNodeId>> cross_host_pairs;
 
     // This is the solve input, so it is keyed on addresses rather than on the descriptor's own ASIC
@@ -448,7 +449,14 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
                 if (src_asic_id == dst_asic_id) {
                     continue;
                 }
-                const auto& dst_node_id = physical_system_descriptor.get_physical_node_id(dst_asic_id);
+                // A solve over a subset of a larger system still sees the subset's links into chips
+                // outside it; those chips are not part of the graph being solved against.
+                const auto dst_node_id_opt = physical_system_descriptor.find_physical_node_id(dst_asic_id);
+                if (!dst_node_id_opt.has_value()) {
+                    pruned_links += asic_connection.second.size();
+                    continue;
+                }
+                const auto& dst_node_id = *dst_node_id_opt;
 
                 const auto& eth_connections = asic_connection.second;
                 // Add each neighbor multiple times based on number of ethernet connections (channels)
@@ -469,11 +477,12 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     log_debug(
         tt::LogFabric,
         "build_flat_adjacency_map_from_psd: {} ASIC node(s), {} local eth link(s), {} cross-host eth link(s), {} "
-        "distinct cross-host ASIC pair(s)",
+        "distinct cross-host ASIC pair(s), {} eth link(s) to undescribed ASIC(s) pruned",
         flat_adj.size(),
         local_links,
         global_links,
-        cross_host_pairs.size());
+        cross_host_pairs.size(),
+        pruned_links);
 
     return flat_adj;
 }
