@@ -36,7 +36,9 @@ _MAX_SEQ = 56_320  # the demo context, 11 chunks of 5120
 _MARGIN = 0.05
 
 _BASELINES = [
-    pytest.param("flash", DeepSeekV4FlashConfig, 10_300_000, id="flash"),  # both chunks -> 5.15 ms a chunk
+    # both chunks: 8.76 ms (main nightly 42165852337) / 8.93 ms (run 42280361540, with the fabric router
+    # PR #64160), Nov 6; was 10.3 ms
+    pytest.param("flash", DeepSeekV4FlashConfig, 8_850_000, id="flash"),
     pytest.param("pro", DeepSeekV4ProConfig, 18_420_000, id="pro"),  # both chunks -> 9.21 ms a chunk
 ]
 

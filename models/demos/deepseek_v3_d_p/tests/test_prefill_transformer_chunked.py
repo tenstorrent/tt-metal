@@ -270,8 +270,10 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations, with the routed
-    # expert overlapped with combine_fabric2d. CI run 41067008100 / job 124125611366.
-    (61, 11, 10): [0.328, 0.338, 0.372, 0.399, 0.432, 0.462, 0.489, 0.523, 0.564, 0.604, 0.638],
+    # expert overlapped with combine_fabric2d. CI run 42280361540 / job 128113020673 (Nov 6, main 94430e9057f with
+    # the fabric router PR #64160: chunks 0-2 ran 5-6% under the old run 41067008100 baseline, which main's own
+    # nightly 42165852337 also failed).
+    (61, 11, 10): [0.309, 0.321, 0.352, 0.381, 0.413, 0.445, 0.470, 0.505, 0.548, 0.585, 0.620],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
