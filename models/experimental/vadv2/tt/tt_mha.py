@@ -154,13 +154,12 @@ class TtMultiheadAttention:
             attn_output_weights = ttnn.matmul(q_scaled, key_transposed, **mm_kw)
 
         if key_padding_mask is not None:
-            # A finite fill matches -inf while a row keeps one key. A fully masked row averages its
-            # keys here but is NaN in the reference; it needs motion_det_score, which is unset.
-            key_mask = ttnn.multiply(ttnn.gtz(key_padding_mask), -1e9)
-            key_mask = ttnn.reshape(key_mask, (bsz, 1, 1, src_len))
-            attn_output_weights = ttnn.reshape(attn_output_weights, (bsz, self.num_heads, Nt, src_len))
-            attn_output_weights = ttnn.add(attn_output_weights, key_mask)
-            attn_output_weights = ttnn.reshape(attn_output_weights, (B, Nt, src_len))
+            # (bsz, src_len), nonzero where the key is padding: those keys get no weight. The
+            # scores are laid out (bsz * num_heads, tgt_len, src_len), batch-major.
+            masked = ttnn.gt(ttnn.to_layout(key_padding_mask, ttnn.TILE_LAYOUT), 0.0)
+            masked = ttnn.reshape(ttnn.multiply(masked, -1e9), (bsz, 1, 1, src_len))
+            masked = ttnn.reshape(ttnn.repeat(masked, (1, self.num_heads, 1, 1)), (bsz * self.num_heads, 1, src_len))
+            attn_output_weights = attn_output_weights + masked
 
         attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1)
 
