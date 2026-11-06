@@ -41,12 +41,18 @@ from diag_runner import (  # noqa: E402
     TrayPowerReader,
     build_diag_arg_parser,
     decode_cpld_power,
+    decode_hsc_record,
     decode_hsc_status,
+    hsc_record_warnings,
     run_tray_power,
     tray_bdf_range,
 )
 
 CLEAN_HSC = {"word": 0x0000, "input": 0x00, "iout": 0x00}
+# SYS-5505 record words of a healthy feed, as hand-read on SJC3 galaxies: no
+# FAULT_RECORD, FAULT_RECORD_LAST 0x0012, 12.22 V, IOUT peak 184.0 A, 43 C,
+# IOUT OC fault/warn limits 228 A / 219 A.
+CLEAN_REC = {0xFA: 0x0000, 0xFB: 0x0012, 0x8B: 0x0187, 0xA6: 2944, 0xAF: 43, 0x46: 3648, 0x4A: 3504}
 CLEAN_CPLD = {"reg1e": "ff", "dbg5f": "7c", "dbg58": "fa"}
 
 
@@ -62,7 +68,8 @@ class FakeBmc:
     """Answers the phase's reads from per-tray HSC and CPLD values; records every call."""
 
     def __init__(self, hsc=None, cpld=None, fail=()):
-        # hsc: {(tray, addr): {"word", "input", "iout"}}, cpld: {tray: {"reg1e", "dbg5f", "dbg58"}}
+        # hsc: {(tray, addr): {"word", "input", "iout"[, "rec": {code: word}]}},
+        # cpld: {tray: {"reg1e", "dbg5f", "dbg58"}}
         self.hsc = hsc or {}
         self.cpld = cpld or {}
         self.fail = set(fail)  # (tray, addr) whose reads all error out
@@ -85,8 +92,9 @@ class FakeBmc:
             return subprocess.CompletedProcess(argv, 0, stdout=f" {cp[key]}\n", stderr="")
         st = self.hsc.get((tray, addr), CLEAN_HSC)
         code = payload[0]
-        if code == 0x79:
-            out = f" {st['word'] & 0xFF:02x} {st['word'] >> 8:02x}\n"
+        if code == 0x79 or code in CLEAN_REC:
+            v = st["word"] if code == 0x79 else st.get("rec", {}).get(code, CLEAN_REC[code])
+            out = f" {v & 0xFF:02x} {v >> 8:02x}\n"
         else:
             out = f" {st['input' if code == 0x7C else 'iout']:02x}\n"
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
@@ -155,16 +163,22 @@ class TestDecodeCpld(unittest.TestCase):
 
 class TestTrayPowerPhase(unittest.TestCase):
     def assert_read_only(self, bmc: FakeBmc):
-        """Every call is an allowed transaction, and nothing is ever written to an HSC."""
+        """Every call is an allowed transaction, nothing is ever written to an HSC,
+        and the clear-on-read peak registers are read at most once per HSC."""
         self.assertTrue(bmc.calls)
+        peaks: dict = {}
         for argv in bmc.calls:
             bus, addr, nbytes, payload = txn_of(argv)
             self.assertIn(bus, TRAY_POWER_BUS.values())
             self.assertIn((addr, nbytes, payload), TRAY_POWER_ALLOWED)
             if addr != 0x80:
                 self.assertEqual(len(payload), 1, argv)
-                self.assertIn(payload[0], (0x79, 0x7B, 0x7C), argv)
+                self.assertIn(payload[0], (0x79, 0x7B, 0x7C, 0xFA, 0xFB, 0x8B, 0x46, 0x4A, 0xA6, 0xAF), argv)
                 self.assertGreater(nbytes, 0, argv)
+                if payload[0] in (0xA6, 0xAF):
+                    k = (bus, addr, payload[0])
+                    peaks[k] = peaks.get(k, 0) + 1
+                    self.assertEqual(peaks[k], 1, argv)
             elif nbytes == 0:
                 # The CPLD debug-index select, the only transaction that reads nothing back.
                 self.assertEqual(payload[0], 0x50, argv)
@@ -335,17 +349,18 @@ class TestTrayPowerPhase(unittest.TestCase):
 
         def runner(argv):
             cp = clean(argv)
-            if len(clean.calls) == 32:  # trays 1 and 2 read in full
+            if len(clean.calls) == 60:  # trays 1 and 2 read in full
                 clock.t = TRAY_POWER_PHASE_S
             return cp
 
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             checks = by_tray(run_phase(runner, clock=clock))
-        self.assertEqual(
-            err.getvalue(), f"[diag] tray_power: stopped reading: phase time limit of {TRAY_POWER_PHASE_S:g} s spent\n"
-        )
-        self.assertEqual(len(clean.calls), 32)
+        lines = err.getvalue().splitlines()
+        stop = f"[diag] tray_power: stopped reading: phase time limit of {TRAY_POWER_PHASE_S:g} s spent"
+        self.assertEqual([l for l in lines if not l.startswith("[diag] tray_power: tray ")], [stop])
+        self.assertEqual(len(lines), 5)  # and one record line per HSC of trays 1 and 2
+        self.assertEqual(len(clean.calls), 60)
         self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [PASS, PASS, WARN, WARN])
         for t in (3, 4):
             self.assertIn("not read: HSC 0x40, HSC 0x42, CPLD (phase time limit", checks[t].details)
@@ -401,6 +416,13 @@ class TestTrayPowerPhase(unittest.TestCase):
             (0x11, 0x40, 0, (0x03,)),  # CLEAR_FAULTS
             (0x11, 0x40, 1, (0x01, 0x00)),  # OPERATION write
             (0x11, 0x42, 2, (0xA1,)),  # peak register, clears on read
+            (0x11, 0x42, 2, (0xA0,)),  # READ_VIN_MIN, not read
+            (0x11, 0x42, 2, (0xA7,)),  # peak register not in the whitelist
+            (0x11, 0x40, 2, (0xFC,)),  # manufacturer register
+            (0x11, 0x40, 0, (0xE0,)),  # manufacturer command, writes
+            (0x11, 0x40, 1, (0xA6,)),  # READ_IOUT_PEAK with the wrong length
+            (0x11, 0x40, 2, (0x46, 0x00)),  # IOUT_OC_FAULT_LIMIT write
+            (0x11, 0x40, 2, (0x4A, 0x10, 0x0E)),  # IOUT_OC_WARN_LIMIT write
             (0x11, 0x80, 0, (0x50, 0x10)),  # CPLD index other than 0x5F / 0x58
             (0x11, 0x80, 0, (0x30, 0x8B)),  # any other CPLD write
             (0x12, 0x40, 2, (0x79,)),  # not a tray bus
@@ -409,6 +431,106 @@ class TestTrayPowerPhase(unittest.TestCase):
             with self.assertRaises(ValueError):
                 reader.txn(bus, addr, nbytes, *payload)
         self.assertEqual(bmc.calls, [])
+
+
+# The SJC3 c02u21 hand reads (owner msg #6581): tray 2 HSC 0x40 latched OFF and
+# IOUT_OC with FAULT_RECORD 0x0022 and an IOUT peak of 235.5 A; the other seven
+# feeds peaked at 180.5-185.5 A. Raw IOUT peaks in 62.5 mA steps.
+C02U21_PEAKS = {
+    (1, 0x40): 2920, (1, 0x42): 2968, (2, 0x40): 3768, (2, 0x42): 2944,
+    (3, 0x40): 2912, (3, 0x42): 2888, (4, 0x40): 2896, (4, 0x42): 2904,
+}  # fmt: skip
+
+
+def c02u21_hsc(tray2_status=True):
+    hsc = {}
+    for (t, a), peak in C02U21_PEAKS.items():
+        hsc[(t, a)] = dict(CLEAN_HSC, rec={0xA6: peak, 0x46: 3712, 0x4A: 3552} if a == 0x42 else {0xA6: peak})
+    if tray2_status:
+        hsc[(2, 0x40)].update(word=0x6852, input=0x20, iout=0x80)
+        hsc[(2, 0x40)]["rec"].update({0xFA: 0x0022})
+    return hsc
+
+
+class TestHscRecord(unittest.TestCase):
+    def test_decode(self):
+        d = decode_hsc_record(
+            {
+                "read_vout": 0x0187,
+                "iout_peak": 3768,
+                "temp_peak": 43,
+                "iout_oc_fault_limit": 3648,
+                "iout_oc_warn_limit": 3504,
+            }
+        )
+        self.assertEqual(d, {"vout_v": 12.219, "iout_peak_a": 235.5, "temp_peak_c": 43,
+                             "iout_oc_fault_limit_a": 228.0, "iout_oc_warn_limit_a": 219.0})  # fmt: skip
+        self.assertEqual(set(decode_hsc_record({}).values()), {None})
+
+    def test_c02u21_tray_2_warns_and_fails_on_its_latches(self):
+        bmc = FakeBmc(hsc=c02u21_hsc())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            checks = by_tray(run_phase(bmc))
+        c = checks[2]
+        self.assertEqual(c.status, FAIL)  # the latches decide the FAIL, as before
+        for s in (
+            "IOUT_OC",
+            "HSC 0x40: FAULT_RECORD 0x0022 (FAh) set; WARN only",
+            "HSC 0x40: IOUT peak 235.5 A (A6h, since the last peak read) above its own IOUT_OC_WARN_LIMIT 219.0 A",
+            "HSC 0x40: IOUT peak 235.5 A, 29% above the median 182.0 A of the other 7 feeds (WARN over 20%)",
+        ):
+            self.assertIn(s, c.details)
+        self.assertNotIn("HSC 0x42: IOUT peak", c.details)
+        self.assertEqual(c.data["hsc"]["0x40"]["iout_peak_a"], 235.5)
+        self.assertEqual(c.data["hsc"]["0x40"]["fault_record"], 0x0022)
+        self.assertEqual(c.data["hsc"]["0x42"]["iout_oc_warn_limit_a"], 222.0)
+        self.assertEqual([checks[t].status for t in (1, 3, 4)], [PASS] * 3)
+        self.assertIn(
+            "[diag] tray_power: tray 2 HSC 0x40: FAULT_RECORD 0x0022, FAULT_RECORD_LAST 0x0012, STATUS_IOUT 0x80, "
+            "VOUT 12.22 V, IOUT peak 235.5 A, TEMP peak 43 C, IOUT OC fault/warn limit 228.0/219.0 A",
+            err.getvalue(),
+        )
+        self.assertEqual(err.getvalue().count("[diag] tray_power: tray "), 8)
+        self.assert_read_only = TestTrayPowerPhase.assert_read_only.__get__(self)
+        self.assert_read_only(bmc)
+
+    def test_peak_alone_turns_a_pass_into_a_warn_never_a_fail(self):
+        checks = by_tray(run_phase(FakeBmc(hsc=c02u21_hsc(tray2_status=False))))
+        self.assertEqual(checks[2].status, WARN)
+        self.assertIn("no 12 V latch set", checks[2].details)
+        self.assertIn("29% above the median", checks[2].details)
+        self.assertEqual([checks[t].status for t in (1, 3, 4)], [PASS] * 3)
+
+    def test_fault_record_alone_is_a_warn(self):
+        hsc = {(3, 0x42): dict(CLEAN_HSC, rec={0xFA: 0x0004})}
+        checks = by_tray(run_phase(FakeBmc(hsc=hsc)))
+        self.assertEqual(checks[3].status, WARN)
+        self.assertIn("HSC 0x42: FAULT_RECORD 0x0004 (FAh) set; WARN only", checks[3].details)
+        self.assertEqual([checks[t].status for t in (1, 2, 4)], [PASS] * 3)
+
+    def test_fault_record_last_baseline_and_even_peaks_pass(self):
+        checks = by_tray(run_phase(FakeBmc()))
+        self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [PASS] * 4)
+
+    def test_peak_rule_needs_three_other_feeds(self):
+        hscs = {1: {0x40: {"iout_peak": 3768}, 0x42: {"iout_peak": 2944}}, 2: {0x40: {"iout_peak": 2944}}}
+        self.assertEqual(hsc_record_warnings(hscs), {1: [], 2: []})
+
+    def test_peaks_are_read_once_even_when_the_read_fails(self):
+        clean = FakeBmc()
+
+        def runner(argv):
+            if txn_of(argv)[3] in ((0xA6,), (0xAF,)):
+                clean.calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="Unable to send RAW command\n")
+            return clean(argv)
+
+        checks = by_tray(run_phase(runner))
+        n = sum(1 for argv in clean.calls if txn_of(argv)[3] in ((0xA6,), (0xAF,)))
+        self.assertEqual(n, 16)  # 2 codes x 2 HSCs x 4 trays, no retry
+        self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [PASS] * 4)
+        self.assertIsNone(checks[1].data["hsc"]["0x40"]["iout_peak_a"])
 
 
 class TestPlumbing(unittest.TestCase):

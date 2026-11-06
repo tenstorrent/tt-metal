@@ -2583,9 +2583,18 @@ def run_sys_triage(
 # Reads only, in-band through the BMC's I2C master (`ipmitool raw 0x06 0x52`).
 # Every transaction goes through TRAY_POWER_ALLOWED; anything else raises before
 # ipmitool is called. Nothing is ever written to an HSC: no CLEAR_FAULTS, no
-# limit, no peak register (reading those clears them). The one write on the bus
-# is the CPLD's debug-index select (0x50 <- 0x5F / 0x58) ahead of its 0x51 read,
-# which only picks the register to read; it has no power or reset action.
+# limit, no CLEAR_PEAK. The one write on the bus is the CPLD's debug-index
+# select (0x50 <- 0x5F / 0x58) ahead of its 0x51 read, which only picks the
+# register to read; it has no power or reset action.
+#
+# Each HSC is also read, for the record (SYS-5505): the MP5990's FAULT_RECORD
+# (FAh) and FAULT_RECORD_LAST (FBh), READ_VOUT (8Bh), IOUT_OC_FAULT_LIMIT (46h),
+# IOUT_OC_WARN_LIMIT (4Ah), and READ_IOUT_PEAK (A6h) / READ_TEMP_PEAK (AFh).
+# The two peaks clear when read, so each is read once, never retried; what they
+# hold is the peak since the last peak read or power-on. Flags built on these
+# are WARN only: a set FAULT_RECORD, or a feed's IOUT peak above its own
+# IOUT_OC_WARN_LIMIT or more than HSC_PEAK_PCT % above the median of the other
+# feeds' peaks.
 #
 # The phase does not gate yet: VIN_UV_WARN also latches on feeds that sag
 # without dropping the tray, so it is worth recording before it is worth
@@ -2603,6 +2612,23 @@ TRAY_POWER_HSC_ADDRS = (0x40, 0x42)  # 8-bit addresses, as ipmitool takes them
 TRAY_POWER_CPLD_ADDR = 0x80
 
 HSC_STATUS_WORD, HSC_STATUS_IOUT, HSC_STATUS_INPUT = 0x79, 0x7B, 0x7C
+HSC_FAULT_RECORD, HSC_FAULT_RECORD_LAST, HSC_READ_VOUT = 0xFA, 0xFB, 0x8B
+HSC_IOUT_OC_FAULT_LIMIT, HSC_IOUT_OC_WARN_LIMIT = 0x46, 0x4A
+HSC_READ_IOUT_PEAK, HSC_READ_TEMP_PEAK = 0xA6, 0xAF  # clear when read: read once
+# (key, code) of the 2-byte words read per HSC after its status bytes.
+HSC_RECORD_READS = (
+    ("fault_record", HSC_FAULT_RECORD),
+    ("fault_record_last", HSC_FAULT_RECORD_LAST),
+    ("read_vout", HSC_READ_VOUT),
+    ("iout_oc_fault_limit", HSC_IOUT_OC_FAULT_LIMIT),
+    ("iout_oc_warn_limit", HSC_IOUT_OC_WARN_LIMIT),
+)
+HSC_PEAK_READS = (("iout_peak", HSC_READ_IOUT_PEAK), ("temp_peak", HSC_READ_TEMP_PEAK))
+# MP5990 formats, as the Linux mp5990 driver and tray-test read them: VOUT
+# 31.25 mV/LSB, IOUT (READ_IOUT_PEAK and the OC limits too) 62.5 mA/LSB,
+# TEMP_PEAK in deg C.
+HSC_VOUT_V_PER_LSB, HSC_IOUT_A_PER_LSB = 0.03125, 0.0625
+HSC_PEAK_PCT = 20
 CPLD_REG_ALIVE, CPLD_DBG_INDEX, CPLD_DBG_DATA = 0x1E, 0x50, 0x51
 CPLD_DBG_PG, CPLD_DBG_POWER = 0x5F, 0x58
 
@@ -2611,6 +2637,7 @@ TRAY_POWER_ALLOWED = frozenset(
     [(a, 2, (HSC_STATUS_WORD,)) for a in TRAY_POWER_HSC_ADDRS]
     + [(a, 1, (HSC_STATUS_IOUT,)) for a in TRAY_POWER_HSC_ADDRS]
     + [(a, 1, (HSC_STATUS_INPUT,)) for a in TRAY_POWER_HSC_ADDRS]
+    + [(a, 2, (code,)) for a in TRAY_POWER_HSC_ADDRS for _, code in HSC_RECORD_READS + HSC_PEAK_READS]
     + [
         (TRAY_POWER_CPLD_ADDR, 1, (CPLD_REG_ALIVE,)),
         (TRAY_POWER_CPLD_ADDR, 0, (CPLD_DBG_INDEX, CPLD_DBG_PG)),
@@ -2690,6 +2717,82 @@ def decode_hsc_status(word: int, inp: int, iout: int | None = None) -> tuple[lis
     if inp & 0x20:
         faults.append("VIN_UV_WARN")
     return faults, set_bits
+
+
+def decode_hsc_record(st: dict) -> dict:
+    """Decoded SYS-5505 record words of one hsc() read (None where not read)."""
+
+    def scale(key: str, k: float) -> float | None:
+        v = st.get(key)
+        return None if v is None else round(v * k, 3)
+
+    return {
+        "vout_v": scale("read_vout", HSC_VOUT_V_PER_LSB),
+        "iout_peak_a": scale("iout_peak", HSC_IOUT_A_PER_LSB),
+        "temp_peak_c": st.get("temp_peak"),
+        "iout_oc_fault_limit_a": scale("iout_oc_fault_limit", HSC_IOUT_A_PER_LSB),
+        "iout_oc_warn_limit_a": scale("iout_oc_warn_limit", HSC_IOUT_A_PER_LSB),
+    }
+
+
+def hsc_record_text(st: dict) -> str:
+    """One line of one HSC's record words, for the log."""
+    d = decode_hsc_record(st)
+
+    def h(key: str, w: int) -> str:
+        v = st.get(key)
+        return "-" if v is None else f"0x{v:0{w}x}"
+
+    def f(v, fmt: str) -> str:
+        return "-" if v is None else format(v, fmt)
+
+    return (
+        f"FAULT_RECORD {h('fault_record', 4)}, FAULT_RECORD_LAST {h('fault_record_last', 4)}, "
+        f"STATUS_IOUT {h('status_iout', 2)}, VOUT {f(d['vout_v'], '.2f')} V, "
+        f"IOUT peak {f(d['iout_peak_a'], '.1f')} A, TEMP peak {f(d['temp_peak_c'], 'd')} C, "
+        f"IOUT OC fault/warn limit {f(d['iout_oc_fault_limit_a'], '.1f')}/{f(d['iout_oc_warn_limit_a'], '.1f')} A"
+    )
+
+
+def hsc_record_warnings(hscs_by_tray: dict) -> dict[int, list[str]]:
+    """WARN lines per tray from the record words of every HSC ({tray: {addr: hsc()}}).
+
+    A set FAULT_RECORD; an IOUT peak above the HSC's own IOUT_OC_WARN_LIMIT; or
+    an IOUT peak more than HSC_PEAK_PCT % above the median of the other feeds'
+    peaks (3 or more of them read). FAULT_RECORD_LAST has no rule: it reads
+    0x0012 on every healthy HSC seen so far.
+    """
+    peaks = {
+        (t, a): decode_hsc_record(st)["iout_peak_a"]
+        for t, hscs in hscs_by_tray.items()
+        for a, st in hscs.items()
+        if st.get("iout_peak") is not None
+    }
+    out: dict[int, list[str]] = {t: [] for t in hscs_by_tray}
+    for t, hscs in sorted(hscs_by_tray.items()):
+        for a, st in sorted(hscs.items()):
+            key = f"HSC 0x{a:02x}"
+            if st.get("fault_record"):
+                out[t].append(f"{key}: FAULT_RECORD 0x{st['fault_record']:04x} (FAh) set; WARN only")
+            peak = peaks.get((t, a))
+            if peak is None:
+                continue
+            lim = decode_hsc_record(st)["iout_oc_warn_limit_a"]
+            if lim and peak > lim:
+                out[t].append(
+                    f"{key}: IOUT peak {peak:.1f} A (A6h, since the last peak read) above its own "
+                    f"IOUT_OC_WARN_LIMIT {lim:.1f} A (4Ah); WARN only"
+                )
+            others = sorted(v for k, v in peaks.items() if k != (t, a))
+            if len(others) >= 3:
+                n = len(others)
+                med = others[n // 2] if n % 2 else (others[n // 2 - 1] + others[n // 2]) / 2
+                if med > 0 and peak > med * (1 + HSC_PEAK_PCT / 100):
+                    out[t].append(
+                        f"{key}: IOUT peak {peak:.1f} A, {(peak / med - 1) * 100:.0f}% above the median "
+                        f"{med:.1f} A of the other {n} feeds (WARN over {HSC_PEAK_PCT}%); WARN only"
+                    )
+    return out
 
 
 def decode_cpld_power(reg1e: str | None, dbg5f: str | None, dbg58: str | None = None) -> tuple[str, str]:
@@ -2806,12 +2909,20 @@ class TrayPowerReader:
         def read(nbytes: int, code: int) -> list[int] | None:
             return self.txn(bus, addr, nbytes, code) or self.txn(bus, addr, nbytes, code)
 
+        def word16(got: list[int] | None) -> int | None:
+            return None if got is None else got[0] | got[1] << 8  # low byte first
+
         word, inp, iout = read(2, HSC_STATUS_WORD), read(1, HSC_STATUS_INPUT), read(1, HSC_STATUS_IOUT)
-        return {
-            "status_word": None if word is None else word[0] | word[1] << 8,  # low byte first
+        st = {
+            "status_word": word16(word),
             "status_input": None if inp is None else inp[0],
             "status_iout": None if iout is None else iout[0],
         }
+        for key, code in HSC_RECORD_READS:
+            st[key] = word16(read(2, code))
+        for key, code in HSC_PEAK_READS:
+            st[key] = word16(self.txn(bus, addr, 2, code))  # clears on read: once, no retry
+        return st
 
     def _stable(self, once) -> str | None:
         """Read until two in a row agree (the CPLD bus is shared with the BMC's own polling)."""
@@ -2840,13 +2951,16 @@ class TrayPowerReader:
         }
 
 
-def tray_power_check(tray: int, hscs: dict, cpld: dict, why: str = "") -> Check:
+def tray_power_check(tray: int, hscs: dict, cpld: dict, why: str = "", warns=()) -> Check:
     """One tray's Check from its HSC reads ({addr: hsc()}) and CPLD read (cpld()).
 
     `why` says why reads were cut short (the phase's time limit), for the
     'not read' text. A tray whose CPLD power enable reads low was powered off on
     purpose: its OFF latch is no 12 V feed fault, so it is a WARN with no hint.
+    `warns` (hsc_record_warnings) are added to the details and turn a PASS into
+    a WARN, never into a FAIL.
     """
+    warns = list(warns)
     where = f"tray {tray} ({tray_bdf_range(tray)})"
     findings, unread, data = [], [], {"tray": tray, "bdf_range": tray_bdf_range(tray), "hsc": {}, "cpld": dict(cpld)}
     for addr, st in sorted(hscs.items()):
@@ -2854,10 +2968,10 @@ def tray_power_check(tray: int, hscs: dict, cpld: dict, why: str = "") -> Check:
         word, inp, iout = st.get("status_word"), st.get("status_input"), st.get("status_iout")
         if word is None or inp is None:
             unread.append(f"HSC {key}")
-            data["hsc"][key] = dict(st)
+            data["hsc"][key] = dict(st, **decode_hsc_record(st))
             continue
         faults, set_bits = decode_hsc_status(word, inp, iout)
-        data["hsc"][key] = dict(st, faults=faults, bits=set_bits)
+        data["hsc"][key] = dict(st, faults=faults, bits=set_bits, **decode_hsc_record(st))
         if faults:
             findings.append(
                 f"HSC {key}: {', '.join(faults)} latched (STATUS_WORD 0x{word:04x}, STATUS_INPUT 0x{inp:02x})"
@@ -2876,19 +2990,22 @@ def tray_power_check(tray: int, hscs: dict, cpld: dict, why: str = "") -> Check:
     not_read = f"not read: {', '.join(unread)}" + (f" ({why})" if why else "")
     if powered_off:
         lines = [f"{where}: tray powered off (CPLD power enable low, dbg 0x58={dbg58}): latches not judged"]
-        lines += findings + ([not_read] if unread else [])
+        lines += findings + ([not_read] if unread else []) + warns
         return Check(name=name, status=WARN, details="\n".join(lines), data=data, ip="board")
     if findings:
         lines = [f"{where}: check {TRAY_POWER_HINT}"] + findings
         if unread:
             lines.append(not_read)
-        return Check(name=name, status=FAIL, details="\n".join(lines), data=data, ip="board")
+        return Check(name=name, status=FAIL, details="\n".join(lines + warns), data=data, ip="board")
     if unread:
-        return Check(name=name, status=WARN, details=f"{where}: {not_read}", data=data, ip="board")
+        return Check(name=name, status=WARN, details="\n".join([f"{where}: {not_read}"] + warns), data=data, ip="board")
     if state == "OTHER":
-        return Check(name=name, status=WARN, details=f"{where}: CPLD {text}", data=data, ip="board")
+        return Check(
+            name=name, status=WARN, details="\n".join([f"{where}: CPLD {text}"] + warns), data=data, ip="board"
+        )
     extra = f"; CPLD {text}" if state != "HEALTHY" else ""
-    return Check(name=name, status=PASS, details=f"{where}: no 12 V latch set{extra}", data=data, ip="board")
+    details = "\n".join([f"{where}: no 12 V latch set{extra}"] + warns)
+    return Check(name=name, status=WARN if warns else PASS, details=details, data=data, ip="board")
 
 
 def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None, clock=time.monotonic) -> None:
@@ -2905,12 +3022,19 @@ def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None, clock=ti
         phase.add(Check(name="tray_12v_feed", status=SKIP, details="(dry) ipmitool raw 0x06 0x52 reads", ip="board"))
         return
     reader = TrayPowerReader(runner, clock)
-    checks = []
+    reads = {}
     for tray, bus in sorted(TRAY_POWER_BUS.items()):
         hscs = {addr: reader.hsc(bus, addr) for addr in TRAY_POWER_HSC_ADDRS}
         # No early exit on a tray with no reply: a dead tray NACKs fast and
         # must not hide the next ones; hangs are bounded by the reader.
-        checks.append(tray_power_check(tray, hscs, reader.cpld(bus), why=reader.stopped))
+        reads[tray] = (hscs, reader.cpld(bus), reader.stopped)
+    # The peak rule compares each feed with all the others, so it runs once every tray is read.
+    warns = hsc_record_warnings({t: r[0] for t, r in reads.items()})
+    checks = [tray_power_check(t, hscs, cpld, why=why, warns=warns[t]) for t, (hscs, cpld, why) in reads.items()]
+    for t, (hscs, _, _) in reads.items():
+        for addr, st in sorted(hscs.items()):
+            if st.get("status_word") is not None:
+                log(f"tray_power: tray {t} HSC 0x{addr:02x}: {hsc_record_text(st)}")
     if reader.stopped:
         log(f"tray_power: stopped reading: {reader.stopped}")
     if reader.reads_ok == 0:
