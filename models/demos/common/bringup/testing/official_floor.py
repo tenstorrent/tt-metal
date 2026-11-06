@@ -172,7 +172,9 @@ def generate(s, write: bool = True) -> dict:
     off_errors = official_vs_taps(s, layers, g, c, taps, pending)
     doc = {"chunk": c, "steps": out, "unmapped": unmapped, "errors": errors, "official_ref_errors": off_errors}
     if write:
-        (g.dir / "official_floor.json").write_text(json.dumps(doc, indent=1) + "\n")
+        (g.shared_dir / "official_floor.json").write_text(  # F260: the shared copy, never only the mirror
+            json.dumps(doc, indent=1) + "\n"
+        )
     metrics.record("official_taps_steps", n)
     metrics.record("official_taps_errors", len(errors))
     metrics.record("official_taps_unmapped", len(unmapped))

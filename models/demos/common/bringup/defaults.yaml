@@ -26,6 +26,9 @@ agents:
 
 e2e:                       # F128 (owner): end-to-end limits = calib x the reference's own drift from full precision
   calib: 2.0               # (reference/drift.py, testing/e2e_limits.py); no fixed end-to-end bar exists
+goldens:
+  mirror: true             # F260 (owner 2026-11-06): tests read goldens from a node-local mirror (paths.golden_local) of
+                           # the shared copy (paths.golden, the source of truth), synced at run start; off: the shared copy
 reference:
   shipped_dtype: bfloat16  # F128: the dtype the shipped code computes in (the official golden, the margin's source)
   margin_source: reference # F136: reference (numerics official) | hf_official (owner-signed: hooks.hf_model at

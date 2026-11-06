@@ -49,6 +49,7 @@ from models.demos.common.bringup.reference.golden import (
     rung_dir,
     store_dtype,
     text_tokens,
+    write_manifest,
 )
 
 
@@ -111,6 +112,10 @@ def main(argv=None):
         m = drift.margin(json.loads(drift.drift_path(rung_dir(spec, spec.rung(a.rung)), a.rung).read_text()))
         for k, v in m.items():
             metrics.record(k, v)
+        for d in {rung_dir(spec, spec.rung(r)) for r in drift.readers(spec, a.rung)}:  # F260: after the drift files
+            for x in (d, d.with_name(d.name + "-official")):
+                if x.is_dir():
+                    write_manifest(x)
         if not m["drift_layers_above_res"]:  # F136: no silent zero margin
             raise SystemExit(
                 f"no margin source: the reference at numerics official, {spec.get('reference.shipped_dtype')} "
@@ -295,6 +300,7 @@ def main(argv=None):
     manifest["content_hash"] = content_hash(tmp)
     (tmp / "manifest.json").write_text(json.dumps(manifest, indent=1))
     tmp.rename(out)  # atomic: an interrupted run never leaves a half-written golden under the real name
+    write_manifest(out)  # F260: mirror.json beside the shared copy; `reference.golden sync` copies it to the mirror
 
     from models.demos.common.bringup.reference.golden import Golden
 

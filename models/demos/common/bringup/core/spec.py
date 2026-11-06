@@ -15,6 +15,9 @@ Paths:
     art             artifact root outside git (default /localdev/$USER/bringup/<model>)
       hf/ golden/ tt_cache/<mesh>/<version>/ profiles/ runs/<run>/ (a seeded run's: runs/<box>-<mode>/<run>/)
     paths.hf, paths.golden, ...: absolute, or relative to art (F186)
+    paths.golden_local  F260: the node-local mirror of paths.golden that tests read (reference/golden.py read_dir);
+                    default: when paths.golden is outside art (e.g. NFS), art / <the shared path after the model's
+                    own dir name> (/data/u/bringup/<model>/golden_full/box -> <art>/golden_full/box), else no mirror
 
 Prior bring-up: ``prior: models/demos/<slug>`` names an earlier bring-up of the same checkpoint (another mesh or
 configuration). This spec then shares its checkpoint download and goldens (hf/ and golden/ resolve to the prior's
@@ -152,6 +155,7 @@ def _resolve(raw: dict) -> dict:
     return data
 
 
+GOLDEN_MIRROR_FILE = "mirror.json"  # F260: per golden dir, its files (size, mtime_ns) for the node-local mirror
 SCALED_ENV = "BRINGUP_SCALED"
 SEED_RUNG = "seed"  # F185: a seeded run's ladder rung over the seed's layers (W.1, the port to this box)
 
@@ -314,6 +318,25 @@ class Spec:
         if self.scaled:
             return self._art_sub("golden_scaled", "golden_scaled") / self.run_box
         return self._shared("golden", "golden")
+
+    @property
+    def golden_mirror_root(self) -> Path | None:
+        """F260 (owner 2026-11-06): the node-local mirror of golden_root that tests read when it is complete
+        (reference/golden.py read_dir; `reference.golden sync` fills it). golden_root stays the source of truth (the
+        goldens are generated, pinned and frozen there). None: no mirror (goldens.mirror off, a scaled run's goldens,
+        or a golden root already under art)."""
+        if self.scaled or not self.get("goldens.mirror"):
+            return None
+        shared = Path(os.path.abspath(self.golden_root))
+        if self.get("paths.golden_local"):
+            local = self._art_sub("golden_local", "")
+        else:
+            if shared.is_relative_to(os.path.abspath(self.art)):
+                return None
+            at = max((i for i, x in enumerate(shared.parts) if x == self.model), default=None)
+            tail = shared.parts[at + 1 :] if at is not None else ()
+            local = self.art / (Path(*tail) if tail else Path("golden_mirror", shared.name))
+        return None if Path(os.path.abspath(local)) == shared else local
 
     @property
     def profiles_dir(self) -> Path:
