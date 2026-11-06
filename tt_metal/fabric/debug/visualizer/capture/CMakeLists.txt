@@ -38,3 +38,19 @@ target_link_libraries(
     PRIVATE
         umd::tt-umd
 )
+
+# fabric_capture: the tool, one process per rank. It sits beside watcher_dump in build/tools.
+add_executable(fabric_capture fabric_capture_main.cpp)
+target_link_libraries(
+    fabric_capture
+    PRIVATE
+        fabric_capture_umd
+        fabric_visualizer_build_identity
+        cxxopts::cxxopts
+)
+set_target_properties(
+    fabric_capture
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/tools
+)
