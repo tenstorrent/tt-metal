@@ -36,8 +36,11 @@ constexpr uint32_t tensor_c_tiles = get_compile_time_arg_val(6);
 constexpr uint32_t n_coef_cols = get_compile_time_arg_val(7);
 constexpr uint32_t post_width_tiles = get_compile_time_arg_val(8);
 constexpr uint32_t comb_width_tiles = get_compile_time_arg_val(9);
-constexpr uint32_t n_src = get_compile_time_arg_val(10);  // 1: post and comb share one page
-constexpr uint32_t FB = 11;                               // fused block (descriptor fused_ct)
+constexpr uint32_t n_src = get_compile_time_arg_val(10);      // distinct coefficient source pages per row
+constexpr uint32_t comb_slot = get_compile_time_arg_val(11);  // cb_coef_src slot of the comb window
+constexpr uint32_t pre_slot = get_compile_time_arg_val(12);   // cb_coef_src slot of the P window (collapse)
+constexpr uint32_t pre_width_tiles = get_compile_time_arg_val(13);
+constexpr uint32_t FB = 14;  // fused block (descriptor fused_ct)
 constexpr bool fused = get_compile_time_arg_val(FB + 0) != 0;
 constexpr uint32_t cb_w_slice = get_compile_time_arg_val(FB + 2);
 constexpr uint32_t cb_gather = get_compile_time_arg_val(FB + 8);
@@ -54,12 +57,16 @@ static_assert(!fused || COMBINE_LAG + 1 <= COMBINE_DEPTH, "grants run LAG rows a
 
 constexpr uint32_t proj_passes = get_compile_time_arg_val(FB + 22);
 constexpr uint32_t cb_proj_masks = get_compile_time_arg_val(FB + 23);
-constexpr uint32_t FUSED_CT_LEN = 25;  // len(fused_ct) in the descriptor
+constexpr bool collapse = get_compile_time_arg_val(FB + 25) != 0;
+constexpr uint32_t FUSED_CT_LEN = 30;  // len(fused_ct) in the descriptor
 constexpr auto f_args = TensorAccessorArgs<FB + FUSED_CT_LEN>();
 constexpr auto x_args = TensorAccessorArgs<f_args.next_compile_time_args_offset()>();
 constexpr auto post_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
 constexpr auto w_args = TensorAccessorArgs<comb_args.next_compile_time_args_offset()>();
+constexpr auto pre_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+constexpr uint32_t PRE_COEF_BASE = n + n * n;  // P_i at cb_coef_cols tile n + n^2 + i
+static_assert(!collapse || n_src >= 1, "collapse reads a P window");
 
 constexpr uint32_t FACE_WORDS = 256;  // 16x16 fp32 face
 constexpr uint32_t FACE_DIM = 16;
@@ -100,6 +107,7 @@ void kernel_main() {
     // arg 10: g_r (unused here)
     const uint32_t g_c = get_arg_val<uint32_t>(11);
     const uint32_t w_addr = get_arg_val<uint32_t>(12);
+    const uint32_t pre_addr = get_arg_val<uint32_t>(13);
 
     const uint32_t f_tile_bytes = get_tile_size(cb_f_tiles);
     const uint32_t x_tile_bytes = get_tile_size(cb_x_tiles);
@@ -109,11 +117,13 @@ void kernel_main() {
     const auto x_acc = TensorAccessor(x_args, x_addr, x_tile_bytes);
     const auto post_acc = TensorAccessor(post_args, post_addr, coef_tile_bytes);
     const auto comb_acc = TensorAccessor(comb_args, comb_addr, coef_tile_bytes);
+    const auto pre_acc = TensorAccessor(pre_args, pre_addr, coef_tile_bytes);
 
-    // Reader-private scratch: slot 0 = post source tile, slot n_src-1 = comb source tile (the
-    // same tile when one packed mixes page holds both windows). Never pushed.
+    // Reader-private scratch: slot 0 = post source tile, comb / P windows at their (host-deduplicated)
+    // slots — one packed mixes page holding every window is a single slot. Never pushed.
     const uint32_t src_post_l1 = get_write_ptr(cb_coef_src);
-    const uint32_t src_comb_l1 = src_post_l1 + (n_src - 1) * coef_tile_bytes;
+    const uint32_t src_comb_l1 = src_post_l1 + comb_slot * coef_tile_bytes;
+    const uint32_t src_pre_l1 = src_post_l1 + pre_slot * coef_tile_bytes;
 
     const uint32_t num_blocks = (num_c + block_c - 1) / block_c;
 
@@ -160,7 +170,7 @@ void kernel_main() {
             cb_push_back(cb_proj_masks, proj_passes);
         }
     }
-    constexpr uint32_t RT_MEMBERS = 13;  // (x, y) of my group's members, then of every group leader
+    constexpr uint32_t RT_MEMBERS = 14;  // (x, y) of my group's members, then of every group leader
     const uint32_t rt_leaders = RT_MEMBERS + 2 * geo.size;
 
     // GRANT row r's slot sets: reserve them locally (compute has popped their previous
@@ -245,8 +255,11 @@ void kernel_main() {
 
         // load_coefficients: source reads + the row's first block, one barrier.
         noc_async_read_tile(row * post_width_tiles + post_col / 32, post_acc, src_post_l1);
-        if constexpr (n_src > 1) {
+        if constexpr (comb_slot != 0) {
             noc_async_read_tile(row * comb_width_tiles + comb_col / 32, comb_acc, src_comb_l1);
+        }
+        if constexpr (collapse && pre_slot != 0 && pre_slot != comb_slot) {
+            noc_async_read_tile(row * pre_width_tiles, pre_acc, src_pre_l1);  // P at columns 0..n-1
         }
         issue_block(row, 0);
         if constexpr (fused) {
@@ -258,6 +271,9 @@ void kernel_main() {
         const uint32_t coef_l1 = get_write_ptr(cb_coef_cols);
         expand_coefficients(src_post_l1, post_col % 32, coef_l1, n);
         expand_coefficients(src_comb_l1, comb_col % 32, coef_l1 + n * coef_tile_bytes, n * n);
+        if constexpr (collapse) {
+            expand_coefficients(src_pre_l1, 0, coef_l1 + PRE_COEF_BASE * coef_tile_bytes, n);
+        }
         cb_push_back(cb_coef_cols, n_coef_cols);
         push_block();
 

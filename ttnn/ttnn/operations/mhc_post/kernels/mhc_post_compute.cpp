@@ -26,11 +26,19 @@
 //   into column 24 of the partial and ships it to the group leader.
 // combine_row (fused): sum the gathered partials in slot-index order (exact SFPU adds, running
 //   tile ping-pongs through cb_comb_acc) -> cb_lead_out (two-level) / cb_stats_row.
+// collapse_block (collapse): y_c = sum_i P_i * X'_{i,c} on the SFPU in fp32 from the bf16 X' block
+//   already in L1 (cb_xprime_mm, before the projection pops it), packed once to bf16 (cb_y_tiles).
+// hc_row (collapse, on the core that produced the row's stats): the writer permutes the stats row
+//   into hc lanes; HcProgram (mhc_post_hc_sfpu.hpp, a custom lane-wise fp32 SFPU program inside an
+//   eltwise_chain) runs the hc step in place; the result lanes go back to the writer.
 //
 // Helper gaps (recorded, not bypassed): no kernel_lib element wraps the SFPU row reduce, so
 // SfpuRowSum is a 5-line UnaryOp element (init/exec only — the chain still owns DEST sync, CB
 // lifecycle and reconfig). The FPU reduce helper is rejected: it reads fp32 through srcA/B (tf32),
-// ~1e-3 rel error vs the 1e-6 SUMSQ gate.
+// ~1e-3 rel error vs the 1e-6 SUMSQ gate. The hc step is a custom SFPU program (HcProgram): no
+// whole-tile helper can sum across quantities that sit in different tile rows (op_design.md →
+// "Helpers considered and rejected"); it is wrapped as a chain element, so the chain still owns
+// DEST sync, CB lifecycle and reconfig.
 
 #include <cstdint>
 
@@ -42,6 +50,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/ternary/ternary.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_combine.hpp"
+#include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_hc_sfpu.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -75,12 +84,17 @@ constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(FB + 16);
 constexpr uint32_t proj_passes = get_compile_time_arg_val(FB + 22);
 constexpr uint32_t cb_proj_masks = get_compile_time_arg_val(FB + 23);
 constexpr uint32_t cb_xprime_masked = get_compile_time_arg_val(FB + 24);
+constexpr bool collapse = get_compile_time_arg_val(FB + 25) != 0;
+constexpr uint32_t cb_y_tiles = get_compile_time_arg_val(FB + 26);
+constexpr uint32_t cb_hc_lanes = get_compile_time_arg_val(FB + 27);
+constexpr uint32_t cb_hc_out = get_compile_time_arg_val(FB + 28);
 
 static_assert(n == 4, "mhc_post: the mix chain is written for n = 4 streams");
 
 constexpr uint32_t ONE_F32_BITS = 0x3f800000u;  // Addcmul value = 1.0 (exact)
 constexpr uint32_t COEF_POST_BASE = 0;
 constexpr uint32_t COEF_COMB_BASE = n;
+constexpr uint32_t COEF_PRE_BASE = n + n * n;  // collapse: P_i at n + n^2 + i
 
 // ---------------------------------------------------------------------------
 // Chain specs
@@ -167,9 +181,70 @@ using MaskX = ckl::BinaryFpu<
         ckl::TileAddressing::Offset),
     ckl::Dst::D0>;
 
+// collapse_block: X'_{i,c} (bf16, exact through srcA). The X' block is packed compact [j][c]
+// (stride = the block's extent, as the projection reads it), so X'_i sits at Offset i*extent.
+using CopyXprime = ckl::CopyTile<
+    ckl::input(
+        cb_xprime_mm,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Row,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    ckl::Dst::D2>;
+using PackY =
+    ckl::PackTile<ckl::output(cb_y_tiles, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile), ckl::Dst::D0>;
+// hc lanes in / out (caller-managed windows of LANE_TILES pages).
+template <ckl::Dst Slot>
+using LoadLanes = CopyAt<cb_hc_lanes, Slot>;
+template <ckl::Dst Slot>
+using PackLanes = ckl::PackTile<
+    ckl::output(
+        cb_hc_out,
+        ckl::ReservePolicy::None,
+        ckl::PushPolicy::None,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    Slot>;
+
 // ---------------------------------------------------------------------------
 // Block operations
 // ---------------------------------------------------------------------------
+
+// collapse_block: y = P_0 X'_0 + sum_{i>0} P_i X'_i over the block's `extent` c-tiles (fp32 in DEST,
+// one bf16 rounding at the pack). Caller has waited the X' block.
+ALWI void collapse_block(uint32_t extent, DataflowBuffer& coef, DataflowBuffer& xprime, DataflowBuffer& y) {
+    ckl::eltwise_chain(
+        ckl::IterationShape::grid(1, extent),
+        CoefBcast{coef, COEF_PRE_BASE + 0},
+        CopyXprime{xprime, 0 * extent},
+        MulPostF{},
+        CoefBcast{coef, COEF_PRE_BASE + 1},
+        CopyXprime{xprime, 1 * extent},
+        MacCombX{ONE_F32_BITS},
+        CoefBcast{coef, COEF_PRE_BASE + 2},
+        CopyXprime{xprime, 2 * extent},
+        MacCombX{ONE_F32_BITS},
+        CoefBcast{coef, COEF_PRE_BASE + 3},
+        CopyXprime{xprime, 3 * extent},
+        MacCombX{ONE_F32_BITS},
+        PackY{y});
+}
+
+// hc_row: the hc program in place over the 2 lane tiles (D0, D1).
+ALWI void hc_row(const uint32_t* params, DataflowBuffer& lanes, DataflowBuffer& out) {
+    lanes.wait_front(mhc_post_hc::LANE_TILES);
+    out.reserve_back(mhc_post_hc::LANE_TILES);
+    ckl::eltwise_chain(
+        ckl::IterationShape::one_tile(),
+        LoadLanes<ckl::Dst::D0>{lanes, 0},
+        LoadLanes<ckl::Dst::D1>{lanes, 1},
+        mhc_post_hc::HcProgram<ckl::Dst::D0>{params},
+        PackLanes<ckl::Dst::D0>{out, 0},
+        PackLanes<ckl::Dst::D1>{out, 1});
+    out.push_back(mhc_post_hc::LANE_TILES);
+    lanes.pop_front(mhc_post_hc::LANE_TILES);
+}
 
 // mix_block: one chain over grid(n, extent). X block layout in the CB is [i][c] with the
 // nominal block_c stride (ragged tail keeps nominal offsets).
@@ -357,6 +432,22 @@ void kernel_main() {
             masks_buf.wait_front(proj_passes);  // resident exact-projection masks
         }
 
+        // collapse: the hc parameter block (RT args 3..) and the lane CBs.
+        uint32_t hc_params[mhc_post_hc::NUM_PARAMS];
+        if constexpr (collapse) {
+            for (uint32_t i = 0; i < mhc_post_hc::NUM_PARAMS; ++i) {
+                hc_params[i] = get_arg_val<uint32_t>(3 + i);
+            }
+        }
+        DataflowBuffer y_buf(collapse ? cb_y_tiles : cb_xprime_mm);
+        DataflowBuffer hc_lanes_buf(collapse ? cb_hc_lanes : cb_xprime_mm);
+        DataflowBuffer hc_out_buf(collapse ? cb_hc_out : cb_xprime_mm);
+        auto stats_done = [&]() {
+            if constexpr (collapse) {
+                hc_row(hc_params, hc_lanes_buf, hc_out_buf);
+            }
+        };
+
         auto leader_combine = [&]() {
             gather_buf.wait_front(geo.slots);
             if constexpr (geo0.groups > 1) {
@@ -365,6 +456,9 @@ void kernel_main() {
                 sum_slots<cb_gather, cb_stats_row>(geo.size, gather_buf, comb_acc_buf, stats_row_buf);
             }
             gather_buf.pop_front(geo.slots);
+            if constexpr (geo0.groups == 1) {
+                stats_done();
+            }
         };
         auto root_combine = [&]() {
             if constexpr (geo0.groups > 1) {
@@ -372,6 +466,7 @@ void kernel_main() {
                 root_buf.wait_front(geo0.groups);
                 sum_slots<cb_root_gather, cb_stats_row>(geo0.groups, root_buf, comb_acc_buf, stats_row_buf);
                 root_buf.pop_front(geo0.groups);
+                stats_done();
             }
         };
 
@@ -430,6 +525,14 @@ void kernel_main() {
                         // keep cb_xprime_mm block-aligned (the matmul reads K contiguous tiles)
                         xprime_buf.reserve_back(n * pad);
                         xprime_buf.push_back(n * pad);
+                    }
+                    if constexpr (collapse) {
+                        xprime_buf.wait_front(n * block_c);
+                        collapse_block(extent, coef_buf, xprime_buf, y_buf);
+                        if (pad) {
+                            y_buf.reserve_back(pad);
+                            y_buf.push_back(pad);
+                        }
                     }
                     const bool last_block = (b + 1 == num_blocks);
                     const uint32_t w_base = b * n * block_c;

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""mhc_post — ProgramDescriptor (plain-2d and stats-2d-tree regimes).
+"""mhc_post — ProgramDescriptor (plain-2d, stats-2d-tree and collapse-2d-tree regimes).
 
 Work split (op_design.md → Work Distribution): the (token-tile row × column tile) plane is
 block-split 2-D into R row groups × Q column groups by `choose_split`; each core's per-pass
@@ -13,6 +13,7 @@ single-source host constant feeding both the CB capacities and the kernels' CT a
 from __future__ import annotations
 
 import math
+import struct
 from pathlib import Path
 
 import ttnn
@@ -67,6 +68,12 @@ CB_COMB_ACC = 15
 CB_STATS_ROW = 16
 CB_PROJ_MASKS = 17  # exact projection: PROJ_EXACT_PASSES bf16 0/1 column masks (reader-built)
 CB_XPRIME_MASKED = 18  # exact projection: one masked X' block
+# collapse only
+CB_Y_TILES = 19  # y = sum_i P_i X'_i, one block (bf16), pushed per tile
+CB_HC_LANES = 20  # root: stats row permuted into the hc lane layout (writer -> compute)
+CB_HC_OUT = 21  # root: hc program result lanes (compute -> writer)
+CB_HC_ROW = 22  # root: writer-private landing tile for the inverse permutation
+HC_LANE_TILES = 2  # 25 quantities x 64 datums (mhc_post_hc_sfpu.hpp)
 
 
 def _tile_bytes(dtype):
@@ -193,6 +200,38 @@ def _same_buffer(a, b):
         return False
 
 
+def _coef_sources(post, post_col, comb, comb_col, pre):
+    """Distinct coefficient source pages per row: (n_src_read, comb_slot, pre_slot). Post reads into
+    slot 0; a window on the same buffer and tile column as an earlier one shares its slot (a packed
+    mixes page holding pre, post and comb is ONE read, never sliced)."""
+    keys = [(post, post_col // TILE)]
+    slots = []
+    for t, col in ((comb, comb_col), (pre, 0)):
+        if t is None:
+            slots.append(0)
+            continue
+        for i, (kt, kc) in enumerate(keys):
+            if kc == col // TILE and _same_buffer(kt, t):
+                slots.append(i)
+                break
+        else:
+            keys.append((t, col // TILE))
+            slots.append(len(keys) - 1)
+    return len(keys), slots[0], slots[1]
+
+
+def _f32_bits(v):
+    return struct.unpack("<I", struct.pack("<f", float(v)))[0]
+
+
+def hc_params(hc_scale, hc_base, hc_norm_width, hc_norm_eps, hc_eps, hc_sinkhorn_iters):
+    """The hc program's runtime parameter block (mhc_post_hc_sfpu.hpp P_*): b_0..b_23, a_pre, a_post,
+    a_res, 1/width (computed in double), norm_eps, hc_eps as fp32 bits, then the iteration count."""
+    vals = [_f32_bits(b) for b in hc_base] + [_f32_bits(a) for a in hc_scale]
+    vals += [_f32_bits(1.0 / float(hc_norm_width)), _f32_bits(hc_norm_eps), _f32_bits(hc_eps)]
+    return vals + [int(hc_sinkhorn_iters)]
+
+
 def create_program_descriptor(
     input_tensor,
     residual,
@@ -206,10 +245,15 @@ def create_program_descriptor(
     max_grid=None,
     stats_weight=None,
     stats_output=None,
+    collapse_pre=None,
+    hc_output=None,
+    y_output=None,
+    hc_param_block=None,
 ):
     n = N_STREAMS
-    mode = "stats" if stats_weight is not None else "plain"
+    mode = "collapse" if collapse_pre is not None else ("stats" if stats_weight is not None else "plain")
     fused = mode != "plain"
+    collapse = mode == "collapse"
     packed = _same_buffer(post, comb)
     coef_source = "packed" if packed else "separate"
     x_shape = list(residual.shape)
@@ -220,6 +264,7 @@ def create_program_descriptor(
     Ct = C // TILE
     post_wt = -(-list(post.shape)[-1] // TILE)  # tile columns of the post tensor
     comb_wt = -(-list(comb.shape)[-1] // TILE)
+    pre_wt = -(-list(collapse_pre.shape)[-1] // TILE) if collapse else 1
 
     # --- grid (single source G) ---
     device = residual.device()
@@ -231,10 +276,9 @@ def create_program_descriptor(
 
     f_tile = _tile_bytes(input_tensor.dtype)
     x_tile = _tile_bytes(residual.dtype)
-    # Coefficient source pages actually read per row: a packed mixes tensor whose post and comb
+    # Coefficient source pages actually read per row: a packed mixes tensor whose pre / post / comb
     # windows share one tile column is a single page (read once, never sliced).
-    same_page = packed and (post_col // TILE == comb_col // TILE)
-    n_src_read = 1 if same_page else 2
+    n_src_read, comb_slot, pre_slot = _coef_sources(post, post_col, comb, comb_col, collapse_pre)
     n_coef_cols = _n_coef_cols(mode)
 
     # Split / block sizing: the fused modes cost and size against the stats/collapse inventory
@@ -295,6 +339,14 @@ def create_program_descriptor(
             cbs.append(_cb(CB_PROJ_MASKS, ttnn.bfloat16, bf16_tile, proj_passes, core_ranges))
             cbs.append(_cb(CB_XPRIME_MASKED, ttnn.bfloat16, bf16_tile, n * block_c, core_ranges))
         fp32_copy_cbs = [CB_PROJ_BLOCK, CB_PROJ_RUN, CB_SS_RUN, CB_GATHER, CB_ROOT_GATHER, CB_COMB_ACC]
+        if collapse:
+            cbs += [
+                _cb(CB_Y_TILES, y_output.dtype, ttnn.tile_size(y_output.dtype), block_c, core_ranges),
+                f32(CB_HC_LANES, HC_LANE_TILES),
+                f32(CB_HC_OUT, HC_LANE_TILES),
+                f32(CB_HC_ROW, 1),
+            ]
+            fp32_copy_cbs.append(CB_HC_LANES)
 
     fused_ct = [
         int(fused),
@@ -322,22 +374,33 @@ def create_program_descriptor(
         proj_passes,
         CB_PROJ_MASKS,
         CB_XPRIME_MASKED,
+        int(collapse),
+        CB_Y_TILES,
+        CB_HC_LANES,
+        CB_HC_OUT,
+        CB_HC_ROW,
     ]
     w_tensor = stats_weight if fused else residual  # placeholder accessor when not fused
     s_tensor = stats_output if fused else output_tensor
+    p_tensor = collapse_pre if collapse else post  # placeholder accessors when not collapse
+    y_tensor = y_output if collapse else output_tensor
+    h_tensor = hc_output if collapse else output_tensor
 
     # --- compile-time args ---
     reader_ct = [CB_COEF_SRC, CB_COEF_COLS, CB_F_TILES, CB_X_TILES, n, block_c, Ct, n_coef_cols, post_wt, comb_wt]
-    reader_ct += [n_src_read] + fused_ct
+    reader_ct += [n_src_read, comb_slot, pre_slot, pre_wt] + fused_ct
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(residual).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(post).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(comb).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args())
+    reader_ct.extend(ttnn.TensorAccessorArgs(p_tensor).get_compile_time_args())
 
     writer_ct = [CB_OUT_TILES, n, block_c, Ct] + fused_ct
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(s_tensor).get_compile_time_args())
+    writer_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
+    writer_ct.extend(ttnn.TensorAccessorArgs(h_tensor).get_compile_time_args())
 
     compute_ct = [CB_COEF_COLS, CB_F_TILES, CB_X_TILES, CB_OUT_TILES, n, block_c, n_coef_cols] + fused_ct
 
@@ -352,6 +415,10 @@ def create_program_descriptor(
     compute_rt = ttnn.RuntimeArgs()
     w_addr = stats_weight.buffer_address() if fused else 0
     s_addr = stats_output.buffer_address() if fused else 0
+    p_addr = collapse_pre.buffer_address() if collapse else 0
+    y_addr = y_output.buffer_address() if collapse else 0
+    h_addr = hc_output.buffer_address() if collapse else 0
+    hc_rt = list(hc_param_block) if collapse else []
     for k in range(num_cores):
         x, y = k % gx, k // gx
         g_r, g_c = k // Q, k % Q
@@ -372,8 +439,10 @@ def create_program_descriptor(
             g_r,
             g_c,
             w_addr,
+            p_addr,
         ]
         writer_args = [output_tensor.buffer_address(), row_start, num_rows, c_start, num_c, g_r, g_c, s_addr]
+        writer_args += [y_addr, h_addr]
         if fused:
             base = g_r * Q
             grp = g_c // COMBINE_FANIN
@@ -384,7 +453,7 @@ def create_program_descriptor(
             writer_args += leaders  # my leader = leaders[grp]; roots = leaders[r % num_groups]
         reader_rt[x][y] = reader_args
         writer_rt[x][y] = writer_args
-        compute_rt[x][y] = [num_rows, num_c, g_c]
+        compute_rt[x][y] = [num_rows, num_c, g_c] + hc_rt
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),

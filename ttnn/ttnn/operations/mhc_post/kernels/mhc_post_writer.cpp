@@ -15,11 +15,19 @@
 //   leader: ship row r - LAG's combined tile to the row's root (two-level) or write it to the
 //       stats tensor (single level).
 //   root: write row r - 2*LAG's stats tile.
+// collapse, additionally:
+//   store_block: the block's y tiles (block_c window, pushed per tile) after its X' window.
+//   hc_row, on the core that writes a row's stats: permute the stats row into the hc lane layout
+//       (cb_hc_lanes, see mhc_post_hc_sfpu.hpp), let compute run the hc program, inverse-permute
+//       the result lanes into cb_hc_row and write the hc page.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_combine.hpp"
+#include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_hc_sfpu.hpp"
 
 namespace {
 
@@ -43,9 +51,16 @@ constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(FB + 17);
 constexpr uint32_t SEM_ROOT_GATHER = get_compile_time_arg_val(FB + 18);
 constexpr uint32_t SEM_LEAD_CREDIT = get_compile_time_arg_val(FB + 19);
 constexpr uint32_t SEM_ROOT_CREDIT = get_compile_time_arg_val(FB + 20);
-constexpr uint32_t FUSED_CT_LEN = 25;  // len(fused_ct) in the descriptor
+constexpr bool collapse = get_compile_time_arg_val(FB + 25) != 0;
+constexpr uint32_t cb_y_tiles = get_compile_time_arg_val(FB + 26);
+constexpr uint32_t cb_hc_lanes = get_compile_time_arg_val(FB + 27);
+constexpr uint32_t cb_hc_out = get_compile_time_arg_val(FB + 28);
+constexpr uint32_t cb_hc_row = get_compile_time_arg_val(FB + 29);
+constexpr uint32_t FUSED_CT_LEN = 30;  // len(fused_ct) in the descriptor
 constexpr auto out_args = TensorAccessorArgs<FB + FUSED_CT_LEN>();
 constexpr auto stats_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+constexpr auto y_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
+constexpr auto hc_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t SS_COL = 24;  // n (n + 2)
 constexpr uint32_t FACE_WORDS = 256;
@@ -70,7 +85,9 @@ void kernel_main() {
     // arg 5: g_r (unused here)
     const uint32_t g_c = get_arg_val<uint32_t>(6);
     const uint32_t stats_addr = get_arg_val<uint32_t>(7);
-    constexpr uint32_t RT_LEADERS = 8;  // (x, y) of every group leader of my row group
+    const uint32_t y_addr = get_arg_val<uint32_t>(8);
+    const uint32_t hc_addr = get_arg_val<uint32_t>(9);
+    constexpr uint32_t RT_LEADERS = 10;  // (x, y) of every group leader of my row group
 
     const uint32_t tile_bytes = get_tile_size(cb_out_tiles);
     const auto out_acc = TensorAccessor(out_args, out_addr, tile_bytes);
@@ -97,9 +114,51 @@ void kernel_main() {
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(px, py, get_semaphore(sem_id)), 1);
     };
+    // collapse: y / hc tensors and the hc landing tile (columns NG..31 of the hc page stay 0).
+    const uint32_t y_tile_bytes = collapse ? get_tile_size(cb_y_tiles) : 0;
+    const auto y_acc = TensorAccessor(y_args, y_addr, y_tile_bytes);
+    const auto hc_acc = TensorAccessor(hc_args, hc_addr, STAT_TILE);
+    if constexpr (collapse) {
+        Noc noc;
+        CircularBuffer hc_row_cb(cb_hc_row);
+        noc.async_write_zeros(hc_row_cb, STAT_TILE);
+        noc.write_zeros_l1_barrier();
+    }
+
+    // hc_row: stats tile (row t, col k) -> lane word (k, t) of lane tile k / 16 (+ its duplicate);
+    // compute runs the hc program; result lanes -> hc page (row t, col k).
+    auto hc_row = [&](uint32_t stats_l1, uint32_t row) {
+        using namespace mhc_post_hc;
+        cb_reserve_back(cb_hc_lanes, LANE_TILES);
+        volatile tt_l1_ptr uint32_t* lanes = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_hc_lanes));
+        volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_l1);
+        for (uint32_t k = 0; k <= SS_Q; ++k) {
+            volatile tt_l1_ptr uint32_t* lt = lanes + (k / 16) * 1024;
+            for (uint32_t t = 0; t < 32; ++t) {
+                const uint32_t v = st[tile_word(t, k)];
+                lt[lane_word(k, t)] = v;
+                lt[lane_word(k, t) + 32] = v;
+            }
+        }
+        cb_push_back(cb_hc_lanes, LANE_TILES);
+        cb_wait_front(cb_hc_out, LANE_TILES);
+        volatile tt_l1_ptr uint32_t* res = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_hc_out));
+        volatile tt_l1_ptr uint32_t* hrow = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_hc_row));
+        for (uint32_t k = 0; k < NG; ++k) {
+            volatile tt_l1_ptr uint32_t* lt = res + (k / 16) * 1024;
+            for (uint32_t t = 0; t < 32; ++t) {
+                hrow[tile_word(t, k)] = lt[lane_word(k, t)];
+            }
+        }
+        cb_pop_front(cb_hc_out, LANE_TILES);
+        noc_async_write_page(row, hc_acc, get_write_ptr(cb_hc_row));
+    };
     auto write_stats = [&](uint32_t cb, uint32_t row) {
         cb_wait_front(cb, 1);
         noc_async_write_page(row, stats_acc, get_read_ptr(cb));
+        if constexpr (collapse) {
+            hc_row(get_read_ptr(cb), row);
+        }
         noc_async_write_barrier();
         cb_pop_front(cb, 1);
     };
@@ -162,8 +221,19 @@ void kernel_main() {
                 }
             }
             cb_wait_front(cb_out_tiles, window);  // padding pages of a ragged tail
+            if constexpr (collapse) {
+                const uint32_t y_page0 = row * tensor_c_tiles + c0;
+                for (uint32_t c = 0; c < extent; ++c) {
+                    cb_wait_front(cb_y_tiles, c + 1);
+                    noc_async_write_tile(y_page0 + c, y_acc, get_read_ptr(cb_y_tiles) + c * y_tile_bytes);
+                }
+                cb_wait_front(cb_y_tiles, block_c);  // padding pages of a ragged tail
+            }
             noc_async_write_barrier();
             cb_pop_front(cb_out_tiles, window);
+            if constexpr (collapse) {
+                cb_pop_front(cb_y_tiles, block_c);
+            }
         }
         if constexpr (fused) {
             post_row(r);

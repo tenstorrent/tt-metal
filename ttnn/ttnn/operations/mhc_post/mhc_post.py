@@ -11,7 +11,8 @@ Regimes built (op_design.md → Blocking Model → Regimes):
   plain-2d       X' only; float32 / bfloat16 streams and sublayer; separate or packed mixes.
   stats-2d-tree  + stats = X' @ W (col 24 = sum of the unrounded mix squared), bf16/bf16,
                  cross-core deterministic two-level combine.
-collapse is a later refinement.
+  collapse-2d-tree + y = sum_i P_i X'_i (bf16, from the X' block in L1) and, on each row's stats
+                 core, hc = DeepSeek-V4's hc step as one lane-wise fp32 SFPU program.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .mhc_post_program_descriptor import N_STREAMS, create_program_descriptor
+from .mhc_post_program_descriptor import N_STREAMS, create_program_descriptor, hc_params
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ SUPPORTED = {
     "sublayer_dtype": [ttnn.float32, ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True],
-    "mode": ["plain", "stats"],
+    "mode": ["plain", "stats", "collapse"],
     "coef_source": ["separate", "packed"],
     "alignment": ["tile_aligned", "h_non_aligned"],
 }
@@ -138,8 +139,12 @@ def validate(
     collapse_pre=None,
     hc_scale=None,
     hc_base=None,
+    hc_norm_width=None,
+    hc_sinkhorn_iters=20,
     output_tensor=None,
     stats_output=None,
+    hc_output=None,
+    y_output=None,
 ):
     n = N_STREAMS
     # --- (1) structural errors (ValueError) ---
@@ -151,6 +156,10 @@ def validate(
             raise ValueError("mhc_post: collapse mode needs hc_scale with 3 values")
         if hc_base is None or len(hc_base) != n * (n + 2):
             raise ValueError(f"mhc_post: collapse mode needs hc_base with {n * (n + 2)} values")
+        if hc_norm_width is not None and not hc_norm_width > 0:
+            raise ValueError(f"mhc_post: hc_norm_width must be > 0, got {hc_norm_width}")
+        if int(hc_sinkhorn_iters) < 1:
+            raise ValueError(f"mhc_post: hc_sinkhorn_iters must be >= 1, got {hc_sinkhorn_iters}")
 
     f_shape, x_shape = list(input_tensor.shape), list(residual.shape)
     p_shape, c_shape = list(post.shape), list(comb.shape)
@@ -187,9 +196,20 @@ def validate(
             raise ValueError("mhc_post: stats_weight must be float32 TILE")
         if stats_weight.memory_config().is_sharded():
             raise ValueError("mhc_post: stats_weight must be interleaved")
+    if collapse_pre is not None:
+        p_shape = list(collapse_pre.shape)
+        if p_shape[:-1] != lead or p_shape[-1] < n:
+            raise ValueError(f"mhc_post: collapse_pre shape {p_shape} must be {lead} + [>= {n}]")
+        if collapse_pre.dtype != ttnn.float32 or collapse_pre.layout != ttnn.TILE_LAYOUT:
+            raise ValueError("mhc_post: collapse_pre must be float32 TILE")
+        if collapse_pre.memory_config().is_sharded():
+            raise ValueError("mhc_post: collapse_pre must be interleaved")
     _check_caller_buffer("output_tensor", output_tensor, x_shape, residual.dtype, inputs)
     if mode != "plain":
         _check_caller_buffer("stats_output", stats_output, x_shape[:-1] + [32], ttnn.float32, inputs)
+    if mode == "collapse":
+        _check_caller_buffer("hc_output", hc_output, x_shape[:-1] + [n * (n + 2)], ttnn.float32, inputs)
+        _check_caller_buffer("y_output", y_output, x_shape[:-1] + [C], ttnn.bfloat16, inputs)
 
     # --- (2) per-axis SUPPORTED, in TARGET order ---
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
@@ -244,8 +264,9 @@ def mhc_post(
     y_output=None,
     max_grid=None,
 ):
-    """Write the n = 4 new residual streams X' (plain) and, with `stats_weight`, the next hc
-    step's stats row (stats mode). See module docstring."""
+    """Write the n = 4 new residual streams X' (plain); with `stats_weight` also the next hc step's
+    stats row (stats mode); with `collapse_pre` too, its hc coefficients and collapsed input y
+    (collapse mode). See module docstring."""
     validate(
         input_tensor,
         residual,
@@ -258,8 +279,12 @@ def mhc_post(
         collapse_pre=collapse_pre,
         hc_scale=hc_scale,
         hc_base=hc_base,
+        hc_norm_width=hc_norm_width,
+        hc_sinkhorn_iters=hc_sinkhorn_iters,
         output_tensor=output_tensor,
         stats_output=stats_output,
+        hc_output=hc_output,
+        y_output=y_output,
     )
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
 
@@ -273,14 +298,25 @@ def mhc_post(
             ttnn.DRAM_MEMORY_CONFIG,
         )
     fused = stats_weight is not None
-    if fused and stats_output is None:
-        stats_output = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(list(residual.shape)[:-1] + [32]),
-            ttnn.float32,
-            ttnn.TILE_LAYOUT,
-            device,
-            ttnn.DRAM_MEMORY_CONFIG,
+    collapse = collapse_pre is not None
+    lead = list(residual.shape)[:-1]
+
+    def _alloc(shape, dtype):
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
         )
+
+    if fused and stats_output is None:
+        stats_output = _alloc(lead + [32], ttnn.float32)
+    param_block = None
+    if collapse:
+        n = N_STREAMS
+        if hc_output is None:
+            hc_output = _alloc(lead + [n * (n + 2)], ttnn.float32)
+        if y_output is None:
+            y_output = _alloc(lead + [list(input_tensor.shape)[-1]], ttnn.bfloat16)
+        width = hc_norm_width if hc_norm_width is not None else list(residual.shape)[-1]
+        param_block = hc_params(hc_scale, hc_base, width, hc_norm_eps, hc_eps, hc_sinkhorn_iters)
 
     program_descriptor = create_program_descriptor(
         input_tensor,
@@ -294,9 +330,32 @@ def mhc_post(
         max_grid=max_grid,
         stats_weight=stats_weight,
         stats_output=stats_output,
+        collapse_pre=collapse_pre,
+        hc_output=hc_output,
+        y_output=y_output,
+        hc_param_block=param_block,
     )
     if not fused:
         # Output tensor MUST be last in the list.
         return ttnn.generic_op([input_tensor, residual, post, comb, output_tensor], program_descriptor)
-    ttnn.generic_op([input_tensor, residual, post, comb, stats_weight, stats_output, output_tensor], program_descriptor)
-    return output_tensor, stats_output
+    if not collapse:
+        ttnn.generic_op(
+            [input_tensor, residual, post, comb, stats_weight, stats_output, output_tensor], program_descriptor
+        )
+        return output_tensor, stats_output
+    ttnn.generic_op(
+        [
+            input_tensor,
+            residual,
+            post,
+            comb,
+            stats_weight,
+            collapse_pre,
+            stats_output,
+            hc_output,
+            y_output,
+            output_tensor,
+        ],
+        program_descriptor,
+    )
+    return output_tensor, stats_output, hc_output, y_output
