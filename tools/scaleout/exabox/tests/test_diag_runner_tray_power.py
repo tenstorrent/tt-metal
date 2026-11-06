@@ -384,7 +384,7 @@ class TestTrayPowerPhase(unittest.TestCase):
 
         def runner(argv):
             cp = clean(argv)
-            if len(clean.calls) == 60:  # trays 1 and 2 read in full
+            if len(clean.calls) == 32:  # the latches and CPLD of trays 1 and 2
                 clock.t = TRAY_POWER_PHASE_S
             return cp
 
@@ -395,10 +395,50 @@ class TestTrayPowerPhase(unittest.TestCase):
         stop = f"[diag] tray_power: stopped reading: phase time limit of {TRAY_POWER_PHASE_S:g} s spent"
         self.assertEqual([l for l in lines if not l.startswith("[diag] tray_power: tray ")], [stop])
         self.assertEqual(len(lines), 5)  # and one record line per HSC of trays 1 and 2
-        self.assertEqual(len(clean.calls), 60)
+        self.assertEqual(len(clean.calls), 32)
         self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [PASS, PASS, WARN, WARN])
         for t in (3, 4):
             self.assertIn("not read: HSC 0x40, HSC 0x42, CPLD (phase time limit", checks[t].details)
+
+    def test_deadline_in_the_record_pass_keeps_every_tray_status_verdict(self):
+        # Every tray's latches and CPLD are read before any record word: a slow BMC
+        # that spends the phase limit on trays 1-2 record words cannot cost trays 3-4
+        # the STATUS_WORD / STATUS_INPUT reads that decide FAIL.
+        clock = FakeClock()
+        hsc = {
+            (3, 0x42): dict(CLEAN_HSC, word=0x2002, input=0x20),  # VIN_UV_WARN
+            (4, 0x40): dict(CLEAN_HSC, word=0x0010, iout=0x80),  # IOUT_OC
+        }
+        bmc = FakeBmc(hsc=hsc)
+        status = {(0x79,), (0x7C,), (0x7B,)}
+
+        def runner(argv):
+            cp = bmc(argv)
+            if len(bmc.calls) == 4 * 16 + 14:  # pass 1 of 4 trays, then tray 1's record words
+                clock.t = TRAY_POWER_PHASE_S
+            return cp
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            checks = by_tray(run_phase(runner, clock=clock))
+        self.assertEqual(len(bmc.calls), 78)
+        first_record = next(i for i, a in enumerate(bmc.calls) if txn_of(a)[1] != 0x80 and txn_of(a)[3] not in status)
+        self.assertEqual(first_record, 64)
+        self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [PASS, PASS, FAIL, FAIL])
+        self.assertIn("HSC 0x42: VIN_UV_WARN latched", checks[3].details)
+        self.assertIn("HSC 0x40: IOUT_OC latched", checks[4].details)
+        for t in (1, 2, 3, 4):
+            self.assertNotIn("not read", checks[t].details)
+        lines = err.getvalue().splitlines()
+        rec = {(t, a): next(ln for ln in lines if f"tray_power: tray {t} HSC 0x{a:02x}:" in ln)
+               for t in (1, 2, 3, 4) for a in (0x40, 0x42)}  # fmt: skip
+        for a in (0x40, 0x42):
+            self.assertIn("FAULT_RECORD 0x0000, FAULT_RECORD_LAST 0x0012, STATUS_IOUT 0x00, VOUT 12.22 V", rec[1, a])
+            for t in (2, 3, 4):
+                self.assertIn("FAULT_RECORD not read, FAULT_RECORD_LAST not read, STATUS_IOUT 0x", rec[t, a])
+                self.assertIn("VOUT not read, IOUT peak not read, TEMP peak not read", rec[t, a])
+                self.assertIsNone(checks[t].data["hsc"][f"0x{a:02x}"]["fault_record"])
+        self.assertIn(f"stopped reading: phase time limit of {TRAY_POWER_PHASE_S:g} s spent", err.getvalue())
 
     def test_bmc_hanging_mid_run_is_bounded_by_the_phase_limit(self):
         clock = FakeClock()

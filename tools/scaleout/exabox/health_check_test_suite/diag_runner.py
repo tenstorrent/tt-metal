@@ -2728,7 +2728,7 @@ def decode_hsc_status(word: int, inp: int, iout: int | None = None) -> tuple[lis
 
 
 def decode_hsc_record(st: dict) -> dict:
-    """Decoded SYS-5505 record words of one hsc() read (None where not read)."""
+    """Decoded SYS-5505 record words of one hsc_record() read (None where not read)."""
 
     def scale(key: str, k: float) -> float | None:
         v = st.get(key)
@@ -2769,7 +2769,7 @@ def hsc_record_text(st: dict) -> str:
 
 
 def hsc_record_warnings(hscs_by_tray: dict) -> dict[int, list[str]]:
-    """WARN lines per tray from the record words of every HSC ({tray: {addr: hsc()}}).
+    """WARN lines per tray from the record words of every HSC ({tray: {addr: hsc_record()}}).
 
     A set FAULT_RECORD; an IOUT peak above the HSC's own IOUT_OC_WARN_LIMIT; or
     an IOUT peak more than HSC_PEAK_PCT % above the median of the other feeds'
@@ -2928,25 +2928,29 @@ class TrayPowerReader:
             self.bus_ok[bus] = self.bus_ok.get(bus, 0) + 1
         return got
 
-    def hsc(self, bus: int, addr: int) -> dict:
-        """One HSC's latched status, or the reads that failed. One retry per read."""
+    def _read(self, bus: int, addr: int, nbytes: int, code: int) -> list[int] | None:
+        return self.txn(bus, addr, nbytes, code) or self.txn(bus, addr, nbytes, code)
 
-        def read(nbytes: int, code: int) -> list[int] | None:
-            return self.txn(bus, addr, nbytes, code) or self.txn(bus, addr, nbytes, code)
+    @staticmethod
+    def _word16(got: list[int] | None) -> int | None:
+        return None if got is None else got[0] | got[1] << 8  # low byte first
 
-        def word16(got: list[int] | None) -> int | None:
-            return None if got is None else got[0] | got[1] << 8  # low byte first
-
-        word, inp, iout = read(2, HSC_STATUS_WORD), read(1, HSC_STATUS_INPUT), read(1, HSC_STATUS_IOUT)
-        st = {
-            "status_word": word16(word),
+    def hsc_status(self, bus: int, addr: int) -> dict:
+        """One HSC's latched status (the FAIL-deciding reads), or the reads that failed. One retry per read."""
+        word = self._read(bus, addr, 2, HSC_STATUS_WORD)
+        inp, iout = self._read(bus, addr, 1, HSC_STATUS_INPUT), self._read(bus, addr, 1, HSC_STATUS_IOUT)
+        return {
+            "status_word": self._word16(word),
             "status_input": None if inp is None else inp[0],
             "status_iout": None if iout is None else iout[0],
         }
+
+    def hsc_record(self, bus: int, addr: int, st: dict) -> dict:
+        """Add one HSC's SYS-5505 record and peak words (WARN only) to its hsc_status() `st`."""
         for key, code in HSC_RECORD_READS:
-            st[key] = word16(read(2, code))
+            st[key] = self._word16(self._read(bus, addr, 2, code))
         for key, code in HSC_PEAK_READS:
-            st[key] = word16(self.txn(bus, addr, 2, code))  # clears on read: once, no retry
+            st[key] = self._word16(self.txn(bus, addr, 2, code))  # clears on read: once, no retry
         return st
 
     def _stable(self, once) -> str | None:
@@ -2977,7 +2981,7 @@ class TrayPowerReader:
 
 
 def tray_power_check(tray: int, hscs: dict, cpld: dict, why: str = "", warns=()) -> Check:
-    """One tray's Check from its HSC reads ({addr: hsc()}) and CPLD read (cpld()).
+    """One tray's Check from its HSC reads ({addr: hsc_record()}) and CPLD read (cpld()).
 
     `why` says why reads were cut short (the phase's time limit), for the
     'not read' text. A tray whose CPLD power enable reads low was powered off on
@@ -3048,12 +3052,17 @@ def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None, clock=ti
         return
     reader = TrayPowerReader(runner, clock)
     reads = {}
+    # Pass 1: every tray's latches and CPLD, which decide FAIL. Pass 2: the record
+    # and peak words, WARN only, so a slow BMC spends the phase limit on them last.
     for tray, bus in sorted(TRAY_POWER_BUS.items()):
-        hscs = {addr: reader.hsc(bus, addr) for addr in TRAY_POWER_HSC_ADDRS}
+        hscs = {addr: reader.hsc_status(bus, addr) for addr in TRAY_POWER_HSC_ADDRS}
         # No early exit on a tray with no reply: a dead tray NACKs fast and
         # must not hide the next ones; hangs are bounded by the reader.
         cpld = reader.cpld(bus)
         reads[tray] = (hscs, cpld, reader.stopped or reader.bus_err.get(bus, ""))
+    for tray, bus in sorted(TRAY_POWER_BUS.items()):
+        for addr, st in reads[tray][0].items():
+            reader.hsc_record(bus, addr, st)
     # The peak rule compares each feed with all the others, so it runs once every tray is read.
     warns = hsc_record_warnings({t: r[0] for t, r in reads.items()})
     checks = [tray_power_check(t, hscs, cpld, why=why, warns=warns[t]) for t, (hscs, cpld, why) in reads.items()]
