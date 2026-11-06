@@ -203,9 +203,8 @@ _PERF_SAMPLES = 15
 _PERF_MARGIN = 0.05
 # A full chunk that starts 320 rows into the second rank, as the layer gates place it: that rank splits.
 _PERF_START = _ROWS + 320
-# Device-time references in us, at the model's HiFi2. The op runs on each chip alone: the same per-chip workload on
-# every SKU.
-_PERF_REFERENCE_US = {"SP8xTP4": 29.5, "loudbox-SP8xTP1": 24.5, "quietbox-SP4xTP1": 29.5}
+# Device-time references in us, at the model's HiFi2. The op runs on each chip alone.
+_PERF_REFERENCE_US = {"SP8xTP4": 29.5, "loudbox-SP8xTP1": 24.5, "quietbox-SP4xTP1": 24.4}
 
 
 @pytest.mark.parametrize(
