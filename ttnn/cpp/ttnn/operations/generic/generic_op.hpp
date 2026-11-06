@@ -49,12 +49,13 @@ void prepare_generic_op(
 using tt::tt_metal::experimental::ProgramRunArgs;
 using tt::tt_metal::experimental::ProgramSpec;
 
-// Fixed: a ProgramSpec per mesh coordinate range.
+// Fixed: a ProgramSpec per mesh coordinate range. The ranges must not overlap, and every device in a range must hold
+// every tensor.
 struct MeshProgramSpec {
     std::vector<std::pair<ttnn::MeshCoordinateRange, ProgramSpec>> programs;
 };
 
-// Per call: the run args for each range of the MeshProgramSpec.
+// Per call: the run args for each range of the MeshProgramSpec, for exactly its ranges.
 struct MeshProgramRunArgs {
     std::vector<std::pair<ttnn::MeshCoordinateRange, ProgramRunArgs>> programs;
 };
@@ -71,6 +72,9 @@ Tensor generic_op(
     const MeshProgramSpec& mesh_program_spec,
     const MeshProgramRunArgs& mesh_run_args);
 
+// Compiles the program that generic_op with the same arguments would run and puts it in the program cache, without
+// running it. The arguments are checked as for generic_op. If the program is already cached, the run args are applied
+// to it first, so they stay in effect, DFB size overrides included, even if the preparation then fails.
 void prepare_generic_op(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args);
 
 void prepare_generic_op(
