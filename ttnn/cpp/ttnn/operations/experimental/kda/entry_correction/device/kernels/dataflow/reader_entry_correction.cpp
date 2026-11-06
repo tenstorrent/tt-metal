@@ -12,7 +12,7 @@
 #include "experimental/kernel_args.h"
 
 // Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds, and the
-// rows of E = A - I, B and the seed this core forms the final state of.
+// rows of E = A - I and B this core forms the final state of.
 // final_stride: a head's cores each form every final_stride-th tile row of the final state.
 // streamed: interleaved terms, read a chunk row of F(0) and F(I) at a time; otherwise they are in place in the shard.
 // seed_receivers: the head's other cores, which the head's first core writes the seeds to (varargs: NoC x | y << 16).
@@ -36,7 +36,9 @@ TT_KERNEL void reader(
     DataflowBuffer terms(dfb::terms);
     DataflowBuffer e(dfb::e);
     DataflowBuffer b(dfb::b);
-    DataflowBuffer seed_row(dfb::seed_row);
+    // The seeds' exact views: the same storage, pushed with the seeds.
+    DataflowBuffer seed_exact(dfb::seed_exact);
+    DataflowBuffer tail_exact(dfb::tail_exact);
     DataflowBuffer ctl(dfb::ctl);
     DataflowBuffer ctl_writer(dfb::ctl_writer);
     Noc noc;
@@ -97,13 +99,9 @@ TT_KERNEL void reader(
     // address on each. Every core reading its own copy instead makes the K3 layer 17 us slower on Galaxy.
     Semaphore landed(sem::seed_landed);
     const uint32_t seeds = need_group + need_tail;
-    // Where the seeds sit in this core's L1: the final rows copy their seed row from there.
-    uint32_t group_l1 = 0;
-    uint32_t tail_l1 = 0;
     if (seed_sender) {
-        const auto send = [&](auto& buffer, const auto& states, uint32_t& l1) {
+        const auto send = [&](auto& buffer, const auto& states) {
             buffer.reserve_back(state_tiles);
-            l1 = buffer.get_write_ptr();
             const uint32_t tile = buffer.get_entry_size();
             for (uint32_t i = 0; i < state_tiles; ++i) {
                 noc.async_read(states, buffer, tile, {.page_id = head * state_tiles + i}, {.offset_bytes = i * tile});
@@ -117,10 +115,10 @@ TT_KERNEL void reader(
             buffer.push_back(state_tiles);
         };
         if (need_group) {
-            send(seed, TensorAccessor(tensor::entry), group_l1);
+            send(seed, TensorAccessor(tensor::entry));
         }
         if (need_tail) {
-            send(tail, TensorAccessor(tensor::tail_entry), tail_l1);
+            send(tail, TensorAccessor(tensor::tail_entry));
         }
         if (seeds != 0) {
             noc_async_write_barrier();
@@ -134,14 +132,21 @@ TT_KERNEL void reader(
         landed.wait_min(seeds);
         if (need_group) {
             seed.reserve_back(state_tiles);
-            group_l1 = seed.get_write_ptr();
             seed.push_back(state_tiles);
         }
         if (need_tail) {
             tail.reserve_back(state_tiles);
-            tail_l1 = tail.get_write_ptr();
             tail.push_back(state_tiles);
         }
+    }
+    // The seeds have landed (read here, or written by the head's first core): their exact views are ready too.
+    if (need_group) {
+        seed_exact.reserve_back(state_tiles);
+        seed_exact.push_back(state_tiles);
+    }
+    if (need_tail) {
+        tail_exact.reserve_back(state_tiles);
+        tail_exact.push_back(state_tiles);
     }
     if constexpr (streamed) {
         // Head h's F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
@@ -170,28 +175,21 @@ TT_KERNEL void reader(
         terms.push_back(2 * core_chunks * kt);
     }
     if (final) {
-        // Tile rows of E, of B and of the seed: each row of the final state is seed[row] + (E[row] @ seed + B[row]).
+        // Tile rows of E and of B: each row of the final state is seed[row] + (E[row] @ seed + B[row]).
         const auto e_states = TensorAccessor(tensor::final_e);
         const auto b_states = TensorAccessor(tensor::final_b);
-        // The seed row comes from the seed already in this core's L1 (a final rank's seed implies need_group, a final
-        // tail's need_tail): re-reading it from DRAM on every final-row core costs the op ~4 us on Galaxy.
-        const uint32_t seed_l1 = final_tail ? tail_l1 : group_l1;
         const uint32_t tile = b.get_entry_size();
         for (uint32_t row = final_row; row < kt; row += final_stride) {
             e.reserve_back(kt);
             b.reserve_back(kt);
-            seed_row.reserve_back(kt);
             for (uint32_t c = 0; c < kt; ++c) {
                 const uint32_t page = head * state_tiles + row * kt + c;
                 noc.async_read(e_states, e, tile, {.page_id = page}, {.offset_bytes = c * tile});
                 noc.async_read(b_states, b, tile, {.page_id = page}, {.offset_bytes = c * tile});
             }
-            noc_async_read(get_noc_addr(seed_l1 + row * kt * tile), seed_row.get_write_ptr(), kt * tile);
             noc.async_read_barrier();
-            noc_async_read_barrier();
             e.push_back(kt);
             b.push_back(kt);
-            seed_row.push_back(kt);
         }
     }
 }
