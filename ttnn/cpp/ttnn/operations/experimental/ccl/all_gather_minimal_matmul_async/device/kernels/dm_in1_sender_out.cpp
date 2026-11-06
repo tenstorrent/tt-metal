@@ -8,10 +8,15 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "matmul_dataflow_common.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/kernels/input_pipelining.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
 using ttnn::ccl::Topology;
+
+#if defined(FSDP_FUSED) && MM_CUT_THROUGH_CHUNKS > 0
+#error "MM_CUT_THROUGH_CHUNKS does not support the FSDP in1 path"
+#endif
 
 #ifdef FSDP_FUSED
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -424,6 +429,59 @@ void kernel_main() {
                         }
                     }
                 }
+#if MM_CUT_THROUGH_CHUNKS > 0
+                {
+                    // Chunks are rows of K, in the slot's row order: the k_left_tiles rows of the left half, then
+                    // the k_right_tiles rows of the right half.
+                    constexpr uint32_t ct_rows_per_chunk =
+                        (K_block_tiles + MM_CUT_THROUGH_CHUNKS - 1) / MM_CUT_THROUGH_CHUNKS;
+                    constexpr uint32_t ct_num_chunks = (K_block_tiles + ct_rows_per_chunk - 1) / ct_rows_per_chunk;
+                    const uint32_t slot_address = in1_start_address;
+                    move_block_cut_through<static_cast<bool>(is_injector_core)>(
+                        noc_obj,
+                        in1_sender_sem,
+                        in1_receiver_sem,
+                        !is_sink_core,
+                        in1_sender_noc_x,
+                        in1_sender_noc_y,
+                        in1_dest_noc_x,
+                        in1_dest_noc_y,
+                        ct_num_chunks,
+                        [&](uint32_t c) {
+                            const uint32_t r0 = c * ct_rows_per_chunk;
+                            const uint32_t r1 = std::min<uint32_t>(r0 + ct_rows_per_chunk, K_block_tiles);
+                            const uint32_t left0 = std::min(r0, k_left_tiles);
+                            const uint32_t left1 = std::min(r1, k_left_tiles);
+                            const uint32_t right0 = std::max(r0, k_left_tiles) - k_left_tiles;
+                            const uint32_t right1 = std::max(r1, k_left_tiles) - k_left_tiles;
+                            read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                                noc_obj,
+                                in1_reader,
+                                in1_shape,
+                                cb_in1,
+                                in1_tile_size,
+                                k_block_left_tile + left0,
+                                k_block_left_tile + left1,
+                                k_block_right_tile + right0,
+                                k_block_right_tile + right1,
+                                n_tile,
+                                n_tile_end,
+                                /*barrier=*/false,
+                                r0 * full_N_tiles_bytes);
+                        },
+                        [&](uint32_t c) {
+                            // Only the non-padded N tiles of each row, as in the store-and-forward path.
+                            const uint32_t r0 = c * ct_rows_per_chunk;
+                            const uint32_t r1 = std::min<uint32_t>(r0 + ct_rows_per_chunk, K_block_tiles);
+                            uint32_t address = slot_address + r0 * full_N_tiles_bytes;
+                            for (uint32_t r = r0; r < r1; r++) {
+                                noc_async_write(address, in1_unicast_data_base_addr | address, current_N_tiles_bytes);
+                                address += full_N_tiles_bytes;
+                            }
+                        },
+                        [&]() { cb_in1.push_back(in1_block_num_tiles); });
+                }
+#else
                 if constexpr (is_injector_core) {
 #ifdef FSDP_FUSED
                     // Skewed-shard mirror of in0: the K-block's stripe == my_rank is this device's
@@ -541,6 +599,7 @@ void kernel_main() {
 
                     in1_valid_sem.relay_unicast(noc_obj, in1_receiver_sem, in1_dest_noc_x, in1_dest_noc_y);
                 }
+#endif  // MM_CUT_THROUGH_CHUNKS
 #ifdef FSDP_FUSED
                 // Fabric relay (uni-ring, mirrors in0): on the first m-pass, relay the just-consumed
                 // full K-block to the FSDP predecessor's PWB. Skewed (a+b) sharding makes our consume
