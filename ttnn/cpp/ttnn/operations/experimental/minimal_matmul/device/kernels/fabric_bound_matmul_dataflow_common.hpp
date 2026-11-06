@@ -143,7 +143,9 @@ void read_in1_block_sync(
     uint32_t d1_start,
     uint32_t d1_end,
     // Byte offset from the CB base at which this block's writes begin
-    uint32_t write_ptr_offset = 0) {
+    uint32_t write_ptr_offset = 0,
+    // When false, issue the async reads but skip the completion barrier
+    bool issue_barrier = true) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
     Noc noc;
@@ -167,7 +169,9 @@ void read_in1_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    if (issue_barrier) {
+        noc_async_read_barrier();
+    }
     noc.write_zeros_l1_barrier();
 }
 

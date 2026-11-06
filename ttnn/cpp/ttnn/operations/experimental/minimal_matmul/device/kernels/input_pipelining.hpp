@@ -4,8 +4,10 @@
 
 #pragma once
 
-// Input pipelining shared by the minimal_matmul (Metal 2.0) and all_gather_minimal_matmul_async data-movement
-// kernels, whose in0 / in1 blocks travel down the same store-and-forward chain of unicast hops.
+// Input pipelining shared by the minimal_matmul data-movement kernels (Metal 2.0, the legacy pair behind
+// minimal_matmul_strided_reduce_scatter_async, and the fabric-bound pair behind
+// strided_all_gather_minimal_matmul_async) and those of all_gather_minimal_matmul_async, whose in0 / in1 blocks
+// travel down the same store-and-forward chain of unicast hops.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -29,9 +31,11 @@
 #if MM_CUT_THROUGH_CHUNKS > 0 && defined(MM_INJECTOR_PREFETCH)
 #error "MM_CUT_THROUGH_CHUNKS and MM_INJECTOR_PREFETCH are exclusive"
 #endif
-// The fused-CCL k-block schedule (FUSE_AG) is only compiled by the legacy kernels, which have neither mode.
-#if defined(FUSE_AG) && (MM_CUT_THROUGH_CHUNKS > 0 || defined(MM_INJECTOR_PREFETCH))
-#error "MM_CUT_THROUGH_CHUNKS / MM_INJECTOR_PREFETCH do not support FUSE_AG"
+// Under the fused-CCL k-block schedule (FUSE_AG) an injector learns its next K block only once the gather delivers
+// it, so it cannot prefetch. Cut-through is per block and does not care: the fabric-bound kernels take it with
+// FUSE_AG, while the legacy kernels, which no AG-fused op builds any more, refuse it themselves.
+#if defined(FUSE_AG) && defined(MM_INJECTOR_PREFETCH)
+#error "MM_INJECTOR_PREFETCH does not support FUSE_AG"
 #endif
 
 /**

@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "fabric_bound_matmul_dataflow_common.hpp"
+#include "input_pipelining.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 // Set by the host only when fusing AG; default to 1 (single whole band per k-block) otherwise.
@@ -352,8 +353,61 @@ void kernel_main() {
                     }
                 }
 
-                // ---- Read-once, re-present-per-band ---- in1 has no M dimension
                 [[maybe_unused]] uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+#if MM_CUT_THROUGH_CHUNKS > 0
+                // Cut-through (input_pipelining.hpp): one presentation per K block (no bands), read straight into the
+                // slot without the scratch copy.
+#ifdef FUSE_AG
+                if constexpr (is_injector_core) {
+                    k_block = fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
+                }
+#endif
+                cb_in1.reserve_back(in1_block_num_tiles);
+                {
+                    // Chunks are rows of K: each is up to ct_rows_per_chunk rows of N_block_tiles tiles.
+                    constexpr uint32_t ct_rows_per_chunk =
+                        (K_block_tiles + MM_CUT_THROUGH_CHUNKS - 1) / MM_CUT_THROUGH_CHUNKS;
+                    constexpr uint32_t ct_num_chunks = (K_block_tiles + ct_rows_per_chunk - 1) / ct_rows_per_chunk;
+                    const uint32_t slot_address = get_write_ptr(cb_in1_id);
+                    move_block_cut_through<static_cast<bool>(is_injector_core)>(
+                        noc,
+                        in1_sender_sem,
+                        in1_receiver_sem,
+                        !is_sink_core,
+                        in1_sender_noc_x,
+                        in1_sender_noc_y,
+                        in1_dest_noc_x,
+                        in1_dest_noc_y,
+                        ct_num_chunks,
+                        [&](uint32_t c) {
+                            const uint32_t r0 = c * ct_rows_per_chunk;
+                            const uint32_t r1 = std::min<uint32_t>(r0 + ct_rows_per_chunk, K_block_tiles);
+                            read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                                in1_reader,
+                                in1_shape,
+                                cb_in1_id,
+                                in1_tile_size,
+                                k_block * K_block_tiles + r0,
+                                k_block * K_block_tiles + r1,
+                                n_tile,
+                                n_tile_end,
+                                /*write_ptr_offset=*/r0 * full_N_tiles_bytes,
+                                /*issue_barrier=*/false);
+                        },
+                        [&](uint32_t c) {
+                            // Only the non-padded N tiles of each row, as in the store-and-forward path.
+                            const uint32_t r0 = c * ct_rows_per_chunk;
+                            const uint32_t r1 = std::min<uint32_t>(r0 + ct_rows_per_chunk, K_block_tiles);
+                            uint32_t address = slot_address + r0 * full_N_tiles_bytes;
+                            for (uint32_t r = r0; r < r1; r++) {
+                                noc_async_write(address, in1_unicast_data_base_addr | address, current_N_tiles_bytes);
+                                address += full_N_tiles_bytes;
+                            }
+                        },
+                        [&]() { cb_in1.push_back(in1_block_num_tiles); });
+                }
+#else
+                // ---- Read-once, re-present-per-band ---- in1 has no M dimension
                 uint32_t nb;
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
@@ -427,6 +481,7 @@ void kernel_main() {
                         }
                     }
                 }
+#endif  // MM_CUT_THROUGH_CHUNKS
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {

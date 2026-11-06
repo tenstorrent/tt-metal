@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "minimal_matmul_program_factory.hpp"
+#include "minimal_matmul_input_pipelining.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
@@ -386,10 +387,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
     auto in1_valid_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, VALID);
 
+    // The input CBs may deepen to a third block once every other CB is declared (input pipelining, end of function).
     uint32_t in0_cb_id = tt::CBIndex::c_0;
+    const size_t in0_cb_desc_index = program.cbs.size();
     push_cb(program, core_grid, in0_cb_id, static_cast<uint32_t>(in0_tile_size), in0_cb_num_tiles, in0_data_format);
 
     uint32_t in1_cb_id = tt::CBIndex::c_1;
+    const size_t in1_cb_desc_index = program.cbs.size();
     push_cb(program, core_grid, in1_cb_id, static_cast<uint32_t>(in1_tile_size), in1_cb_num_tiles, in1_data_format);
 
     uint32_t out_cb_id = tt::CBIndex::c_2;
@@ -537,6 +541,24 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         auto all_cores_tmp = corerange_to_cores(core_grid, num_cores, true);
         for (const auto& c : all_cores_tmp) {
             all_worker_cores_noc.push_back(device->worker_core_from_logical_core(c));
+        }
+    }
+
+    // Input pipelining (minimal_matmul_input_pipelining.hpp), as in minimal_matmul: cut-through forwarding down the
+    // in0 / in1 chains when the block a core computes has the intensity for it, else injector prefetch. Neither under
+    // the AG-fused k-block schedule (FUSE_AG), which these kernels refuse them for. The input CBs' third block is
+    // decided at the end, once every CB is declared.
+    const bool ag_fused = defines.contains("FUSE_AG");
+    const uint32_t cut_through_chunks =
+        ag_fused ? 0
+                 : input_pipelining::cut_through_chunks(
+                       std::min(M_block_tiles, M_tiles_per_core), std::min(N_block_tiles, N_tiles_per_core));
+    const bool injector_prefetch = !ag_fused && input_pipelining::injector_prefetch(cut_through_chunks);
+    for (auto* d : {&defines, &in0_concat_defines}) {
+        if (cut_through_chunks > 0) {
+            (*d)["MM_CUT_THROUGH_CHUNKS"] = std::to_string(cut_through_chunks);
+        } else if (injector_prefetch) {
+            (*d)["MM_INJECTOR_PREFETCH"] = "1";
         }
     }
 
@@ -1005,6 +1027,37 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         program.kernels[compute_kernels_id].emplace_runtime_args(core, compute_runtime_args);
+    }
+
+    // A third in0 / in1 block when every CB on the matmul cores, with it, fits the static L1 space with room to spare
+    // (input_pipelining::input_buffer_blocks). A CB elsewhere (e.g. a fused reduce-scatter's) counts if its cores
+    // overlap the grid, and so do the op's own L1 tensors (the reduce-scatter's rolling L1 window over our output).
+    {
+        uint64_t l1_bytes = input_pipelining::l1_tensor_bytes_per_core(
+            {input_tensor.buffer(), weight_tensor.buffer(), in2_buffer, in3_buffer});
+        for (const auto& output_tensor : output_tensors) {
+            l1_bytes += input_pipelining::l1_tensor_bytes_per_core({output_tensor.buffer()});
+        }
+        for (const auto& cb : program.cbs) {
+            if (cb.core_ranges.intersects(core_grid)) {
+                l1_bytes += cb.total_size;
+            }
+        }
+        const uint32_t input_buffer_blocks = input_pipelining::input_buffer_blocks(
+            device,
+            l1_bytes,
+            (static_cast<uint64_t>(in0_tile_size) * in0_block_num_tiles) +
+                (static_cast<uint64_t>(in1_tile_size) * in1_block_num_tiles));
+        program.cbs[in0_cb_desc_index].total_size = in0_tile_size * in0_block_num_tiles * input_buffer_blocks;
+        program.cbs[in1_cb_desc_index].total_size = in1_tile_size * in1_block_num_tiles * input_buffer_blocks;
+        log_debug(
+            tt::LogOp,
+            "minimal_matmul (fused CCL) input pipelining: {} input blocks, cut-through chunks {}, injector prefetch {} "
+            "(L1 bytes {})",
+            input_buffer_blocks,
+            cut_through_chunks,
+            injector_prefetch,
+            l1_bytes);
     }
 
     return MinimalMatmulProgramFactory::shared_variables_t{

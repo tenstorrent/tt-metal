@@ -8,7 +8,10 @@
 #include <cstdlib>
 #include <optional>
 
+#include <initializer_list>
+
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 
@@ -68,6 +71,19 @@ inline uint32_t input_buffer_blocks(tt::tt_metal::IDevice* device, uint64_t buff
     const bool fits = ceiling > base + kL1Reserve && buffer_bytes + third_block_bytes <= ceiling - base - kL1Reserve;
     const uint32_t blocks = env_override("TT_MM_IN_BUFFERS").value_or(fits ? 3u : 2u);
     return blocks < 2 ? 2 : blocks;
+}
+
+// Per-core L1 that the op's own L1-resident tensors take (e.g. the rolling L1 window a fused reduce-scatter reads the
+// matmul output from), to add to `buffer_bytes`: an interleaved L1 tensor puts this much in every L1 bank. A pure
+// function of the tensor specs, like the rest. Null and DRAM buffers count 0.
+inline uint64_t l1_tensor_bytes_per_core(std::initializer_list<const tt::tt_metal::Buffer*> buffers) {
+    uint64_t bytes = 0;
+    for (const auto* buffer : buffers) {
+        if (buffer != nullptr && buffer->is_l1()) {
+            bytes += buffer->aligned_size_per_bank();
+        }
+    }
+    return bytes;
 }
 
 }  // namespace ttnn::experimental::prim::input_pipelining

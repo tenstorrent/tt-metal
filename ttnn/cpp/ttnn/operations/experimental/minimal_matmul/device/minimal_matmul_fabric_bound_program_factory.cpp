@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "minimal_matmul_fabric_bound_program_factory.hpp"
+#include "minimal_matmul_input_pipelining.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -310,6 +311,16 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     // Number of leading (self/local) k-block positions this device owns (see kernels)
     uint32_t num_local_k_blocks = K_blocks;
 
+    // Input pipelining (minimal_matmul_input_pipelining.hpp), as in minimal_matmul: cut-through forwarding down the
+    // in0 / in1 chains when the block a core computes has the intensity for it. Not with the banded in0 delivery
+    // (IN0_SUB_CHUNKS > 1), whose bands are separate CB slots presented band by band. No injector prefetch: an in0
+    // injector waits on the gather per K block. The input CBs' third block is decided at the end, once every CB is
+    // declared.
+    const uint32_t cut_through_chunks =
+        in0_sub_chunks > 1 ? 0
+                           : input_pipelining::cut_through_chunks(
+                                 std::min(M_block_tiles, M_tiles_per_core), std::min(N_block_tiles, N_tiles_per_core));
+
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
@@ -338,14 +349,18 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
 
+    // The input CBs may deepen to a third block once every other CB is created (input pipelining, end of function).
     uint32_t in0_cb_id = tt::CBIndex::c_0;
-    tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
+    const auto in0_cb_handle = std::get<1>(
+        tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format));
 
     uint32_t in1_cb_id = tt::CBIndex::c_1;
-    tt::tt_metal::create_cb(in1_cb_id, program, core_grid, in1_tile_size, in1_cb_num_tiles, in1_data_format);
+    const auto in1_cb_handle = std::get<1>(
+        tt::tt_metal::create_cb(in1_cb_id, program, core_grid, in1_tile_size, in1_cb_num_tiles, in1_data_format));
 
-    {
-        // Scratch holds one K_block x N_block so the in1 injector can read it once and re-present it to compute
+    if (cut_through_chunks == 0) {
+        // Scratch holds one K_block x N_block so the in1 injector can read it once and re-present it to compute.
+        // The cut-through path reads straight into the in1 CB and never re-presents a block.
         uint32_t in1_scratch_cb_id = tt::CBIndex::c_7;
         tt::tt_metal::create_cb(
             in1_scratch_cb_id,
@@ -562,6 +577,10 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     // Per-DM-family defines
     auto in0_defines = defines;
     auto in1_defines = defines;
+    if (cut_through_chunks > 0) {
+        in0_defines["MM_CUT_THROUGH_CHUNKS"] = std::to_string(cut_through_chunks);
+        in1_defines["MM_CUT_THROUGH_CHUNKS"] = std::to_string(cut_through_chunks);
+    }
     if (split_output_write) {
         in1_defines["SPLIT_OUTPUT_WRITE"] = "1";
         in1_defines["AG_SPLIT_NOC1_PCT"] = std::to_string(split_noc1_pct);
@@ -982,6 +1001,46 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
             compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
+    }
+
+    // A third in0 / in1 block when every CB on the matmul cores, with it, fits the static L1 space with room to spare
+    // (input_pipelining::input_buffer_blocks). The fused all-gather's CBs are created after this, on its own worker
+    // cores, which cannot overlap the matmul's (both run data-movement kernels on the same RISCs). The op's own L1
+    // tensors count too.
+    {
+        uint64_t l1_bytes = input_pipelining::l1_tensor_bytes_per_core(
+            {input_tensor.buffer(),
+             weight_tensor.buffer(),
+             use_bias ? bias_tensor->buffer() : nullptr,
+             (fuse_op && fused_op_signaler->read_local_slice_from_input) ? fused_op_signaler->ag_input->buffer()
+                                                                         : nullptr,
+             use_fused_ternary ? fused_ternary_input_a->buffer() : nullptr,
+             use_fused_ternary ? fused_ternary_input_b->buffer() : nullptr});
+        for (const auto& output_tensor : output_tensors) {
+            l1_bytes += input_pipelining::l1_tensor_bytes_per_core({output_tensor.buffer()});
+        }
+        for (const auto& cb : program.circular_buffers()) {
+            if (cb->core_ranges().intersects(core_grid)) {
+                l1_bytes += cb->size();
+            }
+        }
+        const uint32_t input_buffer_blocks = input_pipelining::input_buffer_blocks(
+            device,
+            l1_bytes,
+            (static_cast<uint64_t>(in0_tile_size) * in0_block_num_tiles) +
+                (static_cast<uint64_t>(in1_tile_size) * in1_block_num_tiles));
+        if (input_buffer_blocks != double_buffer_factor) {
+            tt::tt_metal::UpdateCircularBufferTotalSize(
+                program, in0_cb_handle, in0_tile_size * in0_block_num_tiles * input_buffer_blocks);
+            tt::tt_metal::UpdateCircularBufferTotalSize(
+                program, in1_cb_handle, in1_tile_size * in1_block_num_tiles * input_buffer_blocks);
+        }
+        log_debug(
+            tt::LogOp,
+            "minimal_matmul (fabric-bound) input pipelining: {} input blocks, cut-through chunks {} (L1 bytes {})",
+            input_buffer_blocks,
+            cut_through_chunks,
+            l1_bytes);
     }
 
     return MinimalMatmulFabricBoundProgramFactory::shared_variables_t{

@@ -16,7 +16,14 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
+#include "input_pipelining.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+
+// Input pipelining (input_pipelining.hpp) as in dm_in1_sender_out_metal2.cpp, but not under the AG-fused k-block
+// schedule, which no op builds this kernel with any more.
+#if defined(FUSE_AG) && MM_CUT_THROUGH_CHUNKS > 0
+#error "MM_CUT_THROUGH_CHUNKS does not support FUSE_AG in this kernel"
+#endif
 
 void kernel_main() {
     Noc noc;
@@ -206,6 +213,9 @@ void kernel_main() {
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
     bool k_forward = true;
+    // MM_INJECTOR_PREFETCH: the current K block's reads were issued during the previous one. Never carried across
+    // output blocks: the last K block of one does not prefetch.
+    [[maybe_unused]] bool prefetched = false;
 
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
@@ -316,6 +326,123 @@ void kernel_main() {
                 }
 
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+#if MM_CUT_THROUGH_CHUNKS > 0
+                cb_in1.reserve_back(in1_block_num_tiles);
+                {
+                    // Chunks are rows of K: each is up to ct_rows_per_chunk rows of N_block_tiles tiles.
+                    constexpr uint32_t ct_rows_per_chunk =
+                        (K_block_tiles + MM_CUT_THROUGH_CHUNKS - 1) / MM_CUT_THROUGH_CHUNKS;
+                    constexpr uint32_t ct_num_chunks = (K_block_tiles + ct_rows_per_chunk - 1) / ct_rows_per_chunk;
+                    const uint32_t slot_address = cb_in1.get_write_ptr();
+                    move_block_cut_through<static_cast<bool>(is_injector_core)>(
+                        noc,
+                        in1_sender_semaphore,
+                        in1_receiver_semaphore,
+                        !is_sink_core,
+                        in1_sender_noc_x,
+                        in1_sender_noc_y,
+                        in1_dest_noc_x,
+                        in1_dest_noc_y,
+                        ct_num_chunks,
+                        [&](uint32_t c) {
+                            const uint32_t r0 = c * ct_rows_per_chunk;
+                            const uint32_t r1 = std::min<uint32_t>(r0 + ct_rows_per_chunk, K_block_tiles);
+                            read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                                in1_reader,
+                                in1_shape,
+                                cb_in1_id,
+                                in1_tile_size,
+                                k_block * K_block_tiles + r0,
+                                k_block * K_block_tiles + r1,
+                                n_tile,
+                                n_tile_end,
+                                /*barrier=*/false,
+                                r0 * full_N_tiles_bytes);
+                        },
+                        [&](uint32_t c) {
+                            // Only the non-padded N tiles of each row, as in the store-and-forward path.
+                            const uint32_t r0 = c * ct_rows_per_chunk;
+                            const uint32_t r1 = std::min<uint32_t>(r0 + ct_rows_per_chunk, K_block_tiles);
+                            uint32_t address = slot_address + r0 * full_N_tiles_bytes;
+                            for (uint32_t r = r0; r < r1; r++) {
+                                noc.async_write(
+                                    CoreLocalMem<uint32_t>(address),
+                                    UnicastEndpoint{},
+                                    current_N_tiles_bytes,
+                                    {},
+                                    {.noc_x = in1_dest_noc_x, .noc_y = in1_dest_noc_y, .addr = address});
+                                address += full_N_tiles_bytes;
+                            }
+                        },
+                        [&]() { cb_in1.push_back(in1_block_num_tiles); });
+                }
+#elif defined(MM_INJECTOR_PREFETCH)
+                if (!prefetched) {
+                    cb_in1.reserve_back(in1_block_num_tiles);
+                }
+                uint32_t in1_start_address = cb_in1.get_write_ptr();
+                if constexpr (is_injector_core) {
+                    if (prefetched) {
+                        // This block's reads were issued during the previous K block.
+                        noc.async_read_barrier();
+                        noc.write_zeros_l1_barrier();
+                    } else {
+                        read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            cb_in1_id,
+                            in1_tile_size,
+                            k_block * K_block_tiles,
+                            (k_block + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end);
+                    }
+                } else {
+                    in1_receiver_semaphore.set(INVALID);
+                    in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
+                    in1_receiver_semaphore.wait(VALID);
+                }
+                cb_in1.push_back(in1_block_num_tiles);
+
+                // Issue the next K block's reads into the next slot, if it is already free, before forwarding this
+                // block, so the DRAM latency overlaps the forward.
+                prefetched = false;
+                if constexpr (is_injector_core) {
+                    if (k_block_iter + 1 < K_num_blocks && cb_in1.pages_reservable_at_back(in1_block_num_tiles)) {
+                        cb_in1.reserve_back(in1_block_num_tiles);
+                        const uint32_t next_k_block = k_forward ? k_block_iter + 1 : (K_num_blocks - 2) - k_block_iter;
+                        read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            cb_in1_id,
+                            in1_tile_size,
+                            next_k_block * K_block_tiles,
+                            (next_k_block + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end,
+                            /*barrier=*/false);
+                        prefetched = true;
+                    }
+                }
+
+                if (!is_sink_core) {
+                    in1_sender_semaphore.wait(1);
+                    in1_sender_semaphore.set(0);
+                    for (uint32_t i = 0; i < K_block_tiles; i++) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(in1_start_address),
+                            UnicastEndpoint{},
+                            current_N_tiles_bytes,
+                            {},
+                            {.noc_x = in1_dest_noc_x, .noc_y = in1_dest_noc_y, .addr = in1_start_address});
+                        in1_start_address += full_N_tiles_bytes;
+                    }
+#ifdef ARCH_BLACKHOLE
+                    noc.async_writes_flushed();
+#endif
+                    in1_valid_semaphore.relay_unicast(noc, in1_receiver_semaphore, in1_dest_noc_x, in1_dest_noc_y);
+                }
+#else
                 cb_in1.reserve_back(in1_block_num_tiles);
 
                 uint32_t in1_start_address = cb_in1.get_write_ptr();
@@ -370,6 +497,7 @@ void kernel_main() {
 
                     in1_valid_semaphore.relay_unicast(noc, in1_receiver_semaphore, in1_dest_noc_x, in1_dest_noc_y);
                 }
+#endif  // MM_CUT_THROUGH_CHUNKS / MM_INJECTOR_PREFETCH
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
                     // Synchronize and signal strided reduce scatter readers after
