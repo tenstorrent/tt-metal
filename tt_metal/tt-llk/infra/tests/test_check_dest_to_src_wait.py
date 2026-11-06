@@ -480,6 +480,37 @@ def test_tree_headers_drops_index_entries_missing_on_disk(monkeypatch):
     assert mod.tree_headers() == [os.path.normpath(present)]
 
 
+def test_tree_headers_includes_untracked_headers(monkeypatch):
+    """A header that is not in the index yet is still part of a whole-tree scan."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_dest_to_src_wait_untracked", SCRIPT
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    seen = {}
+
+    class Result:
+        returncode = 0
+        stdout = (
+            "tt_metal/tt-llk/tt_llk_blackhole/tracked.h\0"
+            "tt_metal/tt-llk/tt_llk_blackhole/new.h\0"
+        )
+
+    def run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return Result()
+
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    monkeypatch.setattr(mod.os.path, "isfile", lambda path: True)
+    headers = mod.tree_headers()
+    assert "--cached" in seen["cmd"]
+    assert "--others" in seen["cmd"]
+    assert "--exclude-standard" in seen["cmd"]
+    assert [os.path.basename(path) for path in headers] == ["new.h", "tracked.h"]
+
+
 def test_missing_argument_file_is_ignored(tmp_path):
     """A deleted or non-existent file passed on the command line must not raise FileNotFoundError."""
     missing = tmp_path / "deleted.h"
