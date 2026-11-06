@@ -51,9 +51,12 @@ _PERF_MARGIN = 0.03
 # Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
 # through device synchronization. SP8xTP1 and SP4xTP1 open FABRIC_1D_RING, every other case a 2D fabric with K3's
 # payload (kda_device_params).
+# LoudBox SP8xTP1: relay's 1.152 x 1.015, conv's FP32-DST / BF16-DST ratio from run
+# https://github.com/tenstorrent/tt-metal/actions/runs/42012069827; composed from conv's measured ratio on relay's
+# reference, not measured on this base.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.152,
+        "SP8xTP1": 1.169,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
@@ -66,9 +69,11 @@ _PERF_REFERENCE_MS = {
 # lowers the clock by an amount that varies by runner. The cross-chip programs' wait for their neighbours still moves
 # a single replay by a few percent, hence the wider margin.
 _DEVICE_PERF_MARGIN = 0.05
+# QuietBox SP4xTP1: relay's 1.164 x 1.015, conv's ratio from the same run; composed from conv's measured ratio on
+# relay's reference, not measured on this base.
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.164,
+        "SP4xTP1": 1.181,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
@@ -81,7 +86,10 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
 # untraced call also pays its host dispatch, which a block of 10 calls does not fully hide.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.205, "untraced": 1.225}
+# Galaxy SP8xTP4: relay's 1.205 / 1.225 x 1.013, conv's traced median ratio over 3 interleaved c03u08 rounds (conv
+# 43ad083e1ee vs main 28a48b08a82); composed from conv's measured ratio on relay's reference, not measured on this
+# base. The untraced entry assumes the traced ratio.
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.221, "untraced": 1.241}
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
