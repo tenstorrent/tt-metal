@@ -22,6 +22,7 @@ from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     EARLY_DEPTH,
     IN_CHANNELS,
     SINGLE_DEPTH,
+    Flux3KleinPlan,
     Flux3KleinSequenceLayout,
     Flux3KleinTransformer,
     padded_length,
@@ -161,6 +162,9 @@ def image_to_uint8(image: ttnn.Tensor) -> ttnn.Tensor:
 
 
 class Flux3KleinPipeline:
+    # Reuse the per-layout device constants across requests (bit-identical; off = rebuild them every request).
+    cache_constants: bool = True
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -228,6 +232,10 @@ class Flux3KleinPipeline:
             sizes=SIZES,
         )
         self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None
+        # Device constants that depend only on the request's layout (RoPE tables, modulation and row-gather indices,
+        # the latent row mask), kept across requests instead of rebuilt and uploaded each time.
+        self._plan_cache: dict[tuple, Flux3KleinPlan] = {}
+        self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 
     @classmethod
@@ -383,7 +391,16 @@ class Flux3KleinPipeline:
             tokens = self._upload_rows(text_rows, sp)
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
-            return transformer.prepare_plan(layout, sample_ids, sample=index), embedded
+            key = (model, index, sp, tuple(sorted(lengths.items())), text_valid, _ids_digest(sample_ids))
+            plan = self._plan_cache.get(key) if self.cache_constants else None
+            if plan is None:
+                plan = transformer.prepare_plan(layout, sample_ids, sample=index)
+                if self.cache_constants:
+                    self._plan_cache[key] = plan
+            else:
+                # the plan keeps the logical_n buffers, not their values: another request may have written them since
+                transformer.write_logical_n(plan, sample=index)
+            return plan, embedded
 
         samples = [sample(0, *text)]
         if guidance is not None:
@@ -393,9 +410,13 @@ class Flux3KleinPipeline:
         x = tensor.from_torch(
             pad_rows(noise, rows_padded)[None], device=self._device, dtype=ttnn.float32, mesh_axes=image_axes
         )
-        mask = torch.zeros(1, rows_padded, IN_CHANNELS["image"])
-        mask[:, :rows] = 1.0
-        mask = tensor.from_torch(mask, device=self._device, dtype=ttnn.float32, mesh_axes=image_axes)
+        mask = self._mask_cache.get((rows, rows_padded)) if self.cache_constants else None
+        if mask is None:
+            mask = torch.zeros(1, rows_padded, IN_CHANNELS["image"])
+            mask[:, :rows] = 1.0
+            mask = tensor.from_torch(mask, device=self._device, dtype=ttnn.float32, mesh_axes=image_axes)
+            if self.cache_constants:
+                self._mask_cache[(rows, rows_padded)] = mask
         guidance_tt = self._scalar(torch.tensor([[guidance]])) if guidance is not None else None
         dbcache = Flux3KleinDBCache(cache_config, self._device, num_branches=len(samples)) if cache_config else None
 
@@ -443,9 +464,12 @@ class Flux3KleinPipeline:
             cached_steps = dbcache.context.num_cached_steps(0)
             dbcache.close()
         for plan, embedded in samples:
-            plan.deallocate()
+            if not any(plan is cached for cached in self._plan_cache.values()):
+                plan.deallocate()
             ttnn.deallocate(embedded)
-        for t in (cond_embedded, mask, guidance_tt):
+        if not any(mask is cached for cached in self._mask_cache.values()):
+            ttnn.deallocate(mask)
+        for t in (cond_embedded, guidance_tt):
             if t is not None:
                 ttnn.deallocate(t)
         return x, cached_steps
@@ -455,9 +479,26 @@ class Flux3KleinPipeline:
             self._upsampler.close()
             for t in self._upsampler_ranges:
                 ttnn.deallocate(t)
+        self.clear_constant_caches()
         for module in (*self._transformers.values(), self._text_encoder):
             module.deallocate_weights()
         self._vae.deallocate_weights()
+
+    def clear_constant_caches(self) -> None:
+        for plan in self._plan_cache.values():
+            plan.deallocate()
+        for mask in self._mask_cache.values():
+            ttnn.deallocate(mask)
+        self._plan_cache.clear()
+        self._mask_cache.clear()
+
+
+def _ids_digest(ids: dict[str, torch.Tensor]) -> tuple:
+    """A key for a request's token ids (shape + content), so a cached plan is reused only for identical ids."""
+    return tuple(
+        (name, tuple(t.shape), hashlib.sha1(t.contiguous().numpy().tobytes()).hexdigest())
+        for name, t in sorted(ids.items())
+    )
 
 
 def _load_dit_state(snapshot: Path) -> dict[str, torch.Tensor]:

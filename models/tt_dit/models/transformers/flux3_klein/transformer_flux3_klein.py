@@ -425,6 +425,14 @@ class Flux3KleinTransformer(Module):
         ttnn.copy_host_to_device_tensor(self._logical_n_tensor(n, on_host=True), buffer)
         return buffer
 
+    def write_logical_n(self, plan: Flux3KleinPlan, *, sample: int) -> None:
+        """Write ``plan``'s attended lengths into the logical_n buffers it refers to. A plan reused across requests keeps
+        the buffers, not their values: another request with other lengths may have written them since."""
+        layout = plan.layout
+        for mode in plan.early_logical_n:
+            self._write_logical_n(sample, mode, layout.attended(mode))
+        self._write_logical_n(sample, "single", layout.attended())
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in STATE_PREFIXES:
             rename_substate(state, src, dst)
