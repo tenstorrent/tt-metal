@@ -294,6 +294,31 @@
       "score": null,
       "status": "stopped_projected_nonfit",
       "evidence": "runs/nightly-terminal-observable/stop.json"
+    },
+    {
+      "eval": "r1_gpqa_diamond",
+      "tasks": 10,
+      "agents": 4,
+      "batch": 8,
+      "wall_hours": 0.17845714498634657,
+      "device_job_hours": 0.29555555555555557,
+      "workflow_wall_hours": 0.3011111111111111,
+      "agent_hours": null,
+      "timeouts": 0,
+      "score": {
+        "correct": 9,
+        "total": 10,
+        "accuracy_fraction": 0.9,
+        "wilson95_fraction": [
+          0.5958499732047615,
+          0.9821237869049271
+        ],
+        "reference_published_percent": 84.3,
+        "reference_gpu_percent": 83.33,
+        "reference_caveat": "Subset interval does not establish full-suite parity."
+      },
+      "status": "valid_candidate_pending_current_pair",
+      "evidence": "runs/gpqa-c4-scored10-evals/audit.json"
     }
   ],
   "generic_fixes": [

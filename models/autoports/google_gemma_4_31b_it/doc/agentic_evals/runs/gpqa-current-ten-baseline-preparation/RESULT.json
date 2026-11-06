@@ -1,0 +1,55 @@
+{
+  "status": "prepared_only",
+  "candidate": "877e1624dc82fa667f1b16ffe205ce9223127021",
+  "base": "82569bf17497585555a5710929a8e2f78ea47f1b",
+  "branch": "prep/gpqa-current-ten-baseline",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa-current-ten-baseline",
+  "doc_ids": [
+    152,
+    189,
+    46,
+    87,
+    52,
+    181,
+    31,
+    185,
+    50,
+    187
+  ],
+  "cohort_source": "Existing frozen same10; no score-conditioned selection",
+  "planned_clients": 2,
+  "server_batch": 8,
+  "workflow": "evals",
+  "production_changes": [
+    "GPQA doc_ids20to10",
+    "GPQA nightly20to10"
+  ],
+  "preserved": [
+    "C2",
+    "SWE0/Terminal0",
+    "caps/pins/sampling",
+    "SWE return_token_ids",
+    "Terminal store_all_messages",
+    "all runtime/workflow source"
+  ],
+  "checks": {
+    "ast": "Equal base except two specified GPQA fields",
+    "route": "exact10C2 local-chat-completions via evals",
+    "focused": "24passed0.63s",
+    "hooks": "ruff/format/fullpytest/copyright all passed",
+    "diff_check": "pass"
+  },
+  "device_hours": 0,
+  "estimated_device_hours": 0,
+  "saving_hours": 0,
+  "unblocks": "current-best GPQA scored pair",
+  "publication_or_dispatch": false,
+  "launch_condition": "Coordinator only if measured C4 outcome justifies baseline and projection fits remaining5.5h box including failedC4.122222h and actual correctedC4",
+  "runtime_pairing": "Use same current439c immutable metal SHA as C4; prior08ee879 baseline is not rewritten or treated as sufficient current pair",
+  "evidence": [
+    "plan.md",
+    "route-check.json",
+    "candidate.patch",
+    "hooks.log"
+  ]
+}

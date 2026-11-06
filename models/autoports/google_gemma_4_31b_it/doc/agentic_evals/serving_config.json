@@ -188,6 +188,13 @@
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch >=2; accepted C2, no pending C4 speed benefit",
       "capacity_evidence": "runs/server-sized-gpqa-c2/audit.json"
+    },
+    "gpqa-current10-c2": {
+      "eval": "r1_gpqa_diamond",
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest supported batch>=2; current accepted C2 baseline with matching439c phase export"
     }
   },
   "release_limits": {

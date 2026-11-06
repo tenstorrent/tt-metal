@@ -1,0 +1,116 @@
+{
+  "status": "input_reconstructable_host_preparation_complete",
+  "device_hours": 0,
+  "saving_hours_planning_credit": 0,
+  "unblocks": [
+    "capped-call cause"
+  ],
+  "source_run": 42210467509,
+  "task": "astropy__astropy-14598",
+  "prefix": {
+    "messages_included": "indices0..138 inclusive",
+    "last_assistant_index": 137,
+    "last_tool_index": 138,
+    "excluded_feedback_index": 139,
+    "feedback_type": "FormatError",
+    "message_count": 139,
+    "recorded_assistant_responses_in_prefix": 68,
+    "source_sha256": "710cb09d493c3060ad5abda5e6ec30a9984286517792b9488083d490139bb5e3",
+    "request_reconstruction": "Stock mini2.2.8 _prepare_messages_for_api drops extra only, applies existing cache-control/Anthropic helpers; native content/tool arguments preserved. InteractiveAgent yolo delegates DefaultAgent.query. Discarded response is not needed to reconstruct preceding request.",
+    "stock_server_template_tokens": 31001,
+    "token_ids_sha256": "2cd074a353c38472a9c01b92fe84d7b393a8439233d910ec3409c7833fccfec9",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "content_format": "openai",
+    "tokenizer_path": "Actual installed stock ChatCompletionRequest + resolve_chat_template_content_format(auto) + parse_chat_messages + safe_apply_chat_template; CPU only",
+    "observed_server_match": {
+      "source": "bringup/artifacts/stage12-swe-nightly-live-1341.log:50472-50473",
+      "last_tool_utc": "2026-11-06T13:07:05.6998208Z",
+      "chunk_times_utc": [
+        "2026-11-06T13:07:05.7806018Z",
+        "2026-11-06T13:07:05.9211126Z"
+      ],
+      "slot": 0,
+      "chunks": [
+        {
+          "start": 29952,
+          "valid": 1024
+        },
+        {
+          "start": 30976,
+          "valid": 25
+        }
+      ],
+      "end_position": 31001,
+      "interpretation": "Endpoint exactly matches reconstructed count immediately after prior native tool; no requestID/original inputtokenarray, so originalwire identity not claimed."
+    }
+  },
+  "missing": {
+    "original_seed": null,
+    "discarded_output_text": null,
+    "discarded_output_token_ids": null,
+    "discarded_response_usage": null,
+    "original_finish_reason": null,
+    "notes": "Known FormatError after request; cap association from coordinator runtime audit remains separate. No fabricated missing assistant message. Laterfeedback139/newrequest is excluded."
+  },
+  "proposed_discriminator": {
+    "warranted": true,
+    "question": "Does this distinct original failed Astropy input show terminal next-token HF/TT distribution divergence consistent with precision collapse, versus normal initial distribution?",
+    "scope": "Full60 same31001token reconstructed native input, selected terminal logits only, deterministic distribution comparison before sampling",
+    "metrics": [
+      "KL/JS fullvocabulary",
+      "top1agreement",
+      "release top20/top_p.95 support and probability differences"
+    ],
+    "limitations": [
+      "Agreement at initial nexttoken cannot rule out later precision/cache divergence or sampled long-loop/format failure.",
+      "Disagreement alone cannot establish rootcause without trajectory-level evidence.",
+      "No seed/output available to recreate original exact stochastic trajectory.",
+      "Previous Django42823 result concerns a different prefix; neither excludes nor proves Astropy collapse.",
+      "TT direct generator is not original asynchronous served scheduler/cache state."
+    ],
+    "no_score_claim": true
+  },
+  "reference_feasibility": {
+    "hardware_independent": true,
+    "method": "Existing HF load_reference uses pinnedHF config/weights, full60 Gemma4ForCausalLM, CPU SDPA, chunk512 KV continuation, logits_to_keep1; no accelerator or oldGemmaimplementation source",
+    "loader": "models/autoports/google_gemma_4_31b_it/tests/generate_full_reference.py:load_reference",
+    "driver": "bringup/artifacts/django-cap-loop/diagnose.py",
+    "existing_success": {
+      "source": "bringup/artifacts/django-cap-loop/hf512-extended-single/result.json",
+      "tokens": 42823,
+      "elapsed_seconds": 5007.956094684079,
+      "peak_rss_mib": 99583.125,
+      "threads": 16,
+      "short_chunk_control": "KL0/top1equal"
+    },
+    "linear_31001_forecast_seconds": 3625.4266840553246,
+    "forecast_is_guess": "Attention/cache length changes nonlinearly; use perchunk measured projection rather than assuming linear guarantee.",
+    "proposed_cpu_budget_seconds": 7100,
+    "proposed_outer_seconds": 7200,
+    "host_snapshot": {
+      "mem_available_kib": 160222876,
+      "mem_total_kib": 261425516,
+      "cgroup_memory_max": "max",
+      "cpu_quota": "max100000",
+      "basis": "Host-only /proc and cgroup read during preparation; headroom changes and must be rechecked by coordinator beforeCPU launch."
+    },
+    "expected_memory": "Prior full42823 reached99583MiB; current~152800MiB available supports tentative feasibility, not reserved capacity. Avoid concurrent duplicateHF runs; schedule CPU contention knowingly."
+  },
+  "proposed_TT_followup": {
+    "estimate_device_hours": 0.12,
+    "box_device_hours": 0.2,
+    "basis": "Prior complete full60B8 42823terminal-logit diagnostic332.0776s;31001 shorter, retain432s estimate and720sbox forload/cache variability. Coordinator approval/queue ownership required; not launched.",
+    "run_after": "Prefer complete HF result and validated matched input first; avoid holdingdevice while CPUreference runs",
+    "source": "bringup/artifacts/django-cap-loop/tt-b8-retry/result.json"
+  },
+  "private_artifacts": [
+    "bringup/artifacts/astropy-capped-prefix/request.json",
+    "bringup/artifacts/astropy-capped-prefix/case.json",
+    "bringup/artifacts/astropy-capped-prefix/stock-full-ids.json",
+    "bringup/artifacts/astropy-capped-prefix/stock_tokenize_case.py",
+    "bringup/artifacts/astropy-capped-prefix/metadata.json",
+    "bringup/artifacts/astropy-capped-prefix/tokenization.json"
+  ],
+  "preparation_error_fixed": "Initial helper filename tokenize.py shadowed stdlib; renamed stock_tokenize_case.py before successful CPU tokenization. No model/runtime source edit.",
+  "future_repeat": "Upcoming retainedrepeat output is independent evidence, never merged into this original missingoutput or selected byscore."
+}

@@ -87,6 +87,7 @@
     "GPQA server-sized 10 repeats prior nightly visible answers; not 20 independent samples. Full198 attempt stopped for projected nonfit; no final score.",
     "Synthetic prefill-interference diagnostic is not headline workload or scored accuracy; excluded from performance fields. Local evidence commit6c9d8cdf.",
     "Current-runtime benchmark confirmation passed; no frozen dry run or release yet.",
-    "SWE nightly partial evidence: runs/nightly-swe-observable/audit.json; raw1/5 excluded, notpooled withsmoke."
+    "SWE nightly partial evidence: runs/nightly-swe-observable/audit.json; raw1/5 excluded, notpooled withsmoke.",
+    "C4 frozen10 candidate valid9/10 in642.445722s; contemporaryC2 comparison pending. Same ten examples, not additional independent accuracy samples."
   ]
 }

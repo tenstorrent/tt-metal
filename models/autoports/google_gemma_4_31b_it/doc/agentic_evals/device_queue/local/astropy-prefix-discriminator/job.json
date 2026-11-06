@@ -1,0 +1,15 @@
+{
+  "arm": "astropy-prefix-discriminator",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "waiting_cpu_reference",
+  "planned_clients": 1,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Diagnostic matches original failing B8 configuration; no throughput selection claim",
+  "queued_at": "2026-11-06T14:46:33.079585+00:00",
+  "predicted_hours": 0.12,
+  "box_hours": 0.2,
+  "dependency": "Complete pinnedHF31001 reference and chunk-control gate before device open",
+  "scope": "Full60 terminal-logit diagnostic, not vLLM headline performance or original trajectory"
+}

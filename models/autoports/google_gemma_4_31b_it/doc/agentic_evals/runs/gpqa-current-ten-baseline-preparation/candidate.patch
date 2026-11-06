@@ -1,0 +1,124 @@
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index 7d4b22a..fdb90ce 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -11969,31 +11969,10 @@ _eval_config_list = [
+                     "top_k": 20,
+                     "top_p": 0.95,
+                 },
+-                doc_ids=[
+-                    152,
+-                    189,
+-                    46,
+-                    87,
+-                    52,
+-                    181,
+-                    31,
+-                    185,
+-                    50,
+-                    187,
+-                    153,
+-                    135,
+-                    81,
+-                    93,
+-                    7,
+-                    42,
+-                    24,
+-                    168,
+-                    20,
+-                    28,
+-                ],
++                doc_ids=[152, 189, 46, 87, 52, 181, 31, 185, 50, 187],
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 20,
++                    EvalLimitMode.CI_NIGHTLY: 10,
+                 },
+             ),
+             EvalTask(
+diff --git a/tests/workflows/test_eval_config_mode_reference.py b/tests/workflows/test_eval_config_mode_reference.py
+index f9c89c3..5ab8387 100644
+--- a/tests/workflows/test_eval_config_mode_reference.py
++++ b/tests/workflows/test_eval_config_mode_reference.py
+@@ -229,28 +229,7 @@ def test_gemma4_31b_autoport_smoke_preserves_references_without_score_gates():
+     ]
+     assert all(task.priority == "should" for task in tasks)
+     gpqa = tasks[0]
+-    assert gpqa.doc_ids == [
+-        152,
+-        189,
+-        46,
+-        87,
+-        52,
+-        181,
+-        31,
+-        185,
+-        50,
+-        187,
+-        153,
+-        135,
+-        81,
+-        93,
+-        7,
+-        42,
+-        24,
+-        168,
+-        20,
+-        28,
+-    ]
++    assert gpqa.doc_ids == [152, 189, 46, 87, 52, 181, 31, 185, 50, 187]
+     assert gpqa.thinking is True
+     assert gpqa.score.published_score == 84.3
+     assert gpqa.score.gpu_reference_score == 83.33
+@@ -258,7 +237,7 @@ def test_gemma4_31b_autoport_smoke_preserves_references_without_score_gates():
+     for mode in (EvalLimitMode.SMOKE_TEST, EvalLimitMode.CI_NIGHTLY):
+         # Dedicated CI publications may disable this suite to isolate another.
+         assert gpqa.limit_samples_map[mode] == (
+-            20 if mode == EvalLimitMode.CI_NIGHTLY else 2
++            10 if mode == EvalLimitMode.CI_NIGHTLY else 2
+         )
+         assert not resolve_eval_reference(gpqa.score, mode)["is_subset_reference"]
+ 
+diff --git a/tests/workflows/test_gemma4_autoport_smoke_suites.py b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+index 65829c2..34ca43c 100644
+--- a/tests/workflows/test_gemma4_autoport_smoke_suites.py
++++ b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+@@ -53,28 +53,7 @@ def test_stock_common_route_exact_gpqa_cohort(tmp_path, monkeypatch, mode):
+         runtime_config=SimpleNamespace(limit_samples_mode=mode),
+     )
+     assert json.loads(command[command.index("--samples") + 1]) == {
+-        "r1_gpqa_diamond": [
+-            152,
+-            189,
+-            46,
+-            87,
+-            52,
+-            181,
+-            31,
+-            185,
+-            50,
+-            187,
+-            153,
+-            135,
+-            81,
+-            93,
+-            7,
+-            42,
+-            24,
+-            168,
+-            20,
+-            28,
+-        ]
++        "r1_gpqa_diamond": [152, 189, 46, 87, 52, 181, 31, 185, 50, 187]
+         if mode == "ci-nightly"
+         else [152, 189, 46]
+     }
+@@ -179,7 +158,7 @@ def test_only_prepared_candidate_enabled():
+     from reference_config.evals.eval_config import EvalLimitMode
+ 
+     assert [task.limit_samples_map[EvalLimitMode.CI_NIGHTLY] for task in TASKS] == [
+-        20,
++        10,
+         0,
+         0,
+     ]
