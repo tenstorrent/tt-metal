@@ -56,7 +56,9 @@ _PERF_MARGIN = 0.03
 # reference, not measured on this base.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.169,
+        # Kimi-K3 HiFi3 (scan, affine prefix, output projection), composed, not measured on this base: 1.169 x 1.035,
+        # the traced HiFi3 / HiFi2 ratio over 3 interleaved rounds on bh-lb-18 (before the relay prefix).
+        "SP8xTP1": 1.210,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
@@ -73,7 +75,9 @@ _DEVICE_PERF_MARGIN = 0.05
 # relay's reference, not measured on this base.
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.181,
+        # Kimi-K3 HiFi3, composed, not measured on this base: 1.181 x 1.035, assuming LoudBox SP8xTP1's ratio (same
+        # per-chip workload); not measured on QuietBox.
+        "SP4xTP1": 1.222,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
