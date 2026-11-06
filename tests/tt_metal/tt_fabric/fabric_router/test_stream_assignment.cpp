@@ -236,5 +236,26 @@ TEST(StreamAssignmentTest, InactiveConsumersEmitTheSentinel) {
     EXPECT_EQ(values["MULTI_RISC_TEARDOWN_SYNC_STREAM_ID"], 31u);
 }
 
+// A Keraunos CCE has no stream registers: the router zeroes every named ack and completion register at init, so
+// none may be named. Every other id stays where it is with registers, as chippy compat's generator emits them.
+TEST(StreamAssignmentTest, NoStreamRegistersNamesNoAckOrCompletionRegister) {
+    CreditTransportPlan plan{};
+    plan.stream_registers_available = false;
+    const auto without = make_stream_assignment(stream_requirements(legacy_2d_placement(), plan));
+    const auto with = make_stream_assignment(stream_requirements(legacy_2d_placement(), CreditTransportPlan{}));
+    std::map<std::string, uint32_t> with_values;
+    for (const auto& [name, value] : with.named_args()) {
+        with_values.emplace(name, value);
+    }
+    EXPECT_EQ(emitted_names(without), emitted_names(with));
+    for (const auto& [name, value] : without.named_args()) {
+        if (name.find("_PKTS_ACKED_ID") != std::string::npos || name.find("_PKTS_COMPLETED_ID") != std::string::npos) {
+            EXPECT_EQ(value, k_unused_stream_id) << name;
+        } else {
+            EXPECT_EQ(value, with_values[name]) << name;
+        }
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric

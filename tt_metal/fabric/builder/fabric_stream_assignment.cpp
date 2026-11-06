@@ -169,10 +169,14 @@ void StreamAssignment::emit_flat_table(
     StreamRole role, const char* pattern, uint32_t extent, std::vector<std::pair<std::string, uint32_t>>& out) const {
     // One flat-indexed table, emitted as monotone segments: the vc0 group, the gap after it, the
     // vc1 group, then the tail. The flat index is generated, never resolved per position.
+    // The router zeroes every ack and completion register named (init_stream_reg_if_used), so without stream
+    // registers those tables name none.
+    const bool unnamed = !plan_.stream_registers_available &&
+                         (role == StreamRole::SENDER_PKTS_ACKED || role == StreamRole::SENDER_PKTS_COMPLETED);
     uint32_t flat = 0;
     for (uint32_t vc = 0; vc <= 1; ++vc) {
         const uint32_t base = sender_flat_base_[vc];
-        const uint32_t count = group_count(role, vc);
+        const uint32_t count = unnamed ? 0 : group_count(role, vc);
         for (; flat < base; ++flat) {
             out.emplace_back(fmt::format(fmt::runtime(pattern), flat), k_unused_stream_id);
         }
