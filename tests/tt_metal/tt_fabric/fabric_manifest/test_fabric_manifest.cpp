@@ -47,6 +47,7 @@
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_record.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_targets.hpp"
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_umd.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
@@ -908,32 +909,9 @@ void check_arch_core_registers(const json& manifest, const std::vector<RouterEnt
     }
 }
 
-// The chips capture would find on this rank, from the mock cluster: each local chip's unique id, and the translated
-// core of each of its Ethernet channels, as a reader gives them.
-capture::ClusterFacts collect_cluster_facts(const json& manifest) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    capture::ClusterFacts facts;
-    for (const auto& [m_key, mesh] : manifest.at("meshes").items()) {
-        for (const auto& [c_key, chip] : mesh.at("chips").items()) {
-            if (!chip.at("is_local").get<bool>()) {
-                continue;
-            }
-            const auto physical_chip_id = chip.at("physical_chip_id").get<ChipId>();
-            const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
-            capture::FoundChip found{
-                .chip = physical_chip_id,
-                .asic_id = cluster.get_unique_chip_ids().at(physical_chip_id),
-                .arch = lower_enum_name(cluster.arch()),
-            };
-            for (uint32_t chan = 0; chan < soc_desc.get_num_eth_channels(); ++chan) {
-                const auto core = soc_desc.get_eth_core_for_channel(chan, CoordSystem::TRANSLATED);
-                found.eth_cores_by_channel.emplace_back(
-                    capture::CoreXY{.x = static_cast<uint32_t>(core.x), .y = static_cast<uint32_t>(core.y)});
-            }
-            facts.chips.push_back(std::move(found));
-        }
-    }
-    return facts;
+// The chips capture finds on this rank, through capture's own UMD code, on the mock cluster's driver.
+capture::ClusterFacts collect_cluster_facts() {
+    return capture::collect_umd_cluster_facts(*tt::tt_metal::MetalContext::instance().get_cluster().get_driver());
 }
 
 // Capture's reading of this manifest matches the live fabric. Capture reads the file itself, in the manifest's order,
@@ -945,7 +923,6 @@ capture::ClusterFacts collect_cluster_facts(const json& manifest) {
 void check_capture_plan(
     // Parse manifest file using capture's own reader
     const std::filesystem::path& manifest_path,
-    const json& manifest,
     const std::vector<RouterEntry>& routers) {
     const capture::ManifestFile file = capture::read_manifest_file(manifest_path);
     const capture::CapturePlan plan = capture::collect_capture_plan(file.json);
@@ -993,9 +970,9 @@ void check_capture_plan(
     }
     EXPECT_EQ(num_planned_routers, routers.size());
 
-    // Collect cluster facts is using the mock cluster to find physical chips and cores, so we should never see
-    // any missing chips
-    for (const capture::ChipTarget& chip : capture::resolve_capture_targets(plan, collect_cluster_facts(manifest))) {
+    // Collect cluster facts reads the mock cluster's UMD driver to find physical chips and cores, so we should never
+    // see any missing chips
+    for (const capture::ChipTarget& chip : capture::resolve_capture_targets(plan, collect_cluster_facts())) {
         EXPECT_EQ(chip.location, capture::ChipLocation::FOUND) << chip.path;
         for (const capture::RouterTarget& target : chip.routers) {
             EXPECT_EQ(target.location, capture::CoreLocation::FOUND)
@@ -1160,7 +1137,7 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                 \
     TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                             \
     TEST_F(Fixture, HostClears) { check_host_clears(manifest_, routers_); }                                \
-    TEST_F(Fixture, CapturePlan) { check_capture_plan(manifest_path_, manifest_, routers_); }
+    TEST_F(Fixture, CapturePlan) { check_capture_plan(manifest_path_, routers_); }
 
 TEST_MANIFEST_CHECKS(Manifest1DFixture)
 TEST_MANIFEST_CHECKS(Manifest2DFixture)
@@ -1175,8 +1152,8 @@ TEST_MANIFEST_CHECKS(ManifestMuxFixture)
 TEST_F(Manifest1DFixture, CaptureRankWritesEveryRoutersReadsWhereTheRecordSays) {
     FakeDeviceReader reader;
     capture::SteadyCaptureClock clock;
-    const capture::CaptureResult result = capture::capture_rank(
-        make_capture_request(manifest_path_, "complete"), reader, collect_cluster_facts(manifest_), clock);
+    const capture::CaptureResult result =
+        capture::capture_rank(make_capture_request(manifest_path_, "complete"), reader, collect_cluster_facts(), clock);
 
     EXPECT_EQ(result.outcome, capture::CaptureOutcome::COMPLETE);
     EXPECT_EQ(result.paths.record_path.parent_path(), manifest_path_.parent_path() / "captures" / "complete");
@@ -1207,7 +1184,7 @@ TEST_F(Manifest1DFixture, CaptureRankWritesEveryRoutersReadsWhereTheRecordSays) 
 // A chip the reader didn't find and a core whose L1 read failed are recorded, not fatal: the files are still written,
 // and the outcome says something is missing.
 TEST_F(Manifest1DFixture, CaptureRankRecordsWhatItCouldNotRead) {
-    capture::ClusterFacts facts = collect_cluster_facts(manifest_);
+    capture::ClusterFacts facts = collect_cluster_facts();
     ASSERT_GE(facts.chips.size(), 2u);
     const uint64_t missing_asic_id = facts.chips.back().asic_id;
     facts.chips.pop_back();

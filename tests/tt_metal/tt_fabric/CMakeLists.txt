@@ -11,8 +11,9 @@ target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
-        # The manifest fixtures check capture's reading of the manifests they write (CapturePlan).
-        fabric_capture_core
+        # The manifest fixtures check capture's reading of the manifests they write (CapturePlan), and capture's UMD
+        # cluster facts on the mock cluster.
+        fabric_capture_umd
         # FSD proto (tt::scaleout_tools::fsd::proto) constructed directly by test_physical_descriptor_builder.cpp;
         # those symbols are hidden in libtt_metal.so (see tools/scaleout/CMakeLists.txt), so link explicitly.
         TT::ScaleoutTools
