@@ -9,7 +9,8 @@
 // A writer reports the longest finished prefix of steps: it counts the blocks it still owes per local expert; the
 // caller guarantees the rows have landed (`barrier`: or this waits for its writes).
 //
-// Runtime args at SE_CMB_DONE_RT: collector noc x, collector noc y, the collector's count array address, (unused).
+// Common runtime args at SE_CMB_DONE_RT: collector noc x, collector noc y, the collector's count array address,
+// (unused) - the same on every writer.
 #pragma once
 
 #ifdef SE_CMB_DONE_RT
@@ -43,9 +44,9 @@ struct SeCmbDone {
         if (barrier) {
             noc_async_write_barrier();  // the rows have landed
         }
-        const uint32_t x = get_arg_val<uint32_t>(SE_CMB_DONE_RT);
-        const uint32_t y = get_arg_val<uint32_t>(SE_CMB_DONE_RT + 1);
-        const uint32_t counts = get_arg_val<uint32_t>(SE_CMB_DONE_RT + 2);
+        const uint32_t x = get_common_arg_val<uint32_t>(SE_CMB_DONE_RT);
+        const uint32_t y = get_common_arg_val<uint32_t>(SE_CMB_DONE_RT + 1);
+        const uint32_t counts = get_common_arg_val<uint32_t>(SE_CMB_DONE_RT + 2);
         while (next < num_steps && step_done(next)) {
             noc_semaphore_inc(get_noc_addr(x, y, counts + 4 * next), 1);
             ++next;

@@ -17,7 +17,7 @@
 //     expert), 5 W_SLOTS, 6 H_LOCAL_CB, 7 MT, 8 H_TILE_BYTES, 9 NCC, 10 DATA_SEM, 11 GO_SEM, 12 HBUF, 13 XARR_SEM,
 //     14 X_SLOTS, 15 NP, 16-17 GATH ids of h buffers 1, 2, 18 X_PIECES (XARR counts pieces), 19 NUM_E
 // RT: 0 the grant counter's sem id here, 1 column group CG, 2 NH (chain heads of the group), 3 the GATH sem id, 4
-//     h_all address, 5.. NH head xy, then the expert_schedule.hpp args
+//     h_all address, 5.. the expert_schedule.hpp args. Common args: the NH head xy
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
@@ -71,7 +71,7 @@ void kernel_main() {
     // Dynamic counts: the active experts' weights and sub-blocks only; RT 5 + NH.. are the expert_schedule.hpp args, CB
     // 7 this RISC's scratch; the compute gets them in CB 6.
     SeDyn dyn;
-    se_dyn_load<num_e>(dyn, heads0 + nh, get_write_ptr(tt::CBIndex::c_7), mt * 32);
+    se_dyn_load<num_e>(dyn, heads0, get_write_ptr(tt::CBIndex::c_7), mt * 32);
     se_dyn_publish(dyn, tt::CBIndex::c_6);
     const uint32_t total_w = dyn.n_load * nk_gu;  // gate/up loads
     const uint32_t num_v = dyn.num_v;
@@ -126,7 +126,7 @@ void kernel_main() {
             const uint32_t src = get_read_ptr(h_local_cb);
             const uint32_t dst = (h_sent % hbuf) * half_bytes;  // down h_all: [HBUF]
             for (uint32_t hd = 0; hd < nh; ++hd) {
-                const uint32_t hxy = get_arg_val<uint32_t>(heads0 + hd);
+                const uint32_t hxy = get_common_arg_val<uint32_t>(hd);
                 const uint64_t bc_h = get_noc_addr(hxy >> 16, hxy & 0xFFFF, h_all_addr);
 #ifdef SE_HG_NU
                 // 16-column units cg NU..: h tiles from K-tile cg NU / 2, the first one's right half only when cg NU is
@@ -179,7 +179,7 @@ void kernel_main() {
                                  : h_sent % hbuf == 1 ? get_compile_time_arg_val(16)
                                                       : get_compile_time_arg_val(17);
             for (uint32_t hd = 0; hd < nh; ++hd) {
-                const uint32_t hxy = get_arg_val<uint32_t>(heads0 + hd);
+                const uint32_t hxy = get_common_arg_val<uint32_t>(hd);
                 noc_semaphore_inc(get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(gid)), 1);
             }
             cb_pop_front(h_local_cb, mt * hpc);

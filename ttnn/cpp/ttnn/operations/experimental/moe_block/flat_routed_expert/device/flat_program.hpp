@@ -14,9 +14,10 @@
 //  * L1: every arena-backed CB lies inside `tensors.arena` (>= plan.arena_tiles x 32 rows a core, sharded over at
 //    least the plan's arena cores). The flat expert has no static CB (plan.static_l1_bytes is 0).
 //    The caller may lay its own buffers in the same arena on its own cells (e.g. a persistent arena the caller owns).
-//  * Combine overlap (config.cmb_rt > 0, see with_combine_overlap): every y writer (y_writers, in program order) has 4
-//    report args at config.cmb_rt (collector x, y, counts address, unused) and, with config.y_l1, kFlatYL1Args
-//    L1 hand-off args after them (y_row_major.hpp SE_Y_L1); set_flat_combine_report fills them. Each writer then adds 1
+//  * Combine overlap (config.cmb_rt > 0, see with_combine_overlap): every y writer kernel (y_writers, in program order)
+//    has 4 report common args (collector x, y, counts address, unused) and, with config.y_l1, kFlatYL1Args L1 hand-off
+//    common args after them (y_row_major.hpp SE_Y_L1); each writer's own args end with its writer index
+//    (y_widx_arg); set_flat_combine_report fills them. Each writer then adds 1
 //    to counts[e] on the collector once local expert e's rows have landed (cumulative across calls, slot order, no
 //    go handshake), so the collector waits for calls x writers.
 //  * Hash: everything the fragment depends on is in the config (hash it), the plan (a function of the mesh device and
@@ -71,6 +72,7 @@ struct FlatProgramHandles {
     // config.cmb_rt: the y writer kernels / cores whose report args the combine overlap fills, in program order (a
     // writer's index in the combine's L1 hand-off)
     std::vector<std::pair<tt::tt_metal::KernelHandle, tt::tt_metal::CoreCoord>> y_writers;
+    uint32_t y_widx_arg = 0;  // the writers' own arg holding the writer index (the report: their common args)
 };
 
 // The y writers' L1 hand-off args after the 4 report args (y_row_major.hpp SE_Y_L1).

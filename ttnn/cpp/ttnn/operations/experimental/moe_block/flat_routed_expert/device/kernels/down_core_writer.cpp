@@ -21,8 +21,9 @@
 //     are counted per buffer v % HBUF: one shared count could be completed by a fast core's next slice)
 // RT: 0 h_all address, 1 predecessor xy (0: head), 2 successor xy (0: tail), 3 coordinator xy, 4 is coordinator,
 //     5 N_GU, 6 y DRAM address, 7 first y tile column, 8 address of the coordinator's per-down-core done words, 9 this
-//     core's index, 10.. N_GU gate/up core xy. "go" is released on the minimum of the done words (a summed count would
-//     let fast down cores stand in for a slow one); the coordinator zeroes them again at the end.
+//     core's index, 10.. the expert_schedule.hpp args. Common args: the N_GU gate/up core xy. "go" is released on the
+//     minimum of the done words (a summed count would let fast down cores stand in for a slow one); the coordinator
+//     zeroes them again at the end.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "flat_accessors.hpp"
@@ -74,12 +75,11 @@ void kernel_main() {
     constexpr uint32_t out_page = 1088;
 #endif
     const auto y = TensorAccessor(flat_acc::y, get_arg_val<uint32_t>(6), out_page);
-    const uint32_t e2e_args = 10 + n_gu;
-    // Dynamic counts (with SE_E2E): the active experts' sub-blocks; RT 10 + N_GU.. are the expert_schedule.hpp args (CT
+    // Dynamic counts (with SE_E2E): the active experts' sub-blocks; RT 10.. are the expert_schedule.hpp args (CT
     // 22 NUM_E), CB 7 this RISC's scratch; the compute gets them in CB 6. Output rows come from the experts' regions.
     constexpr uint32_t num_e_dyn = get_compile_time_arg_val(22);
     SeDyn dyn;
-    se_dyn_load<num_e_dyn>(dyn, 10 + n_gu, get_write_ptr(tt::CBIndex::c_7), mt * 32);
+    se_dyn_load<num_e_dyn>(dyn, 10, get_write_ptr(tt::CBIndex::c_7), mt * 32);
     se_dyn_publish(dyn, tt::CBIndex::c_6);
     const uint32_t num_v = dyn.num_v;
     uint32_t y_a = 0, y_s = 0;  // (active expert, sub-block) of output out_done
@@ -184,7 +184,7 @@ void kernel_main() {
         }
         if (all_done) {
             for (uint32_t p = 0; p < n_gu; ++p) {
-                const uint32_t xy = get_arg_val<uint32_t>(10 + p);
+                const uint32_t xy = get_common_arg_val<uint32_t>(p);
                 noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, get_semaphore(go_sem_id)), 1);
             }
             ++go_sent;

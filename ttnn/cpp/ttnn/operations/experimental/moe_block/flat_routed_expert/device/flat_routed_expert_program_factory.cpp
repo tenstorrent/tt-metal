@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <set>
 #include "flat_routed_expert_program_factory.hpp"
 
 #include "flat_routed_expert_plan.hpp"
@@ -201,24 +202,29 @@ FlatProgramHandles add_flat_routed_expert_program(
     const std::string sbt = std::to_string(p.sbt);
 
     // ---- kernels + runtime args ----
-    // combine overlap (cfg.cmb_rt): a y writer's args padded to cmb_rt, then 4 report args the overlap fills
-    auto add_writer_rt = [&](KernelHandle k, const CoreCoord& c, Args args) {
+    // combine overlap (cfg.cmb_rt): the report and the L1 hand-off args are the writer kernel's common args (the same
+    // on every writer: 4 + kFlatYL1Args words sent once a kernel, not once a core); a writer's own args end with its
+    // writer index (SE_CMB_WIDX, set_flat_combine_report)
+    auto add_writer_rt = [&](KernelHandle k, const CoreCoord& c, Args args, uint32_t widx_arg) {
         if (cfg.cmb_rt) {
             TT_FATAL(
-                args.v.size() <= cfg.cmb_rt,
-                "flat_routed_expert: {} writer args > cmb_rt {}",
+                args.v.size() == widx_arg && widx_arg < cfg.cmb_rt,
+                "flat_routed_expert: {} writer args, the writer index planned at {} (cmb_rt {})",
                 args.v.size(),
+                widx_arg,
                 cfg.cmb_rt);
-            args.v.resize(cfg.cmb_rt + 4 + (cfg.y_l1 ? kFlatYL1Args : 0), 0);
+            args.v.push_back(0);
             sv.y_writers.emplace_back(k, c);
+            sv.y_widx_arg = widx_arg;
         }
         return args;
     };
     // the combine overlap (with_combine_overlap: row-major y, the writers report in slot order, cumulative counts)
     TT_FATAL(!cfg.cmb_rt || cfg.y_row_major, "flat_routed_expert: a combine overlap takes row-major y");
-    Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", std::to_string(cfg.cmb_rt)}} : Defines{};
+    // (common-arg indices: the report at 0, the L1 hand-off after it)
+    Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", "0"}} : Defines{};
     if (cfg.cmb_rt && cfg.y_l1) {  // (flat_with_program: y rows straight into the combine's L1)
-        cmb_def["SE_Y_L1"] = std::to_string(cfg.cmb_rt + 4);
+        cmb_def["SE_Y_L1"] = "4";
     }
     auto add_rt = [&](KernelHandle k, const CoreCoord& c, const Args& args) {
         SetRuntimeArgs(program, k, c, args.v);
@@ -476,6 +482,7 @@ FlatProgramHandles add_flat_routed_expert_program(
         }
         const auto kc =
             cp("gate_up_compute.cpp", p.gu, {kKBlk, MT, p.nk_gu, p.slot, NP, p.ring_g}, cdef, true, p.gu_full_sync);
+        SetCommonRuntimeArgs(program, kr, head_xy);  // (the down chain heads' xy: the same on every gate/up core)
         for (uint32_t r = 0; r < n_rd; ++r) {
             for (uint32_t j = 0; j < p.r_; ++j) {
                 const uint32_t ci = p.gu_at(r, j);
@@ -483,7 +490,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                 const uint32_t cg_ = r * p.rg + j;  // (the core's column group)
                 Args a;
                 // the grant counter's semaphore id, column group, chain heads, GATH, h_all, head xy
-                a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.h_off).lits(head_xy).cat(dyn);
+                a.lit(GRANT).lit(cg_).lit(head_xy.size()).lit(GATH).a(FlatAddr::Arena, p.h_off).cat(dyn);
                 // the gate/up weight reads (gate_up_weight_read.hpp, on this core's NCRISC): weights, bank, this core's
                 // first block (slot region + block j), chunk bytes, landing ring (the arena's start)
                 Args gw;
@@ -525,6 +532,11 @@ FlatProgramHandles add_flat_routed_expert_program(
         // (~0.4 us) at M <= 64. The h chain / y writes (BRISC) on NOC1, the down-weight reads (NCRISC) on NOC0.
         const bool y_nc = yrm;
         const Defines ync = y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{};
+        TT_FATAL(
+            !cfg.cmb_rt || y_nc, "flat_routed_expert: a combine overlap writes y from the down NCRISC (row-major)");
+        // the y writer's (down_weight_reader) own args: down weights, bank, rotation, the schedule args, y, column 0;
+        // then its writer index (SE_CMB_WIDX)
+        const uint32_t w_widx = 3 + static_cast<uint32_t>(dyn.v.size()) + 2;
         auto plus = [](Defines a, const Defines& b) {
             a.insert(b.begin(), b.end());
             return a;
@@ -547,7 +559,12 @@ FlatProgramHandles add_flat_routed_expert_program(
                    plus(
                        y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
                        Defines{{"SE_DW_ROT", std::to_string(banks)}}),
-                   Defines{{"SE_DW_RING", std::to_string(ring)}}));
+                   cfg.cmb_rt ? Defines{{"SE_DW_RING", std::to_string(ring)}, {"SE_CMB_WIDX", std::to_string(w_widx)}}
+                              : Defines{{"SE_DW_RING", std::to_string(ring)}}));
+        SetCommonRuntimeArgs(program, kr, gu_xy);  // (the gate/up cores' xy: the same on every down core)
+        if (cfg.cmb_rt) {                          // (the report + L1 hand-off args, filled by set_flat_combine_report)
+            SetCommonRuntimeArgs(program, kw, std::vector<uint32_t>(4 + (cfg.y_l1 ? kFlatYL1Args : 0), 0));
+        }
         const auto kc =
             cp("down_compute.cpp",
                cores,
@@ -570,15 +587,14 @@ FlatProgramHandles add_flat_routed_expert_program(
                 .lit(p.col0s[d])
                 .a(FlatAddr::Done)
                 .lit(d)
-                .lits(gu_xy)
                 .cat(dyn);
-            add_rt(kr, dc, y_nc ? a : add_writer_rt(kr, dc, a));
+            add_rt(kr, dc, a);
             Args w;
             w.a(FlatAddr::Down).lit(d % banks).lit(d * p.wd_rot_region).cat(dyn);
             if (y_nc) {
                 w.a(FlatAddr::Y).lit(p.col0s[d]);
             }
-            add_rt(kw, dc, y_nc ? add_writer_rt(kw, dc, w) : w);
+            add_rt(kw, dc, y_nc ? add_writer_rt(kw, dc, w, w_widx) : w);
             SetRuntimeArgs(program, kc, dc, std::vector<uint32_t>{0});
         }
     }
@@ -720,19 +736,27 @@ void set_flat_combine_report(
         report.l1_args.size(),
         kFlatYL1Args);
     TT_FATAL(cfg.y_l1 || report.l1_args.empty(), "flat_routed_expert: L1 hand-off args without y_l1");
+    // the report + L1 hand-off: each writer kernel's common args (once a kernel); the writer index: each writer's own
+    // last arg (SE_CMB_WIDX)
+    std::set<KernelHandle> done;
     uint32_t widx = 0;
     for (const auto& [k, core] : handles.y_writers) {
-        auto& a = GetRuntimeArgs(program, k, core);
-        a[cfg.cmb_rt + 0] = static_cast<uint32_t>(report.collector.x);
-        a[cfg.cmb_rt + 1] = static_cast<uint32_t>(report.collector.y);
-        a[cfg.cmb_rt + 2] = report.counts_addr;
-        a[cfg.cmb_rt + 3] = 0;  // (unused)
-        if (cfg.y_l1 && !report.l1_args.empty()) {
-            TT_FATAL(a.size() >= cfg.cmb_rt + 4 + kFlatYL1Args, "flat_routed_expert: writer args too short (y_l1)");
+        if (done.insert(k).second) {
+            auto& c = GetCommonRuntimeArgs(program, k);
+            TT_FATAL(
+                c.size() == 4 + (cfg.y_l1 ? kFlatYL1Args : 0),
+                "flat_routed_expert: writer common args of {}",
+                c.size());
+            c[0] = static_cast<uint32_t>(report.collector.x);
+            c[1] = static_cast<uint32_t>(report.collector.y);
+            c[2] = report.counts_addr;
+            c[3] = 0;  // (unused)
             for (uint32_t j = 0; j < report.l1_args.size(); ++j) {
-                a[cfg.cmb_rt + 4 + j] = report.l1_args[j];
+                c[4 + j] = report.l1_args[j];
             }
-            a[cfg.cmb_rt + 4 + 4] = widx++;
+        }
+        if (cfg.y_l1 && !report.l1_args.empty()) {
+            GetRuntimeArgs(program, k, core)[handles.y_widx_arg] = widx++;
         }
     }
 }

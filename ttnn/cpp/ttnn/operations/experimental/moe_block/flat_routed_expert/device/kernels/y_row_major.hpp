@@ -44,8 +44,9 @@ struct SeYRmWriter {
     // agree), grants slots (cumulative grant[d] in this core's words, +gbase[d] at this call's start), and takes a
     // row once every writer's landed counter there covers it (+1 per row, sent when a row tile's writes are acked).
     // The column-0 writer also writes each row's 32-byte trailer (header word, gate weight, arrival flags); a table
-    // row is (destination | gate weight bf16 << 16, header word). Args at SE_Y_L1:
-    // nd, slot stride, table address, words address (grant[32], gbase[32], table page, trailer stages), writer index,
+    // row is (destination | gate weight bf16 << 16, header word). Common args at SE_Y_L1 (the same on every writer):
+    // nd, slot stride, table address, words address (grant[32], gbase[32], table page, trailer stages), (unused: the
+    // writer index is this core's unique arg SE_CMB_WIDX),
     // the combine's zero gate (gate noc x | y << 16, its words' address, the bytes of this core's words to zero; 0:
     // off), then per destination: noc x, noc y, slot base, slots, landed counter array address.
     static constexpr uint32_t L1_MAXD = 32;
@@ -68,25 +69,25 @@ struct SeYRmWriter {
         yg(TensorAccessor(flat_acc::y, y_addr, ht * 64)), col_off(col0 * 64), base(get_read_ptr(out_cb)) {
 #ifdef SE_Y_L1
         constexpr uint32_t A0 = SE_Y_L1;
-        nd = get_arg_val<uint32_t>(A0 + 0);
-        islot = get_arg_val<uint32_t>(A0 + 1);
-        tab_base = get_arg_val<uint32_t>(A0 + 2);
-        words = get_arg_val<uint32_t>(A0 + 3);
-        widx = get_arg_val<uint32_t>(A0 + 4);
+        nd = get_common_arg_val<uint32_t>(A0 + 0);
+        islot = get_common_arg_val<uint32_t>(A0 + 1);
+        tab_base = get_common_arg_val<uint32_t>(A0 + 2);
+        words = get_common_arg_val<uint32_t>(A0 + 3);
+        widx = get_arg_val<uint32_t>(SE_CMB_WIDX);
         for (uint32_t d = 0; d < nd; ++d) {
-            dx[d] = get_arg_val<uint32_t>(A0 + 8 + 5 * d);
-            dy[d] = get_arg_val<uint32_t>(A0 + 9 + 5 * d);
-            dbase[d] = get_arg_val<uint32_t>(A0 + 10 + 5 * d);
-            dq[d] = get_arg_val<uint32_t>(A0 + 11 + 5 * d);
-            dland[d] = get_arg_val<uint32_t>(A0 + 12 + 5 * d);
+            dx[d] = get_common_arg_val<uint32_t>(A0 + 8 + 5 * d);
+            dy[d] = get_common_arg_val<uint32_t>(A0 + 9 + 5 * d);
+            dbase[d] = get_common_arg_val<uint32_t>(A0 + 10 + 5 * d);
+            dq[d] = get_common_arg_val<uint32_t>(A0 + 11 + 5 * d);
+            dland[d] = get_common_arg_val<uint32_t>(A0 + 12 + 5 * d);
             cnt[d] = 0;
         }
         grant = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
         gbase = grant + 32;
         // (routed_experts_combine: the words are in the call's arena - zero them, then count in on the combine's gate,
         // before any grant can arrive: the gate releases the ports / accumulators that grant only after every writer)
-        if (const uint32_t zb = get_arg_val<uint32_t>(A0 + 7); zb != 0) {
-            const uint32_t gxy = get_arg_val<uint32_t>(A0 + 5), bar = get_arg_val<uint32_t>(A0 + 6);
+        if (const uint32_t zb = get_common_arg_val<uint32_t>(A0 + 7); zb != 0) {
+            const uint32_t gxy = get_common_arg_val<uint32_t>(A0 + 5), bar = get_common_arg_val<uint32_t>(A0 + 6);
             const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
             for (uint32_t o = 0; o < zb; o += MEM_ZEROS_SIZE) {
                 noc_async_read(zeros, words + o, zb - o < MEM_ZEROS_SIZE ? zb - o : MEM_ZEROS_SIZE);
