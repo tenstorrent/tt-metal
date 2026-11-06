@@ -196,7 +196,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // (makespan 2 tokens); split-K gives every core 26-27 of the 2560 chunk units (1.67 tokens). Merges are pairwise
     // between neighbouring cores, at most one per core (needs Sqt <= 4 so a merge fits DST once).
     const uint32_t n_chunks = topk / k_chunk;
-    const bool split_k_ok = scaled_kv && !use_attention_sink && Sqt <= 4;
+    const bool split_k_ok = scaled_kv && !use_attention_sink && Sqt <= 4 && n_chunks > 1;
     bool split_k = split_k_ok && S > num_cores && (S % num_cores) != 0;
     // Small S (fewer query rows than cores, e.g. GLM chunk 1024/2048: 32/64 rows per chip on 96 cores): the
     // whole-token split leaves most cores idle at one token-time (~330 us, compute-bound). Deal the (token, chunk)
