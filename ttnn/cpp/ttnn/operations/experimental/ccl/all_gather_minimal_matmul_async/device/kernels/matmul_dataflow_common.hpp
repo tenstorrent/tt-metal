@@ -423,7 +423,9 @@ void read_in0_block_sync(
     uint32_t d1_tiles_left,
     uint32_t d1_start_right,
     uint32_t d1_end_right,
-    uint32_t d1_tiles_right) {
+    uint32_t d1_tiles_right,
+    bool barrier = true,
+    uint32_t write_offset_bytes = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end_left > d1_start_left);
     // Linear topology is unidirectional: the "right" (backward) half is legitimately empty
@@ -432,7 +434,7 @@ void read_in0_block_sync(
     ASSERT(d1_end_right >= d1_start_right);
 
     const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    uint32_t write_ptr = cb_base_write_ptr + write_offset_bytes;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -484,8 +486,10 @@ void read_in0_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (d1_tiles_right - (d1_end_right - d1_start_right)) * tile_size_bytes;
     }
-    noc.async_read_barrier();
-    noc.write_zeros_l1_barrier();
+    if (barrier) {
+        noc.async_read_barrier();
+        noc.write_zeros_l1_barrier();
+    }
 }
 
 /**
@@ -505,13 +509,16 @@ void read_in1_block_sync(
     uint32_t d0_start_right,
     uint32_t d0_end_right,
     uint32_t d1_start,
-    uint32_t d1_end) {
-    ASSERT(d0_end_left > d0_start_left);
-    // Linear topology is unidirectional: the "right" (backward) half is legitimately empty.
+    uint32_t d1_end,
+    bool barrier = true,
+    uint32_t write_offset_bytes = 0) {
+    // Linear topology is unidirectional: the "right" (backward) half is legitimately empty. A row chunk of the
+    // block (move_block_cut_through) may also cover only one of the halves.
+    ASSERT(d0_end_left >= d0_start_left);
     ASSERT(d0_end_right >= d0_start_right);
     ASSERT(d1_end > d1_start);
     const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    uint32_t write_ptr = cb_base_write_ptr + write_offset_bytes;
     for (uint32_t i = d0_start_left; i < d0_end_left; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -548,8 +555,10 @@ void read_in1_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc.async_read_barrier();
-    noc.write_zeros_l1_barrier();
+    if (barrier) {
+        noc.async_read_barrier();
+        noc.write_zeros_l1_barrier();
+    }
 }
 
 /**

@@ -4,6 +4,7 @@
 
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_input_pipelining.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -154,7 +155,7 @@ void fabric_mux_connection_ct_args(
     std::vector<uint32_t>& worker_ct_args) {
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
     worker_ct_args.push_back(
-        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes
+        mux_kernel_config.get_buffer_size_bytes(channel_type));  // fabric_mux_channel_buffer_size_bytes
     // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place of the
     // status word; every other mux address is then an offset from that address.
     worker_ct_args.push_back(
@@ -507,10 +508,13 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         });
     };
 
+    // The input CBs may deepen to a third block once every other CB is declared (input pipelining, end of function).
     uint32_t in0_cb_id = tt::CBIndex::c_0;
+    const size_t in0_cb_desc_index = desc.cbs.size();
     add_cb(in0_cb_id, in0_tile_size, in0_cb_num_tiles, in0_data_format);
 
     uint32_t in1_cb_id = tt::CBIndex::c_1;
+    const size_t in1_cb_desc_index = desc.cbs.size();
     add_cb(in1_cb_id, in1_tile_size, in1_cb_num_tiles, in1_data_format);
 
     uint32_t out_cb_id = tt::CBIndex::c_2;
@@ -785,6 +789,22 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in1_defines["FSDP_FUSED"] = "1";
         in1_defines["IS_IN1"] = "1";
         in1_defines["USE_MUX"] = "1";
+    }
+
+    // Input pipelining (minimal_matmul_input_pipelining.hpp), as in minimal_matmul: cut-through forwarding down the
+    // in0 / in1 chains when the block a core computes has the intensity for it. Not with the FSDP-fused in1 path,
+    // whose injector reads local / gathered weight stripes and relays them over fabric. No injector prefetch: an in0
+    // injector waits on the gather per K block. The input CBs' third block is decided at the end, once every CB is
+    // declared.
+    const uint32_t cut_through_chunks =
+        persistent_weight_buffer.has_value()
+            ? 0
+            : ttnn::experimental::prim::input_pipelining::cut_through_chunks(
+                  std::min(M_block_tiles, M_tiles_per_core), std::min(N_block_tiles, N_tiles_per_core));
+    if (cut_through_chunks > 0) {
+        for (auto* d : {&in0_defines, &in0_fabric_defines, &in1_defines}) {
+            (*d)["MM_CUT_THROUGH_CHUNKS"] = std::to_string(cut_through_chunks);
+        }
     }
 
     // Linear uni-ring routing: Dev 0's forward unicast routes N-1 hops to Dev N-1
@@ -1688,6 +1708,31 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             N_end_tile,
         };
         desc.kernels[kComputeKernelIdx].emplace_runtime_args(core, as_runtime_args(compute_runtime_args));
+    }
+
+    // A third in0 / in1 block when every CB on the matmul cores, with it, fits the static L1 space with room to spare
+    // (input_pipelining::input_buffer_blocks). A CB elsewhere (e.g. a mux outside the grid) counts if its cores
+    // overlap the grid.
+    {
+        uint64_t cb_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            if (cb.core_ranges.intersects(core_grid)) {
+                cb_bytes += cb.total_size;
+            }
+        }
+        const uint32_t input_buffer_blocks = ttnn::experimental::prim::input_pipelining::input_buffer_blocks(
+            device,
+            cb_bytes,
+            (static_cast<uint64_t>(in0_tile_size) * in0_block_num_tiles) +
+                (static_cast<uint64_t>(in1_tile_size) * in1_block_num_tiles));
+        desc.cbs[in0_cb_desc_index].total_size = in0_tile_size * in0_block_num_tiles * input_buffer_blocks;
+        desc.cbs[in1_cb_desc_index].total_size = in1_tile_size * in1_block_num_tiles * input_buffer_blocks;
+        log_debug(
+            tt::LogOp,
+            "all_gather_minimal_matmul_async input pipelining: {} input blocks, cut-through chunks {} (CB bytes {})",
+            input_buffer_blocks,
+            cut_through_chunks,
+            cb_bytes);
     }
 
     return desc;

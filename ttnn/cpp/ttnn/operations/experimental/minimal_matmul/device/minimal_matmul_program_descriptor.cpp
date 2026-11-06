@@ -15,6 +15,7 @@
 //
 
 #include "minimal_matmul_device_operation.hpp"
+#include "minimal_matmul_input_pipelining.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -438,7 +439,10 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         });
     };
 
+    // The input DFBs may deepen to a third block once every other buffer is declared (input pipelining, below).
+    const size_t in0_dfb_index = spec.dataflow_buffers.size();
     push_dfb(DFB_IN0, in0_tile_size, in0_cb_num_tiles, in0_data_format);
+    const size_t in1_dfb_index = spec.dataflow_buffers.size();
     push_dfb(DFB_IN1, in1_tile_size, in1_cb_num_tiles, in1_data_format);
     push_dfb(DFB_OUT, out_tile_size, out_cb_num_tiles, output_data_format);
     push_dfb(DFB_INTERMEDIATE, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
@@ -466,6 +470,37 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
         push_dfb(DFB_TERNARY_B, ternary_c_tile_size, ternary_c_num_tiles, ternary_c_data_format);
     }
+
+    /**
+     * Input pipelining (minimal_matmul_input_pipelining.hpp): a third in0 / in1 block when L1 allows, and cut-through
+     * forwarding or injector prefetch depending on the per-block intensity of the block a core computes. Quasar keeps
+     * the double-buffered store-and-forward dataflow.
+     */
+    uint32_t input_buffer_blocks = double_buffer_factor;
+    uint32_t cut_through_chunks = 0;
+    bool injector_prefetch = false;
+    if (!is_quasar) {
+        uint64_t dfb_bytes = 0;
+        for (const auto& dfb : spec.dataflow_buffers) {
+            dfb_bytes += static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries;
+        }
+        input_buffer_blocks = input_pipelining::input_buffer_blocks(
+            device,
+            dfb_bytes,
+            (static_cast<uint64_t>(in0_tile_size) * in0_block_num_tiles) +
+                (static_cast<uint64_t>(in1_tile_size) * in1_block_num_tiles));
+        cut_through_chunks = input_pipelining::cut_through_chunks(
+            std::min(M_block_tiles, M_tiles_per_core), std::min(N_block_tiles, N_tiles_per_core));
+        injector_prefetch = input_pipelining::injector_prefetch(cut_through_chunks);
+    }
+    spec.dataflow_buffers[in0_dfb_index].num_entries = in0_block_num_tiles * input_buffer_blocks;
+    spec.dataflow_buffers[in1_dfb_index].num_entries = in1_block_num_tiles * input_buffer_blocks;
+    log_debug(
+        tt::LogOp,
+        "minimal_matmul input pipelining: {} input blocks, cut-through chunks {}, injector prefetch {}",
+        input_buffer_blocks,
+        cut_through_chunks,
+        injector_prefetch);
 
     /**
      * Tensor parameters. One per distinct tensor the kernels access; the N outputs additionally get
@@ -549,6 +584,11 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         std::map<std::string, std::string> d = base;
         if (is_output_writer) {
             d["IS_OUTPUT_WRITER"] = "1";
+        }
+        if (cut_through_chunks > 0) {
+            d["MM_CUT_THROUGH_CHUNKS"] = std::to_string(cut_through_chunks);
+        } else if (injector_prefetch) {
+            d["MM_INJECTOR_PREFETCH"] = "1";
         }
         return to_defines(d);
     };

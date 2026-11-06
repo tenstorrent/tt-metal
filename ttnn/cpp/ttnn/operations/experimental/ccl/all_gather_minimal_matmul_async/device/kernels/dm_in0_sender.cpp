@@ -10,6 +10,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/kernels/input_pipelining.hpp"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -455,6 +456,64 @@ void kernel_main() {
                         k_block_right_tile = K_tiles;
                     }
                 }
+#if MM_CUT_THROUGH_CHUNKS > 0
+                {
+                    // Chunks are rows of M: each is up to ct_rows_per_chunk rows of K_block_tiles tiles, contiguous in
+                    // the slot. Only this block's real rows move, as in the store-and-forward path.
+                    constexpr uint32_t ct_rows_per_chunk =
+                        (M_block_tiles + MM_CUT_THROUGH_CHUNKS - 1) / MM_CUT_THROUGH_CHUNKS;
+                    constexpr uint32_t ct_row_bytes = K_block_tiles * in0_tile_size;
+                    const uint32_t ct_num_chunks = (current_M_block_tiles + ct_rows_per_chunk - 1) / ct_rows_per_chunk;
+                    move_block_cut_through<static_cast<bool>(is_injector_core)>(
+                        noc_obj,
+                        in0_sender_sem,
+                        in0_receiver_sem,
+                        !is_sink_core,
+                        in0_sender_noc_x,
+                        in0_sender_noc_y,
+                        in0_dest_noc_x,
+                        in0_dest_noc_y,
+                        ct_num_chunks,
+                        [&](uint32_t c) {
+                            const uint32_t r0 = c * ct_rows_per_chunk;
+                            const uint32_t r1 = std::min<uint32_t>(r0 + ct_rows_per_chunk, current_M_block_tiles);
+                            read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                                noc_obj,
+                                in0_reader,
+                                in0_shape,
+                                cb_in0,
+                                in0_tile_size,
+#ifdef READ_FROM_LOCAL_INPUT
+                                in3_reader,
+                                my_rank * K_tiles_per_device,
+                                ((my_rank + 1) * K_tiles_per_device) - 1,
+                                K_tiles_per_device,
+#endif
+                                m_tile + r0,
+                                m_tile + r1,
+                                k_block_left_tile,
+                                k_block_left_tile + k_left_tiles,
+                                k_left_tiles,
+                                k_block_right_tile,
+                                k_block_right_tile + k_right_tiles,
+                                k_right_tiles,
+                                /*barrier=*/false,
+                                r0 * ct_row_bytes);
+                        },
+                        [&](uint32_t c) {
+                            const uint32_t r0 = c * ct_rows_per_chunk;
+                            const uint32_t r1 = std::min<uint32_t>(r0 + ct_rows_per_chunk, current_M_block_tiles);
+                            const uint32_t address = in0_start_address + r0 * ct_row_bytes;
+                            noc_obj.async_write(
+                                CoreLocalMem<uint32_t>(address),
+                                UnicastEndpoint{},
+                                (r1 - r0) * ct_row_bytes,
+                                {},
+                                {.noc_x = in0_dest_noc_x, .noc_y = in0_dest_noc_y, .addr = address});
+                        },
+                        [&]() { cb_in0.push_back(in0_block_num_tiles); });
+                }
+#else
                 if (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         noc_obj,
@@ -507,6 +566,7 @@ void kernel_main() {
 
                     in0_valid_sem.relay_unicast(noc_obj, in0_receiver_sem, in0_dest_noc_x, in0_dest_noc_y);
                 }
+#endif  // MM_CUT_THROUGH_CHUNKS
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
                     if constexpr (is_linear) {
