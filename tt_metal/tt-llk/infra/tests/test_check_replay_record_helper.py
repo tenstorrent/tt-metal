@@ -66,6 +66,20 @@ def test_playback_helper_and_comments_are_clean(code):
     assert not findings(f"void f() {{ {code} }}\n"), code
 
 
+@pytest.mark.parametrize(
+    "literal", ["1'024", "0xFFFF'FFFFu", "0b1010'0101", "1'760'000'000ull", "1'0.5"]
+)
+def test_digit_separator_does_not_hide_a_record(literal):
+    # A separator is not a character literal: the record after it must still be seen.
+    text = f"void f() {{ auto x = {literal}; lltt::record(0, 4); }}\nchar c = 'a';\n"
+    assert findings(text), literal
+
+
+@pytest.mark.parametrize("code", ["auto c = L'a';", "auto c = u8'a';", "char c = 'a';"])
+def test_prefixed_char_literal_is_still_blanked(code):
+    assert not findings(f'void f() {{ {code} auto s = "lltt::record(0, 4)"; }}\n'), code
+
+
 def test_macro_definition_is_not_a_use():
     text = "#define TTI_REPLAY(a, b, c, d) \\\n    TTI_INSN(TT_OP_REPLAY(a, b, c, d))\n"
     assert not findings(text)
