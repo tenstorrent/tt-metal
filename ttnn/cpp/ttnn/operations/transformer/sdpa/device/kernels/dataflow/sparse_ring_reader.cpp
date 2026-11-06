@@ -170,6 +170,10 @@ void kernel_main() {
     // by multicast), valid = the producer's local source word for that set. Off when the factory builds no head
     // chains; the pieces then go over the chain or are read by each core.
     constexpr bool group_mcast = get_named_compile_time_arg_val("group_mcast") == 1;
+    // With group delivery every head chain member is a group member (checked by the factory), so the head chain never
+    // moves a piece: its transfers are left out (kernel config buffer). A shared-K chain would still move K.
+    constexpr bool v_chain_moves = !group_mcast;
+    constexpr bool k_chain_moves = v_chain_moves || k_uses_batch_chain;
     // rec_base != 0: one plan page per ring iteration holding every chunk's record from that word on (0 = one page
     // per chunk, when the records do not fit one page).
     constexpr uint32_t plan_rec_base = get_named_compile_time_arg_val("plan_rec_base");
@@ -553,8 +557,8 @@ void kernel_main() {
                 const Slice k_slice(nb, nk, row0, row0 + Sk_chunk_t, 0, DHt);
                 // Chain scope keys: the query head for MHA chains, the KV head for grouped ones.
                 const uint32_t k_head = gqa_grouped_kv ? nk : nq;
-                const bool k_rx = k_chain.should_receive(k_head);
-                const bool v_rx = v_chain.should_receive(nv);
+                const bool k_rx = k_chain_moves && k_chain.should_receive(k_head);
+                const bool v_rx = v_chain_moves && v_chain.should_receive(nv);
                 CircularBuffer cb_k(cb_k_in);
                 uint32_t k_addr;
                 if (k_armed) {
@@ -591,7 +595,7 @@ void kernel_main() {
                     v_reserved = true;
                     v_chain.signal_ready(noc);
                 }
-                if (k_chain.should_forward(k_head, 0)) {
+                if (k_chain_moves && k_chain.should_forward(k_head, 0)) {
                     k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 if (!v_reserved) {
@@ -616,7 +620,7 @@ void kernel_main() {
                     k_armed = true;
                     k_chain.signal_ready(noc);
                 }
-                if (v_chain.should_forward(nv, 0)) {
+                if (v_chain_moves && v_chain.should_forward(nv, 0)) {
                     v_chain.forward(noc, v_addr);
                 }
             };
