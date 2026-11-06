@@ -10,6 +10,8 @@ import os
 import re
 import shlex
 import signal
+import socket
+import stat
 import subprocess
 import time
 import urllib.request
@@ -30,6 +32,35 @@ def write(path, value):
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def source_hashes():
+    # Includes the model-owned timing collector benchmark_phases.py.
+    return {str(p.relative_to(ROOT)): sha(p) for p in (MODEL / "tt").glob("*.py")}
+
+
+def clean_stale_phase_socket(phase_log):
+    digest = hashlib.sha256(os.path.abspath(phase_log).encode()).hexdigest()[:16]
+    path = Path(f"/tmp/gemma4-phase-{digest}.sock")
+    if not path.exists():
+        return
+    metadata = path.lstat()
+    if metadata.st_uid != os.getuid() or not stat.S_ISSOCK(metadata.st_mode):
+        raise RuntimeError(f"Refusing to remove unowned/non-socket path {path}")
+    if device_owners():
+        raise RuntimeError("Cannot remove a phase socket while a device process is alive")
+    # A live listener can exist before its engine opens hardware. Probe it,
+    # and remove only a positively refused connection, never a timed-out one.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.settimeout(1)
+        try:
+            probe.connect(str(path))
+        except ConnectionRefusedError:
+            if path.lstat().st_ino != metadata.st_ino:
+                raise RuntimeError("Phase socket changed during stale-owner check")
+            path.unlink()
+        else:
+            raise RuntimeError(f"Phase socket still has a listener: {path}")
 
 
 def process(pid):
@@ -162,13 +193,17 @@ def observe(state, output, requested):
     models = json.loads(fetch(state["base_url"] + "/v1/models"))
     assert any(m["id"] == "google/gemma-4-31B-it" and m.get("max_model_len") == 262144 for m in models["data"]), models
     snapshot = output.parent / f"configuration-b{requested}.json"
-    source_hashes = {str(p.relative_to(ROOT)): sha(p) for p in (MODEL / "tt").glob("*.py")}
+    current_hashes = source_hashes()
+    if state.get("source_sha256_at_launch") != current_hashes:
+        raise RuntimeError("Runtime source changed since server launch or launch hashes are absent; relaunch required")
     plugin = Path("/home/mvasiljevic/gemma4-31b-pipeline-v3/vllm-tt-plugin-stage09")
 
     def commit(path):
         return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
 
     commits = {"tt-metal": commit(ROOT), "vllm-tt-plugin": commit(plugin)}
+    if state.get("tt_metal_commit_at_launch") != commits["tt-metal"]:
+        raise RuntimeError("tt-metal HEAD changed since launch; preserve launch provenance and relaunch")
     vllm_package = json.loads(
         subprocess.check_output(
             [
@@ -191,7 +226,7 @@ def observe(state, output, requested):
             "registration": registration,
             "pool": pool,
             "source_commits": commits,
-            "source_sha256": source_hashes,
+            "source_sha256": current_hashes,
             "startup_log": log,
             "device_owners": device_owners(),
             "vllm_package": vllm_package,
@@ -248,7 +283,13 @@ def main():
         output = args.output.resolve()
         if old and old["max_num_seqs"] == args.max_num_seqs and old["base_url"] == args.base_url:
             live = process(old["pid"])
-            if live and live["start_ticks"] == old["start_ticks"]:
+            expected_phase_log = str(output.parent / f"phase-b{args.max_num_seqs}.jsonl")
+            if (
+                live
+                and live["start_ticks"] == old["start_ticks"]
+                and old.get("phase_log") == expected_phase_log
+                and old.get("source_sha256_at_launch") == source_hashes()
+            ):
                 observe(old, output, args.max_num_seqs)
                 return
         if old:
@@ -263,6 +304,7 @@ def main():
         server_dir = output.parent / f"server-b{args.max_num_seqs}"
         server_dir.mkdir(parents=True, exist_ok=False)
         phase_log = output.parent / f"phase-b{args.max_num_seqs}.jsonl"
+        clean_stale_phase_socket(phase_log)
         env = dict(os.environ)
         for key in ("GEMMA4_SERVING_TEST_LAYERS", "TT_METAL_WATCHER", "TT_METAL_DEVICE_PROFILER"):
             if env.get(key):
@@ -300,7 +342,10 @@ def main():
             snapshot,
         ]
         cmd += ["--additional-server-args", shlex.join(extras)]
+        launch_hashes = source_hashes()
+        launch_commit = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
         start = time.monotonic()
+        started_unix = time.time()
         with (server_dir / "runner.log").open("wb") as log:
             proc = subprocess.Popen(
                 cmd, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
@@ -312,7 +357,10 @@ def main():
             "server_dir": str(server_dir),
             "phase_log": str(phase_log),
             "launch_command": cmd,
-            "started_unix": time.time(),
+            "started_unix": started_unix,
+            "started_monotonic": start,
+            "source_sha256_at_launch": launch_hashes,
+            "tt_metal_commit_at_launch": launch_commit,
             "startup_seconds": None,
             "bounded_seconds": 7200,
         }

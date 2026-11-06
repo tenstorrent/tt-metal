@@ -9,6 +9,7 @@ import torch
 
 import ttnn
 
+from .benchmark_phases import PhaseRecorder
 from .generator import Gemma4Generator
 from .model import Gemma4Model
 
@@ -61,6 +62,22 @@ class Gemma4ForCausalLM:
                 }
             ),
             flush=True,
+        )
+        phase_path = os.environ.get("GEMMA4_BENCHMARK_PHASE_LOG")
+        obj._benchmark_phases = (
+            PhaseRecorder(
+                phase_path,
+                dict(
+                    module_file=os.path.realpath(__file__),
+                    layers=list(obj.model.layer_indices),
+                    precision=obj.model.precision_config,
+                    device_ids=list(mesh_device.get_device_ids()),
+                    batch_size=max_batch_size,
+                    context=max_seq_len,
+                ),
+            )
+            if phase_path
+            else None
         )
         return obj
 
@@ -299,6 +316,19 @@ class Gemma4ForCausalLM:
         empty_slots=None,
         **kwargs,
     ):
+        recorder = getattr(self, "_benchmark_phases", None)
+        phase_step = None
+        if recorder is not None:
+            starts, ends = list(map(int, start_pos)), list(map(int, prompt_lens))
+            phase_step = recorder.begin(
+                "prefill",
+                batch_size=self.batch,
+                sampling_mode="device" if sampling_params is not None else "host_compatibility",
+                starts=starts,
+                ends=ends,
+                active_rows=sum(e > s for s, e in zip(starts, ends)),
+                token_shape=list(tokens.shape),
+            )
         self._memory_event("before_serving_prefill")
         self._pages(page_table, page_tables_per_layer, kv_cache)
         device = sampling_params is not None
@@ -319,7 +349,11 @@ class Gemma4ForCausalLM:
         self._memory_event("after_serving_prefill")
         if device:
             self._advance_sampler()
-            return self._validate_token_ids(torch.tensor(result[: len(prompt_lens)], dtype=torch.int64).reshape(-1, 1))
+            result = self._validate_token_ids(
+                torch.tensor(result[: len(prompt_lens)], dtype=torch.int64).reshape(-1, 1)
+            )
+        if recorder is not None:
+            recorder.complete(phase_step)
         return result
 
     def decode_forward(
@@ -338,6 +372,21 @@ class Gemma4ForCausalLM:
         slot_remap=None,
         **kwargs,
     ):
+        recorder = getattr(self, "_benchmark_phases", None)
+        phase_step = None
+        if recorder is not None:
+            positions = recorder.decode_positions(start_pos, reload_inputs)
+            phase_step = recorder.begin(
+                "decode",
+                batch_size=self.batch,
+                sampling_mode="device" if sampling_params is not None else "host_compatibility",
+                effective_positions=positions,
+                positions=positions,
+                active_rows=sum(p >= 0 for p in positions),
+                token_shape=list(tokens.shape),
+                reload_inputs=bool(reload_inputs),
+                reload_page_table=bool(reload_page_table),
+            )
         if "reset_batch" in kwargs:
             raise TypeError("Legacy reset_batch is incompatible with decode contract version1")
         if reload_inputs and reload_page_table:
@@ -383,16 +432,31 @@ class Gemma4ForCausalLM:
             self._advance_sampler()
         if read_from_device:
             if sampling_params is not None:
-                return self._validate_token_ids(torch.tensor(result, dtype=torch.int64).reshape(self.batch, 1))
-            return result.reshape(self.batch, 1, -1)
+                result = self._validate_token_ids(torch.tensor(result, dtype=torch.int64).reshape(self.batch, 1))
+            else:
+                result = result.reshape(self.batch, 1, -1)
+            if recorder is not None:
+                recorder.complete(phase_step)
+        elif recorder is not None:
+            recorder.submitted_output(phase_step, result)
         return result
 
     def read_decode_output(self, output, async_read=False):
-        return self.generator.read_decode_output(output, async_read=async_read)
+        result = self.generator.read_decode_output(output, async_read=async_read)
+        recorder = getattr(self, "_benchmark_phases", None)
+        if recorder is not None:
+            recorder.bind_readback(output, result[0] if async_read else result)
+        return result
 
     def process_decode_output_host(self, output, is_tokens=False):
         result = self.generator.process_decode_output_host(output, is_tokens=is_tokens)
-        return self._validate_token_ids(result) if is_tokens else result
+        result = self._validate_token_ids(result) if is_tokens else result
+        recorder = getattr(self, "_benchmark_phases", None)
+        if recorder is not None:
+            # Async callers already waited the existing readback event; sync
+            # conversion above already materialized its existing device read.
+            recorder.complete_output(output)
+        return result
 
     def release_persistent_capture(self):
         if self.generator is not None:
