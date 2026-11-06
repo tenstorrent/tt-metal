@@ -485,8 +485,8 @@ def test_invalid_calls_raise(device, expect_error, case):
 
 # The generated layer norm's ND layout (tt/common.py nd_norm_layout), as out_proj and fc2 write it: (batch, S, K,
 # M block, K block, strip rows, strip read-ahead, read-ahead, fidelity, input dtype) of the model's calls at 8x512,
-# 4x512 and 2x512, plus 3x512 (G = 2 shards, 5-row shares) and 8x384 (a strided split would overfill a column there,
-# so the contiguous one stays).
+# 4x512 and 2x512, plus 3x512 (G = 2 shards, 5-row shares), 8x384 (a strided split would overfill a column there,
+# so the contiguous one stays) and two calls with two M blocks a core.
 ND_CALLS = {
     "out_proj_8x512": (8, 512, HIDDEN, 10, 3, 2, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
     "fc2_8x512": (8, 512, INTERMEDIATE, 10, 4, 2, True, False, ttnn.MathFidelity.HiFi2, ttnn.bfloat8_b),
@@ -496,6 +496,9 @@ ND_CALLS = {
     "fc2_2x512": (2, 512, INTERMEDIATE, 3, 12, 0, False, True, ttnn.MathFidelity.HiFi2, ttnn.bfloat8_b),
     "out_proj_3x512": (3, 512, HIDDEN, 5, 3, 0, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
     "out_proj_8x384": (8, 384, HIDDEN, 9, 3, 0, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
+    # Two M blocks a core: the first written during the second's K loop, through the row table.
+    "out_proj_4x512_m3": (4, 512, HIDDEN, 3, 3, 0, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
+    "fc2_8x512_m5": (8, 512, INTERMEDIATE, 5, 4, 2, True, False, ttnn.MathFidelity.HiFi2, ttnn.bfloat8_b),
 }
 
 
