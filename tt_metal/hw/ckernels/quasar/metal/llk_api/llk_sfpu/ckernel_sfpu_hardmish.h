@@ -30,9 +30,6 @@ inline void hardmish_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
 // Whether BF16 DEST runs the generated hardmish kernel as one call over the whole tile.
 inline constexpr bool hardmish_bf16_whole_tile = false;
-// The stock hardmish kernel needs no BF16 setup.
-template <bool bf16_kernel>
-inline void hardmish_bf16_tile_init() {}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void hardmish() {

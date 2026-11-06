@@ -23,7 +23,7 @@ from grpo_remote_rollout.utils.llama_ttt_presets import (
 )
 from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
 
-MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml"
 MAX_SEQ_LEN = 2048
 
@@ -109,7 +109,7 @@ def build_completer(
     module-scoped fixture so the cost is paid once per file.
     """
     if dummy_weights:
-        # Skip the gated HF tokenizer; stop/pad IDs are immaterial here.
+        # Skip the HF tokenizer; stop/pad IDs are immaterial here.
         stop_token_ids: Any = ()
         pad_token_id = 0
     else:

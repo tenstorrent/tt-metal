@@ -12,7 +12,8 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
-static void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
+namespace {
+void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
     union {
         float f;
         uint32_t u;
@@ -58,6 +59,7 @@ static void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t
         }
     }
 }
+}  // namespace
 
 void kernel_main() {
     auto num_tiles = get_arg(args::num_tiles);
