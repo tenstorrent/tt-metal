@@ -16,6 +16,7 @@
 #include "common/executor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -60,7 +61,7 @@ DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshDevic
         tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(mesh_device_view.mesh_id());
 
     int shard_index = 0;
-    for (auto maybe_device : mesh_device_view) {
+    for (auto maybe_device : mesh_device_view.impl()) {
         maybe_device.if_local([&](const auto&) {
             shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false});
         });
@@ -111,8 +112,15 @@ DistributedHostBuffer DistributedHostBuffer::transform(
     const TransformFn& fn, ProcessShardExecutionPolicy policy) const {
     const std::vector<size_t> indices_to_process = get_populated_shard_indices();
     const auto& shards = shards_.values();
-    std::vector<distributed::MaybeRemote<Shard>> transformed_shards(
-        shards.size(), distributed::MaybeRemote<Shard>::remote());
+    // Every entry keeps its locality: a local coordinate that holds no shard stays local and unpopulated, a remote
+    // one stays remote. The populated shards are overwritten with their transformed buffers below.
+    std::vector<distributed::MaybeRemote<Shard>> transformed_shards;
+    transformed_shards.reserve(shards.size());
+    for (const auto& shard : shards) {
+        transformed_shards.push_back(
+            shard.is_local() ? distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false})
+                             : distributed::MaybeRemote<Shard>::remote());
+    }
 
     // Group replicated shard indices together
     std::unordered_map<const std::byte*, std::vector<size_t>> shard_group_indices;

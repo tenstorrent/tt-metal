@@ -133,6 +133,14 @@ void kernel_main() {
     // ===== Step 2: Read per-expert token counts =====
     // writer_untilize independently reads the sender's receive_buf_addr from c_1 at offset
     // experts_tok_counter_pages * aligned_experts_tok_counter_page_size (same L1 layout).
+    // cb_experts_tok_counter is not used as a typical CB. It's intended to be a scratchpad that is setup
+    // once, remote-written-to once, then read by multiple consumers. The order of operations is
+    // - sender core remote-writes to this CB's data region, then bumps the untilizer core's semaphore
+    // - untilizer's reader kernel waits on the semaphore and reserves + pushes to the CB, thus making the data
+    //   available
+    // - untilizer's reader, writer and compute kernels wait_front on the CB, then read from it.
+    // These kernels must not pop_front because it can happen that pop lands before some other kernel got to its
+    // wait_front step, which would cause it to wait forever (a.k.a. hang)
     cb_experts_tok_counter.wait_front(cb_counter_total_pages);
     uint32_t token_counter_base = cb_experts_tok_counter.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* counter_l1_src =

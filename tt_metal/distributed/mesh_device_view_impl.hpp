@@ -17,6 +17,7 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -35,16 +36,16 @@ public:
     // Constructors for MeshDeviceViewImpl for fully and partially local meshes.
     explicit MeshDeviceViewImpl(
         const MeshShape& shape,
-        const std::vector<IDevice*>& devices,
+        const std::vector<Device*>& devices,
         const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
     explicit MeshDeviceViewImpl(
         const MeshShape& shape,
-        const std::vector<MaybeRemote<IDevice*>>& devices,
+        const std::vector<MaybeRemote<Device*>>& devices,
         const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
-    [[nodiscard]] std::vector<IDevice*> get_devices(const MeshCoordinateRange& range) const;
-    [[nodiscard]] std::vector<IDevice*> get_devices() const;
+    [[nodiscard]] std::vector<Device*> get_devices(const MeshCoordinateRange& range) const;
+    [[nodiscard]] std::vector<Device*> get_devices() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids(const MeshCoordinateRange& range) const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids() const;
     [[nodiscard]] size_t num_devices() const;
@@ -55,9 +56,9 @@ public:
     [[nodiscard]] tt::tt_fabric::MeshId mesh_id() const noexcept;
     [[nodiscard]] bool contains(const MeshCoordinate& coord) const noexcept;
 
-    // Returns `IDevice*` instance for `coord`.
+    // Returns `Device*` instance for `coord`.
     // In multi-host context, throws if `coord` is querying a remote device.
-    [[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
+    [[nodiscard]] Device* get_device(const MeshCoordinate& coord) const;
 
     // Returns `tt::tt_fabric::FabricNodeId` for `coord`.
     // In multi-host context, fabric node IDs are always available, even for remote devices.
@@ -65,6 +66,8 @@ public:
 
     auto begin() const { return devices_.values().begin(); }
     auto end() const { return devices_.values().end(); }
+    // `IDevice*` copy of the devices, backing the deprecated public `MeshDeviceView::begin()`/`end()`.
+    const std::vector<MaybeRemote<IDevice*>>& idevices() const { return idevices_; }
 
     // Throws if no device corresponds to `device_id`.
     [[nodiscard]] MeshCoordinate find_device(ChipId device_id) const;
@@ -108,7 +111,9 @@ public:
     MeshCoordinateRange get_local_mesh_coord_range() const;
 
 private:
-    DistributedMeshContainer<IDevice*> devices_;
+    DistributedMeshContainer<Device*> devices_;
+    // TODO: Remove together with the deprecated `MeshDeviceView::begin()`/`end()` after 2026-11-16.
+    std::vector<MaybeRemote<IDevice*>> idevices_;
     MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids_;
     tt::tt_fabric::MeshId mesh_id_;
 

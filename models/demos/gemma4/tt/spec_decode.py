@@ -714,7 +714,12 @@ class SpeculativeDecoder:
             existing = getattr(layer.self_attn, "kv_staging", None)
             if existing is None or (hasattr(existing[0], "is_allocated") and not existing[0].is_allocated()):
                 layer.self_attn.kv_staging = init_kv_staging(
-                    self.mesh_device, cfg, max_batch_size=1, block_size=self._pv_bs, blk=self._pv_blk
+                    self.mesh_device,
+                    cfg,
+                    max_batch_size=1,
+                    block_size=self._pv_bs,
+                    blk=self._pv_blk,
+                    mesh_config=getattr(layer.self_attn, "mesh_config", None),
                 )
             self._pv_nkv[lt] = int(layer.self_attn.kv_staging[0].shape[1])
         flat = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(torch.int64)

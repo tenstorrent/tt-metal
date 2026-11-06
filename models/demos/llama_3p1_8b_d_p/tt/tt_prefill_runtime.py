@@ -30,9 +30,9 @@ class TtPrefillRuntimeConfig:
             integer(name, getattr(self, name), 1)
         if self.use_trace:
             raise NotImplementedError("Llama runtime uses eager execution")
-        PrefillGeometry(self.max_seq_len)
-        if self.chunk_size != layout.chunk_size or self.num_users != layout.num_users:
-            raise ValueError(f"Llama runtime requires chunk_size={layout.chunk_size} and num_users={layout.num_users}")
+        PrefillGeometry(self.max_seq_len, self.num_users)
+        if self.chunk_size != layout.chunk_size:
+            raise ValueError(f"Llama runtime requires chunk_size={layout.chunk_size}")
         if (self.num_layers, self.first_layer_idx, self.is_first_rank, self.is_last_rank, self.mesh_shape) != (
             32,
             0,
@@ -49,7 +49,9 @@ class TtPrefillRuntime:
             raise ValueError("model layer count differs from runtime configuration")
         if model.max_seq_len != config.max_seq_len:
             raise ValueError("model capacity differs from runtime configuration")
-        self.geometry = PrefillGeometry(config.max_seq_len)
+        if model.num_users != config.num_users:
+            raise ValueError("model slot count differs from runtime configuration")
+        self.geometry = PrefillGeometry(config.max_seq_len, config.num_users)
         self.mesh_device = mesh_device
         self.config = config
         self.model = model
@@ -114,8 +116,8 @@ class TtPrefillRuntime:
                 completed, output = output, None
                 completed.deallocate(True)
             if sink is not None:
-                for layer in range(self.config.num_layers):
-                    sink(self.config.first_layer_idx + layer, request)
+                first = self.config.first_layer_idx
+                sink.layers_completed(first, first + self.config.num_layers, slot, start, end)
         finally:
             if output is not None:
                 output.deallocate(True)
@@ -174,8 +176,8 @@ class TtPrefillRuntime:
         self._check_ready()
         if not self.compiled:
             raise RuntimeError("compile must complete before sink installation")
-        if sink is not None and not callable(sink):
-            raise TypeError("sink must be callable or None")
+        if sink is not None and not hasattr(sink, "layers_completed"):
+            raise TypeError("sink must implement layers_completed or be None")
         self._layer_completion_sink = sink
 
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
@@ -249,6 +251,7 @@ def build_runtime(mesh_device, *, params, checkpoint_path):
         enable_lm_head=False,
         cache_dtype=ttnn.bfloat8_b,
         max_seq_len=config.max_seq_len,
+        num_users=config.num_users,
     )
     return TtPrefillRuntime(
         mesh_device,
