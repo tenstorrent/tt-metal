@@ -103,7 +103,12 @@ void kernel_main() {
     cb_push_back(cb_s, num_nt * S_PAGES);  // also BRISC's go signal (tdec3_writer.cpp)
 #endif
 
+#ifdef W_STAGED
+    const StagedW w{get_common_arg_val<uint32_t>(STAGE_ARG_RD), first_nt * ppr};
+    (void)w_addr;
+#else
     const auto w = TensorAccessor(w_args, w_addr, 4096);
+#endif
 #ifdef PAGE_SPLIT
     stream_pages<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0);
 #else

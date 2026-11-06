@@ -42,8 +42,10 @@ def test_gdn_step(device, steps):
     dt_bias, a_neg = _w("dt_bias"), -torch.exp(_w("A_log"))
     norm_w = _w("norm.weight").bfloat16().float()
     step = GDNStep(device, taps, dt_bias, a_neg, norm_w, nk, hk, hd, eps_o=1e-6)
+    step.first_core = int(os.environ.get("STEP_FIRST_CORE", "0"))
     if os.environ.get("STEP_ZONES"):
         step.compute_defines = (("STEP_ZONES", "1"),)
+        step.reader_defines = (("STEP_ZONES", "1"),)
 
     conv = (torch.randn(3, dq) * 0.5).bfloat16().float()
     S = (torch.randn(nv, hk, hd) * 0.05).bfloat16().float()

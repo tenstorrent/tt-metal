@@ -179,24 +179,46 @@ class TernaryGDN:
             qkv, z = self.qkvz(xr, lead=lead, split=self.split)
             ttnn.deallocate(xr)
             xnt = prerot.take_xnt(x) if getattr(self, "wab", None) is not None else None
+        stage, extra = self._stage_out(x.device())
         if xnt is not None and os.environ.get("BONSAI_STEP_AB", "1") == "1":
             # a / b inside the step: dot products of the norm op's tiled blocks with this head's weight blocks
-            o = self.step(qkv, None, z, gdn.fused_conv_state, gdn.recurrent_state, xnt=xnt, wab=self.wab)
+            o = self.step(qkv, None, z, gdn.fused_conv_state, gdn.recurrent_state, xnt=xnt, wab=self.wab, extra=extra)
             for t in (qkv, z):
                 ttnn.deallocate(t)
         else:
             ab = ttnn.linear(x, self.ab_w, compute_kernel_config=self.ab_ckc, program_config=self.ab_pc)
-            o = self.step(qkv, ab, z, gdn.fused_conv_state, gdn.recurrent_state)
+            o = self.step(qkv, ab, z, gdn.fused_conv_state, gdn.recurrent_state, extra=extra)
             for t in (qkv, z, ab):
                 ttnn.deallocate(t)
-        y = self.out_proj(o)
+        y = self.out_proj(o, stage=stage)
         ttnn.deallocate(o)
+        if stage is not None:
+            ttnn.deallocate(stage)
         return y
 
-    def out_proj(self, o):
+    def _stage_out(self, device):
+        """(stage, extra): the out projection's weights copied into L1 during the step, on the cores it leaves free
+        (the step moves to the last cores), so the out projection reads no DRAM. Off by default (BONSAI_STAGE_OUT=1:
+        on): the staging reads delay the step's own (step + out projection 39.5 + 16.8 us vs 30.8 + 24, eager)."""
+        if os.environ.get("BONSAI_STAGE_OUT", "0") != "1" or os.environ.get("BONSAI_ROT_FUSE", "1") != "1":
+            self.step.first_core = 0
+            return None, None
+        grid = device.compute_with_storage_grid_size()
+        cores, _ = self.out._cores(device)
+        if cores + self.step.nv > grid.x * grid.y:
+            self.step.first_core = 0
+            return None, None
+        self.step.first_core = grid.x * grid.y - self.step.nv
+        stage = self.out.alloc_stage(device)
+        _, kernels = self.out.stage_kernels(device, stage)
+        return stage, (kernels, [self.out.w, stage])
+
+    def out_proj(self, o, stage=None):
         lead = tuple(list(o.shape)[:-1])
         if os.environ.get("BONSAI_ROT_FUSE", "1") == "1":  # the rotation inside the out projection's op
-            return self.out.rotated(self.rot_out, o, lead=lead, residual=prerot.take_residual(), out_l1=True)
+            return self.out.rotated(
+                self.rot_out, o, lead=lead, residual=prerot.take_residual(), out_l1=True, stage=stage
+            )
         orr = self.rot_out(o)
         y = self.out(orr, lead=lead, residual=prerot.take_residual())  # the layer's residual add, if registered
         ttnn.deallocate(orr)

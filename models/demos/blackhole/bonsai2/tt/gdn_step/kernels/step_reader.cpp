@@ -12,6 +12,26 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "../../ternary/kernels/core_span.hpp"
+#ifndef STEP_FIRST
+#define STEP_FIRST 0  // the first core (row-major logical index): core STEP_FIRST + j owns value head j
+#endif
+#ifdef STEP_ZONES
+#include "api/debug/kernel_profiler.hpp"
+#endif
+
+// STEP_SPLIT: two copies of this kernel. NCRISC (no ROLE_CONV) reads the gate inputs and the state; BRISC
+// (ROLE_CONV) reads the conv inputs, writes the new conv state, then does the writer's job (step_writer.cpp): the two
+// RISCs issue their small reads in parallel.
+#if defined(STEP_SPLIT) && defined(ROLE_CONV)
+#define DO_GATES 0
+#define DO_CONV 1
+#elif defined(STEP_SPLIT)
+#define DO_GATES 1
+#define DO_CONV 0
+#else
+#define DO_GATES 1
+#define DO_CONV 1
+#endif
 
 namespace {
 constexpr uint32_t TB = 2048;  // bf16 tile bytes
@@ -20,6 +40,13 @@ void zero(uint32_t l1, uint32_t bytes) {
     const uint64_t z = get_noc_addr(MEM_ZEROS_BASE);
     for (uint32_t o = 0; o < bytes; o += MEM_ZEROS_SIZE) {
         noc_async_read(z, l1 + o, MEM_ZEROS_SIZE);
+    }
+}
+
+void zero_range(uint32_t l1, uint32_t bytes) {
+    const uint64_t z = get_noc_addr(MEM_ZEROS_BASE);
+    for (uint32_t o = 0; o < bytes; o += MEM_ZEROS_SIZE) {
+        noc_async_read(z, l1 + o, bytes - o < MEM_ZEROS_SIZE ? bytes - o : MEM_ZEROS_SIZE);
     }
 }
 
@@ -47,7 +74,7 @@ void kernel_main() {
     const uint32_t conv_addr = get_common_arg_val<uint32_t>(3);
     const uint32_t st_addr = get_common_arg_val<uint32_t>(4);
     const uint32_t c_addr = get_common_arg_val<uint32_t>(5);
-    const uint32_t j = core_index(get_common_arg_val<uint32_t>(6));
+    const uint32_t j = (core_index(get_common_arg_val<uint32_t>(6)) - STEP_FIRST);
 
     constexpr uint32_t NV = get_compile_time_arg_val(0);     // value heads (48)
     constexpr uint32_t QT = get_compile_time_arg_val(1);     // q (= k) width in tiles (2048 / 32 = 64)
@@ -95,25 +122,26 @@ void kernel_main() {
     const uint32_t X = get_write_ptr(cb_x), Z = get_write_ptr(cb_z), A = get_write_ptr(cb_a), B = get_write_ptr(cb_b);
     const uint32_t SC = get_write_ptr(cb_sc), N = get_write_ptr(cb_n);
 
-    zero(X, NCH * TB);
-    zero(Z, HT * TB);
-#ifndef STEP_AB_DOT
-    zero(A, TB);
-    zero(B, TB);
-#endif
-    noc_async_read_barrier();  // the zero fills land before the row reads into the same pages
-
-    // Phase 1: a, b, z (the compute starts with the gates and silu(z)).
+    // Every input read is issued up front in three transaction-id groups (the compute's phases), and each group is
+    // waited for only when its phase needs it: one DRAM round trip instead of five in a row. The zero fills cover
+    // only the bytes the row reads / copies do not write, so they need no ordering against them.
+    constexpr uint32_t T_GATES = 1, T_CONV = 2, T_STATE = 3, T_LOCAL = 4;
+    auto zero_rows_from = [&](uint32_t tile, uint32_t row_bytes) {  // all but face 0/1 rows [0, row_bytes)
+        zero_range(tile + row_bytes, 512 - row_bytes);
+        zero_range(tile + 512 + row_bytes, 512 - row_bytes);
+        zero_range(tile + 1024, 1024);
+    };
+#if DO_GATES
+    noc_async_read_set_trid(T_GATES);
     for (uint32_t i = 0; i < HT; ++i) {
+        zero_rows_from(Z + i * TB, 32);
         const uint64_t s = zs.get_noc_addr(j * HT + i);
         noc_async_read(s, SC + NCH * 128 + i * 128, 64);
         noc_async_read(s + 512, SC + NCH * 128 + i * 128 + 64, 64);
     }
 #ifdef STEP_AB_DOT
-    // a / b come from the compute's dot products (gdn_step.py ab_dot): the normalised input's 5 tiled blocks (in
-    // the ab slot), this head's [a | b] weight blocks, and ONES (needed first now)
+    constexpr uint32_t cb_xnt = 25, cb_wab = 26, NBK = 5;
     {
-        constexpr uint32_t cb_xnt = 25, cb_wab = 26, NBK = 5;
         constexpr auto w_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
         const auto ws = TensorAccessor(w_args, get_common_arg_val<uint32_t>(7 + 2 * (NV / GROUP)), TB);
         cb_reserve_back(cb_xnt, NBK);
@@ -125,35 +153,51 @@ void kernel_main() {
             noc_async_read(ws.get_noc_addr(j * 2 * NBK + t), get_write_ptr(cb_wab) + t * TB, TB);
         }
         noc_async_read(cs.get_noc_addr(NV * NCH + HT + 1), get_write_ptr(cb_ones), TB);
-        noc_async_read_barrier();
-        cb_push_back(cb_xnt, NBK);
-        cb_push_back(cb_wab, 2 * NBK);
-        cb_push_back(cb_ones, 1);
     }
 #else
     const uint32_t ca = j, cbb = NV + j;  // a and b columns of the fused [a | b] projection
+    zero_rows_from(A, 32);
+    zero_rows_from(B, 32);
     noc_async_read(ab.get_noc_addr(ca / 32) + ((ca % 32) / 16) * 512, SC + TB, 64);
     noc_async_read(ab.get_noc_addr(cbb / 32) + ((cbb % 32) / 16) * 512, SC + TB + 64, 64);
-    noc_async_read_barrier();
+#endif
+#ifdef STEP_ZONES
+    {
+        DeviceZoneScopedN("TD-R-wait-gates");
+        noc_async_read_barrier_with_trid(T_GATES);
+    }
+#else
+    noc_async_read_barrier_with_trid(T_GATES);
+#endif
+#ifdef STEP_AB_DOT
+    cb_push_back(cb_xnt, NBK);
+    cb_push_back(cb_wab, 2 * NBK);
+    cb_push_back(cb_ones, 1);
+#else
     {
         const volatile tt_l1_ptr uint16_t* h = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(SC + TB);
         fill_row0(A, h[ca % 16]);
         fill_row0(B, h[32 + cbb % 16]);
     }
 #endif
+    noc_async_read_set_trid(T_LOCAL);
     for (uint32_t i = 0; i < HT; ++i) {
         copy32(Z + i * TB, SC + NCH * 128 + i * 128);
         copy32(Z + i * TB + 512, SC + NCH * 128 + i * 128 + 64);
     }
-    noc_async_read_barrier();
+    noc_async_read_barrier_with_trid(T_LOCAL);
 #ifndef STEP_AB_DOT
     cb_push_back(cb_a, 1);
     cb_push_back(cb_b, 1);
 #endif
     cb_push_back(cb_z, HT);
 
-    // Phase 2: the conv inputs, taps and E.
+#endif
+#if DO_CONV
+    // conv inputs, taps and E
+    noc_async_read_set_trid(T_CONV);
     for (uint32_t c = 0; c < NCH; ++c) {
+        zero_rows_from(X + c * TB, 128);
         const uint32_t t = chunk_tile(c);
         const uint64_t s = conv.get_noc_addr(t);
         noc_async_read(s, X + c * TB, 128);              // face 0 rows 0-3 (row 3 is overwritten below)
@@ -164,25 +208,17 @@ void kernel_main() {
     }
     // consts: [NV * NCH taps tiles | HT norm-weight tiles | E | ONES]
     const uint32_t T = get_write_ptr(cb_t);
-    for (uint32_t c = 0; c < NCH; ++c) {
-        noc_async_read(cs.get_noc_addr(j * NCH + c), T + c * TB, TB);
+    for (uint32_t c = 0; c < NCH; ++c) {  // taps: rows 0-3 only (the rest of the tile is zero)
+        zero_rows_from(T + c * TB, 128);
+        const uint64_t s = cs.get_noc_addr(j * NCH + c);
+        noc_async_read(s, T + c * TB, 128);
+        noc_async_read(s + 512, T + c * TB + 512, 128);
     }
     noc_async_read(cs.get_noc_addr(NV * NCH + HT), get_write_ptr(cb_e), TB);
-    noc_async_read_barrier();
-    const uint32_t sem = get_semaphore(0);
-    if (!leader) {
-        noc_semaphore_inc(get_noc_addr(leader_x, leader_y, sem), 1);  // this core's reads of the shared q/k are done
-    }
-    for (uint32_t c = 0; c < NCH; ++c) {
-        copy32(X + c * TB + 96, SC + c * 128);             // the token into row 3, face 0
-        copy32(X + c * TB + 512 + 96, SC + c * 128 + 64);  // face 1
-    }
-    noc_async_read_barrier();
-    cb_push_back(cb_x, NCH);
-    cb_push_back(cb_t, NCH);
-    cb_push_back(cb_e, 1);
-
-    // Phase 3: ONES (unless read first), the state, the norm weight.
+#endif
+#if DO_GATES
+    // ONES (unless read first), the state, the norm weight
+    noc_async_read_set_trid(T_STATE);
 #ifndef STEP_AB_DOT
     noc_async_read(cs.get_noc_addr(NV * NCH + HT + 1), get_write_ptr(cb_ones), TB);
 #endif
@@ -191,16 +227,55 @@ void kernel_main() {
         noc_async_read(st.get_noc_addr(j * HT * HT + t), S + t * TB, TB);
     }
     const uint32_t W = get_write_ptr(cb_w);
-    for (uint32_t i = 0; i < HT; ++i) {
-        noc_async_read(cs.get_noc_addr(NV * NCH + i), W + i * TB, TB);
+    for (uint32_t i = 0; i < HT; ++i) {  // norm weight: row 0 only (64-B reads: rows 0-1, row 1 is zero)
+        zero_rows_from(W + i * TB, 64);
+        const uint64_t s = cs.get_noc_addr(NV * NCH + i);
+        noc_async_read(s, W + i * TB, 64);
+        noc_async_read(s + 512, W + i * TB + 512, 64);
     }
-    noc_async_read_barrier();
+
+#endif
+#if DO_CONV
+#ifdef STEP_ZONES
+    {
+        DeviceZoneScopedN("TD-R-wait-conv");
+        noc_async_read_barrier_with_trid(T_CONV);
+    }
+#else
+    noc_async_read_barrier_with_trid(T_CONV);
+#endif
+    const uint32_t sem = get_semaphore(0);
+    if (!leader) {
+        noc_semaphore_inc(get_noc_addr(leader_x, leader_y, sem), 1);  // this core's reads of the shared q/k are done
+    }
+    for (uint32_t c = 0; c < NCH; ++c) {
+        copy32(X + c * TB + 96, SC + c * 128);             // the token into row 3, face 0
+        copy32(X + c * TB + 512 + 96, SC + c * 128 + 64);  // face 1
+    }
+    noc_async_read_barrier_with_trid(T_LOCAL);
+    cb_push_back(cb_x, NCH);
+    cb_push_back(cb_t, NCH);
+    cb_push_back(cb_e, 1);
+
+#endif
+#if DO_GATES
+#ifdef STEP_ZONES
+    {
+        DeviceZoneScopedN("TD-R-wait-state");
+        noc_async_read_barrier_with_trid(T_STATE);
+    }
+#else
+    noc_async_read_barrier_with_trid(T_STATE);
+#endif
+    noc_async_read_set_trid(0);
 #ifndef STEP_AB_DOT
     cb_push_back(cb_ones, 1);
 #endif
     cb_push_back(cb_s, HT * HT);
     cb_push_back(cb_w, HT);
+#endif
 
+#if DO_CONV
     // New conv state rows 0-3 = old rows 1-2, the token, zero (face 0 then face 1, 128 B each).
     for (uint32_t c = 0; c < NCH; ++c) {
         const uint32_t n = N + c * 256, x = X + c * TB;
@@ -231,4 +306,24 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+#endif
+#if defined(STEP_SPLIT) && defined(ROLE_CONV)
+    {  // step_writer.cpp: head j's new recurrent state (c_21, not popped: the compute reads it too) and its output
+        constexpr uint32_t cb_snew = 21, cb_out = 16;
+        constexpr auto out_args = TensorAccessorArgs<OUT_ARGS_OFFSET>();
+        const auto out = TensorAccessor(out_args, get_common_arg_val<uint32_t>(OUT_ADDR_ARG), TB);
+        cb_wait_front(cb_snew, HT * HT);
+        const uint32_t sn = get_read_ptr(cb_snew);
+        for (uint32_t t = 0; t < HT * HT; ++t) {
+            noc_async_write(sn + t * TB, st.get_noc_addr(j * HT * HT + t), TB);
+        }
+        cb_wait_front(cb_out, HT);
+        const uint32_t o = get_read_ptr(cb_out);
+        for (uint32_t i = 0; i < HT; ++i) {
+            noc_async_write(o + i * TB, out.get_noc_addr(j * HT + i), TB);
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_out, HT);
+    }
+#endif
 }

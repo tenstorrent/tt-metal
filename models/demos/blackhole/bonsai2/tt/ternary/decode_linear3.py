@@ -122,6 +122,9 @@ def _xl1_buffer(device, K, crs, cores):
     return _XL1[key]
 
 
+STAGE_INFLIGHT = int(os.environ.get("BONSAI_STAGE_INFLIGHT", "1"))  # staging reads in flight per RISC
+
+
 @dataclass
 class TernaryDecodeLinear3:
     K: int
@@ -196,8 +199,10 @@ class TernaryDecodeLinear3:
         qg_heads=0,
         rot=None,
         out_l1=False,
+        stage=None,
     ):
-        """split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
+        """stage: this linear's weights already copied into L1 by stage_kernels(stage) in an earlier op.
+        split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
         x_rot: [C, K] bf16 ROW_MAJOR, C copies of the rotated activation (one per DRAM bank: page c is in bank
         c mod 8) -> [32, N] bf16 TILE, row 0 = y.
         residual: a tensor of the output's shape added before the bf16 rounding (out = residual + y).
@@ -321,6 +326,15 @@ class TernaryDecodeLinear3:
             rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             dm_defines = list(dm_defines) + [("COMMON_ARGS", "1")]
             extra_defines = list(extra_defines) + [("COMMON_ARGS", "1")]
+        if stage is not None:
+            assert COMMON_ARGS
+            dm_defines = list(dm_defines) + [
+                ("W_STAGED", "1"),
+                ("STAGE_ARG_RD", str(len(rd_c))),
+                ("STAGE_ARG_WR", str(len(wr_c))),
+            ]
+            rd_c = rd_c + [stage.buffer_address()]
+            wr_c = wr_c + [stage.buffer_address()]
         rd_ct = [Kt, KB, ppr, inflight]
         for t in (x_rot if x_rot is not None else self.w, self.w if self.inline_scales else self.s, self.w):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -409,8 +423,54 @@ class TernaryDecodeLinear3:
         )
         return (out, out2) if out2 is not None else res  # generic_op returns the last tensor of its list
 
-    def rotated(self, rotation, x, lead=(1, 1, TILE), u=None, sig=False, residual=None, out_l1=False, split=0):
+    def _cores(self, device):
+        """(cores, max output tiles per core) of __call__'s split (unit 1)."""
+        Nt = self.N // TILE
+        per = -(-Nt // min(self.cores, Nt))
+        return -(-Nt // per), per
+
+    def alloc_stage(self, device):
+        """An L1 buffer for stage_kernels: each of this linear's cores holds its own weight pages at one address."""
+        assert not getattr(self, "glu", False) and self.inline_scales
+        cores, per = self._cores(device)
+        grid = device.compute_with_storage_grid_size()
+        rows = per * self.ppr  # 4-KB pages per core
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(row_major_crs(cores, grid.x), [rows, 1024], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([cores * rows, 1024]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, mc
+        )
+
+    def stage_kernels(self, device, stage):
+        """Kernels for another op's program that copy this linear's weight pages into stage (alloc_stage) on this
+        linear's cores (kernels/tdec3_stage.cpp, both data-movement RISCs); __call__(stage=stage) then reads them
+        from L1. The other op must not use these cores."""
+        cores, _ = self._cores(device)
+        grid = device.compute_with_storage_grid_size()
+        crs = row_major_crs(cores, grid.x)
+        common = [self.w.buffer_address(), stage.buffer_address(), self.N // TILE, cores, grid.x, 1]
+        ct = ttnn.TensorAccessorArgs(self.w).get_compile_time_args()
+        return crs, [
+            ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "tdec3_stage.cpp",
+                core_ranges=crs,
+                compile_time_args=[self.ppr, parity, STAGE_INFLIGHT] + ct,
+                runtime_args=ttnn.RuntimeArgs(),
+                common_runtime_args=common,
+                config=ttnn.ReaderConfigDescriptor() if parity == 0 else ttnn.WriterConfigDescriptor(),
+            )
+            for parity in (0, 1)
+        ]
+
+    def rotated(
+        self, rotation, x, lead=(1, 1, TILE), u=None, sig=False, residual=None, out_l1=False, split=0, stage=None
+    ):
         """This linear on rotation(x) (rotation(x, u=u, sig=sig)) in one op: the rotation runs on the cores after this
         linear's and hands x' over through core 0 (no rotation op, no x' round trip; the weight stream starts at
         once). x (and u) should be in L1: the rotation's reads then do not queue behind the weight streams."""
-        return self(None, lead=lead, rot=(rotation, x, u, sig), residual=residual, out_l1=out_l1, split=split)
+        return self(
+            None, lead=lead, rot=(rotation, x, u, sig), residual=residual, out_l1=out_l1, split=split, stage=stage
+        )

@@ -7,14 +7,17 @@ In: qkv [.., 10240], z [.., 6144], ab [.., 2 * nv] (the in_proj outputs, bf16 TI
 conv state [1, 3, 10240] and recurrent state [1, nv, 128, 128] (bf16 TILE, updated in place). Out: [.., 6144] bf16
 TILE, the input of out_proj."""
 
+import os
 import struct
 
 import torch
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_range_crs
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/gdn_step/kernels/"
+# the reader kernel on both data-movement RISCs, each issuing part of the small reads (BONSAI_STEP_SPLIT=0: off)
+SPLIT = os.environ.get("BONSAI_STEP_SPLIT", "1") == "1"
 TILE = 32
 
 
@@ -62,9 +65,13 @@ class GDNStep:
         self.qkv_tiles, self.ht, self.nch = qk // TILE, ht, nch
         self.device = device
         self.compute_defines = ()  # e.g. (("STEP_ZONES", "1"),): profiler zones per phase
+        self.reader_defines = ()
+        self.first_core = 0  # the step's cores: first_core .. first_core + nv - 1 (row-major)
 
-    def __call__(self, qkv, ab, z, conv_state, rec_state, xnt=None, wab=None):
-        """xnt / wab (ab_dot): compute a and b in the op from the normalised input's tiled blocks
+    def __call__(self, qkv, ab, z, conv_state, rec_state, xnt=None, wab=None, extra=None):
+        """extra: (kernels, tensors) to run in this op on cores the step does not use (first_core; e.g. the out
+        projection's weight staging, TernaryDecodeLinear3.stage_kernels).
+        xnt / wab (ab_dot): compute a and b in the op from the normalised input's tiled blocks
         (rotate.NormRotation) and this layer's per-head [a | b] weight blocks (pack_ab_heads) instead of reading
         the a / b projection's output (ab is then unused)."""
         ab_dot = xnt is not None
@@ -76,8 +83,9 @@ class GDNStep:
             ttnn.Shape(lead + [nv * self.hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
         )  # L1: the out projection's fused rotation reads it while that op streams its weights
         grid = device.compute_with_storage_grid_size()
-        coords = [ttnn.CoreCoord(j % grid.x, j // grid.x) for j in range(nv)]
-        crs = row_major_crs(len(coords), grid.x)
+        f0 = self.first_core
+        coords = [ttnn.CoreCoord((f0 + j) % grid.x, (f0 + j) // grid.x) for j in range(nv)]
+        crs = row_major_range_crs(f0, f0 + nv, grid.x)
         # One set of runtime args for all cores (each kernel finds its head from its core index): per-core args
         # cost the dispatcher one write per core per kernel.
         rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -135,6 +143,31 @@ class GDNStep:
             if ab_dot
             else []
         )
+        first = [("STEP_FIRST", str(f0))]
+        rd_def = ([("STEP_AB_DOT", "1")] if ab_dot else []) + list(self.reader_defines) + first
+        if SPLIT:
+            # the reader kernel on both RISCs (step_reader.cpp STEP_SPLIT): BRISC takes the conv inputs and the writes
+            rd_def.append(("STEP_SPLIT", "1"))
+            wr_kernel = ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "step_reader.cpp",
+                core_ranges=crs,
+                compile_time_args=rd_ct + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                runtime_args=wr,
+                common_runtime_args=rd_c + [out.buffer_address()],
+                defines=rd_def
+                + [("ROLE_CONV", "1"), ("OUT_ARGS_OFFSET", str(len(rd_ct))), ("OUT_ADDR_ARG", str(len(rd_c)))],
+                config=ttnn.WriterConfigDescriptor(),
+            )
+        else:
+            wr_kernel = ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "step_writer.cpp",
+                core_ranges=crs,
+                compile_time_args=wr_ct,
+                runtime_args=wr,
+                common_runtime_args=wr_c,
+                defines=first,
+                config=ttnn.WriterConfigDescriptor(),
+            )
         program = ttnn.ProgramDescriptor(
             kernels=[
                 ttnn.KernelDescriptor(
@@ -143,24 +176,17 @@ class GDNStep:
                     compile_time_args=rd_ct,
                     runtime_args=rd,
                     common_runtime_args=rd_c,
-                    defines=[("STEP_AB_DOT", "1")] if ab_dot else [],
+                    defines=rd_def,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
-                ttnn.KernelDescriptor(
-                    kernel_source=KERNELS + "step_writer.cpp",
-                    core_ranges=crs,
-                    compile_time_args=wr_ct,
-                    runtime_args=wr,
-                    common_runtime_args=wr_c,
-                    config=ttnn.WriterConfigDescriptor(),
-                ),
+                wr_kernel,
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "step_compute.cpp",
                     core_ranges=crs,
                     compile_time_args=[nv],
                     runtime_args=cp,
                     common_runtime_args=cp_c,
-                    defines=list(self.compute_defines) + ([("STEP_AB_DOT", "1")] if ab_dot else []),
+                    defines=list(self.compute_defines) + ([("STEP_AB_DOT", "1")] if ab_dot else []) + first,
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,
@@ -172,8 +198,13 @@ class GDNStep:
             semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=crs, initial_value=0)],
             cbs=cbs,
         )
+        extra_tensors = []
+        if extra is not None:
+            program.kernels = list(program.kernels) + list(extra[0])
+            extra_tensors = list(extra[1])
         return ttnn.generic_op(
-            [qkv, z, ab, conv_state, rec_state, self.consts] + ([wab] if ab_dot else []) + [out], program
+            [qkv, z, ab, conv_state, rec_state, self.consts] + ([wab] if ab_dot else []) + extra_tensors + [out],
+            program,
         )
 
 

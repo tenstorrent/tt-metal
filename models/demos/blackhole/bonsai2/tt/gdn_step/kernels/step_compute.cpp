@@ -24,6 +24,9 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "../../ternary/kernels/core_span.hpp"
+#ifndef STEP_FIRST
+#define STEP_FIRST 0  // the first core (row-major logical index): core STEP_FIRST + j owns value head j
+#endif
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/softplus.h"
@@ -49,6 +52,39 @@ inline void silu_row0(uint32_t, uint32_t, uint32_t, uint32_t) {
     }
 }
 inline void silu_row0_4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { silu_row0<4>(a, b, c, d); }
+// Gates on row 0 of DEST tiles 0 (a) and 1 (b) only: decay = exp(a_neg * softplus(a + dt_bias)), beta = sigmoid(b).
+// softplus(x) = max(x, 0) + ln(1 + exp(-|x|)) (the fp32 residual fit and exp tail of ckernel_sfpu_softplus.h).
+// Needs silu_tile_init (Prgm0 = 2.0 for the sigmoid's reciprocal).
+inline void gates_row0(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t dt_bias, uint32_t a_neg) {
+    constexpr uint32_t OFF[4] = {0, 1, 8, 9};
+    const sfpi::vFloat dtb = Converter::as_float(dt_bias);
+    const sfpi::vFloat an = Converter::as_float(a_neg);
+#pragma GCC unroll 1
+    for (int h = 0; h < 4; ++h) {
+        sfpi::vFloat x = sfpi::dst_reg[OFF[h]] + dtb;
+        sfpi::vFloat a = sfpi::setsgn(x, 0);
+        sfpi::vFloat r = PolynomialEvaluator::eval(
+            a,
+            SOFTPLUS_POLY_C0,
+            SOFTPLUS_POLY_C1,
+            SOFTPLUS_POLY_C2,
+            SOFTPLUS_POLY_C3,
+            SOFTPLUS_POLY_C4,
+            SOFTPLUS_POLY_C5,
+            SOFTPLUS_POLY_C6,
+            SOFTPLUS_POLY_C7,
+            SOFTPLUS_POLY_C8);
+        v_if(a > SOFTPLUS_POLY_BOUNDARY) {
+            sfpi::vFloat e = softplus_exp_negative(sfpi::setsgn(a, 1));
+            r = e * (1.0f + e * (-0.5f + e * 0.333333343f));
+        }
+        v_endif;
+        sfpi::vFloat sp = sfpi::max(x, 0.0f) + r;
+        sfpi::dst_reg[OFF[h]] = softplus_exp_negative(sp * an);
+        sfpi::vFloat b = sfpi::dst_reg[32 + OFF[h]];
+        sfpi::dst_reg[32 + OFF[h]] = _sfpu_sigmoid_<true>(b);
+    }
+}
 inline void silu_row0_8(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { silu_row0<8>(a, b, c, d); }
 }  // namespace ckernel::sfpu
 #endif
@@ -92,7 +128,7 @@ void kernel_main() {
     const uint32_t q_scale = get_common_arg_val<uint32_t>(1);
     const uint32_t inv_hd = get_common_arg_val<uint32_t>(2);
     const uint32_t eps_o = get_common_arg_val<uint32_t>(3);
-    const uint32_t j = core_index(get_common_arg_val<uint32_t>(4));
+    const uint32_t j = (core_index(get_common_arg_val<uint32_t>(4)) - STEP_FIRST);
     const uint32_t dt_bias = get_common_arg_val<uint32_t>(5 + j);
     const uint32_t a_neg = get_common_arg_val<uint32_t>(5 + NV + j);
 
@@ -160,6 +196,7 @@ void kernel_main() {
         fmt(cb_b, cb_b);
         copy_init(cb_b);
         copy_tile(cb_b, 0, 1);
+#ifdef GATES_FULL
         binop_with_scalar_tile_init();
         add_unary_tile(0, dt_bias);
         softplus_tile_init();
@@ -170,6 +207,11 @@ void kernel_main() {
         exp_tile(0);
         sigmoid_tile_init();
         sigmoid_tile(1);
+#else
+        silu_tile_init();
+        MATH((SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(
+            DST_SYNC_MODE, DST_ACCUM_MODE, gates_row0, 0, 0, 0, 0, VectorMode::None, dt_bias, a_neg)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_decay);

@@ -53,7 +53,12 @@ void kernel_main() {
 #else
     cb_wait_front(tt::CBIndex::c_2, num_nt * S_PER_NT);
 #endif
+#ifdef W_STAGED
+    const StagedW w{get_common_arg_val<uint32_t>(STAGE_ARG_WR), first_nt * ppr};
+    (void)w_addr;
+#else
     const auto w = TensorAccessor(w_args, w_addr, 4096);
+#endif
 #if defined(GCB_STREAM)
     (void)w;
 #elif defined(PAGE_SPLIT)

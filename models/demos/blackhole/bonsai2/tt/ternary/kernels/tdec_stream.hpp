@@ -52,6 +52,13 @@ FORCE_INLINE void xhub_poll(XHub& h, bool block) {
     } while (block && !h.done);
 }
 
+// W_STAGED: this core's weight pages were copied into L1 (at `base`, page page0 first) by tdec3_stage.cpp in the
+// previous op; the stream reads them locally instead of from DRAM.
+struct StagedW {
+    uint32_t base, page0;
+    FORCE_INLINE uint64_t get_noc_addr(uint32_t page) const { return ::get_noc_addr(base + (page - page0) * 4096); }
+};
+
 template <uint32_t ppr, uint32_t NB, typename Accessor>
 FORCE_INLINE void stream_records(
     uint32_t cb,
