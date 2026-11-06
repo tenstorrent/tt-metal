@@ -249,10 +249,10 @@ that rank wrote, which names it back:
 
 ## Limits and future work
 
-**Only the manifest is built.**
+**Only the manifest and capture are built.**
 
-Capture, decode, join and the visualizer are designed around the manifest but not built yet. "Where it fits" above
-says what each takes from it.
+Capture is described in its [README](../capture/README.md). Decode, join and the visualizer are designed around the
+manifest but not built yet. "Where it fits" above says what each takes from it.
 
 **UDM isn't described.**
 
