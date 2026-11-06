@@ -34,6 +34,10 @@ namespace ckernel::sfpu {
 // column parity q % 2; scales.py). Templates k = 0..3: LReg[16] = LREG(4 + k) * VD + 0 (the 4 ratio vectors in
 // LREG4..7); macro k: load the row into VD = LREG0, MAD with template k (VB = VD, result in LReg[16]), store LReg[16]
 // back to the row 2 instructions later (the pattern of tt-llk's _mul_int_).
+#define T2_ROW(q) \
+    TTI_SFPLOADMACRO(((2 * (((q) >> 3) & 1) + ((q) & 1)) << 2), sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_6, 0)
+// (a tile's 32 SFPU rows also go into replay buffer entries 0..31: one REPLAY per tile, as the TRISC cannot push 32
+// instructions as fast)
 inline void t2_macro_init() {
     TTI_SFPMUL(p_sfpu::LREG4, 0, p_sfpu::LCONST_0, 12, 0);
     TTI_SFPMUL(p_sfpu::LREG5, 0, p_sfpu::LCONST_0, 13, 0);
@@ -54,9 +58,43 @@ inline void t2_macro_init() {
 #undef T2_MACRO
     TTI_SFPCONFIG(0x3F0, 8, 1);  // UsesLoadMod0ForStore for macros 0..3, delay kinds as _init_mul_int_
     TTI_SFPNOP;
+#ifndef T2_NOREPLAY
+    load_replay_buf(0, 32, [] {
+        T2_ROW(0);
+        T2_ROW(1);
+        T2_ROW(2);
+        T2_ROW(3);
+        T2_ROW(4);
+        T2_ROW(5);
+        T2_ROW(6);
+        T2_ROW(7);
+        T2_ROW(8);
+        T2_ROW(9);
+        T2_ROW(10);
+        T2_ROW(11);
+        T2_ROW(12);
+        T2_ROW(13);
+        T2_ROW(14);
+        T2_ROW(15);
+        T2_ROW(16);
+        T2_ROW(17);
+        T2_ROW(18);
+        T2_ROW(19);
+        T2_ROW(20);
+        T2_ROW(21);
+        T2_ROW(22);
+        T2_ROW(23);
+        T2_ROW(24);
+        T2_ROW(25);
+        T2_ROW(26);
+        T2_ROW(27);
+        T2_ROW(28);
+        T2_ROW(29);
+        T2_ROW(30);
+        T2_ROW(31);
+    });
+#endif
 }
-#define T2_ROW(q) \
-    TTI_SFPLOADMACRO(((2 * (((q) >> 3) & 1) + ((q) & 1)) << 2), sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_6, 0)
 inline void scale_macro(uint32_t z, uint32_t m, uint32_t r0 = 0) {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
@@ -77,6 +115,9 @@ inline void scale_macro(uint32_t z, uint32_t m, uint32_t r0 = 0) {
     TTI_SFPNOP;  // the macros' MAD reads LREG4..7 without the automatic MAD stall
     TTI_SFPNOP;
     for (uint32_t r = 0; r < m; ++r) {  // ADDR_MOD_6 steps 2 per row: 32 rows reach the next tile
+#ifndef T2_NOREPLAY
+        lltt::replay(0, 32);
+#else
         T2_ROW(0);
         T2_ROW(1);
         T2_ROW(2);
@@ -112,6 +153,7 @@ inline void scale_macro(uint32_t z, uint32_t m, uint32_t r0 = 0) {
         T2_ROW(29);
         T2_ROW(30);
         T2_ROW(31);
+#endif
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
