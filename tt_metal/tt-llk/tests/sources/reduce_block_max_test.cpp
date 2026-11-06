@@ -279,7 +279,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
 #endif
     TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
-    constexpr bool sync_with_pack                                      = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
+    constexpr bool sync_with_pack = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
 
     {
         START_PERF_MEASURE("INIT")
@@ -294,7 +294,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // The reduce clears SrcA after every tile and the scaler SrcB once per block.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -402,7 +402,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
+            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 // Single output tile: the per-row maxima live in column [0] of DEST[0].

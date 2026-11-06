@@ -135,8 +135,8 @@ finish, or every selected test was skipped.
    sharing a (sweep, marker) key. Differing metrics on a collapsed key are
    either run-to-run noise or a parameter that changes the kernel without
    being recorded as a column. Resolve which before shipping the report.
-4. **Plausibility.** Inspect `marker == TILE_LOOP`. Each `L1_CONGESTION` stage
-   should sit near its isolate. Values near 2048, 4096, or 8192, an isolate
+4. **Plausibility.** Inspect `marker == TILE_LOOP`.
+   Values near 2048, 4096, or 8192, an isolate
    orders of magnitude above the real stage, or a healthy first variant
    followed by slow ones all indicate handshake or wait-mask bugs — switch to
    `quasar-perf-test`.
@@ -145,9 +145,7 @@ finish, or every selected test was skipped.
 6. **Completeness, by report kind.** A timing report carries a
    `mean(<run type>)` column for every requested run type, and a
    `TEXT_SIZE(<run type>)` column only for `L1_TO_L1`, `UNPACK_ISOLATE`,
-   `MATH_ISOLATE`, and `PACK_ISOLATE`. `L1_CONGESTION` is deliberately absent
-   from the code-size map, so a missing `TEXT_SIZE(L1_CONGESTION)` is correct
-   rather than a defect. A counter report carries the same columns and
+   `MATH_ISOLATE`, and `PACK_ISOLATE`. A counter report carries the same columns and
    markers plus the `<RUN_TYPE>_..._pct` counter columns; its wall-clock
    means are counters on timing, so compare them only with other counter
    reports.

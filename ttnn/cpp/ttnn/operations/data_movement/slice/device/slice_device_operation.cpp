@@ -213,6 +213,55 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             distribution.has_value() ? distribution->num_shards() : 0,
             distribution.has_value() ? distribution->num_cores() : 0);
     }
+    // noc_async_{read,write}_sharded walks a rank-1 ND spec one aligned page at a time, so a shard whose payload is
+    // not alignment-sized would have its padding read as data (or real data skipped) once a transfer goes past the
+    // shard's payload. Reject sub-aligned rank-1 shards unless every transfer provably stays inside the payload:
+    //  - rank-1, unstrided tensor: the helper sees one row addressed by byte offset, and reader and writer both end
+    //    at end_bytes, so the transfer is exact iff end_bytes <= shard_bytes (the first page's payload; the bytes
+    //    up to the aligned page are padding).
+    //  - higher rank with a shard exactly one row wide: the page is the whole row and every per-row transfer ends
+    //    inside it, so the early return never leaves its page.
+    // Strided rank-1 slices and shards narrower than the row stay rejected.
+    if (tensor_args.input.layout() == Layout::ROW_MAJOR && output_spec.logical_shape().volume() != 0) {
+        const bool rank1_unstrided = tensor_args.input.padded_shape().rank() == 1 && !has_step;
+        const uint32_t element_size = tensor_args.input.element_size();
+        const auto check_rank1_nd_shard_aligned = [&](const tt::tt_metal::MemoryConfig& mc,
+                                                      const ttnn::Shape& padded_shape,
+                                                      const char* which,
+                                                      const uint32_t end_elements) {
+            const auto& nd = mc.nd_shard_spec();
+            if (!nd.has_value() || nd->shard_shape.rank() != 1) {
+                return;
+            }
+            const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM ? ::hal::get_dram_alignment()
+                                                                                          : ::hal::get_l1_alignment();
+            const uint32_t shard_bytes = nd->shard_shape[0] * element_size;
+            if (shard_bytes % alignment == 0) {
+                return;
+            }
+            if (padded_shape.rank() > 1 && nd->shard_shape[0] == padded_shape[-1]) {
+                return;
+            }
+            if (rank1_unstrided && end_elements * element_size <= shard_bytes) {
+                return;
+            }
+            TT_FATAL(
+                false,
+                "Slice {} is ND-sharded with rank-1 shard shape {} ({} bytes), which is not a multiple of the {}-byte "
+                "buffer alignment, and the slice reaches past the shard's payload. Use a shard size whose byte size "
+                "is aligned.",
+                which,
+                nd->shard_shape,
+                shard_bytes,
+                alignment);
+        };
+        // The input is read up to its slice end; the output is written from offset 0 up to its length.
+        const uint32_t input_end = rank1_unstrided ? args.slice_end[0] : 0;
+        const uint32_t output_end = rank1_unstrided ? args.slice_end[0] - args.slice_start[0] : 0;
+        check_rank1_nd_shard_aligned(
+            tensor_args.input.memory_config(), tensor_args.input.padded_shape(), "input", input_end);
+        check_rank1_nd_shard_aligned(output_spec.memory_config(), output_spec.padded_shape(), "output", output_end);
+    }
     const auto& output_tensor_shape = output_spec.logical_shape();
     if (has_step) {  // if all ones modify before passing in to function
         TT_FATAL(
@@ -267,6 +316,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
 
         uint32_t slice_dimension = args.slice_dim.value();
         uint32_t num_parts = args.num_devices.value();
+        TT_FATAL(num_parts > 0, "num_devices must be greater than 0");
 
         for (uint32_t i = 0; i < out_shape.size(); i++) {
             out_shape[i] = input_tensor.logical_shape()[i];
@@ -488,6 +538,15 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
             po.layout(),
             po.dtype(),
             po.memory_config());
+    }
+
+    // The RM factory sizes its input DFB from the L1 free at program creation. Key on that plan, or a
+    // program built while L1 was emptier replays its larger DFB over buffers allocated since.
+    if (std::holds_alternative<SliceRmProgramFactory>(factory)) {
+        const auto& destination =
+            tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output->tensor_spec() : output_spec;
+        hash = ttsl::hash::hash_objects(
+            hash, SliceRmProgramFactory::dfb_entry_size(operation_attributes, tensor_args, destination));
     }
 
     return hash;
