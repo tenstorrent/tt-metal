@@ -53,10 +53,11 @@ WorkerMemMap generate_worker_mem_map(const std::shared_ptr<tt_metal::distributed
 }
 
 std::shared_ptr<tt_metal::Program> create_receiver_program(
+    tt_metal::distributed::MeshDevice& mesh_device,
     const std::vector<uint32_t>& compile_time_args,
     const std::vector<uint32_t>& runtime_args,
     const tt::tt_metal::CoreCoord& logical_core) {
-    auto recv_program = std::make_shared<tt_metal::Program>();
+    auto recv_program = std::make_shared<tt_metal::Program>(tt_metal::CreateProgram(mesh_device));
     auto recv_kernel = tt_metal::CreateKernel(
         *recv_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
@@ -131,7 +132,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, target_address};
 
     // Create the sender program
-    auto sender_program = tt_metal::CreateProgram();
+    auto sender_program = tt_metal::CreateProgram(*sender_device);
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/multihost/fabric_tests/kernels/tt_fabric_2d_unicast_tx.cpp",
@@ -242,7 +243,8 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
 
-    auto recv_program = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
+    auto recv_program =
+        create_receiver_program(*receiver_device, compile_time_args, receiver_runtime_args, receiver_logical_core);
 
     // Run receiver program
     tt_metal::LaunchProgram(*receiver_device, std::move(*recv_program));
@@ -328,7 +330,7 @@ void run_mcast_sender_step(
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, target_address};
 
-    auto mcast_send_program = tt_metal::CreateProgram();
+    auto mcast_send_program = tt_metal::CreateProgram(*sender_device);
     auto mcast_send_kernel = tt_metal::CreateKernel(
         mcast_send_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_line_mcast_tx.cpp",
@@ -450,9 +452,10 @@ void run_mcast_recv_step(
         recv_programs;
 
     recv_programs[mcast_start_device] =
-        create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
+        create_receiver_program(*mcast_start_device, compile_time_args, receiver_runtime_args, receiver_logical_core);
     for (const auto& dev : mcast_group_devices) {
-        recv_programs[dev] = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
+        recv_programs[dev] =
+            create_receiver_program(*dev, compile_time_args, receiver_runtime_args, receiver_logical_core);
     }
     // Run the mcast receiver programs
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
