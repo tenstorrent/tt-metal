@@ -1,10 +1,10 @@
 intake:
   by: dnijemcevic
-  at: '2026-11-06T10:59:55'
+  at: '2026-11-06T13:09:40'
   files:
-    models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml: 6e72ac394285dcbf9beb22337559e07618e99971559fe8888eaba8a5ec4ccd23
-  note: 'owner 2026-11-06: spec changed by the owner-directed sparse_sdpa H=32 fork
-    waiver (#64605); re-approved'
+    models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml: ff8ea475f53ca2dadb216b94768227a84fe0ab47b52c5f2bc9f29dd5a717ffa0
+  note: 'owner 2026-11-06: paths.golden fixed to /data/dnijemcevic/... (readable by
+    others; keep it in mine); re-approved'
 shared:
   P.34:
     by: dnijemcevic
