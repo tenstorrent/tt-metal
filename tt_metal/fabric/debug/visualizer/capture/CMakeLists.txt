@@ -31,13 +31,7 @@ target_link_libraries(
 # no tt_metal.
 add_library(fabric_capture_umd STATIC)
 target_sources(fabric_capture_umd PRIVATE fabric_capture_umd.cpp)
-target_link_libraries(
-    fabric_capture_umd
-    PUBLIC
-        fabric_capture_core
-    PRIVATE
-        umd::tt-umd
-)
+target_link_libraries(fabric_capture_umd PUBLIC fabric_capture_core PRIVATE umd::tt-umd)
 
 # fabric_capture: the tool, one process per rank. It sits beside watcher_dump in build/tools.
 add_executable(fabric_capture fabric_capture_main.cpp)
