@@ -63,7 +63,9 @@ struct MeshProgramRunArgs {
 // Runs the same program on the devices of the tensor in io_tensors that is on the fewest devices; every other tensor
 // must be on those devices too. It keys and runs as the MeshProgramSpec form would with those devices' ranges, so the
 // two forms share cache entries. The output is the last tensor in io_tensors, which the caller preallocates, and each
-// tensor parameter binds its own io_tensors entry. The program cache keys on a hash of the spec.
+// tensor parameter binds its own io_tensors entry. The program cache keys on a hash of the spec. PrefetcherPipes in
+// the run args must outlive every program that uses them, and a program stays bound to its first pipe (or one
+// re-carved in its place), so a call with another pipe needs another pipe parameter name.
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args);
 
 // Runs each range's program on the devices in that range.

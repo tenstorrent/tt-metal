@@ -428,7 +428,7 @@ ttsl::hash::hash_t hash_compile_time_array_values(const m2::ProgramSpec& spec) {
             const auto& [name, values] = *array;
             hash = ttsl::hash::hash_objects(hash, name, values.size());
             for (std::size_t i = 0; i < values.size(); ++i) {
-                hash = ttsl::hash::hash_objects(hash, values[i].to_uint32());
+                hash = ttsl::hash::hash_objects(hash, values[i]);
             }
         }
     }
@@ -506,7 +506,8 @@ ttsl::hash::hash_t GenericProgramSpecDeviceOperation::compute_program_hash(
     // The framework adds the op's type to the key. Each program's spec hash is combined with its range. The spec hash
     // covers what run args refer to: on a later call Metal writes run args into the cached program by name, keeps
     // whatever they leave out, and places arrays and varargs by the lengths and counts it compiled, so a cached program
-    // whose arguments, array lengths, vararg counts, tensor parameters, buffers, pipes or nodes differ is never reused.
+    // whose arguments, array lengths, vararg counts, tensor parameters, buffers, pipe parameters or nodes differ is
+    // never reused.
     ttsl::hash::hash_t hash = 0;
     for (const auto& program : operation_attributes.programs) {
         hash = ttsl::hash::hash_objects(hash, program.range, compute_program_spec_hash(*program.spec));
