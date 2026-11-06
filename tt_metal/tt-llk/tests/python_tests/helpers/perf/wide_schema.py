@@ -158,6 +158,7 @@ DB_SCHEMA = [
     Column("tilize", "string", True, "configuration"),
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
+    Column("use_perf_buffers", "bool", True, "configuration"),
     Column("use_runtime", "bool", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),
     Column("zero_point_bits", "int64", True, "configuration"),
