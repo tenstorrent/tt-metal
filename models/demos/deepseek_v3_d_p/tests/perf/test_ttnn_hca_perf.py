@@ -28,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_hca import _MESH_CONFIGS, 
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program_merged
 
 _CHUNK = PREFILL_CHUNK_TOKENS
 _CHUNKS = 2
@@ -59,7 +59,7 @@ _IGNORE_POWER = os.environ.get("HCA_PERF_IGNORE_POWER") == "1"
 )
 @pytest.mark.parametrize("variant, model_config, expected_ns", _BASELINES)
 def test_hca_block_perf_galaxy(mesh_device, device_params, topology, variant, model_config, expected_ns):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not is_perf_profiler_active():
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
 
     torch.manual_seed(_SEED)

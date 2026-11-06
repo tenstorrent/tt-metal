@@ -17,6 +17,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
@@ -329,5 +330,13 @@ private:
 
 /** @brief Returns true if the streaming profiler is currently running on at least one device. */
 bool IsActive();
+
+/**
+ * @brief Kernel source paths of the program a record's runtime_id() names, on the default context.
+ *
+ * Empty if the runtime ID is unknown. Runtime IDs are 16-bit, so an ID is reused after 65536 program launches and
+ * then names the newest program. The views are valid until MetalContext teardown or reinitialization.
+ */
+std::vector<std::string_view> KernelSources(uint32_t runtime_id);
 
 }  // namespace tt::tt_metal::experimental::streaming_profiler

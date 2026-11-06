@@ -8,14 +8,32 @@ import time
 from loguru import logger
 
 
-DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS = 1.0
+# Device program timing for perf tests, from the streaming profiler (TT_METAL_STREAMING_PROFILER=1). The streaming
+# profiler drains every kernel's firmware "*-KERNEL" zone to the host while it runs; a C++ collector
+# (ttnn.device.StreamingProgramCollector) folds them into one record per program launch per chip: first kernel start
+# to last kernel end over every core and RISC. Kernels run instrumented in this mode, so durations include the
+# zone-marker cost (measured negligible for ms-scale ops). Recommended setup for perf jobs:
+#   TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16
+# (direct push: no GDDR spool reservation, small host FIFOs; same delivery latency).
 
-# collect_all: records are delivered asynchronously from the RT profiler receiver thread, and
-# UnregisterProgramRealtimeProfilerCallback only waits for in-flight callbacks — not for records that
-# have not yet been delivered. For a multi-chip mesh run, breaking on the first record would capture
-# only a subset (possibly a single chip's), making the downstream max(duration_ns) non-deterministic.
-# Once the first record arrives, keep polling until no new record has landed for this settle window.
-RT_PROFILER_RECORD_SETTLE_SECONDS = 0.1
+DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS = 5.0
+
+# A program's "*-KERNEL" zones arrive per core, so settle on the zone count, not the program count. Measured on
+# Blackhole, every zone of the measured region lands within 4 ms of synchronize_device returning (spool and direct
+# push alike, 1-core and 110-core programs); 50 ms keeps >10x headroom.
+STREAMING_RECORD_SETTLE_SECONDS = 0.05
+
+
+def is_streaming_profiler_active() -> bool:
+    """True when TT_METAL_STREAMING_PROFILER=1 is running. Needs an open device."""
+    import ttnn
+
+    return bool(ttnn.device.IsStreamingProfilerActive())
+
+
+def is_perf_profiler_active() -> bool:
+    """True when the profiler that times perf-test programs is running. Needs an open device."""
+    return is_streaming_profiler_active()
 
 
 def profile_realtime_program(
@@ -24,38 +42,28 @@ def profile_realtime_program(
     *,
     collect_all=False,
     record_timeout_seconds=DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS,
-    record_settle_seconds=RT_PROFILER_RECORD_SETTLE_SECONDS,
+    record_settle_seconds=STREAMING_RECORD_SETTLE_SECONDS,
 ) -> tuple:
-    """Run measured device work and return (result, rt_record or rt_records)."""
+    """Run measured device work and return (result, record or records), records ordered by start time.
+
+    Each record is {"runtime_id", "chip_id", "duration_ns", "kernel_sources", "num_cores", "processor_duration_ns",
+    "execution"}; without ``collect_all`` it is the first program that started in the measured region. Programs
+    still in flight to the host from before the region are excluded by host time."""
     import ttnn
 
-    profile_records = []
-    dropped = [0]
+    if not is_streaming_profiler_active():
+        raise RuntimeError(
+            "Streaming profiler is not active: run with TT_METAL_STREAMING_PROFILER=1 "
+            "(see tests/ttnn/profiling/realtime_profiler_utils.py for the recommended setup)."
+        )
 
-    def collect_records(batch):
-        dropped[0] += int(batch.dropped)
-        for record in batch.records:
-            if profile_records and not collect_all:
-                return
-
-            start_timestamp = int(record.start_timestamp)
-            end_timestamp = int(record.end_timestamp)
-            frequency = float(record.frequency)
-            if frequency <= 0 or end_timestamp <= start_timestamp:
-                continue
-
-            profile_records.append(
-                {
-                    "runtime_id": int(record.runtime_id),
-                    "chip_id": int(record.chip_id),
-                    "duration_ns": (end_timestamp - start_timestamp) / frequency,
-                    "kernel_sources": tuple(str(source) for source in record.kernel_sources),
-                }
-            )
-
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
-
+    # Everything dispatched before the measured region finishes here, so its programs start before region_start_ns
+    # (host steady_clock == CLOCK_MONOTONIC == time.monotonic_ns).
+    ttnn.synchronize_device(device)
+    collector = ttnn.device.StreamingProgramCollector()
+    collector.start()
     try:
+        region_start_ns = time.monotonic_ns()
         result = run_fn()
         ttnn.synchronize_device(device)
 
@@ -63,45 +71,60 @@ def profile_realtime_program(
         last_count = 0
         last_change = time.monotonic()
         while time.monotonic() < deadline:
-            count = len(profile_records)
-            if count and not collect_all:
-                break
+            count = collector.num_kernel_zones
             if count != last_count:
                 last_count = count
                 last_change = time.monotonic()
             elif count and (time.monotonic() - last_change) >= record_settle_seconds:
-                # collect_all: records have stopped arriving for the settle window.
                 break
-            time.sleep(0.01)
+            time.sleep(0.005)
+        records = collector.records()
+        dropped_bytes = collector.dropped_bytes
+        stall_count = collector.stall_count
     finally:
-        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+        collector.stop()
 
-    # Dropped records make the set partial: on a mesh, losing the slowest chip's record silently
-    # under-reports a program's critical path, so a perf gate could read green off incomplete data.
-    if dropped[0]:
+    # Dropped data makes the set partial: on a mesh, losing the slowest chip's zones silently under-reports a
+    # program's critical path, so a perf gate could read green off incomplete data.
+    if dropped_bytes:
         raise RuntimeError(
-            f"Real-time profiler dropped {dropped[0]} record(s) — the receiver could not keep up, so the "
-            "record set is incomplete and durations may under-report."
+            f"Streaming profiler dropped {dropped_bytes} bytes — the record set is incomplete and durations may "
+            "under-report. Raise TT_METAL_STREAMING_PROFILER_FIFO_MB."
+        )
+    if stall_count:
+        logger.warning(
+            f"Streaming profiler: cores stalled {stall_count} time(s) waiting for the profiler to drain; "
+            "measured durations include those stalls."
         )
 
+    profile_records = [
+        {
+            "runtime_id": int(record.runtime_id),
+            "chip_id": int(record.chip_id),
+            "duration_ns": float(record.duration_ns),
+            "kernel_sources": tuple(str(source) for source in record.kernel_sources),
+            "num_cores": int(record.num_cores),
+            "processor_duration_ns": dict(record.processor_duration_ns),
+            "execution": int(record.execution),
+        }
+        for record in records
+        if record.start_ns >= region_start_ns and record.duration_ns > 0
+    ]
     if not profile_records:
         raise RuntimeError(
-            "Real-time profiler returned no valid program records. "
-            "Ensure the profiler is active and the measured op dispatched a device program."
+            "Streaming profiler returned no program records for the measured region. "
+            "Ensure the measured op dispatched a device program."
         )
-
     return result, profile_records if collect_all else profile_records[0]
 
 
 def require_realtime_profiler(what: str) -> None:
     """Fail (not skip) if the profiler is inactive — an unmeasured perf run must not report green.
-    Needs an open device: IsProgramRealtimeProfilerActive segfaults if called at collection time."""
+    Needs an open device."""
     import pytest
 
-    import ttnn
-
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail(f"Real-time profiler must be active for {what}")
+    if not is_perf_profiler_active():
+        pytest.fail(f"Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for {what}")
 
 
 def profile_realtime_program_merged(
@@ -122,7 +145,7 @@ def profile_realtime_program_merged(
         entry = per_program.setdefault(runtime_id, {"duration_ns": 0.0, "kernel_sources": record["kernel_sources"]})
         entry["duration_ns"] = max(entry["duration_ns"], record["duration_ns"])
 
-    assert per_program, "real-time profiler returned no valid program records for the measured region"
+    assert per_program, "streaming profiler returned no valid program records for the measured region"
     return result, per_program
 
 

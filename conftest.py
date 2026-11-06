@@ -1290,6 +1290,67 @@ def record_test_timestamp(record_property):
     record_property("end_timestamp", end_timestamp)
 
 
+# Perf tests time device programs with the streaming profiler (tests/ttnn/profiling/realtime_profiler_utils.py).
+# It is a process-wide mode read once when the first device opens, so it cannot be a per-test fixture: instead, once
+# collection is final (deselection included) and before any device opens, turn it on for the session when a selected
+# test can reach the profiler helper. An explicit TT_METAL_STREAMING_PROFILER (0 or 1) always wins.
+_PERF_PROFILER_HELPER_MODULE = "tests.ttnn.profiling.realtime_profiler_utils"
+_STREAMING_PROFILER_SESSION_ENV = {
+    "TT_METAL_STREAMING_PROFILER": "1",
+    # Direct push: no GDDR spool reservation in device DRAM; same delivery latency for perf tests.
+    "TT_METAL_STREAMING_PROFILER_DRAM_MB": "0",
+    # Host FIFO per relay; a perf test's capture is a few MB.
+    "TT_METAL_STREAMING_PROFILER_FIFO_MB": "16",
+}
+
+
+def _reaches_perf_profiler_helper(func, seen, depth=4):
+    """Whether ``func`` (or what it calls through module globals, up to ``depth`` levels) uses the perf profiler helper."""
+    import types
+
+    if depth < 0 or not isinstance(func, types.FunctionType) or func in seen:
+        return False
+    seen.add(func)
+    if func.__module__ == _PERF_PROFILER_HELPER_MODULE:
+        return True
+    codes = [func.__code__]
+    while codes:
+        code = codes.pop()
+        codes.extend(const for const in code.co_consts if isinstance(const, types.CodeType))  # lambdas, inner defs
+        for name in code.co_names:
+            target = func.__globals__.get(name)
+            if isinstance(target, types.ModuleType) and target.__name__ == _PERF_PROFILER_HELPER_MODULE:
+                return True
+            if _reaches_perf_profiler_helper(target, seen, depth - 1):
+                return True
+    return False
+
+
+def _item_uses_perf_profiler(item, seen):
+    funcs = [getattr(item, "function", None)]
+    fixture_info = getattr(item, "_fixtureinfo", None)
+    for fixture_defs in fixture_info.name2fixturedefs.values() if fixture_info else ():
+        funcs.extend(fixture_def.func for fixture_def in fixture_defs)
+    return any(_reaches_perf_profiler_helper(func, seen) for func in funcs)
+
+
+def pytest_collection_finish(session):
+    if os.environ.get("TT_METAL_STREAMING_PROFILER") is not None or os.environ.get("TT_METAL_DEVICE_PROFILER"):
+        return
+    if os.environ.get("TT_METAL_SIMULATOR"):
+        return
+    seen = set()
+    if not any(_item_uses_perf_profiler(item, seen) for item in session.items):
+        return
+    import ttnn
+
+    if ttnn.get_arch_name() != "blackhole":  # the streaming profiler is Blackhole only
+        return
+    for name, value in _STREAMING_PROFILER_SESSION_ENV.items():
+        os.environ.setdefault(name, value)
+    logger.info("Selected tests time device programs: enabling the streaming profiler for this session")
+
+
 def pytest_configure(config):
     xmlpath = config.option.xmlpath
     # https://github.com/tenstorrent/tt-metal/pull/18372

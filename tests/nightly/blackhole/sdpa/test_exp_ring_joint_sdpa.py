@@ -30,7 +30,7 @@ from tests.nightly.sdpa_perf_utils import (
     post_process_ops_log,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
 
@@ -41,8 +41,8 @@ def create_fabric_router_config(max_payload_size):
 
 
 def profile_exp_ring_joint_runtime_duration_ns(mesh_device, run_fn):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for SDPA perf checks")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for SDPA perf checks")
 
     _, records = profile_realtime_program(
         mesh_device,

@@ -33,7 +33,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import CHUNK_TOKENS, GALAXY_SP, SCENARIOS
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 
 # Mesh axes. In production the layout is SP (sequence) on axis 0, TP (tensor) on axis 1.
 SP_AXIS = 0
@@ -296,8 +296,8 @@ def resolve_runtime_system(mesh_device, path: CollectivePath, fabric_config) -> 
 # Profiling
 # --------------------------------------------------------------------------------------------------
 def _profile_programs(mesh_device, run_fn, expected_programs):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for sparse MLA CCL perf checks")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for sparse MLA CCL perf checks")
 
     # Drain setup programs before registering the callback so only run_fn contributes records.
     ttnn.synchronize_device(mesh_device)

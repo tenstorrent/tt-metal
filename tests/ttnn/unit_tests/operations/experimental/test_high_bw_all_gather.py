@@ -16,7 +16,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 
 
 def _fabric_router_config(max_packet_payload_size=14 * 1024):
@@ -855,7 +855,7 @@ def _run_high_bw_all_gather_perf(
     output check, so the two numbers are directly comparable against the same floor.
     """
     assert invocation in ("scalar", "metadata"), invocation
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not is_perf_profiler_active():
         pytest.skip("high_bw_all_gather bandwidth test requires the realtime device profiler")
 
     # ``cluster_axis=None`` gathers over one snake ring spanning every device, so the
@@ -1002,7 +1002,7 @@ def _run_high_bw_all_gather_perf(
 
 
 def _run_high_bw_all_gather(mesh_device, dtype, width, layout, expected_page_size, min_bandwidth_gbps, cluster_axis):
-    if ttnn.device.IsProgramRealtimeProfilerActive():
+    if is_perf_profiler_active():
         _run_high_bw_all_gather_perf(
             mesh_device,
             dtype,
@@ -1068,8 +1068,8 @@ def _run_high_bw_all_gather_ci_perf(
     correctness run through the SAME invocation, so a bandwidth number never stands alone on a
     functionally wrong gather.
     """
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("high_bw_all_gather CI performance coverage requires the realtime device profiler")
+    if not is_perf_profiler_active():
+        pytest.fail("high_bw_all_gather CI performance coverage requires the realtime or streaming device profiler")
 
     axis_size = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
     for global_rows in global_rows_cases:
@@ -1360,7 +1360,7 @@ def test_high_bw_all_gather_512k(mesh_device, axis_0_min_bandwidth_gbps, axis_1_
     if ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
         # Cover the Blackhole four-worker region without another device setup. The old 4.5 MB/link heuristic chose
         # eight workers here and measured below this floor; four bank-owning workers sustain more than 60 GB/s.
-        if ttnn.device.IsProgramRealtimeProfilerActive():
+        if is_perf_profiler_active():
             _run_high_bw_all_gather_perf(
                 rank_line,
                 ttnn.bfloat16,
@@ -2124,7 +2124,7 @@ def _run_high_bw_all_gather_token_sweep(
 ):
     if require_opt_in and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_TOKEN_SWEEP") != "1":
         pytest.skip("set TT_METAL_HIGH_BW_ALL_GATHER_RUN_TOKEN_SWEEP=1 to run the local token sweep")
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not is_perf_profiler_active():
         pytest.skip("the local token sweep requires the realtime device profiler")
 
     output_path = Path(

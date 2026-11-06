@@ -21,6 +21,8 @@
 #include <tt_stl/indestructible.hpp>
 
 #include "hostdev/observability_event_descriptor.h"
+#include "impl/context/context_types.hpp"
+#include "impl/dispatch/data_collection.hpp"
 #include "impl/streaming_profiler/service.hpp"
 #include "impl/streaming_profiler/sync/clock_map.hpp"
 #include "llrt/observability_event_meta.hpp"
@@ -154,6 +156,12 @@ TimestampedData& TimestampedData::operator=(TimestampedData other) noexcept {
 TimestampedData::~TimestampedData() { delete[] values_; }
 
 bool IsActive() { return internal::service().is_active(); }
+
+std::vector<std::string_view> KernelSources(uint32_t runtime_id) {
+    const std::span<const std::string_view> sources =
+        tt::GetKernelSourcesForRuntimeId(tt::tt_metal::DEFAULT_CONTEXT_ID, static_cast<uint16_t>(runtime_id));
+    return {sources.begin(), sources.end()};
+}
 
 constinit thread_local Record::TscToSteadyLine Record::tsc_to_steady_line_{};
 

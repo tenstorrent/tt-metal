@@ -64,7 +64,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 
 pytestmark = pytest.mark.perf
 
@@ -225,7 +225,7 @@ def _shape_normalized_config_and_weights(fixture_config, fixture_weights, tp: in
 
 
 def _require_rt_profiler() -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not is_perf_profiler_active():
         pytest.fail("realtime profiler is inactive (K3 MLA perf requires eligible Blackhole hardware)")
 
 

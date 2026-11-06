@@ -17,7 +17,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_HISTORY_EXCHANGE_ROWS, KDA_HISTORY_EXCHANGE_SEMAPHORES
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program_merged
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -447,8 +447,10 @@ def test_qkv_causal_conv1d_silu_rejects_unsupported_compute_config(
 def test_qkv_causal_conv1d_silu_production_performance(
     zero_actual_start, device: ttnn.Device, case: _BenchmarkCase
 ) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for QKV causal Conv1D plus SiLU performance checks")
+    if not is_perf_profiler_active():
+        pytest.fail(
+            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for QKV causal Conv1D plus SiLU performance checks"
+        )
 
     _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=case.widths)
 
@@ -514,8 +516,10 @@ _K3_PAGE_CHANNELS = 64
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: ttnn.Device) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for QKV causal Conv1D plus SiLU performance checks")
+    if not is_perf_profiler_active():
+        pytest.fail(
+            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for QKV causal Conv1D plus SiLU performance checks"
+        )
 
     (inputs, history, taps), (_, history_tt, taps_tt) = qkv_device_inputs(
         device, sequence=_K3_ROWS, widths=_K3_WIDTHS, page_channels=_K3_PAGE_CHANNELS
