@@ -199,6 +199,7 @@ class MiniMaxH3Attention(Module):
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
         self.use_exp_ring_sdpa = (
             self.use_ring
+            and ccl_manager.topology == ttnn.Topology.Ring
             and is_blackhole()
             and tp_factor == 4
             and parallel_config.sequence_parallel.factor == 32
@@ -500,6 +501,7 @@ class MiniMaxH3Attention(Module):
         # all-gather of the K-fractured input folds into the matmul that consumes it, instead of
         # running as a separate op. Only on ring topologies -- on a line the unfused path is faster,
         # which is the same condition WanAttention uses.
+        # Swept block sizes fit the fused op's CBs; the unfused matmul overruns L1 with them at long seq.
         matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
         if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather(
@@ -510,8 +512,10 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(
-                self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+            default_block_size=(
+                agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
+                if self.use_fused_agmm
+                else None
             ),
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
@@ -628,8 +632,10 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(
-                self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
+            default_block_size=(
+                agmm_block_size(self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2])
+                if self.use_fused_agmm
+                else None
             ),
             force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,

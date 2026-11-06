@@ -69,6 +69,14 @@ def pack_gate_up(gate_w, up_w, tp: int, pad_to=None) -> torch.Tensor:
     return torch.cat(blocks, dim=-1).contiguous()
 
 
+def pack_gate_up_swiglu(gate_w, up_w, tp: int, pad_to=None) -> torch.Tensor:
+    """pack_gate_up with every rank block in the minimal_matmul(fuse_swiglu=True) layout: 32-column tiles
+    interleaved as [gate_t0, up_t0, gate_t1, up_t1, ...]."""
+    gu = pack_gate_up(gate_w, up_w, tp, pad_to)
+    h = gu.shape[0]
+    return gu.reshape(h, tp, 2, -1, 32).transpose(2, 3).reshape(h, -1).contiguous()
+
+
 def pack_column_parallel(w, tp: int, pad_to=None) -> torch.Tensor:
     """w [N, H] (HF Linear) -> [H, tp * pad_to]; rank block i = w[i*N/tp:(i+1)*N/tp].T zero-padded to pad_to columns."""
     n = w.shape[0]

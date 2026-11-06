@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 // Forked from reader_rotary_embedding_llama_interleaved_start_id.cpp for KV-pad-aware indexed RoPE,
 // on the Metal 2.0 named-arg API.
@@ -75,12 +76,12 @@ void kernel_main() {
     // Without this the read is intermittently STALE -> a wrong rotation offset that compounds (the
     // metadata KV-PCC run-to-run non-determinism).
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Raw address needed: the uncached alias is the scratchpad's address offset by MEM_L1_UNCACHED_BASE.
     volatile tt_l1_ptr uint32_t* meta_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        static_cast<uintptr_t>(meta.get_base_address()) + MEM_L1_UNCACHED_BASE);
+        local_mem::detail::AddressAccess::address(meta.local_mem()) + MEM_L1_UNCACHED_BASE);
 #else
     invalidate_l1_cache();
-    volatile tt_l1_ptr uint32_t* meta_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(meta.get_base_address()));
+    volatile tt_l1_ptr uint32_t* meta_ptr = &meta[0];
 #endif
     const uint32_t kv_actual_global = meta_ptr[0];  // the 1-element tensor holds kv_actual_global directly
 #else
@@ -115,6 +116,14 @@ void kernel_main() {
     const auto s3 = TensorAccessor(tensor::trans_mat);
 
     DataflowBuffer dfb_input(dfb::input);
+#if ROW_MAJOR_OUTPUT
+    // Row-major output: compute untilizes each tile row's prefix tiles with its rotated ones, so the reader fetches
+    // them.
+    constexpr auto prefix_Wt = get_arg(args::prefix_Wt);
+    const auto s_prefix = TensorAccessor(tensor::concat_prefix);
+    DataflowBuffer dfb_prefix(dfb::prefix);
+    const uint32_t prefix_tile_bytes = dfb_prefix.get_entry_size();
+#endif
     DataflowBuffer dfb_cos(dfb::cos);
     DataflowBuffer dfb_sin(dfb::sin);
     DataflowBuffer dfb_trans_mat(dfb::trans_mat);
@@ -205,6 +214,22 @@ void kernel_main() {
 
                 noc.async_read_barrier();
                 dfb_input.push_back(Wt);
+#if ROW_MAJOR_OUTPUT
+                dfb_prefix.reserve_back(prefix_Wt);
+                uint32_t prefix_l1_write_addr = dfb_prefix.get_write_ptr();
+                const uint32_t prefix_first_page = ((batch_id * n_heads + head_num) * Ht + seq_tile) * prefix_Wt;
+                for (uint32_t col = 0; col < prefix_Wt; ++col) {
+                    noc.async_read(
+                        s_prefix,
+                        CoreLocalMem<uint32_t>(prefix_l1_write_addr),
+                        prefix_tile_bytes,
+                        {.page_id = prefix_first_page + col},
+                        {});
+                    prefix_l1_write_addr += prefix_tile_bytes;
+                }
+                noc.async_read_barrier();
+                dfb_prefix.push_back(prefix_Wt);
+#endif
 #if RELOAD_IMPL == 1
                 dfb_sin.push_back(Wt);
                 dfb_cos.push_back(Wt);

@@ -8,6 +8,7 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/edm_fabric_utils.hpp
     hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
     hw/inc/edm_fabric/edm_handshake.hpp
+    hw/inc/edm_fabric/edm_handshake_types.hpp
     hw/inc/edm_fabric/fabric_connection_manager.hpp
     hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
     hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
@@ -53,6 +54,7 @@ set(FABRIC_SOURCES
     fabric_context.cpp
     fabric_builder_context.cpp
     fabric_mux_config.cpp
+    fabric_mux_program_local_l1.cpp
     fabric_mux_v2_config.cpp
     fabric_tensix_builder.cpp
     fabric_tensix_builder_impl.cpp

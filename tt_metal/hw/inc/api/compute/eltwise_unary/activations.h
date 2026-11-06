@@ -153,10 +153,7 @@ ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softshrink_tile_init() {
-    MATH(SFPU_UNARY_INIT(softshrink));
-    MATH(ckernel::sfpu::softshrink_bf16_tile_init<!DST_ACCUM_MODE>());
-}
+ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 
 // clang-format off
 /**
