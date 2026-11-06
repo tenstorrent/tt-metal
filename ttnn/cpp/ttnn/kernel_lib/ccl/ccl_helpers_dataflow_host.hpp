@@ -267,6 +267,7 @@ inline void append_ccl_line_route_ct_args(
  * flag also equals the send direction, so the kernel peeks `get_arg_val<uint32_t>(0)`.
  */
 inline std::vector<uint32_t> build_ccl_fabric_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& neighbor_fabric_node_id,
     uint32_t link_idx,
@@ -277,12 +278,12 @@ inline std::vector<uint32_t> build_ccl_fabric_rt_args(
     rt_args.push_back(is_forward);  // has_forward
     if (is_forward) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fabric_node_id, neighbor_fabric_node_id, link_idx, desc, core, rt_args);
+            mesh_device, src_fabric_node_id, neighbor_fabric_node_id, link_idx, desc, core, rt_args);
     }
     rt_args.push_back(!is_forward);  // has_backward
     if (!is_forward) {
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fabric_node_id, neighbor_fabric_node_id, link_idx, desc, core, rt_args);
+            mesh_device, src_fabric_node_id, neighbor_fabric_node_id, link_idx, desc, core, rt_args);
     }
     return rt_args;
 }
