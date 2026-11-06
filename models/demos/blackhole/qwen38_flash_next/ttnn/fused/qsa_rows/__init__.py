@@ -235,11 +235,21 @@ def score_blocks_rows_composed(score_rows, mask, *, cluster_axis: int, topology=
     return masked
 
 
-def selection_rows(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill, live_rows=None):
+def selection_rows(
+    block_ids,
+    sentinel_pad,
+    block_offsets_rows,
+    row_keep_bits,
+    row_fill,
+    live_rows=None,
+    page_table=None,
+    page_size=0,
+):
     """Program 3: the verify tile's sparse-attention rows of token ids [1, 1, 32, 2080] uint32 from the top-k block ids
     [1, 1, 32, 512] and the pass's keep / fill rows -- the decode ``qsa_selection_row`` program on the 32 rows (its
     per-row integer chain: shift, repeat, offset add, sentinel concat, keep and, fill or, exact), with the module's
-    one-row ``sentinel_pad`` and the chunk constants' per-row ``block_offsets_rows`` [1, 1, 32, 2048]."""
+    one-row ``sentinel_pad`` and the chunk constants' per-row ``block_offsets_rows`` [1, 1, 32, 2048].  With
+    ``page_table`` / ``page_size`` the ids are mapped to pool rows through the table's row r for output row r."""
 
     shape = tuple(block_ids.shape)
     if shape != (1, 1, fp.TILE, qsa_block.BLOCK_IDS):
@@ -247,7 +257,14 @@ def selection_rows(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, r
             f"the verify selection takes the 32-row block ids [1, 1, 32, {qsa_block.BLOCK_IDS}], got {shape}"
         )
     return qsa_block.selection_row(
-        block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill, live_rows=live_rows
+        block_ids,
+        sentinel_pad,
+        block_offsets_rows,
+        row_keep_bits,
+        row_fill,
+        page_table=page_table,
+        page_size=page_size,
+        live_rows=live_rows,
     )
 
 

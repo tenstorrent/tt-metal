@@ -42,6 +42,7 @@ from models.demos.blackhole.qwen38_flash_next.tests import test_qwen38_sampling_
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vllm as vllm_module
 from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import MODE
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging, paged_table_width
 
 
 @pytest.fixture(autouse=True)
@@ -100,8 +101,29 @@ ALLOCATED_CONTEXT = 32_768
 MAX_MODEL_LEN = ALLOCATED_CONTEXT - RESIDENT_CONTEXT_HEADROOM
 PAGE_TABLE = torch.zeros((1, (MAX_MODEL_LEN + 63) // 64), dtype=torch.int32)  # the runner's width at block size 64
 TRACE_ID = 77
+BLOCK_SIZE = 128
+NUM_BLOCKS = 16
+KV_CACHE_SHAPE = (NUM_BLOCKS, 1, BLOCK_SIZE, 256)  # vLLM's (num_blocks, heads, block_size, head_size)
 DIGEST = "0123456789abcdef" * 4
 PHYSICAL_IDS = (1, 0, *range(2, TP_SIZE))  # the mesh's physical device ids: two swapped, so the order is checked
+
+
+@pytest.mark.parametrize("enabled", (False, True))
+def test_device_sampler_switch_opens_the_single_slot_with_the_sampler_and_writes_the_greedy_policy(
+    construction, monkeypatch, enabled
+) -> None:
+    from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step
+    from models.demos.blackhole.qwen38_flash_next.ttnn.device_sampler import Qwen38DeviceSamplerPolicy
+
+    written = []
+    construction.chain.sampling.sampler = SimpleNamespace(write_policy=written.append)
+    monkeypatch.setattr(vllm_module, "DEVICE_SAMPLER", enabled)
+    monkeypatch.setattr(qwen38_sampling_step, "SKIP_CANDIDATE_ROW", False)
+    _initialize(construction)
+    opened = _recorded(construction)[2]
+    assert opened.get("device_sampler", False) is enabled and opened["sampling"] is True
+    assert qwen38_sampling_step.SKIP_CANDIDATE_ROW is (not enabled)
+    assert written == ([Qwen38DeviceSamplerPolicy.greedy_policy()] if enabled else [])
 
 
 class FakeChain(sampling_tests.FakeChain):
@@ -115,11 +137,20 @@ class FakeChain(sampling_tests.FakeChain):
         self.misses_forbidden = True
         self.chunks: list[tuple[tuple[int, ...], int]] = []
         self.chunk_stopped: str | None = None  # the driver's should_stop reason, reported on the result
+        self.page_table_ids: tuple[int, ...] | None = None
 
     def reset_and_seed(self, token_id: int) -> None:
         self.log.append(f"reset:{token_id}")
         self.inputs = []
         self.row = token_id
+
+    def write_page_table(self, block_ids) -> bool:
+        ids = tuple(int(block) for block in block_ids)
+        if ids == self.page_table_ids:
+            return False
+        self.page_table_ids = ids
+        self.log.append(f"table:{ids}")
+        return True
 
     @contextmanager
     def loop_guard(self):
@@ -769,7 +800,8 @@ def test_reduced_sampler_paths_agree_with_the_vllm_algorithm(top_k, top_p, candi
     "overrides, message",
     (
         ({"sampling_params": _params()}, "decode_only"),
-        ({"start_pos": [5]}, "position 0"),
+        ({"start_pos": [4]}, "prefill start"),
+        ({"start_pos": [-1]}, "prefill start"),
         ({"empty_slots": [1]}, "empty_slots"),
         ({"empty_slots": []}, "empty_slots"),
         ({"tokens": torch.zeros((2, 4), dtype=torch.int32)}, r"\[1, P\]"),
@@ -953,9 +985,136 @@ def test_release_persistent_capture_closes_the_chain() -> None:
     assert chain.log == ["close"] and chain.closed
 
 
-def test_allocate_kv_cache_allocates_nothing() -> None:
+def test_allocate_kv_cache_refuses_a_second_open() -> None:
     model, chain = _adapter()
-    assert model.allocate_kv_cache((512, 1, 64, 256), torch.bfloat16, 48) is None and chain.log == []
+    with pytest.raises(RuntimeError, match="already open"):  # allow-pytest.raises: the flat fake has no opener
+        model.allocate_kv_cache(KV_CACHE_SHAPE, torch.bfloat16, 48)
+    assert chain.log == []
+
+
+# -- the paged single slot: vLLM's block ids address the chain's pools -------------------------------------------------
+
+
+def _paged_adapter(num_blocks: int = NUM_BLOCKS, block_size: int = BLOCK_SIZE) -> tuple[Qwen38ForCausalLM, FakeChain]:
+    chain = FakeChain()
+    opened: list[dict] = []
+
+    def opener(warm_hook, paging=None):
+        opened.append({"warm_hook": warm_hook, "paging": paging})
+        return chain
+
+    model = Qwen38ForCausalLM(None, allocated_context=ALLOCATED_CONTEXT, chain_opener=opener)
+    assert model.chain is None and not model.batch_mode
+    model.allocate_kv_cache((num_blocks, 1, block_size, 256), torch.bfloat16, 48)
+    chain.opened = opened
+    return model, chain
+
+
+def _table(*ids: int, width: int = 8) -> torch.Tensor:
+    row = torch.zeros(1, width, dtype=torch.int32)
+    row[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+    return row
+
+
+def test_the_paged_single_slot_opens_in_allocate_kv_cache_on_vllms_pool() -> None:
+    model, chain = _paged_adapter()
+    paging = Qwen38LanePaging(
+        page_size=BLOCK_SIZE, num_pages=NUM_BLOCKS, max_blocks=paged_table_width(ALLOCATED_CONTEXT, BLOCK_SIZE)
+    )
+    assert chain.opened == [{"warm_hook": None, "paging": paging}] and model.chain is chain
+    assert (model.paging, model.block_size, model.num_blocks) == (paging, BLOCK_SIZE, NUM_BLOCKS)
+
+
+def test_initialize_defers_the_single_slot_open_and_a_chainless_adapter_is_safe(construction) -> None:
+    model = _initialize(construction, allocate=False)
+    assert model.chain is None and model.chain_opener is not None and not model.batch_mode
+    assert "open" not in [call[0] for call in construction.calls]
+    model.release_persistent_capture()  # allocate_kv_cache never ran: nothing to close
+    model.release_request(0)
+    model.allocate_kv_cache(KV_CACHE_SHAPE, torch.bfloat16, 48)
+    assert model.chain is construction.chain and [call[0] for call in construction.calls][-1] == "open"
+
+
+@pytest.mark.parametrize("block_size", (64, 96, 8192, 0))
+def test_the_paged_single_slot_refuses_a_block_size_outside_the_pool_form(block_size: int, expect_error) -> None:
+    model = Qwen38ForCausalLM(None, allocated_context=ALLOCATED_CONTEXT, chain_opener=lambda hook, paging=None: None)
+    with expect_error(ValueError, "--block-size must be a power of two in 128..4096"):
+        model.allocate_kv_cache((NUM_BLOCKS, 1, block_size, 256), torch.bfloat16, 48)
+    assert model.chain is None
+
+
+def test_the_paged_single_slot_refuses_a_malformed_cache_shape_and_a_tiny_pool(expect_error) -> None:
+    model = Qwen38ForCausalLM(None, allocated_context=ALLOCATED_CONTEXT, chain_opener=lambda hook, paging=None: None)
+    with expect_error(ValueError, "must be \\(num_blocks, heads, block_size, head_size\\)"):
+        model.allocate_kv_cache((NUM_BLOCKS, BLOCK_SIZE), torch.bfloat16, 48)
+    with expect_error(ValueError, "num_blocks must be >= 2"):
+        model.allocate_kv_cache((1, 1, BLOCK_SIZE, 256), torch.bfloat16, 48)
+
+
+def test_prefill_writes_row_zero_of_the_page_table_after_the_reset_and_before_the_prefill() -> None:
+    model, chain = _paged_adapter()
+    ids = list(range(1, 131))  # 130 tokens: two blocks of 128
+    _prefill(model, ids, page_table=torch.cat([_table(9, 4), _table(7, 7)]))
+    assert chain.log[:2] == [f"reset:{SEED_TOKEN_ID}", "table:(9, 4)"]
+    assert chain.log[2] == f"chunk_prefill:{len(ids) - 1}@0"
+    _prefill(model, [5, 6, 7], page_table=_table(3))
+    assert chain.log[chain.log.index("table:(3,)") - 1] == f"reset:{SEED_TOKEN_ID}"
+
+
+@pytest.mark.parametrize(
+    "table, message",
+    (
+        (None, "needs the plugin's page_table"),
+        (_table(5), "needs 2 blocks"),
+        (_table(5, 0, 6), "block 0"),
+        (_table(5, NUM_BLOCKS), "block ids must be in"),
+        (torch.zeros(1, 8, dtype=torch.int32), "needs 2 blocks"),
+    ),
+)
+def test_prefill_refuses_a_page_row_that_cannot_hold_the_prompt_before_any_chain_call(
+    table, message: str, expect_error
+) -> None:
+    model, chain = _paged_adapter()
+    with expect_error(ValueError, message):
+        _prefill(model, list(range(1, 131)), page_table=table)
+    assert chain.log == []
+
+
+def test_decode_writes_the_page_table_before_the_step_and_only_a_changed_row_reaches_the_device() -> None:
+    model, chain = _paged_adapter()
+    ids = list(range(1, 127))
+    _prefill(model, ids, page_table=_table(9, 4))
+    chain.log.clear()
+    _decode(model, 7, 126, page_table=_table(9, 4))  # position 126: one block needed, the row holds two
+    assert not [op for op in chain.log if op.startswith("table")]  # unchanged since the prefill wrote it
+    assert chain.log[:2] == ["guard", "write:7"]
+    chain.log.clear()
+    _decode(model, 8, 127, page_table=_table(9, 4, 2))  # the plugin appended a block: the new row is written first
+    assert chain.log[0] == "table:(9, 4, 2)"
+
+
+def test_decode_refuses_a_row_without_the_block_of_its_position_before_any_chain_call(expect_error) -> None:
+    model, chain = _paged_adapter()
+    _prefill(model, list(range(1, 129)), page_table=_table(9))
+    chain.log.clear()
+    with expect_error(ValueError, "needs 2 blocks"):
+        _decode(model, 7, 128, page_table=_table(9))
+    assert chain.log == []
+
+
+def test_decode_warmup_runs_on_a_scratch_free_page_row_and_resets() -> None:
+    model, chain = _paged_adapter()
+    model.warmup_model_decode(
+        enable_trace=True, kv_cache=None, max_batch_size=1, num_blocks=NUM_BLOCKS, can_sample_on_device=False
+    )
+    assert "table:(1,)" in chain.log and chain.log[-1] == f"reset:{SEED_TOKEN_ID}"
+
+
+def test_the_flat_single_slot_ignores_the_page_table() -> None:
+    model, chain = _adapter()
+    _prefill(model, [1, 2, 3], page_table=None)
+    _decode(model, 4, 3, page_table=None)
+    assert not [op for op in chain.log if op.startswith("table")]
 
 
 # -- the real chunk driver ---------------------------------------------------------------------------------------------
@@ -1074,7 +1233,10 @@ def construction(monkeypatch, tmp_path) -> SimpleNamespace:
     )
 
 
-def _initialize(construction, **overrides) -> Qwen38ForCausalLM:
+def _initialize(construction, *, allocate: bool = True, **overrides) -> Qwen38ForCausalLM:
+    """``initialize_vllm_model``; the paged single slot opens its chain in ``allocate_kv_cache``, run here too unless
+    ``allocate`` is False."""
+
     kwargs = dict(
         hf_config=None,
         mesh_device=_mesh(),
@@ -1084,7 +1246,10 @@ def _initialize(construction, **overrides) -> Qwen38ForCausalLM:
         optimizations=None,
     )
     kwargs.update(overrides)
-    return Qwen38ForCausalLM.initialize_vllm_model(**kwargs)
+    model = Qwen38ForCausalLM.initialize_vllm_model(**kwargs)
+    if allocate and kwargs["max_batch_size"] == 1:
+        model.allocate_kv_cache(KV_CACHE_SHAPE, torch.bfloat16, 48)
+    return model
 
 
 def _recorded(construction) -> tuple[dict, dict, dict]:
@@ -1166,7 +1331,11 @@ def test_construction_order_and_forwarded_arguments(construction, monkeypatch) -
         "sampling": True,
         "long_chunks": True,
         "slab_rows": DEFAULT_SLAB_ROWS,
+        "paging": opened["paging"],
     }
+    assert opened["paging"] == Qwen38LanePaging(
+        page_size=BLOCK_SIZE, num_pages=NUM_BLOCKS, max_blocks=paged_table_width(ALLOCATED_CONTEXT, BLOCK_SIZE)
+    )
     assert all(callable(kwargs["marker"]) for kwargs in (prepared, constructed, opened))
     assert os.environ["QWEN38_HARDWARE_MODE"] == MODE
     assert model.chain is construction.chain and model.slot == Qwen38VLLMSlot()
@@ -1471,6 +1640,7 @@ def test_construction_names_the_slab_knob_when_the_dram_admission_refuses_the_sl
         "sampling": True,
         "long_chunks": False,
         "slab_rows": None,
+        "paging": _recorded(construction)[2]["paging"],
     }
     assert model.chain is construction.chain
     assert [line for line in messages if line.startswith("prefill form: ")] == [
@@ -1499,10 +1669,10 @@ def test_class_surface_matches_the_plugin_contract(expect_error) -> None:
     for name in (
         "already_warmed_up_prefill",
         "is_hybrid",
-        "get_kv_cache_spec",
         "tt_supported_decode_batch_sizes",
     ):
         assert not hasattr(cls, name)
+    assert cls.get_kv_cache_spec(None) is None  # off (QWEN38_MAMBA_SPEC unset): the plugin's homogeneous spec
     # the async decode's output hooks (QWEN38_ASYNC_DECODE): present always, only a handle or a host tensor passes through
     assert callable(cls.read_decode_output) and callable(cls.process_decode_output_host)
     parameters = inspect.signature(cls.__init__).parameters
@@ -1889,6 +2059,7 @@ def _feed_chain(monkeypatch, *, mtp=None):
     device_row = [0]
     chain = object.__new__(session_module.Qwen38TracedChain)
     chain.mtp, chain.token_row_io, chain.head_trace_ids = mtp, "row", [1, 2, 3, 4]
+    chain.greedy_head_trace_ids, chain.greedy_tail_trace_ids = [], []
     chain.construction = SimpleNamespace(builder=SimpleNamespace(mesh_device="mesh"))
     return chain, writes, device_row
 
@@ -1928,3 +2099,91 @@ def test_step_uses_feed_token_row_only_with_the_flag(monkeypatch) -> None:
         chain.log.clear()
         _decode(model, 14, 3)
         assert f"{name}:14" in chain.log and ("feed:14" in chain.log) == (flag != "0")
+
+
+# -- chunked prefill of the same request (start_pos > 0) -------------------------------------------------------------
+
+
+def _chunked(model, ids: list[int], start: int, end: int, **overrides):
+    row = torch.tensor([ids[:end]], dtype=torch.int32)
+    return _prefill(model, ids[:end], tokens=row, prompt_lens=[end], start_pos=[start], **overrides)
+
+
+def test_a_chunk_continues_on_the_committed_state_without_a_reset() -> None:
+    model, chain = _adapter()
+    ids = list(range(100, 100 + 400))
+    _chunked(model, ids, 0, 128)
+    chain.log.clear()
+    out, _ = _chunked(model, ids, 128, 256)
+    assert "reset:" + str(SEED_TOKEN_ID) not in chain.log and not any(e.startswith("reset") for e in chain.log)
+    assert chain.chunks[-1] == (tuple(ids[128:255]), 128)  # [P, E - 1) through the chunk driver at start P
+    assert chain.log[:3] == ["chunk_prefill:127@128", "guard", f"write:{ids[255]}"]  # then the forced last token
+    assert model.slot.committed == ids[:256] and chain.inputs == ids[:256]
+    assert out.shape == (
+        1,
+        1,
+        VOCAB_SIZE,
+    )  # the forced last token's logits: the plugin drops them for a non-final chunk
+
+
+def test_the_last_chunk_forces_the_last_prompt_token_like_a_whole_prompt() -> None:
+    model, chain = _adapter()
+    ids = list(range(100, 100 + 300))
+    _chunked(model, ids, 0, 128)
+    _chunked(model, ids, 128, 300)
+    assert chain.chunks[-1] == (tuple(ids[128:299]), 128)
+    assert chain.inputs[-1] == ids[299] and model.slot.committed == ids
+    whole_model, whole_chain = _adapter()
+    whole_out, _ = _prefill(whole_model, ids)
+    assert whole_chain.inputs == chain.inputs and whole_model.slot.ple_context == model.slot.ple_context
+
+
+def test_a_short_continuation_steps_the_tokens_instead_of_a_chunk() -> None:
+    model, chain = _adapter()
+    ids = list(range(100, 100 + 200))
+    _chunked(model, ids, 0, 128)
+    n_chunks = len(chain.chunks)
+    _chunked(model, ids, 128, 140)
+    assert len(chain.chunks) == n_chunks and chain.inputs == ids[:140] and model.slot.committed == ids[:140]
+
+
+def test_a_chunk_that_does_not_start_at_the_committed_length_is_refused(expect_error) -> None:
+    model, chain = _adapter()
+    ids = list(range(100, 100 + 400))
+    _chunked(model, ids, 0, 128)
+    chain.log.clear()
+    with expect_error(Qwen38ChatChainError, "starts at position 256, the slot has committed 128"):
+        _chunked(model, ids, 256, 300)
+    assert chain.log == []
+    other = ids[:64] + [7] + ids[65:]  # same length, different earlier token
+    with expect_error(Qwen38ChatChainError, "starts at position 128"):
+        _chunked(model, other, 128, 200)
+    assert chain.log == []
+
+
+def test_a_restart_from_zero_resets_the_state() -> None:
+    model, chain = _adapter()
+    ids = list(range(100, 100 + 400))
+    _chunked(model, ids, 0, 256)
+    chain.log.clear()
+    _chunked(model, ids, 0, 128)  # preempted: the request begins again
+    assert chain.log[0] == f"reset:{SEED_TOKEN_ID}" and model.slot.committed == ids[:128]
+
+
+def test_a_chunk_after_a_failed_call_is_refused(expect_error) -> None:
+    model, chain = _adapter()
+    ids = list(range(100, 100 + 400))
+    _chunked(model, ids, 0, 128)
+    model.slot.failed = True
+    with expect_error(Qwen38ChatChainError, "not trusted"):
+        _chunked(model, ids, 128, 256)
+
+
+def test_the_plain_adapter_declares_chunked_prefill_only_when_opted_in(monkeypatch) -> None:
+    monkeypatch.delenv("QWEN38_VLLM_CHUNKED_PREFILL", raising=False)
+    caps = Qwen38ForCausalLM.model_capabilities
+    assert caps["supports_chunked_prefill"] is False and caps["supports_prefix_caching"] is False
+    monkeypatch.setenv("QWEN38_VLLM_CHUNKED_PREFILL", "1")
+    assert Qwen38ForCausalLM.model_capabilities["supports_chunked_prefill"] is True
+    monkeypatch.setenv("QWEN38_VLLM_CHUNKED_PREFILL", "0")
+    assert Qwen38ForCausalLM.model_capabilities["supports_chunked_prefill"] is False

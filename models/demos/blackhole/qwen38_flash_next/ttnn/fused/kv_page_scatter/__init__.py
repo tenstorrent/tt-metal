@@ -10,6 +10,11 @@ one compiled program serves every prompt of a page size.  ``src_row0`` (runtime 
 source window to rows [src_row0, src_row0 + rows): a multi-user pack's user ``u`` sits at row ``u * S`` of the dense cache
 (``src_row0`` a multiple of 32).  Not registered (no composed twin in the decode chain);
 ``kv_page_scatter_composed`` is the reference.
+
+``position`` (optional UINT32 [1, 1, 1, 1] ROW_MAJOR device scalar P, a multiple of 32) moves the destination: group g
+lands at logical rows [P + 32 g, P + 32 g + 32) of the lane, P read on device, so a captured trace writes each replay's
+chunk where the scalar says.  ``lane``, ``rows`` and ``src_row0`` stay host values.  The page-table range check covers
+[0, rows) only; the caller keeps P + rows inside the lane's entries.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ GROUP_ROWS = fp.TILE
 ROW_BYTES = KV_WIDTH * 2
 GROUP_BYTES = GROUP_ROWS * ROW_BYTES
 PT_ALIGN_SLACK = 64
+POSITION_SLOT_BYTES = 128  # the aligned slot of P after the page table row, plus the alignment of the slot's start
 
 
 def _check(src, pool, page_table, lane: int, rows: int, page_size: int, src_row0: int = 0) -> tuple[int, int]:
@@ -53,34 +59,56 @@ def _check(src, pool, page_table, lane: int, rows: int, page_size: int, src_row0
     return groups, max_blocks
 
 
-def kv_page_scatter(src, pool, page_table, *, lane: int, rows: int, page_size: int, src_row0: int = 0):
+def _check_position(position) -> None:
+    if (
+        tuple(position.shape) != (1, 1, 1, 1)
+        or position.dtype != ttnn.uint32
+        or position.layout != ttnn.ROW_MAJOR_LAYOUT
+    ):
+        raise ValueError(
+            f"position must be a UINT32 ROW_MAJOR [1, 1, 1, 1] scalar, got {position.dtype} {position.layout} "
+            f"{tuple(position.shape)}"
+        )
+
+
+def kv_page_scatter(src, pool, page_table, *, lane: int, rows: int, page_size: int, src_row0: int = 0, position=None):
     """Scatter ``src`` rows [src_row0, src_row0 + rows) (up to 32-row groups) into ``pool`` at lane ``lane``'s pages of ``page_table``
-    (int32 ROW_MAJOR [1, 1, >= lane + 1, max_blocks]); returns ``pool`` (updated in place)."""
+    (int32 ROW_MAJOR [1, 1, >= lane + 1, max_blocks]); returns ``pool`` (updated in place).  ``position`` (device scalar,
+    see the module doc) offsets the destination rows by P read on device."""
 
     groups, max_blocks = _check(src, pool, page_table, lane, rows, page_size, src_row0)
+    if position is not None:
+        _check_position(position)
     shift = page_shift(page_size)
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(SCATTER_CORES - 1, 0))])
     tensors = (src, pool, page_table)
     addresses = [t.buffer_address() for t in tensors]
+    pos_args = [] if position is None else [position.buffer_address()]
+    pos_tensors = [] if position is None else [position]
     kernel = fp.reader_kernel(
         SCATTER,
         cores,
-        [a for t in tensors for a in fp.accessor_args(t)],
+        [a for t in (*tensors, *pos_tensors) for a in fp.accessor_args(t)],
         [
-            (ttnn.CoreCoord(j, 0), [*addresses, groups, lane, shift, page_size, max_blocks, j, SCATTER_CORES, src_row0])
+            (
+                ttnn.CoreCoord(j, 0),
+                list([*addresses, groups, lane, shift, page_size, max_blocks, j, SCATTER_CORES, src_row0]) + pos_args,
+            )
             for j in range(SCATTER_CORES)
         ],
+        defines=[] if position is None else [("DEVICE_POSITION", "1")],
     )
-    cbs = [fp.cb_descriptor(0, ttnn.uint32, GROUP_BYTES + max_blocks * 4 + PT_ALIGN_SLACK, 1, cores)]
+    cb_bytes = GROUP_BYTES + max_blocks * 4 + PT_ALIGN_SLACK + (0 if position is None else POSITION_SLOT_BYTES)
+    cbs = [fp.cb_descriptor(0, ttnn.uint32, cb_bytes, 1, cores)]
     meta = fp.program_meta(
         NAME,
         "scatter_rows",
         1,
-        reads=(page_table,),
+        reads=(page_table, *pos_tensors),
         partial=((src, groups * GROUP_BYTES), (pool, groups * GROUP_BYTES)),
         cores=SCATTER_CORES,
     )
-    return fp.run_program([src, page_table, pool], fp.program_descriptor([kernel], cbs=cbs), meta=meta)
+    return fp.run_program([src, page_table, *pos_tensors, pool], fp.program_descriptor([kernel], cbs=cbs), meta=meta)
 
 
 def kv_page_scatter_composed(

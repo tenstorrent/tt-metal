@@ -1025,6 +1025,8 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
         "_all_gather_hidden_rows",
     ):
         source = inspect.getsource(getattr(Qwen38TTNNQSA, name))
+        # The prefill chain passes its page-table row as the keyword lane=0; that is not the LANE layout.
+        source = source.replace("lane=0", "")
         assert "lane" not in source and "Lane" not in source, name
     assert INDEXER_FORMS == ("wide", "per_lane")
     assert tuple(Qwen38TTNNQSALaneState.__dataclass_fields__) == (
@@ -1039,4 +1041,6 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
         "kv_scratch_rows",  # the MTP lane verify's redirect region past the last lane (0 for the plain lanes)
         "pool_rows",  # the PAGED plain body's page pool rows (0: the flat per-lane cache)
         "storage_lanes",  # a bucket view's parent lane extent (0: the state owns its lanes)
+        "pools_shared",  # the prefill chain and the lanes share the page pools
+        "lane_alias",  # an MTP width view: the per-lane fixed tensors are lane-prefix aliases
     )

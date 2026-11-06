@@ -15,6 +15,25 @@ constexpr uint32_t BLOCK_PAGES = tile_rows::TILE_ROWS;  // one 1 KB row-major pa
 // the row-count page at +64 -- each scalar's page read may cover up to 64 B, so the two never overlap (a 32 B offset
 // let the position read overwrite the row count: R read as 0 or as garbage, the first device run).
 constexpr uint32_t ROWS_WORD_OFFSET = 64;
+#ifdef PAGED
+// PAGED (compile-time define; the unpaged programs are unchanged): the cache is the page pool and a 32-row block at
+// logical row `row` starts at pool row pt[row >> shift] * bs + (row & (bs - 1)) (pt = the user's int32 page table row,
+// bs = 1 << shift).  CB_KV_PT (one page of KV_PT_BYTES) holds the 64-byte aligned page-table windows: 3 * 64 bytes for
+// the reader (slack for the alignment) and 3 * 64 for the writer, which look up on different RISCs of the same core.
+constexpr uint32_t CB_KV_PT = 32;
+constexpr uint32_t PT_WINDOW = 64, PT_WRITER_OFFSET = 3 * PT_WINDOW;
+inline uint32_t pt_window_l1(uint32_t cb_base, uint32_t index) { return ((cb_base + 63) & ~63u) + index * PT_WINDOW; }
+// The window around the entry of logical row `row` -> NoC read of 64 bytes from the table's row 0 (page 0).
+template <typename PT>
+inline void pt_window_read(const PT& pt, uint32_t row, uint32_t shift, uint32_t window_l1) {
+    noc_async_read(pt.get_noc_addr(0, ((row >> shift) * 4) & ~63u), window_l1, PT_WINDOW);
+}
+// The pool row of logical row `row` once its window has landed (after the barrier and invalidate_l1_cache).
+inline uint32_t pt_base_row(uint32_t window_l1, uint32_t row, uint32_t shift, uint32_t bs) {
+    const uint32_t entry_byte = (row >> shift) * 4;
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(window_l1)[(entry_byte & 63u) >> 2] * bs + (row & (bs - 1));
+}
+#endif
 
 #ifdef QWEN38_ROWS_KV_FAST
 // The same copy over the pack tiles c0 .. c1 - 1 (v tiles 0..7, k tiles 8..15), 32-bit loads and stores: two bf16 per

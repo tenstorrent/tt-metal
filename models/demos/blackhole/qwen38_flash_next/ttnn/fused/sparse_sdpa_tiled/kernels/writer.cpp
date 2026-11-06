@@ -19,6 +19,11 @@
 // CB_OUT_RM CB_SCALE CB_COL_IDENTITY CB_MASK_BAND CB_BAND_TEMPLATE CB_POS CB_UNION CB_MEMBER CB_KREQ CB_KACK
 // CB_TILECTL.  Positional compile-time args: TensorAccessorArgs of out, kv.  Runtime args: 0 out, 1 kv addresses,
 // 2 tile_start, 3 tile_count.
+// PAGED (compile-time define, PAGE_SIZE = the block size bs): kv is the K/V pool and the gather row of logical token t
+// is pt[t >> s] * bs + (t & (bs - 1)) with pt = the page-table row the reader copied into the CB_PT scratch (this
+// kernel reads it at the same 64-byte aligned address once the reader's request message has landed).  Extra named arg
+// CB_PT, extra positional compile-time args: the page table's TensorAccessorArgs; extra runtime args: 4 page table
+// address, 5 row, 6 width (unused here).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -32,6 +37,9 @@
 namespace {
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
+#ifdef PAGED
+constexpr uint32_t PAGE_SHIFT = 31 - __builtin_clz(PAGE_SIZE);
+#endif
 
 template <uint32_t D, uint32_t BT, typename Accessor>
 FORCE_INLINE void union_gather(
@@ -42,7 +50,12 @@ FORCE_INLINE void union_gather(
     uint32_t slot0,
     uint32_t lo,
     uint32_t hi,
-    uint32_t row_bytes) {
+    uint32_t row_bytes
+#ifdef PAGED
+    ,
+    volatile tt_l1_ptr uint32_t* pt_l1
+#endif
+) {
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
     for (uint32_t i = 0; i < cnt; ++i) {
@@ -52,7 +65,12 @@ FORCE_INLINE void union_gather(
             experimental::async_read_barrier_with_trid(noc, trid);
         }
         experimental::set_read_trid(noc, trid);
+#ifdef PAGED
+        const uint32_t t = union_ptr[slot0 + p / BT] * BT + p % BT;
+        const uint32_t page = pt_l1[t >> PAGE_SHIFT] * PAGE_SIZE + (t & (PAGE_SIZE - 1));
+#else
         const uint32_t page = union_ptr[slot0 + p / BT] * BT + p % BT;
+#endif
         noc.async_read(kv, local_l1, row_bytes, {.page_id = page}, {.addr = dst_l1 + p * row_bytes});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
@@ -119,6 +137,9 @@ void kernel_main() {
 
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto kv_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#ifdef PAGED
+    constexpr uint32_t cb_pt = get_named_compile_time_arg_val("CB_PT");
+#endif
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t kv_addr = get_arg_val<uint32_t>(1);
@@ -155,6 +176,11 @@ void kernel_main() {
         }
     }
     const UnicastEndpoint local_src;
+#ifdef PAGED
+    experimental::CB pt_cb(cb_pt);
+    volatile tt_l1_ptr uint32_t* pt_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>((pt_cb.get_write_ptr() + 63) & ~63u);
+#endif
 
     uint32_t diag_slot_q[32];  // the union slot of the row's own incomplete block, NO_BLOCK when the row has no tail
     uint32_t tail_q[32];
@@ -248,7 +274,23 @@ void kernel_main() {
 
             {
                 FUSED_ZONE("fz_ss_w_gather");
-                union_gather<RING_DEPTH, BT>(noc, kv, dst, uni, req_slot0, 0, split, K_ROW_BYTES);
+#ifdef PAGED
+                invalidate_l1_cache();
+#endif
+                union_gather<RING_DEPTH, BT>(
+                    noc,
+                    kv,
+                    dst,
+                    uni,
+                    req_slot0,
+                    0,
+                    split,
+                    K_ROW_BYTES
+#ifdef PAGED
+                    ,
+                    pt_l1
+#endif
+                );
             }
 
             kack_cb.reserve_back(1);

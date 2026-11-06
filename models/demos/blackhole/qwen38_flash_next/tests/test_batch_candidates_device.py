@@ -61,9 +61,9 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import Qwen38Candida
 
 # A candidate row: [TP_SIZE, 2, k] flattened, each shard's k values, then its k ids.
 CANDIDATE_ROW = 2 * TP_SIZE * SAMPLING_CANDIDATES_PER_DEVICE
-BLOCK = 64
+BLOCK = 128
 STEPS = 12
-PROMPT_LEN = 100  # two 64-row blocks per request
+PROMPT_LEN = 100  # one 128-row block per request
 
 
 def sampling(rows: int, **fields) -> SimpleNamespace:

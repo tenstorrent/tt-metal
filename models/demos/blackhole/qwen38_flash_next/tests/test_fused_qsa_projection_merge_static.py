@@ -186,7 +186,7 @@ def test_the_served_path_runs_one_linear_and_the_tails_read_its_windows() -> Non
     assert (
         "self._index_tail_step(full_hidden,cos,sin,block_start_cos,block_start_sin,state,position,projections=merged)"
     ) in forward
-    assert "self._main_tail_step(full_hidden,cos,sin,state,position,projections=merged)" in forward
+    assert "self._main_tail_step(full_hidden,cos,sin,state,position,projections=merged," in forward
     assert (
         "self._sparse_value_attention_fused(sparse_query,qg_ws,sparse_indices,state,"
         'qg_first=0ifmergedisNoneelsePROJECTION_FIRST_TILE["qg"],)'
@@ -207,7 +207,7 @@ def test_the_served_path_runs_one_linear_and_the_tails_read_its_windows() -> Non
         "else:index_q_ws=raw_key_ws=projectionsindex_q_first,index_k_first="
         'PROJECTION_FIRST_TILE["index_q"],PROJECTION_FIRST_TILE["index_k"]'
     ) in index_step
-    assert "index_q_first=index_q_first,index_k_first=index_k_first,)" in index_step
+    assert "index_q_first=index_q_first,index_k_first=index_k_first," in index_step
     assert "ifprojectionsisNone:_deallocate(index_q_ws,raw_key_ws)" in index_step
     main_step = _flat(qsa.Qwen38TTNNQSA._main_tail_step)
     assert "ifprojectionsisNone:qg_ws=ttnn.linear(" in main_step and main_step.count("ttnn.linear(") == 3

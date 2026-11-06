@@ -894,6 +894,16 @@ def _validate_mtp_components(model: Qwen38TTNNTextModel, mtp_components) -> tupl
     return layer, input_mixer, final_mixer
 
 
+def _allocate_alignment_generic_state(
+    mtp_layer: Qwen38TTNNDecoderLayer, state: Qwen38TTNNTextModelGenericState, mtp_pools: Any
+) -> Qwen38TTNNDecoderLayerGenericState:
+    """The MTP layer's generic state: flat, or on ``mtp_pools`` with ``state``'s paging and its page table object."""
+
+    if state.paging is None:
+        return mtp_layer.allocate_generic_state()
+    return mtp_layer.allocate_generic_state(state.paging, mtp_pools, state.page_table)
+
+
 def allocate_verify_state(
     model: Qwen38TTNNTextModel,
     state: Qwen38TTNNTextModelGenericState,
@@ -903,6 +913,7 @@ def allocate_verify_state(
     moe_rows: int | None = None,
     gdn_step_anchor_layers: Sequence[int] = (),
     candidates_constants: Qwen38TTNNSamplingCandidateConstants | None = None,
+    mtp_pools: Any = None,
     alignment_generic_state: Qwen38TTNNDecoderLayerGenericState | None = None,
 ) -> Qwen38TTNNVerifyState:
     """Allocate the verify constants and every layer's verify buffers beside ``state`` (before any capture).
@@ -911,6 +922,10 @@ def allocate_verify_state(
     (a second drafting chain over the same model state, e.g. k = 5 beside k = 4): the committed history is one; the
     window is the chain's.  The sharing state does not release it (``owns_generic_state`` False); the active chain's
     commit writes it and the other chain's verify window is stale until its next pass starts from it.
+
+    ``mtp_pools`` (the MTP QSA layer's :meth:`Qwen38TTNNQSA.allocate_paged_pools`): required when ``state`` is paged,
+    and only then; the MTP layer's generic state runs on them with ``state``'s paging and its one page table object
+    (a table write reaches the MTP layer too).  Unused with ``alignment_generic_state``, which is already built.
 
     ``mtp_components`` (the builder's ``decoder_layer`` / ``input_mixer`` / ``final_mixer``) enables the
     alignment rows; without it the pass reports ``first_draft = None`` and skips the MTP layer.  ``moe_rows``
@@ -935,6 +950,10 @@ def allocate_verify_state(
     ):
         raise ValueError(f"GDN step anchor layers must be GDN layer indices, got {list(gdn_step_anchor_layers)!r}")
     mtp = None if mtp_components is None else _validate_mtp_components(model, mtp_components)
+    if mtp_pools is not None and (mtp is None or state.paging is None):
+        raise ValueError("mtp_pools need the MTP alignment components and a paged generic state")
+    if mtp is not None and state.paging is not None and mtp_pools is None and alignment_generic_state is None:
+        raise ValueError("a paged generic state needs the MTP layer's pools (mtp_pools)")
     gdn = next(layer.attention for layer in model.layers if layer.layer_type is Qwen38TTNNLayerType.GDN)
     qsa = next(layer.attention for layer in model.layers if layer.layer_type is Qwen38TTNNLayerType.QSA)
     mesh_device, mesh_contract = model.mesh_device, model.mesh_contract
@@ -1001,7 +1020,7 @@ def allocate_verify_state(
             if alignment_generic_state is not None:
                 generic_state = alignment_generic_state  # shared with the owning chain's verify state
             else:
-                generic_state = mtp_layer.allocate_generic_state()
+                generic_state = _allocate_alignment_generic_state(mtp_layer, state, mtp_pools)
                 actions.append(("MTP layer generic state", lambda: mtp_layer.release_generic_state(generic_state)))
             mtp_verify = _allocate_layer_verify_state(mtp_layer, rows, rows_constants, moe_rows=moe_rows)
             actions.append(("MTP layer verify state", lambda: _release_layer_verify_state(mtp_layer, mtp_verify)))

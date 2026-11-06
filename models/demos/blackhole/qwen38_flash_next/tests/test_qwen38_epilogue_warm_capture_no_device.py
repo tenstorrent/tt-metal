@@ -85,7 +85,7 @@ def extension_with_fakes(monkeypatch):
     ext.sampler = FakeSamplerConstants()
     ext.presence_on_device = False
     ext.candidate_row = False  # the chain's candidate row (the fold has its own program-key test)
-    ext.trace_rows, ext.trace_logits = [], []
+    ext.trace_rows, ext.trace_logits, ext.greedy_trace_logits = [], [], []
     keys: list[tuple[str, str, str]] = []
 
     def sample(row, greedy_row, constants):

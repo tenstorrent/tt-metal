@@ -28,6 +28,7 @@ import pytest
 import torch
 from loguru import logger
 
+import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import EOS_TOKEN_IDS, TOKENIZER_SIZE, Qwen38OfficialChatTemplate
 from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
@@ -53,7 +54,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lanes_session import 
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import Qwen38ForCausalLM, plain_lanes_max_batch
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_CONTEXT_HEADROOM
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import FABRIC_CONFIG, MESH_SHAPE, fabric_config
-from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging, paged_table_width
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import determine_device_name
@@ -118,12 +119,42 @@ def greedy_sampling_params() -> SimpleNamespace:
     )
 
 
+def demo_page_row(k: int, num_blocks: int, width: int, seed: int) -> torch.Tensor:
+    """One int32 [1, width] page-table row: ``k`` distinct block ids from 1..num_blocks-1 in a seeded shuffle, then
+    zeros (block 0 is the null block)."""
+
+    assert 0 <= k <= num_blocks - 1 and k <= width, (k, num_blocks, width)
+    ids = torch.randperm(num_blocks - 1, generator=torch.Generator().manual_seed(seed))[:k] + 1
+    row = torch.zeros((1, width), dtype=torch.int32)
+    row[0, :k] = ids.to(torch.int32)
+    return row
+
+
+def allocate_demo_pages(model: Qwen38ForCausalLM, max_tokens: int) -> torch.Tensor:
+    """Allocate the paged pools (this opens the single-slot chain) for requests of up to ``max_tokens`` tokens and
+    return a page-table row for one request."""
+
+    block_size = int(os.environ.get("QWEN38_PAGED_BLOCK_SIZE", "128"))
+    k = -(-max_tokens // block_size) + 1
+    num_blocks = k + 9
+    model.allocate_kv_cache((num_blocks, 1, block_size, 512), ttnn.bfloat16, 48)
+    row = demo_page_row(
+        k,
+        num_blocks,
+        paged_table_width(model.allocated_context, block_size),
+        int(os.environ.get("QWEN38_PAGED_SEED", "0")),
+    )
+    logger.info(f"paged KV: block size {block_size}, {num_blocks} blocks, {k} per request, ids {row[0, :8].tolist()}")
+    return row
+
+
 def generate(
     model: Qwen38ForCausalLM,
     prompt_ids: list[int],
     max_generated_tokens: int,
     profiler: BenchmarkProfiler,
     stop_ids: tuple[int, ...] = (),
+    page_table: torch.Tensor | None = None,
 ):
     """Prefill, then greedy decode for the fixed count (no stop on EOS unless ``stop_ids`` is given; the stop id is kept
     as the last token); returns (tokens, ttft_s, step_seconds)."""
@@ -134,7 +165,7 @@ def generate(
     started = time.perf_counter()
     out, _rope_deltas = model.prefill_forward(
         tokens=torch.tensor([prompt_ids], dtype=torch.int32),
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         enable_trace=True,
         prompt_lens=[len(prompt_ids)],
@@ -165,7 +196,7 @@ def generate(
         out = model.decode_forward(
             tokens=step_tokens if lean else torch.tensor([[generated[-1]]], dtype=torch.int32),
             start_pos=[len(prompt_ids) + step - 1],
-            page_table=None,
+            page_table=page_table,
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
@@ -236,13 +267,17 @@ def test_demo_text(mesh_device, seqlen, max_generated_tokens, repeat_runs, tmp_p
     model = Qwen38ForCausalLM.initialize_vllm_model(
         SimpleNamespace(_name_or_path=str(checkpoint)), mesh_device, max_batch_size=1, max_seq_len=max_seq_len
     )
+    page_table = allocate_demo_pages(model, prompt_len + max_generated_tokens)
     profiler.end("compile_prefill")
     logger.info(f"model ready in {profiler.get_duration('compile_prefill'):.1f} s")
 
     route = ROUTE_HOST if host_argmax_route() else ROUTE_DEVICE
     logger.info(f"route: {route}")
     try:
-        runs = [generate(model, prompt_ids, max_generated_tokens, profiler) for _ in range(repeat_runs)]
+        runs = [
+            generate(model, prompt_ids, max_generated_tokens, profiler, page_table=page_table)
+            for _ in range(repeat_runs)
+        ]
         if (
             os.environ.get("QWEN38_ZERO_DEAD_ROWS_CHECK") == "1"
         ):  # after the traced replays: the pinned buffers' dead rows
@@ -531,11 +566,15 @@ def test_demo_text_chat_plain(mesh_device, case, tmp_path, record_property):
     model = Qwen38ForCausalLM.initialize_vllm_model(
         SimpleNamespace(_name_or_path=str(checkpoint)), mesh_device, max_batch_size=1, max_seq_len=max_seq_len
     )
+    chat_tokens = max(len(ids) for ids in [warmup_ids] + [ids for _, ids in prompts]) + max(
+        CHAT_MAX_NEW_TOKENS, CHAT_WARMUP_TOKENS
+    )
+    page_table = allocate_demo_pages(model, chat_tokens)
     runs = []
     try:
-        generate(model, warmup_ids, CHAT_WARMUP_TOKENS, profiler, stop_ids)
+        generate(model, warmup_ids, CHAT_WARMUP_TOKENS, profiler, stop_ids, page_table)
         for name, ids in prompts:
-            runs.append(generate(model, ids, CHAT_MAX_NEW_TOKENS, profiler, stop_ids))
+            runs.append(generate(model, ids, CHAT_MAX_NEW_TOKENS, profiler, stop_ids, page_table))
             logger.info(f"{name}: {tokenizer.decode(runs[-1][0], skip_special_tokens=True)!r}")
     finally:
         model.release_persistent_capture()
@@ -570,7 +609,7 @@ def test_demo_text_chat_plain(mesh_device, case, tmp_path, record_property):
         assert row["generated_tokens"] > 8 and len(set(tokens)) > 1, (row["prompt"], tokens[:8])
 
 
-BATCH_PAGE_SIZE = 64
+BATCH_PAGE_SIZE = 128
 BATCH_EXACT_PREFIX = 8
 DRIFT_WINDOW = 16
 
@@ -666,17 +705,17 @@ def test_demo_text_batched(mesh_device, seqlen, batch_size, tmp_path, record_pro
     keys = [info["pass_key"] for info in infos]
     assert len(set(keys)) == batch_size and len({tuple(p) for p in prompts}) == batch_size
 
-    max_blocks = -(-allocated_context // BATCH_PAGE_SIZE)
+    reference_blocks = -(-(max(len(p) for p in prompts) + max_generated_tokens) // BATCH_PAGE_SIZE) + 1
     paging = Qwen38LanePaging(
         page_size=BATCH_PAGE_SIZE,
-        num_pages=batch_pool_pages([len(p) for p in prompts], max_generated_tokens),
-        max_blocks=-(-max_blocks // 8) * 8,
+        num_pages=max(batch_pool_pages([len(p) for p in prompts], max_generated_tokens), reference_blocks + 9),
+        max_blocks=paged_table_width(allocated_context, BATCH_PAGE_SIZE),
     )
     mesh_device.enable_program_cache()
     profiler = BenchmarkProfiler()
     profiler.start("run")
     started = time.perf_counter()
-    decoder = Qwen38PlainLaneDecoder(batch_size, paging=paging, decode_steps=max_generated_tokens)
+    decoder = Qwen38PlainLaneDecoder(batch_size, paging=paging, shared_pools=True, decode_steps=max_generated_tokens)
     logger.info(
         f"B={batch_size} ISL {prompt_len} (ctx {allocated_context}) indexer form {decoder.indexer_form}; paged KV page "
         f"size {BATCH_PAGE_SIZE}, {paging.num_pages} pages = {paging.pool_rows} pool rows vs "
@@ -686,13 +725,15 @@ def test_demo_text_batched(mesh_device, seqlen, batch_size, tmp_path, record_pro
         vm = Qwen38ForCausalLM.initialize_vllm_model(
             SimpleNamespace(_name_or_path=str(checkpoint)), mesh_device, max_batch_size=1, max_seq_len=max_seq_len
         )
+        vm.allocate_kv_cache((paging.num_pages, 1, BATCH_PAGE_SIZE, 512), ttnn.bfloat16, 48)
     model_ready_s = time.perf_counter() - started
     logger.info(f"model ready in {model_ready_s:.1f} s (lane prepare {decoder.timing.get('allocate_s', 0):.1f} s)")
 
     try:
         references, ref_ttft, ref_steps = [], [], []
         for user, prompt in enumerate(prompts):  # B=1 references before the lane capture
-            tokens, ttft, steps = generate(vm, prompt, max_generated_tokens, profiler)
+            reference_row = demo_page_row(reference_blocks, paging.num_pages, paging.max_blocks, user)
+            tokens, ttft, steps = generate(vm, prompt, max_generated_tokens, profiler, page_table=reference_row)
             references.append(tokens)
             ref_ttft.append(ttft)
             ref_steps.append(sum(steps) / len(steps))

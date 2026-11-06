@@ -38,6 +38,7 @@ from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import (
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
     PROMPT_FILE,
+    allocate_demo_pages,
     batch_pool_pages,
     device_params,
     greedy_sampling_params,
@@ -66,12 +67,12 @@ def out_dir() -> Path:
     return path
 
 
-def reference_decode(vm, prompt_ids: list[int], steps: int) -> list[int]:
+def reference_decode(vm, prompt_ids: list[int], steps: int, page_table: torch.Tensor) -> list[int]:
     """B=1: greedy prefill token t0, then ``steps`` greedy decode steps; returns [t0..t_steps]."""
 
     out, _ = vm.prefill_forward(
         tokens=torch.tensor([prompt_ids], dtype=torch.int32),
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         enable_trace=True,
         prompt_lens=[len(prompt_ids)],
@@ -84,7 +85,7 @@ def reference_decode(vm, prompt_ids: list[int], steps: int) -> list[int]:
         out = vm.decode_forward(
             tokens=torch.tensor([[tokens[-1]]], dtype=torch.int32),
             start_pos=[len(prompt_ids) + step - 1],
-            page_table=None,
+            page_table=page_table,
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
@@ -117,7 +118,7 @@ def needle_prompts(checkpoint, count: int, prompt_len: int | None):
 
 @contextmanager
 def open_decoder(mesh_device, lanes: int, prompts, gen: int, buckets=None):
-    """The decoder (paged, 64-row pages) over a fresh adapter; yields (decoder, vm, checkpoint).  Released on exit."""
+    """The decoder (paged, 64-row pages) over a fresh adapter; yields (decoder, vm, checkpoint, page_table).  Released on exit."""
 
     checkpoint = checkpoint_directory()
     if not os.environ.get("TT_CACHE_PATH"):
@@ -138,10 +139,11 @@ def open_decoder(mesh_device, lanes: int, prompts, gen: int, buckets=None):
             max_batch_size=1,
             max_seq_len=ALLOCATED_CONTEXT - RESIDENT_CONTEXT_HEADROOM,
         )
+        page_table = allocate_demo_pages(vm, ALLOCATED_CONTEXT - RESIDENT_CONTEXT_HEADROOM)  # opens the chain
     try:
         decoder.capture(vm)
         logger.info(f"decoder {lanes} lanes buckets {decoder.buckets} captured: {decoder.timing}")
-        yield decoder, vm, checkpoint
+        yield decoder, vm, checkpoint, page_table
     finally:
         decoder.release()
         vm.release_persistent_capture()
@@ -171,7 +173,7 @@ def test_bucket_view_matches_own_state(mesh_device, mode, live):
     prompts, _tokenizer, _config = needle_prompts(checkpoint, 8, None)
     users = {u: prompts[u] for u in lanes_live}
     lanes, buckets = (8, None) if mode == "own8" else (32, (8, 32))
-    with open_decoder(mesh_device, lanes, list(users.values()), STEPS + 1, buckets) as (decoder, _vm, _ckpt):
+    with open_decoder(mesh_device, lanes, list(users.values()), STEPS + 1, buckets) as (decoder, _vm, _ckpt, _pages):
         current = [0] * lanes
         for u, prompt in users.items():
             current[u] = decoder.admit(u, prompt)
@@ -216,8 +218,8 @@ def test_bucket_switch_keeps_users(mesh_device):
     checkpoint = checkpoint_directory()
     prompts, tokenizer, config = needle_prompts(checkpoint, 8, None)
     lanes_live = list(range(8))
-    with open_decoder(mesh_device, 32, prompts, SWITCH_STEPS + 1, (8, 32)) as (decoder, vm, _ckpt):
-        references = [reference_decode(vm, prompt, SWITCH_STEPS) for prompt in prompts]
+    with open_decoder(mesh_device, 32, prompts, SWITCH_STEPS + 1, (8, 32)) as (decoder, vm, _ckpt, page_table):
+        references = [reference_decode(vm, prompt, SWITCH_STEPS, page_table) for prompt in prompts]
         firsts = [decoder.admit(u, prompt) for u, prompt in enumerate(prompts)]
         assert firsts == [ref[0] for ref in references], f"admission t0 {firsts} vs reference"
         outputs = [[t] for t in firsts]
@@ -256,7 +258,7 @@ def test_bucket_step_times(mesh_device):
     checkpoint = checkpoint_directory()
     prompts, _tokenizer, _config = needle_prompts(checkpoint, 32, 128)
     results = []
-    with open_decoder(mesh_device, 32, prompts, gen, (1, 2, 4, 8, 16, 32)) as (decoder, _vm, _ckpt):
+    with open_decoder(mesh_device, 32, prompts, gen, (1, 2, 4, 8, 16, 32)) as (decoder, _vm, _ckpt, _pages):
         for live_count in (1, 2, 4, 8, 16, 32):
             lanes_live = list(range(live_count))
             current = [0] * 32

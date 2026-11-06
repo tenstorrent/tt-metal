@@ -1,13 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// main_tail, one-row staging core writer (QWEN38_QSA_MT_ROW=1, one lane, unpaged): the new row (CB_ROW: two 512 B
+// main_tail, one-row staging core writer (QWEN38_QSA_MT_ROW=1, one lane): the new row (CB_ROW: two 512 B
 // pages, the V half then the K half, canonicalized by the reader) to the KV cache row lane * lane_rows + P (V half at
 // byte 0, K half at byte 512 of the row [V | K]), and into row (P % 32) of each of the 16 staging tiles (two 32-byte
 // chunks per tile); each half is written when the reader pushes it.  The other staging rows and cache rows are not
 // touched.  One write barrier.
-// Compile-time args: TensorAccessorArgs staging, cache, kv_block_start, kv_row_hit.  Runtime args: 0 staging, 1 cache,
-// 2 kv_block_start, 3 kv_row_hit addresses, 4 rows, 5 lane rows (cache rows per lane), 6 lane.
+// Compile-time args: TensorAccessorArgs staging, cache, kv_block_start, kv_row_hit (+ page table under PAGED).
+// Runtime args: 0 staging, 1 cache, 2 kv_block_start, 3 kv_row_hit addresses, 4 rows, 5 lane rows (cache rows per
+// lane), 6 lane; PAGED: 7 page table address, 8 shift, 9 bs.
+// PAGED (compile-time define; the unpaged program is unchanged): the cache is the page pool and the cache row is
+// pt[lane][P >> shift] * bs + (P & (bs - 1)) instead of lane * lane_rows + P; the entry comes through one 64-byte
+// aligned window read (CB_PT).  The staging rows are unchanged.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -35,6 +39,14 @@ void kernel_main() {
     const auto cache = TensorAccessor(cache_args, cache_addr);
     const auto pos = TensorAccessor(pos_args, pos_addr);
     const auto hit = TensorAccessor(hit_args, hit_addr);
+#ifdef PAGED
+    constexpr auto pt_args = TensorAccessorArgs<hit_args.next_compile_time_args_offset()>();
+    const auto pt = TensorAccessor(pt_args, get_arg_val<uint32_t>(7));
+    const uint32_t shift = get_arg_val<uint32_t>(8);
+    const uint32_t bs = get_arg_val<uint32_t>(9);
+    cb_reserve_back(CB_PT, 1);
+    const uint32_t pt_l1 = (get_write_ptr(CB_PT) + 63) & ~63u;
+#endif
 
     cb_reserve_back(CB_POS_W, 1);
     cb_reserve_back(CB_POSCW, 1);
@@ -47,7 +59,16 @@ void kernel_main() {
     const uint32_t p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1)[lane];
 
     const uint32_t slot = p & 31;
+#ifdef PAGED
+    const uint32_t entry_byte = (p >> shift) * 4;
+    noc_async_read(pt.get_noc_addr(lane, entry_byte & ~63u), pt_l1, 64);
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    const uint32_t cache_row =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pt_l1)[(entry_byte & 63u) >> 2] * bs + (p & (bs - 1));
+#else
     const uint32_t cache_row = lane * lane_rows + p;
+#endif
     constexpr uint32_t HALF_BYTES = QUERY_ROW_BYTES / 2;
     uint32_t row = 0;
     // page 0 = the V half (row bytes 0..511), page 1 = the K half (512..1023): each half to its cache bytes and its 16

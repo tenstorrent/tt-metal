@@ -46,6 +46,9 @@ def rows_kv_fast_enabled(environ=None) -> bool:
 
 
 CB_BLOCK, CB_NEXT, CB_KV_POS = 29, 30, 31
+CB_KV_PT = 32  # the paged KV core's page-table windows (PAGED only; rows_kv_cbs.h)
+KV_PT_BYTES = 6 * 64  # three 64-byte windows for the reader and three for the writer (64-byte alignment slack)
+PAGE_SIZE_MIN, PAGE_SIZE_MAX = 128, 4096
 ROW_BYTES = KV_WIDTH * 2  # one row-major cache row, 512 bf16
 POS_PAGE = (
     128  # the position page at +0 (with the writer's block word at +4), the row-count page at +64 (rows_kv_cbs.h)
@@ -64,12 +67,19 @@ def _expect_rows_tile(tensor, width: int, label: str) -> None:
         raise ValueError(f"{label} must be a TILE row tile [1, 1, 32, >= {width}], got {tensor.layout} {shape}")
 
 
-def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, core=None) -> qsa_block.KVStage:
+def kv_stage(
+    position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, core=None, page_table=None, page_size: int = 0
+) -> qsa_block.KVStage:
     """The verify rows' KV stage on one core: reads the current block back, scatters the R packed rows, writes the
     current and (unless ``single_row``) the next block.  ``position`` is the pass's uint32 ROW_MAJOR [1, 1, 1, 1] scalar
     P (the tile's first position; the block start P & ~31 is derived on the core), ``rows`` the same form's row count R
     (the verify form's constant k + 1, the commit form's accepted count a*: one program for both; read on the core,
-    clamped to 32); ``kv_cache`` the packed KV cache [1, 1, C, 512] bf16 ROW_MAJOR."""
+    clamped to 32); ``kv_cache`` the packed KV cache [1, 1, C, 512] bf16 ROW_MAJOR.
+
+    With ``page_table`` (int32 ROW_MAJOR [1, 1, >= 1, max_blocks], row 0 = the user's block ids) and ``page_size`` (the
+    PAGED program) ``kv_cache`` is the page pool [1, 1, num_pages * page_size, 512] and the current and the next block
+    (each looked up on its own) start at the pool row ``page_table[0][b >> shift] * page_size + (b & (page_size - 1))``
+    (b = the block's logical start row)."""
 
     for label, scalar in (("position", position), ("rows", rows)):
         shape = tuple(scalar.shape)
@@ -85,6 +95,15 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
         or kv_cache.layout != ttnn.ROW_MAJOR_LAYOUT
     ):
         raise ValueError(f"KV cache must be ROW_MAJOR bf16 [1, 1, C, 512] with C a multiple of 32, got {cache_shape}")
+    paged = page_table is not None
+    if paged:
+        qsa_block.page_table_blocks(page_table, page_size)
+        if page_size < PAGE_SIZE_MIN or page_size > PAGE_SIZE_MAX:
+            raise ValueError(f"page_size must be a power of two in [{PAGE_SIZE_MIN}, {PAGE_SIZE_MAX}], got {page_size}")
+        if cache_shape[2] % page_size:
+            raise ValueError(f"the page pool's {cache_shape[2]} rows must be a multiple of page_size {page_size}")
+    elif page_size:
+        raise ValueError("page_size needs a page_table")
     core = ttnn.CoreCoord(0, 2) if core is None else core  # the first lane's staging core position of the decode form
     acc = fp.accessor_args
 
@@ -93,9 +112,14 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
             fp.cb_descriptor(CB_BLOCK, BF16, ROW_BYTES, fp.TILE, all_set),
             fp.cb_descriptor(CB_NEXT, BF16, ROW_BYTES, fp.TILE, all_set),
             fp.cb_descriptor(CB_KV_POS, ttnn.uint32, POS_PAGE, 1, all_set),
+            *([fp.cb_descriptor(CB_KV_PT, ttnn.uint32, KV_PT_BYTES, 1, all_set)] if paged else []),
         ]
 
-    fast_defines = [("QWEN38_ROWS_KV_FAST", "1")] if rows_kv_fast_enabled() else ()
+    fast = rows_kv_fast_enabled()
+    fast_defines = [("QWEN38_ROWS_KV_FAST", "1")] if fast else ()
+    paged_defines = [*fast_defines, ("PAGED", "1")] if paged else fast_defines
+    paged_args = [page_table.buffer_address(), page_size.bit_length() - 1, page_size] if paged else []
+    reader_paged = paged and not fast  # the fast reader never reads the cache
 
     def kernels(ctx):
         core_set = ctx["staging_set"]
@@ -103,7 +127,7 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
             fp.reader_kernel(
                 ROWS_KV_READER,
                 core_set,
-                [*acc(kv_cache), *acc(v_ws), *acc(position), *acc(rows)],
+                [*acc(kv_cache), *acc(v_ws), *acc(position), *acc(rows), *(acc(page_table) if reader_paged else ())],
                 [
                     (
                         core,
@@ -114,17 +138,18 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
                             rows.buffer_address(),
                             v_first,
                             int(single_row),
+                            *(paged_args if reader_paged else ()),
                         ],
                     )
                 ],
-                defines=fast_defines,
+                defines=paged_defines if reader_paged else fast_defines,
             ),
             fp.writer_kernel(
                 ROWS_KV_WRITER,
                 core_set,
-                acc(kv_cache),
-                [(core, [kv_cache.buffer_address(), int(single_row)])],
-                defines=fast_defines,
+                [*acc(kv_cache), *(acc(page_table) if paged else ())],
+                [(core, [kv_cache.buffer_address(), int(single_row), *paged_args])],
+                defines=paged_defines,
             ),
         ]
 
@@ -133,8 +158,8 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
         cores=[core],
         cb_descriptors=cb_descriptors,
         kernels=kernels,
-        io=[position, rows, kv_cache],
-        reads=(position, rows),
+        io=[position, rows, kv_cache, *([page_table] if paged else [])],
+        reads=(position, rows, *((page_table,) if paged else ())),
         writes=(),
         partial=((kv_cache, blocks * fp.TILE * ROW_BYTES),),
         flops=0,
@@ -160,11 +185,14 @@ def main_tail_rows(
     k_first: int = 0,
     v_first: int = 0,
     live_rows: int | None = None,
+    page_table=None,
+    page_size: int = 0,
 ):
     """The verify tile's main tail: ``qg_ws`` / ``k_ws`` / ``v_ws`` the projections as 32-row TILE row tiles (rows
     past R stale), ``position`` / ``rows`` uint32 ROW_MAJOR [1, 1, 1, 1] = P / R (device scalars), the norm weights [1, 1, 1, 256], the RoPE tables
     [1, 1, 32, 64] (row j at P + j), the packed KV cache [1, 1, C, 512] ROW_MAJOR updated in place (the block at
-    P & ~31 and, unless ``single_row``, the next block).  Returns the sparse query [1, 32, 32, 512] bf16 ROW_MAJOR."""
+    P & ~31 and, unless ``single_row``, the next block).  With ``page_table`` / ``page_size`` the cache is the page pool
+    (see :func:`kv_stage`).  Returns the sparse query [1, 32, 32, 512] bf16 ROW_MAJOR."""
 
     for tensor, width, label in (
         (qg_ws, 2 * LOCAL_HEADS * HEAD_DIM, "qg"),
@@ -172,7 +200,8 @@ def main_tail_rows(
         (v_ws, HEAD_DIM, "v"),
     ):
         _expect_rows_tile(tensor, width, label)
-    stage = kv_stage(position, rows, kv_cache, single_row=single_row, v_ws=v_ws, v_first=v_first)
+    paged = dict(page_table=page_table, page_size=page_size)
+    stage = kv_stage(position, rows, kv_cache, single_row=single_row, v_ws=v_ws, v_first=v_first, **paged)
     return qsa_block.main_tail(
         qg_ws,
         k_ws,

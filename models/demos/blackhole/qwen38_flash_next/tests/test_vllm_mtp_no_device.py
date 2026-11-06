@@ -23,6 +23,10 @@ import torch
 
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, VOCAB_SIZE
 from models.demos.blackhole.qwen38_flash_next.tests import test_mtp_sampled_session_no_device as fakes
+from models.demos.blackhole.qwen38_flash_next.tests import test_qwen38_vllm_no_device as base
+from models.demos.blackhole.qwen38_flash_next.tests.test_qwen38_vllm_no_device import (  # noqa: F401  (fixture)
+    construction,
+)
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vllm
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vllm_mtp as mtp_module
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38ChatChainError
@@ -75,10 +79,10 @@ def _prompt(length: int, base: int = 100) -> list[int]:
     return [base + 7 * index for index in range(length)]
 
 
-def _prefill(model, prompt, **extra):
+def _prefill(model, prompt, page_table=None, **extra):
     return model.prefill_forward(
         tokens=torch.tensor([prompt], dtype=torch.int32),
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         enable_trace=True,
         prompt_lens=[len(prompt)],
@@ -88,14 +92,14 @@ def _prefill(model, prompt, **extra):
     )
 
 
-def _verify(model, tokens, positions, num_valid, accepted, **extra):
+def _verify(model, tokens, positions, num_valid, accepted, page_table=None, **extra):
     return model.decode_forward(
         tokens=torch.tensor([tokens], dtype=torch.int32),
         start_pos=torch.tensor([positions], dtype=torch.int32),
         spec_mode="argmax_ids",
         num_valid_drafts=torch.tensor([num_valid], dtype=torch.int32),
         accepted_counts=torch.tensor([accepted], dtype=torch.int32),
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
@@ -480,6 +484,46 @@ def test_initialize_refuses_a_batch_before_any_library_call(expect_error):
         Qwen38MTPForCausalLM.initialize_vllm_model(SimpleNamespace(), None, 7, 4096)
 
 
+def test_batch_one_defers_the_paged_chain_open_to_allocate_kv_cache(construction, monkeypatch):
+    """Batch 1 opens the chain in ``allocate_kv_cache`` on vLLM's pools, with the MTP chain options and the paging."""
+
+    monkeypatch.setattr(mtp_module, "mtp_drafts_from_env", lambda environ=None: 2)
+    construction.chain.mtp = SimpleNamespace(drafts=2)
+    model = Qwen38MTPForCausalLM.initialize_vllm_model(
+        hf_config=None,
+        mesh_device=base._mesh(),
+        max_batch_size=1,
+        max_seq_len=base.MAX_MODEL_LEN,
+        tt_data_parallel=1,
+        optimizations=None,
+    )
+    assert Qwen38MTPForCausalLM._paged_single_slot is True and not model.lanes_mode
+    assert not [call for call in construction.calls if call[0] == "open"]
+    assert model.chain is None and model.driver is None and model.session is None
+    model.release_persistent_capture()  # nothing open yet
+    assert model.allocate_kv_cache((base.NUM_BLOCKS, 1, 128, 256), torch.bfloat16, 48) is None
+    opened = [call for call in construction.calls if call[0] == "open"]
+    assert len(opened) == 1 and opened[0][2]["paging"] is model.paging and model.paging is not None
+    assert opened[0][2]["sampling"] is False and opened[0][2]["mtp"] == 2 and "mtp_ple_early" in opened[0][2]
+    assert model.chain is construction.chain and model.drafts == 2
+    assert (model.block_size, model.num_blocks) == (128, base.NUM_BLOCKS)
+    assert model.driver.chain is model.chain and model.session is model.driver.session
+
+
+def test_batch_one_chain_without_mtp_is_refused_at_the_deferred_open(construction, monkeypatch, expect_error):
+    construction.chain.mtp = None
+    model = Qwen38MTPForCausalLM.initialize_vllm_model(
+        hf_config=None,
+        mesh_device=base._mesh(),
+        max_batch_size=1,
+        max_seq_len=base.MAX_MODEL_LEN,
+        tt_data_parallel=1,
+        optimizations=None,
+    )
+    with expect_error(ValueError, "mtp=K"):
+        model.allocate_kv_cache((base.NUM_BLOCKS, 1, 128, 256), torch.bfloat16, 48)
+
+
 def test_a_chain_without_mtp_is_refused(expect_error):
     chain = SimpleNamespace(mtp=None)
     with expect_error(ValueError, "mtp=K"):
@@ -526,6 +570,180 @@ def test_shutdown_leaves_the_pass_loop_then_closes_the_chain():
     Runner(model, _prompt(5), 12).step()
     model.release_persistent_capture()
     assert chain.log[-2].startswith("leave:") and chain.log[-1] == "close"
+
+
+# -- batch 1 on the paged pools: the request's block ids reach the chain's page table -----------------------------------
+
+PAGED_BLOCK = 128
+
+
+@pytest.fixture(autouse=True)
+def _forced_prefill_for_paged_tests(request, monkeypatch):
+    """The scripted chain has no chunk trace: the paged tests' prompts (past one 128-row block) take the forced path."""
+
+    if request.node.name.startswith("test_paged"):
+        monkeypatch.setattr(mtp_module, "CHUNK_PREFILL_MIN_ROWS", 10**9)
+
+
+class PagedChain(BootstrapChain):
+    """The scripted chain with the paged chain's ``write_page_table`` (logged ``table:<ids>``, a no-op when unchanged)."""
+
+    def __init__(self, **fields):
+        super().__init__(**fields)
+        self.page_table_ids = None
+        self.closed = False
+        self.misses_forbidden = True
+
+    def write_page_table(self, block_ids) -> bool:
+        ids = tuple(int(block) for block in block_ids)
+        if ids == self.page_table_ids:
+            return False
+        self.page_table_ids = ids
+        self.log.append(f"table:{ids}")
+        return True
+
+
+def _paged_model(num_blocks: int = 16) -> tuple[Qwen38MTPForCausalLM, PagedChain]:
+    chain = PagedChain()
+    opened: list[dict] = []
+
+    def opener(warm_hook, paging=None):
+        opened.append({"warm_hook": warm_hook, "paging": paging})
+        return chain
+
+    model = Qwen38MTPForCausalLM(None, allocated_context=ALLOCATED, chain_opener=opener)
+    assert model.chain is None
+    model.allocate_kv_cache((num_blocks, 1, PAGED_BLOCK, 256), torch.bfloat16, 48)
+    assert opened[0]["warm_hook"] is None and opened[0]["paging"] is model.paging
+    return model, chain
+
+
+def _row(*ids: int, width: int = 8) -> torch.Tensor:
+    row = torch.zeros(1, width, dtype=torch.int32)
+    row[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+    return row
+
+
+def test_paged_prefill_writes_the_table_after_the_reset_and_before_the_first_chunk():
+    model, chain = _paged_model()
+    prompt = _prompt(300)  # 3 blocks of 128
+    _prefill(model, prompt, page_table=_row(5, 9, 2, 7))
+    assert chain.page_table_ids == (5, 9, 2, 7)  # every nonzero entry of row 0, as the plain adapter writes it
+    tables = [index for index, entry in enumerate(chain.log) if entry.startswith("table:")]
+    resets = [index for index, entry in enumerate(chain.log) if entry == "reset"]
+    assert len(tables) == 1 and resets and resets[0] < tables[0] and len(chain.log) > tables[0] + 1
+
+
+def test_paged_prefill_needs_ceil_length_over_block_size_blocks(expect_error):
+    model, chain = _paged_model()
+    with expect_error(ValueError, "prefill: needs 2 blocks"):
+        _prefill(model, _prompt(129), page_table=_row(3))
+    assert chain.log == []
+    _prefill(model, _prompt(128), page_table=_row(3))  # exactly one block
+    assert chain.page_table_ids == (3,)
+    with expect_error(ValueError, "page_table"):
+        _prefill(model, _prompt(8))  # the paged slot needs the plugin's table
+
+
+def test_paged_verify_needs_the_block_of_the_last_row_position_plus_k(expect_error):
+    model, chain = _paged_model()
+    prompt = _prompt(126)
+    out, _ = _prefill(model, prompt, page_table=_row(4, 6))
+    first = int(out[0, 0].argmax())
+    block = [first] + [PLACEHOLDER] * K
+    positions = [126] + [-1] * K
+    # the pass writes rows 126 .. 126 + K: block 1 is reached for K >= 2, one block is not enough
+    with expect_error(ValueError, "verify: needs 2 blocks"):
+        _verify(model, block, positions, 0, 1, page_table=_row(4))
+    _verify(model, block, positions, 0, 1, page_table=_row(4, 6))
+    assert chain.page_table_ids == (4, 6)
+
+
+def test_paged_verify_writes_every_pass_and_only_a_change_reaches_the_chain():
+    model, chain = _paged_model()
+    prompt = _prompt(100)
+    out, _ = _prefill(model, prompt, page_table=_row(4, 6))
+    state = {"committed": [int(out[0, 0].argmax())], "drafts": [], "accepted": 1}
+    calls = []
+    original = model.driver.verify
+
+    def spy(tokens, positions, num_valid, accepted, page_ids=None):
+        calls.append((positions[0], None if page_ids is None else tuple(page_ids)))
+        return original(tokens, positions, num_valid, accepted, page_ids)
+
+    model.driver.verify = spy
+
+    def step(table):
+        committed, drafts = state["committed"], state["drafts"]
+        position = len(prompt) + len(committed) - 1
+        tokens = [committed[-1], *drafts] + [PLACEHOLDER] * (K - len(drafts))
+        positions = [position + column if column <= len(drafts) else -1 for column in range(K + 1)]
+        out = _verify(model, tokens, positions, len(drafts), state["accepted"], page_table=table)
+        walked, counts = spec_decode.accept_greedy_drafts(
+            out.argmax_ids,
+            torch.tensor([tokens[1:]], dtype=torch.int32),
+            torch.tensor([len(drafts)], dtype=torch.int32),
+        )
+        new = walked[0, : int(counts[0])].tolist()
+        state["committed"], state["accepted"] = committed + new, len(new)
+        offered = _propose(model, new, len(new))
+        state["drafts"] = offered.draft_token_ids[0, : int(offered.num_valid[0])].tolist()
+
+    def tables():
+        return [entry for entry in chain.log if entry.startswith("table:")]
+
+    for _ in range(6):
+        step(_row(4, 6))
+    assert len(calls) == 6 and all(ids == (4, 6) for _, ids in calls)
+    assert len(tables()) == 1  # the prefill's write; the unchanged row is a no-op on the chain
+    step(_row(4, 6, 8))  # vLLM appended a block
+    assert chain.page_table_ids == (4, 6, 8) and len(tables()) == 2
+
+
+def test_paged_verify_resync_writes_the_table_before_the_leave(expect_error):
+    model, chain = _paged_model()
+    prompt = _prompt(20)
+    out, _ = _prefill(model, prompt, page_table=_row(4))
+    first = int(out[0, 0].argmax())
+    positions = [20] + [-1] * K
+    _verify(model, [first] + [PLACEHOLDER] * K, positions, 0, 1, page_table=_row(4))
+    # a cut: the plugin committed 1 of the pass's rows, the same block ids move (a new row), the leave follows the write
+    walked = chain.mtp.chain.next_tokens
+    block = [walked[0]] + [PLACEHOLDER] * K
+    _verify(model, block, [21] + [-1] * K, 0, 1, page_table=_row(4, 5))
+    log = chain.log
+    write = max(index for index, entry in enumerate(log) if entry == "table:(4, 5)")
+    leave = max(index for index, entry in enumerate(log) if entry.startswith("leave:"))
+    assert write < leave
+
+
+def test_paged_warmup_uses_real_blocks_one_to_n_and_leaves_a_servable_model(monkeypatch):
+    monkeypatch.setattr(mtp_module, "WARMUP_PROMPT_TOKEN_IDS", tuple(_prompt(10)))
+    model, chain = _paged_model()
+    model.warmup_model_decode(
+        enable_trace=True, kv_cache=None, max_batch_size=1, num_blocks=16, can_sample_on_device=False
+    )
+    assert chain.page_table_ids == (1,) and chain.log.count("table:(1,)") == 1
+    assert model.driver.run is None and chain.log[-1] == "reset"
+    prompt = _prompt(6, 500)
+    out, _ = _prefill(model, prompt, page_table=_row(3))
+    assert int(out[0, 0].argmax()) == fakes._greedy_stream(prompt, 1)[0]
+
+
+def test_paged_warmup_across_a_block_boundary_takes_the_blocks_of_the_last_verify_row(monkeypatch):
+    monkeypatch.setattr(mtp_module, "WARMUP_PROMPT_TOKEN_IDS", tuple(_prompt(PAGED_BLOCK - 2)))
+    model, chain = _paged_model()
+    model.warmup_model_decode(
+        enable_trace=True, kv_cache=None, max_batch_size=1, num_blocks=16, can_sample_on_device=False
+    )
+    assert chain.page_table_ids == (1, 2)
+
+
+def test_paged_table_is_ignored_by_a_flat_chain():
+    model, chain = _model()
+    assert model.paging is None
+    _prefill(model, _prompt(20), page_table=_row(4))
+    assert not any(entry.startswith("table:") for entry in chain.log)
 
 
 # -- batch 2..8: the lane chain under the plugin's calls ---------------------------------------------------------------
@@ -1034,10 +1252,10 @@ def _hybrid_model(monkeypatch, lanes: int = 3, flag: str | None = None):
     return model, device, chain
 
 
-def _hybrid_prefill(model, prompt, slot):
+def _hybrid_prefill(model, prompt, slot, page_table=None):
     return model.prefill_forward(
         tokens=torch.tensor([prompt], dtype=torch.int32),
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         enable_trace=True,
         prompt_lens=[len(prompt)],
@@ -1046,7 +1264,7 @@ def _hybrid_prefill(model, prompt, slot):
     )
 
 
-def _hybrid_verify(model, lanes, row, block, position, num_valid, accepted, remap=None):
+def _hybrid_verify(model, lanes, row, block, position, num_valid, accepted, remap=None, page_table=None):
     tokens = torch.full((lanes, LROWS), PLACEHOLDER, dtype=torch.int32)
     positions = torch.full((lanes, LROWS), -1, dtype=torch.int32)
     valid = torch.zeros(lanes, dtype=torch.int32)
@@ -1061,14 +1279,15 @@ def _hybrid_verify(model, lanes, row, block, position, num_valid, accepted, rema
         num_valid_drafts=valid,
         accepted_counts=counts,
         slot_remap=remap,
+        page_table=page_table,
     )
 
 
-def _hybrid_step(model, lanes, row, committed, position, drafts, accepted):
+def _hybrid_step(model, lanes, row, committed, position, drafts, accepted, page_table=None):
     """One plugin step of the lone request: the verify of ``[committed[-1], *drafts]``, the greedy walk, the proposal."""
 
     block = [committed[-1], *drafts] + [PLACEHOLDER] * (LK - len(drafts))
-    out = _hybrid_verify(model, lanes, row, block, position, len(drafts), accepted)
+    out = _hybrid_verify(model, lanes, row, block, position, len(drafts), accepted, page_table=page_table)
     walked, n_ok = spec_decode.accept_greedy_drafts(
         out.argmax_ids[row : row + 1],
         torch.tensor([drafts + [PLACEHOLDER] * (LK - len(drafts))], dtype=torch.int32),
@@ -1364,3 +1583,280 @@ def test_hybrid_warmup_is_skipped_with_the_flag_off(monkeypatch):
         enable_trace=True, kv_cache=None, max_batch_size=3, num_blocks=4, can_sample_on_device=False
     )
     assert chain.passes == 0 and device.imports == []
+
+
+# -- batch 2..8 on vLLM's paged pools ------------------------------------------------------------------------------------
+
+
+class PagedFakeLanes(HybridLanes):
+    """The lane device with the paged session's protocol: the admission's block ids, the lane page rows and their upload, all
+    logged in ``calls`` next to the pass protocol."""
+
+    def admit(self, lane, ticket, between=None, block_ids=None):
+        self.calls.append(("admit_blocks", lane, list(block_ids)))
+        return super().admit(lane, ticket, between)
+
+    def set_lane_pages(self, lane, block_ids):
+        self.calls.append(("set_pages", lane, list(block_ids)))
+
+    def clear_lane_pages(self, lane):
+        self.calls.append(("clear_pages", lane))
+
+    def sync_page_tables(self, keep=None):
+        self.calls.append(("sync",))
+
+    def capture(self, chain, session):
+        pass
+
+    def summary(self):
+        return {"buckets": (self.lanes,), "dram_growth_bytes_per_bank_by_width": {}}
+
+
+def _paged_lanes_model(monkeypatch, lanes: int = 3, num_blocks: int = 64, hybrid: bool = False):
+    """A lanes-mode adapter opened through ``allocate_kv_cache`` on a fake session and a scripted paged chain."""
+
+    from models.demos.blackhole.qwen38_flash_next.demo import mtp_demo
+    from models.demos.blackhole.qwen38_flash_next.tools import qwen38_lanes_session
+
+    monkeypatch.setattr(fakes, "K", LK)
+    monkeypatch.setattr(sys.modules[__name__], "K", LK)
+    monkeypatch.setenv("QWEN38_VLLM_MTP_K", str(LK))
+    monkeypatch.setenv("QWEN38_MTP_HYBRID_SINGLE", "1" if hybrid else "0")
+    device = PagedFakeLanes(lanes)
+    chain = PagedChain()
+    chain.mtp.drafts = LK
+    opened: list[dict] = []
+
+    def opener(warm_hook, paging=None):
+        opened.append({"warm_hook": warm_hook, "paging": paging})
+        return chain
+
+    monkeypatch.setattr(qwen38_lanes_session, "Qwen38LanesSession", lambda **kwargs: device)
+    monkeypatch.setattr(mtp_demo, "_lanes_warm_hook", lambda *args: None)
+    model = Qwen38MTPForCausalLM(None, allocated_context=ALLOCATED, batch_lanes=lanes, chain_opener=opener)
+    model.allocate_kv_cache((num_blocks, 1, PAGED_BLOCK, 256), torch.bfloat16, 48)
+    model.lane_driver._import_chain_state = lambda lane, position, ple_context: device.imports.append(
+        (lane, position, ple_context)
+    ) or device.sequence.__setitem__(lane, list(model.session.committed))
+    model.opened = opened
+    return model, device, chain
+
+
+def _page_table(model, rows: dict[int, list[int]], height: int | None = None) -> torch.Tensor:
+    table = torch.zeros(height or model.lanes, model.paging.max_blocks, dtype=torch.int32)
+    for row, ids in rows.items():
+        table[row, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+    return table
+
+
+def _paged_prefill(model, prompts: list[list[int]], slots: list[int], table):
+    width = max(len(prompt) for prompt in prompts)
+    tokens = torch.zeros(len(prompts), width, dtype=torch.int32)
+    for i, prompt in enumerate(prompts):
+        tokens[i, : len(prompt)] = torch.tensor(prompt, dtype=torch.int32)
+    return model.prefill_forward(
+        tokens=tokens,
+        page_table=table,
+        kv_cache=None,
+        enable_trace=True,
+        prompt_lens=[len(prompt) for prompt in prompts],
+        start_pos=[0] * len(prompts),
+        empty_slots=slots,
+    )
+
+
+def _paged_verify(model, rows: dict[int, tuple[int, int]], table):
+    """One verify over ``rows`` = {row: (first token, position)}: no drafts, one accepted token."""
+
+    lanes = model.lanes
+    tokens = torch.full((lanes, LROWS), PLACEHOLDER, dtype=torch.int32)
+    positions = torch.full((lanes, LROWS), -1, dtype=torch.int32)
+    for row, (token, position) in rows.items():
+        tokens[row, 0] = token
+        positions[row] = torch.arange(position, position + LROWS, dtype=torch.int32)
+    return model.decode_forward(
+        tokens=tokens,
+        start_pos=positions,
+        spec_mode="argmax_ids",
+        num_valid_drafts=torch.zeros(lanes, dtype=torch.int32),
+        accepted_counts=torch.ones(lanes, dtype=torch.int32),
+        page_table=table,
+    )
+
+
+def _kinds(device, *names):
+    return [call for call in device.calls if call[0] in names]
+
+
+def test_paged_lanes_allocate_builds_the_paging_from_the_vllm_shape_and_opens_the_chain_with_it(monkeypatch):
+    model, device, chain = _paged_lanes_model(monkeypatch, 3, num_blocks=40)
+    (opened,) = model.opened
+    paging = opened["paging"]
+    assert paging is model.paging and model.chain is chain
+    assert (paging.page_size, paging.num_pages) == (PAGED_BLOCK, 40)
+    assert paging.max_blocks == qwen38_vllm.paged_table_width(ALLOCATED, PAGED_BLOCK)
+    assert (model.block_size, model.num_blocks) == (PAGED_BLOCK, 40)
+    assert model.lane_driver.paged and model.lanes_session is device
+
+
+def test_paged_lanes_allocate_refuses_a_bad_shape(monkeypatch, expect_error):
+    from models.demos.blackhole.qwen38_flash_next.tools import qwen38_lanes_session
+
+    monkeypatch.setattr(qwen38_lanes_session, "Qwen38LanesSession", lambda **kwargs: None)
+    model = Qwen38MTPForCausalLM(
+        None, allocated_context=ALLOCATED, batch_lanes=3, chain_opener=lambda hook, paging=None: None
+    )
+    with expect_error(ValueError, "kv_cache_shape must be"):
+        model.allocate_kv_cache((16, 128, 256), torch.bfloat16, 48)
+    with expect_error(ValueError, "num_blocks must be >= 2"):
+        model.allocate_kv_cache((1, 1, PAGED_BLOCK, 256), torch.bfloat16, 48)
+    assert model.chain is None and model.paging is None
+
+
+def test_paged_lanes_max_tokens_follow_the_plain_batch_sizing(monkeypatch):
+    kwargs = dict(max_model_len=32_704, max_num_seqs=4)
+    plain = Qwen38ForCausalLM.get_max_tokens_all_users(**kwargs)
+    assert Qwen38MTPForCausalLM.get_max_tokens_all_users(**kwargs) == plain <= 32_704 * 4
+    assert Qwen38MTPForCausalLM.get_max_tokens_all_users(max_model_len=32_704, max_num_seqs=1) == 32_704
+    monkeypatch.setenv("QWEN38_MAX_TOKENS_ALL_USERS", "5000")
+    assert Qwen38MTPForCausalLM.get_max_tokens_all_users(**kwargs) == 5000
+
+
+def test_paged_lanes_admission_passes_each_rows_block_ids(monkeypatch, expect_error):
+    model, device, chain = _paged_lanes_model(monkeypatch, 3)
+    table = _page_table(model, {0: [5, 6], 1: [9]}, height=2)
+    _paged_prefill(model, [_prompt(200), _prompt(20, 500)], [0, 1], table)
+    assert _kinds(device, "admit_blocks") == [("admit_blocks", 0, [5, 6]), ("admit_blocks", 1, [9])]
+    # a row short of ceil(length / block_size) blocks is refused before any device work
+    before = len(device.calls)
+    short = _page_table(model, {0: [5]}, height=1)
+    with expect_error(ValueError, "needs 2 blocks"):
+        _paged_prefill(model, [_prompt(200)], [2], short)
+    with expect_error(ValueError, "the paged lanes need the plugin's page_table"):
+        _paged_prefill(model, [_prompt(20)], [2], None)
+    assert len(device.calls) == before and not model.batch_failed
+
+
+def test_paged_lanes_each_pass_sets_the_live_rows_clears_the_others_and_syncs_before_the_pass(
+    monkeypatch, expect_error
+):
+    model, device, chain = _paged_lanes_model(monkeypatch, 3)
+    table = _page_table(model, {0: [5, 6], 1: [9]}, height=2)
+    out, _ = _paged_prefill(model, [_prompt(130), _prompt(20, 500)], [0, 1], table)
+    firsts = [int(out[i, 0].argmax()) for i in range(2)]
+    # positions 130 and 20: the last row's block is (P + K) // 128 -> blocks 2 and 1
+    assert (130 + LK) // PAGED_BLOCK + 1 == 2 and (20 + LK) // PAGED_BLOCK + 1 == 1
+    mark = len(device.calls)
+    full = _page_table(model, {0: [5, 6], 1: [9]})
+    _paged_verify(model, {0: (firsts[0], 130), 1: (firsts[1], 20)}, full)
+    tail = device.calls[mark:]
+    names = [call[0] for call in tail]
+    assert tail[:4] == [("set_pages", 0, [5, 6]), ("set_pages", 1, [9]), ("clear_pages", 2), ("sync",)]
+    assert names.index("sync") < names.index("set_active") and device.passes == 1
+    # a row whose last verify row crosses into a block the table lacks is refused, nothing reaches the device
+    before = len(device.calls)
+    thin = _page_table(model, {0: [5, 6], 1: [9]})
+    with expect_error(ValueError, "needs 2 blocks"):
+        _paged_verify(model, {0: (1, 130), 1: (1, 126)}, thin)
+    with expect_error(ValueError, "the paged lanes need the plugin's page_table"):
+        _paged_verify(model, {0: (1, 130)}, None)
+    assert len(device.calls) == before and device.passes == 1
+
+
+def test_paged_lanes_release_zeroes_the_row_and_uploads_it_between_passes(monkeypatch):
+    model, device, chain = _paged_lanes_model(monkeypatch, 3)
+    table = _page_table(model, {0: [5], 1: [9]}, height=2)
+    out, _ = _paged_prefill(model, [_prompt(20), _prompt(20, 500)], [0, 1], table)
+    firsts = [int(out[i, 0].argmax()) for i in range(2)]
+    _paged_verify(model, {0: (firsts[0], 20), 1: (firsts[1], 20)}, _page_table(model, {0: [5], 1: [9]}))
+    mark = len(device.calls)
+    model.release_request(1)
+    assert device.calls[mark:] == [("clear_pages", 1), ("sync",)]
+    assert model.lane_driver.runs[1] is None
+    # the next pass: the live row set, every other lane (the released one too) zero
+    mark = len(device.calls)
+    run = model.lane_driver.runs[0]  # the second pass on the device's own next block (no resync)
+    tokens = torch.full((3, LROWS), PLACEHOLDER, dtype=torch.int32)
+    positions = torch.full((3, LROWS), -1, dtype=torch.int32)
+    tokens[0] = torch.tensor(run.next_tokens, dtype=torch.int32)
+    positions[0] = torch.arange(run.next_position, run.next_position + LROWS, dtype=torch.int32)
+    counts = torch.ones(3, dtype=torch.int32)
+    counts[0] = run.accepted + 1
+    model.decode_forward(
+        tokens=tokens,
+        start_pos=positions,
+        spec_mode="argmax_ids",
+        num_valid_drafts=torch.tensor([LK, 0, 0], dtype=torch.int32),
+        accepted_counts=counts,
+        page_table=_page_table(model, {0: [5]}),
+    )
+    tail = device.calls[mark:]
+    assert tail[:4] == [("set_pages", 0, [5]), ("clear_pages", 1), ("clear_pages", 2), ("sync",)]
+
+
+def test_paged_lanes_hybrid_move_sets_the_chains_blocks_on_the_lane_without_a_kv_copy(monkeypatch):
+    model, device, chain = _paged_lanes_model(monkeypatch, 3, hybrid=True)
+    prompt = _prompt(6)
+    table = _page_table(model, {0: [3, 4]}, height=1)
+    out, _ = _hybrid_prefill(model, prompt, 0, table)
+    assert model.mtp_hybrid_slot == 0 and chain.page_table_ids == (3, 4)
+    committed = [int(out[0, 0].argmax())]
+    full = _page_table(model, {0: [3, 4]})
+    _, new, _ = _hybrid_step(model, 3, 0, committed, len(prompt), [], 1, page_table=full)
+    assert not _kinds(device, "set_pages", "clear_pages") and model.mtp_hybrid_pages == [3, 4]
+    mark = len(device.calls)
+    second = _page_table(model, {0: [7]}, height=1)
+    _hybrid_prefill(model, _prompt(5, 900), 1, second)
+    tail = device.calls[mark:]
+    assert model.mtp_hybrid_slot is None and model.mtp_hybrid_pages is None
+    # state-only import into lane 0 (no admission of that lane), its row the chain's table, then the second admission
+    assert ("admit", 0) not in device.calls and len(device.imports) == 1
+    assert tail[:2] == [("set_pages", 0, [3, 4]), ("sync",)]
+    assert ("admit_blocks", 1, [7]) in tail and ("admit_blocks", 0, [3, 4]) not in device.calls
+
+
+def test_paged_lanes_hybrid_pass_writes_the_chain_table_of_its_row_and_no_lane_rows(monkeypatch, expect_error):
+    model, device, chain = _paged_lanes_model(monkeypatch, 3, hybrid=True)
+    prompt = _prompt(6)
+    out, _ = _hybrid_prefill(model, prompt, 1, _page_table(model, {0: [3]}, height=1))
+    committed = [int(out[0, 0].argmax())]
+    with expect_error(ValueError, "the paged lanes need the plugin's page_table"):
+        _hybrid_step(model, 3, 1, committed, len(prompt), [], 1)
+    _hybrid_step(model, 3, 1, committed, len(prompt), [], 1, page_table=_page_table(model, {1: [8]}))
+    assert chain.page_table_ids == (8,) and not _kinds(device, "set_pages", "clear_pages", "sync")
+    model.release_request(1)  # the chain's request leaves: no lane row to clear
+    assert not _kinds(device, "clear_pages", "sync") and model.mtp_hybrid_pages is None
+
+
+def test_paged_lanes_warmup_uses_distinct_real_blocks_per_lane(monkeypatch):
+    monkeypatch.setattr(mtp_module, "WARMUP_PROMPT_TOKEN_IDS", tuple(_prompt(126)))
+    model, device, chain = _paged_lanes_model(monkeypatch, 3, hybrid=True)
+    model.warmup_model_decode(
+        enable_trace=True, kv_cache=None, max_batch_size=3, num_blocks=64, can_sample_on_device=False
+    )
+    # 126 + 1 + K = 130 rows at most: 2 blocks per warm lane, 1.., distinct per lane, never block 0
+    assert _kinds(device, "admit_blocks")[:2] == [("admit_blocks", 0, [1, 2]), ("admit_blocks", 1, [3, 4])]
+    sets = {(call[1], tuple(call[2])) for call in _kinds(device, "set_pages")}
+    assert {(0, (1, 2)), (1, (3, 4))} <= sets and all(min(ids) >= 1 for _, ids in sets)
+    # the hybrid warm request: chain table of blocks 1.., then moved to lane 0 on them
+    assert chain.page_table_ids[0] == 1 and (0, (1, 2)) in sets
+    # a fresh server: every lane row zeroed by the releases, the hybrid state gone
+    assert model.lane_driver.holders == [] and model.mtp_hybrid_slot is None and not model.batch_failed
+    assert _kinds(device, "clear_pages", "sync")
+
+
+def test_paged_lanes_warmup_needs_enough_blocks(monkeypatch, expect_error):
+    monkeypatch.setattr(mtp_module, "WARMUP_PROMPT_TOKEN_IDS", tuple(_prompt(126)))
+    model, device, chain = _paged_lanes_model(monkeypatch, 3, num_blocks=4)
+    with expect_error(ValueError, "the warm-up needs 5 blocks"):
+        model.warmup_model_decode(
+            enable_trace=True, kv_cache=None, max_batch_size=3, num_blocks=4, can_sample_on_device=False
+        )
+
+
+def test_unpaged_lanes_make_no_page_calls(monkeypatch):
+    model, device, chain = _hybrid_model(monkeypatch, 3)
+    assert model.paging is None and model.lane_driver.paged is False
+    _run_hybrid_steps(model, 3, 0, _prompt(6), 2)
+    model.release_request(0)
+    assert not hasattr(device, "set_lane_pages")

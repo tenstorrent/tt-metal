@@ -13,6 +13,9 @@
 // constant k + 1, the commit form's accepted count a*: one program for both), clamped to 32. Compile-time args:
 // TensorAccessorArgs cache, v, position, rows. Runtime args: 0 cache, 1 v, 2 position, 3 rows addresses, 4 first tile
 // of the value in v, 5 single_row.
+// PAGED (compile-time define, the non-fast read-back only; the fast path never reads the cache): + TensorAccessorArgs
+// page table; + runtime args 6 page table address, 7 shift, 8 bs; the current block is read from the pool rows
+// pt[block >> shift] * bs + (block & (bs - 1)) + k (rows_kv_cbs.h).
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -38,6 +41,12 @@ void kernel_main() {
     const auto v = TensorAccessor(v_args, v_addr);
     const auto pos = TensorAccessor(pos_args, pos_addr);
     const auto rows_page = TensorAccessor(rows_args, rows_addr);
+#if defined(PAGED) && !defined(QWEN38_ROWS_KV_FAST)
+    constexpr auto pt_args = TensorAccessorArgs<rows_args.next_compile_time_args_offset()>();
+    const auto pt = TensorAccessor(pt_args, get_arg_val<uint32_t>(6));
+    const uint32_t shift = get_arg_val<uint32_t>(7);
+    const uint32_t bs = get_arg_val<uint32_t>(8);
+#endif
     Semaphore<> sem_krot(SEM_KROT), sem_knorm(SEM_KNORM);
 
     // the tile's first position P and the row count R (uint32 [1, 1, 1, 1] each) and the value tiles into pack slots
@@ -116,10 +125,19 @@ void kernel_main() {
     // the current block, read back as the chain's kv row lookup does
     cb_reserve_back(CB_BLOCK, BLOCK_PAGES);
     const uint32_t block_l1 = get_write_ptr(CB_BLOCK);
+#ifdef PAGED
+    const uint32_t pt_l1 = pt_window_l1(get_write_ptr(CB_KV_PT), 0);
+    pt_window_read(pt, block, shift, pt_l1);
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    const uint32_t base = pt_base_row(pt_l1, block, shift, bs);
+#else
+    const uint32_t base = block;
+#endif
     {
         FUSED_ZONE("fz_qr_kv_block");
         for (uint32_t k = 0; k < tile_rows::TILE_ROWS; ++k) {
-            noc_async_read(cache.get_noc_addr(block + k, 0), block_l1 + k * QUERY_ROW_BYTES, QUERY_ROW_BYTES);
+            noc_async_read(cache.get_noc_addr(base + k, 0), block_l1 + k * QUERY_ROW_BYTES, QUERY_ROW_BYTES);
         }
         noc_async_read_barrier();
         invalidate_l1_cache();

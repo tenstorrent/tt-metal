@@ -101,11 +101,11 @@ class FakeMTPChain:
     def write_mtp_next_token(self, next_token_id: int | None) -> None:
         self.mtp.step_written = True
 
-    def execute_head(self, residue: int) -> None:
+    def execute_head(self, residue: int, sampled: bool = False) -> None:
         self.log.append(f"head:{residue}")
         self.inputs.append(self.row)
 
-    def execute_tail(self, residue: int) -> None:
+    def execute_tail(self, residue: int, sampled: bool = False) -> None:
         self.log.append(f"tail:{residue}")
         self.mtp.step_written = False
         self.row = _argmax(self.inputs, eos_at=self.eos_at)
@@ -234,7 +234,7 @@ class FakeSampling:
         self.chain.log.append("read_row")
         return Qwen38CandidateRow.emulate(_logits_for(self.chain.inputs, eos_at=self.chain.eos_at))
 
-    def read_full_logits(self, residue: int) -> torch.Tensor:
+    def read_full_logits(self, residue: int, *, sampled: bool = False) -> torch.Tensor:
         self.chain.log.append(f"full_gather:{residue}")
         return _logits_for(self.chain.inputs, eos_at=self.chain.eos_at).to(torch.float32)
 

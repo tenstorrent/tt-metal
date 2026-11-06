@@ -95,10 +95,12 @@ PACK_TRACE_BYTES = {128: 74 * PACK_MIB, 256: 63 * PACK_MIB, 512: 62 * PACK_MIB, 
 PACK_TAIL_ROW_BYTES = 128 * 2  # one compressed index row: INDEX_HEAD_DIM bf16
 
 
-def prefill_pack_enabled(environ=None, lanes: int | None = None) -> bool:
+def prefill_pack_enabled(environ=None, lanes: int | None = None, shared_pools: bool = False) -> bool:
     """``QWEN38_PREFILL_PACK``: "1" = on, "0" = off, anything else is refused.  Unset: on with at least
     ``PACK_DEFAULT_MIN_LANES`` ``lanes`` (the vLLM batch adapter passes its lane count), off without ``lanes`` (the P1
-    drivers and text_demo)."""
+    drivers and text_demo).  ``shared_pools`` (the lanes sit on the chain's page pools) does not change the switch: the
+    pack then writes the pools through the chain's flat pack page-table row (buckets of at least one block only, see
+    :func:`pack_buckets_for_block`)."""
 
     value = (os.environ if environ is None else environ).get(PREFILL_PACK_VARIABLE)
     if value is None:
@@ -127,12 +129,19 @@ def pack_buckets_from_env(environ=None, lanes: int | None = None) -> tuple[int, 
     return tuple(sorted(set(values)))
 
 
-def pack_dram_bytes(buckets: Sequence[int], context: int = 32768) -> int:
-    """Per device DRAM the pack holds: its persistent state, the bucket traces and the landing's compressed zero tails at
-    the allocated ``context`` (pool admission counts it)."""
+def pack_buckets_for_block(buckets: Sequence[int], block_size: int) -> tuple[int, ...]:
+    """The pack buckets a paged pack can run: a user's rows must start on a page boundary, so ``rows >= block_size``
+    (the buckets are powers of two, as the block size)."""
+
+    return tuple(rows for rows in buckets if rows >= block_size)
+
+
+def pack_dram_bytes(buckets: Sequence[int], context: int = 32768, shared_pools: bool = False) -> int:
+    """Per device DRAM the pack holds: its persistent state, the bucket traces and, without shared pools, the landing's
+    compressed zero tails at the allocated ``context`` (pool admission counts it)."""
 
     launches = max(len(pack_module.pack_bucket(rows).launches) for rows in buckets)
-    tails = sum((context // 4 - rows // 4) * PACK_TAIL_ROW_BYTES for rows in buckets)
+    tails = 0 if shared_pools else sum((context // 4 - rows // 4) * PACK_TAIL_ROW_BYTES for rows in buckets)
     return PACK_FIXED_BYTES + launches * PACK_LAUNCH_BYTES + sum(PACK_TRACE_BYTES[rows] for rows in buckets) + tails
 
 
@@ -280,6 +289,7 @@ class Qwen38PlainLaneDecoder:
         normalizer: bool = False,
         row_read: bool = False,
         buckets: Sequence[int] | None = None,
+        shared_pools: bool = False,
     ) -> None:
         self.lanes = lanes
         self.buckets: tuple[int, ...] = (lanes,) if buckets is None else tuple(sorted({int(r) for r in buckets}))
@@ -291,6 +301,12 @@ class Qwen38PlainLaneDecoder:
         self.bucket_steps: dict[int, int] = {r: 0 for r in self.buckets}
         # QSA lane indexer form, "wide" or "per_lane"; the argument beats QWEN38_LANE_INDEXER_FORM (default "wide")
         self.indexer_form = indexer_form or os.environ.get("QWEN38_LANE_INDEXER_FORM", "wide")
+        # the lanes' QSA K/V and index rows live in the chain's own pools (taken from the chain in ``prepare``): a request
+        # the chain prefilled into its vLLM blocks is already in them, so the import copies only the fixed-size states
+        self._shared_pools = bool(shared_pools)
+        self.pools: dict[Any, Any] | None = None
+        if shared_pools and paging is None:
+            raise ValueError("shared pools need paging (the lanes' page table)")
         self.paging = paging
         self.decode_steps = decode_steps
         self.allocator = None if paging is None else Qwen38PageAllocator(paging.num_pages, seed)
@@ -318,8 +334,17 @@ class Qwen38PlainLaneDecoder:
         self.warm_logits_gather = False
         # P3d-3: the multi-user packed prefill; the argument beats QWEN38_PREFILL_PACK (unset: off, the P1 drivers; the
         # vLLM adapter passes its own default, on with at least PACK_DEFAULT_MIN_LANES lanes)
-        self.pack_enabled = prefill_pack_enabled() if pack is None else pack
+        self.pack_enabled = prefill_pack_enabled(shared_pools=self.shared_pools) if pack is None else pack
         self.pack_buckets: tuple[int, ...] = pack_buckets_from_env(lanes=lanes) if self.pack_enabled else ()
+        if self.pack_enabled and self.shared_pools:
+            kept = pack_buckets_for_block(self.pack_buckets, paging.page_size)
+            if kept != self.pack_buckets:
+                logger.info(
+                    f"prefill pack buckets {self.pack_buckets} -> {kept}: shared pools need rows per user >= the "
+                    f"block size {paging.page_size}"
+                )
+            self.pack_buckets = kept
+            self.pack_enabled = bool(kept)
         if self.pack_enabled:
             pack_plan.pack_force_enabled()  # QWEN38_PACK_FORCE is read per prefill call: refuse a bad value at start
         # P3g-1: the candidate rows of every lane (``sampling_candidates`` over the lane logits, ``[1,1,lanes,256]`` fp32
@@ -347,6 +372,10 @@ class Qwen38PlainLaneDecoder:
         self.pack_dram: dict[str, Any] = {}
         self.last_pack: dict[str, Any] = {}
 
+    @property
+    def shared_pools(self) -> bool:
+        return self._shared_pools
+
     # -- the two build phases ----------------------------------------------------------------------
 
     def prepare(self, chain: Any) -> None:
@@ -360,10 +389,22 @@ class Qwen38PlainLaneDecoder:
         lanes = self.lanes
         started = time.perf_counter()
         paging = self.paging
-        self.ls = ls = model.allocate_lane_state(lanes, indexer_form=self.indexer_form, residue_free=True, paged=paging)
+        extra = {}
+        if self.shared_pools:
+            if chain.paging != paging:
+                raise ValueError(f"shared pools: the chain's paging {chain.paging} differs from the decoder's {paging}")
+            self.pools = chain.pools
+            extra = {"pools": self.pools}
+        self.ls = ls = model.allocate_lane_state(
+            lanes, indexer_form=self.indexer_form, residue_free=True, paged=paging, **extra
+        )
         full = self.bucket_sets[lanes]
         full.ls = ls
-        gl = model.generic_lane_layout(chain.state, exclude_kv=paging is not None)
+        gl = (
+            model.generic_lane_layout(chain.state, exclude_kv=True, exclude_compressed=True)
+            if self.shared_pools
+            else model.generic_lane_layout(chain.state, exclude_kv=paging is not None)
+        )
         ll = model.lane_layout(ls)
         self.pager_g = Qwen38TTNNLanePager(mesh, model.mesh_contract, gl)
         self.pager_l = Qwen38TTNNLanePager(mesh, model.mesh_contract, ll, buffers=self.pager_g)
@@ -782,7 +823,7 @@ class Qwen38PlainLaneDecoder:
             before_state=before,
             state_bytes=before - after_state,
             lander_bytes=after_state - after_lander,
-            estimate_bytes=pack_dram_bytes(self.pack_buckets, int(model.allocated_context)),
+            estimate_bytes=pack_dram_bytes(self.pack_buckets, int(model.allocated_context), self.shared_pools),
         )
         self.timing["pack_prepare_s"] = time.perf_counter() - started
         logger.info(
@@ -895,27 +936,47 @@ class Qwen38PlainLaneDecoder:
         vm, model, ls = self.vm, self.model, self.ls
         length = len(prompt_ids)
         started = time.perf_counter()
-        out, _ = vm.prefill_forward(
-            tokens=torch.tensor([list(prompt_ids)], dtype=torch.int32),
-            page_table=None,
-            kv_cache=None,
-            enable_trace=True,
-            prompt_lens=[length],
-            start_pos=[0],
-            empty_slots=[0],
-            sampling_params=greedy_sampling_params(),
-        )
+        preallocated = False
+        if self.shared_pools:  # the chain's prefill writes its K/V and index rows through the lane's blocks
+            if self.page_rows[lane]:
+                raise RuntimeError(f"lane {lane} still holds pages: release_lane first")
+            if page_count is None:
+                page_count = lane_page_count(length, self.decode_steps, self.paging.page_size)
+            self.page_rows[lane] = self.allocator.allocate(page_count)
+            preallocated = True
+            lane_ids = list(self.page_rows[lane])
+            page_table = torch.zeros((1, self.paging.max_blocks), dtype=torch.int32)
+            page_table[0, : len(lane_ids)] = torch.tensor(lane_ids, dtype=torch.int32)
+        else:
+            page_table = None
+        try:
+            out, _ = vm.prefill_forward(
+                tokens=torch.tensor([list(prompt_ids)], dtype=torch.int32),
+                page_table=page_table,
+                kv_cache=None,
+                enable_trace=True,
+                prompt_lens=[length],
+                start_pos=[0],
+                empty_slots=[0],
+                sampling_params=greedy_sampling_params(),
+            )
+        except BaseException:
+            if preallocated:
+                self.allocator.release(self.page_rows[lane])
+                self.page_rows[lane] = []
+            raise
         first_token = int(out.reshape(-1)[0])
         context = vm.slot.ple_context
         if len(vm.slot.committed) != length:
             raise RuntimeError(f"adapter committed {len(vm.slot.committed)} tokens, expected {length}")
         prefilled = time.perf_counter()
         if self.paging is not None:
-            if self.page_rows[lane]:
-                raise RuntimeError(f"lane {lane} still holds pages: release_lane first")
-            if page_count is None:
-                page_count = lane_page_count(length, self.decode_steps, self.paging.page_size)
-            self.page_rows[lane] = self.allocator.allocate(page_count)
+            if not preallocated:
+                if self.page_rows[lane]:
+                    raise RuntimeError(f"lane {lane} still holds pages: release_lane first")
+                if page_count is None:
+                    page_count = lane_page_count(length, self.decode_steps, self.paging.page_size)
+                self.page_rows[lane] = self.allocator.allocate(page_count)
             model.write_lane_page_table(ls, page_table_rows(self.page_rows, self.lanes))
             self.page_table_dirty = False  # the whole table, other lanes' pending changes included
         self.move_into_lane(lane, length)
@@ -977,6 +1038,11 @@ class Qwen38PlainLaneDecoder:
                     self.set_page_row(lane, pages[index])
             model.write_lane_page_table(ls, page_table_rows(self.page_rows, self.lanes))
             self.page_table_dirty = False  # the whole table, other lanes' pending changes included
+            if self.shared_pools:  # the pack's QSA writes go through the chain table: user u's blocks at its slab pages
+                users_blocks: list[list[int]] = [[] for _ in prompts]
+                for lane, u in zip(lanes, users):
+                    users_blocks[u] = list(self.page_rows[lane])[: rows_per_user // self.paging.page_size]
+                model.write_pack_page_table(self.chain.state, users_blocks, rows_per_user)
             trace_id, output = self.pack_traces[rows_per_user]
             TraceAllocationTracker.verify_before_replay(mesh, trace_id)
             timing: dict[str, float] = {}
@@ -1035,7 +1101,8 @@ class Qwen38PlainLaneDecoder:
         model, ls = self.model, self.ls
         if self.importer is not None and not self.host_import:
             model.admit_lane_position(ls, lane, length, rope_shift=0)
-            model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
+            if not self.shared_pools:  # shared pools: the chain's prefill already wrote the K/V and index rows
+                model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
             self.importer.import_lane(lane, length)
             return
         slot = self.pool.slots[0]
@@ -1043,7 +1110,9 @@ class Qwen38PlainLaneDecoder:
         self.pager_g.rotate_ring_canonical(slot, length)
         slot.position = length
         model.admit_lane(ls, lane, length, rope_shift=0)
-        if self.paging is not None:
+        if (
+            self.paging is not None and not self.shared_pools
+        ):  # shared pools: the host pager moves the fixed-size states only
             model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
         self.pager_l.readmit(slot, lane, position_row=None)
 

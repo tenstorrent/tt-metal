@@ -8,8 +8,8 @@ A lone plain greedy request decodes on the B=1 chain; a second request's prefill
 
 (a) request A alone on the chain (never demoted) for k_max + N steps gives T_ref.  For each k: a fresh run, A on the chain
     for k steps, request B prefilled (demotes A), then A and B decode together for N steps.  A's tokens equal T_ref bitwise,
-    B's tokens equal B's own lone chain reference.  The cases cover (P + k) mod 4 = 0..3 and (P + k) mod 64 = 0 (the next
-    position needs a new block, block size 64).
+    B's tokens equal B's own lone chain reference.  The cases cover (P + k) mod 4 = 0..3 and (P + k) mod 128 = 0 (the next
+    position needs a new block, block size 128).
 (b) control, knob off: A through the old path (prefill, import, lane decode) equals T_ref (lane = chain).
 (d) the real server's prefill passes ``sampling_params=None`` (device sampling is decode only) and returns the logits: per
     ISL, A alone on the chain from a logits prefill (the host argmax is the first token) then greedy decode equals T_ref.
@@ -48,13 +48,13 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import greedy_ba
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
 
 LANES = 8
-BLOCK = 64
+BLOCK = 128
 NEW_TOKENS = 48  # decode steps after the demote
 B_LENGTH = 200  # the second request's prompt
 TIMED_STEPS = 40
 CASES = {  # ISL -> the chain steps k before the second request arrives
-    128: [0, 1, 2, 3, 61, 64],  # P + k mod 4 = 0, 1, 2, 3, 1, 0; 128 + 64 = 192 = 3 * 64
-    1000: [1, 3, 24, 61],  # 1000 + 24 = 1024 = 16 * 64
+    128: [0, 1, 2, 3, 61, 64],  # P + k mod 4 = 0, 1, 2, 3, 1, 0; 128 + 0 starts block 2
+    1000: [1, 3, 24, 61],  # 1000 + 24 = 1024 = 8 * 128
 }
 LONE_STEPS = max(max(ks) for ks in CASES.values()) + NEW_TOKENS
 
@@ -238,7 +238,7 @@ def test_hybrid_import(mesh_device, monkeypatch) -> None:
 
             for k in ks:
                 a_tokens, b_tokens = run_demoted(client, prompt_a, prompt_b, k)
-                logger.info(f"ISL {isl} k={k} (P+k)%4={(isl + k) % 4} (P+k)%64={(isl + k) % 64}")
+                logger.info(f"ISL {isl} k={k} (P+k)%4={(isl + k) % 4} (P+k)%128={(isl + k) % 128}")
                 if a_tokens != reference[: k + 1 + NEW_TOKENS]:
                     first = next(i for i, (x, y) in enumerate(zip(a_tokens, reference)) if x != y)
                     failures.append(f"ISL {isl} k={k}: A diverges from the chain reference at token {first}")

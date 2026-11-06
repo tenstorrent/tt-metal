@@ -96,7 +96,13 @@ UNDECLARED: dict[tuple[str, str], str] = {
     ): "the two-core router tail (router_tail_sc_into, a test and bench entry): its caller stamps like router_tail's",
     ("sampler_tail", '"sample"'): "the token is read back to the host",
     ("sparse_sdpa_tiled", '"flash"'): "the slab attention's output is consumed by the out-projection on the same die",
+    ("index_page_fill", '"fill"'): "the pool is written in place on the same die (prefill's compressed index rows)",
     ("kv_page_scatter", '"scatter_rows"'): "the pool is written in place on the same die (the prompt's KV hand-over)",
+    ("pool_blocks", '"copy_blocks"'): "the pools are written in place on the same die (block copy and zero-fill)",
+    (
+        "pool_blocks",
+        '"state_to_block" if to_block else "block_to_state"',
+    ): "the pool block or the state tensor is written in place on the same die",
     ("untilize_rows", '"rows"'): "the untilized rows are consumed on the same die",
 }
 

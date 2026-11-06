@@ -486,8 +486,9 @@ def test_generic_body_has_no_host_ints_and_a_fixed_op_sequence() -> None:
     assert "ttnn.to_layout(state.kv_staging, ttnn.ROW_MAJOR_LAYOUT" in kv
     update = kv.split("update_padded_kv_cache(", 1)[1].split("\n        )", 1)[0]
     assert re.sub(r"\s+|#[^\n]*", "", update).startswith(
-        "state.packed_kv_cache,stage_row_major,self.slot_zero,position.kv_block_start,0,1,STAGING_AXIS,"
+        "state.packed_kv_cache,stage_row_major,self.slot_zero,row_start,0,1,STAGING_AXIS,"
     )
+    assert "row_start,owned_starts=self._kv_write_row_start(state,position)" in re.sub(r"\s+", "", kv)
 
     ring = sources["_write_compressed_index_generic"]
     assert re.findall(r"\bttnn\.(?:experimental\.)?(\w+)\(", ring) == [
@@ -518,7 +519,7 @@ def test_generic_body_has_no_host_ints_and_a_fixed_op_sequence() -> None:
         "self._index_projection(full_hidden, cos, sin)",
         "self._write_compressed_index_generic(state, raw_key, position, block_start_cos, block_start_sin)",
         "self._score_blocks_generic(index_query, state, position)",
-        "self._materialize_row_generic(masked_scores, position)",
+        "self._materialize_row_generic(masked_scores, position, state)",
         "self._main_projection(full_hidden, cos, sin)",
         "self._write_packed_kv_generic(state, key, value, position)",
         "self._sparse_value_attention(query, gate, sparse_indices, state)",
@@ -538,13 +539,14 @@ def test_generic_state_is_fixed_address_with_tile_staging_and_in_place_reset() -
         in allocate
     )
     assert "raw_key_ring=self._allocate_replicated_tile_zeros((1, 1, CACHE_WRITE_ROWS, INDEX_HEAD_DIM))" in allocate
-    assert (
-        "layout=ttnn.ROW_MAJOR_LAYOUT"
-        in allocate.split("packed_kv_cache=", 1)[1].split("compressed_index_cache=", 1)[0]
-    )
+    unpaged, paged = allocate.split("if paging is None:", 1)[1].split("else:", 1)
+    paged = paged.split("epoch = self._next_epoch", 1)[0]
+    assert "packed_kv = self._allocate_pair_grouped(" in unpaged and "layout=ttnn.ROW_MAJOR_LAYOUT" in unpaged
     # One tile past the resident blocks: the indexer's fixed query window, never written (block_index < allocated).
     compressed = "(1, 1, self.allocated_compressed_blocks + ttnn.TILE_SIZE, INDEX_HEAD_DIM)"
-    assert compressed in allocate.split("compressed_index_cache=", 1)[1].split("kv_staging=", 1)[0]
+    assert "compressed = self._allocate_replicated_tile_zeros(" in unpaged and compressed in unpaged
+    assert "packed_kv = pools.kv" in paged and "compressed = pools.index" in paged
+    assert "packed_kv_cache=packed_kv" in allocate and "compressed_index_cache=compressed" in allocate
     assert compressed in inspect.getsource(Qwen38TTNNQSA._validate_generic_state)
     reset = inspect.getsource(Qwen38TTNNQSA.reset_generic_state_inplace)
     assert "ttnn.fill(tensor, 0.0, output_tensor=tensor)" in reset
@@ -570,6 +572,8 @@ def test_generic_state_is_fixed_address_with_tile_staging_and_in_place_reset() -
         "compressed_index_cache",
         "kv_staging",
         "raw_key_ring",
+        "paging",
+        "page_table",
     )
     assert "self._live_generic_epochs" in inspect.getsource(Qwen38TTNNQSA.deallocate)
 

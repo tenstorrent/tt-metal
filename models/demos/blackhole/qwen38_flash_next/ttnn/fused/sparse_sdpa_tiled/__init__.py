@@ -64,6 +64,11 @@ CB_CTRL, CB_KREQ, CB_KACK, CB_TILECTL, CB_IDS, CB_POS, CB_BITMAP, CB_SEEDMAP, CB
     18, 29
 )
 CB_BAND_TEMPLATE = 29
+CB_PT = 30  # the paged form's page-table row (one CB, absent from the unpaged program)
+PAGED_DEFINE = ("PAGED", "1")  # the kernels' compile-time flag; the unpaged programs are built without it
+PT_ALIGN_SLACK = 64  # L1 bytes added to the page-table row so the kernels can align it to 64
+MIN_PAGE_SIZE = 128
+MAX_PT_ENTRIES = 2048
 
 
 @dataclass(frozen=True)
@@ -132,9 +137,36 @@ def _shape(tensor) -> tuple[int, ...]:
     return tuple(int(v) for v in tensor.shape)
 
 
-def geometry(q, kv, block_ids, positions, config: Config = DEFAULT) -> dict[str, int]:
+def page_table_width(page_table, page_size: int, row: int = 0) -> int:
+    """Validate the page table (int32 ROW_MAJOR [1, 1, R, W], W a multiple of 8 and at most 2048, row ``row`` inside
+    it) and ``page_size`` (a power of two >= 128) and return W."""
+
+    if page_size < MIN_PAGE_SIZE or page_size & (page_size - 1):
+        raise ValueError(f"page_size must be a power of two >= {MIN_PAGE_SIZE}, got {page_size}")
+    shape = _shape(page_table)
+    if (
+        len(shape) != 4
+        or shape[:2] != (1, 1)
+        or shape[3] % 8
+        or shape[3] > MAX_PT_ENTRIES
+        or page_table.dtype != ttnn.int32
+        or page_table.layout != ttnn.ROW_MAJOR_LAYOUT
+    ):
+        raise ValueError(
+            f"page_table must be int32 ROW_MAJOR [1, 1, R, W] with W a multiple of 8 up to {MAX_PT_ENTRIES}, got "
+            f"{page_table.layout} {page_table.dtype} {shape}"
+        )
+    if not 0 <= row < shape[2]:
+        raise ValueError(f"page_table_row {row} is outside the {shape[2]} page-table rows")
+    return shape[3]
+
+
+def geometry(
+    q, kv, block_ids, positions, config: Config = DEFAULT, page_table=None, page_size: int = 0, page_table_row: int = 0
+) -> dict[str, int]:
     """The program's integer geometry from the tensors; raises on any shape, dtype or layout the kernels were not
-    written for (``admits`` is this check as a predicate)."""
+    written for (``admits`` is this check as a predicate).  With ``page_table`` (the paged form) ``kv`` is the K/V
+    pool ``[1, 1, NB * page_size, W]`` and the logical cache length T is ``page_table`` width x ``page_size``."""
 
     qs, kvs, ids_s, ps = _shape(q), _shape(kv), _shape(block_ids), _shape(positions)
     if len(qs) != 4 or qs[0] != 1 or q.dtype != BF16 or q.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -152,10 +184,16 @@ def geometry(q, kv, block_ids, positions, config: Config = DEFAULT) -> dict[str,
             f"positions must be [1, 1, 1, {S}] uint32 ROW_MAJOR, got {positions.layout} {positions.dtype} {ps}"
         )
     IDS = ids_s[3]
-    return _geometry_of(H, S, T, W, Dq, IDS, config)
+    pt_w = 0
+    if page_table is not None:
+        pt_w = page_table_width(page_table, page_size, page_table_row)
+        if T % page_size:
+            raise ValueError(f"the K/V pool's {T} rows must be whole pages of {page_size}")
+        T = pt_w * page_size
+    return _geometry_of(H, S, T, W, Dq, IDS, config, pt_w)
 
 
-def _geometry_of(H: int, S: int, T: int, W: int, Dq: int, IDS: int, config: Config) -> dict[str, int]:
+def _geometry_of(H: int, S: int, T: int, W: int, Dq: int, IDS: int, config: Config, pt_w: int = 0) -> dict[str, int]:
     TQ, CB, BT = config.tile_queries, config.chunk_blocks, config.block_tokens
     if not 1 <= TQ <= 32 or (TQ * H) % TILE:
         raise ValueError(f"tile_queries {TQ} x {H} heads must be whole tile rows (a multiple of {TILE}) with TQ <= 32")
@@ -204,6 +242,7 @@ def _geometry_of(H: int, S: int, T: int, W: int, Dq: int, IDS: int, config: Conf
         "U_max": config.union_max(IDS),
         "num_tiles": S // TQ,
         "qsb": config.query_subblock(Sqt),
+        "pt_w": pt_w,
     }
 
 
@@ -254,11 +293,13 @@ def config_for_grid(S: int, cores: int, base: Config = DEFAULT, heads: int | Non
     return replace(base, tile_queries=32, chunk_blocks=min(base.chunk_blocks, 32))
 
 
-def admits(q, kv, block_ids, positions, *, config: Config = DEFAULT, **_ignored) -> bool:
+def admits(
+    q, kv, block_ids, positions, *, config: Config = DEFAULT, page_table=None, page_size: int = 0, **_ignored
+) -> bool:
     """The geometry contract on the tensors plus the L1 budget (what ``build`` would refuse)."""
 
     try:
-        g = geometry(q, kv, block_ids, positions, config)
+        g = geometry(q, kv, block_ids, positions, config, page_table, page_size)
     except (ValueError, AttributeError, TypeError):
         return False
     return l1_bytes(g, config) <= L1_BUDGET_BYTES
@@ -307,6 +348,7 @@ def cb_table(g: dict[str, int], config: Config) -> list[tuple[int, Any, int, int
         (CB_RANK, U32, aligned(g["words"] * 2), 1),
         (CB_UNION, U32, g["U_max"] * 4, 1),
         (CB_MEMBER, U32, g["U_max"] * 4, 1),
+        *([(CB_PT, U32, g["pt_w"] * 4 + PT_ALIGN_SLACK, 1)] if g["pt_w"] else []),
     ]
 
 
@@ -314,12 +356,26 @@ def l1_bytes(g: dict[str, int], config: Config) -> int:
     return sum(page * pages for _, _, page, pages in cb_table(g, config))
 
 
-def build(q, kv, block_ids, positions, out, *, scale: float, config: Config = DEFAULT):
+def build(
+    q,
+    kv,
+    block_ids,
+    positions,
+    out,
+    *,
+    scale: float,
+    config: Config = DEFAULT,
+    page_table=None,
+    page_size: int = 0,
+    page_table_row: int = 0,
+):
     """The program descriptor over the compute grid (tiles split contiguously, several per core when the grid is
     smaller than the tile count) and the io list; ``out`` is the pre-allocated ``[1, H, S, v_dim]`` bf16 ROW_MAJOR
-    output."""
+    output.  With ``page_table`` (int32 ROW_MAJOR ``[1, 1, R, W]``) and ``page_size`` (the PAGED program) ``kv`` is
+    the K/V pool and the K/V row of logical token t is ``page_table[page_table_row][t >> s] * page_size + (t &
+    (page_size - 1))``; the bitmap, the union, the bands and the positions stay logical."""
 
-    g = geometry(q, kv, block_ids, positions, config)
+    g = geometry(q, kv, block_ids, positions, config, page_table, page_size, page_table_row)
     if _shape(out) != (1, g["H"], g["S"], config.v_dim) or out.dtype != BF16 or out.layout != ttnn.ROW_MAJOR_LAYOUT:
         raise ValueError(
             f"out must be [1, {g['H']}, {g['S']}, {config.v_dim}] bf16 ROW_MAJOR, got {out.layout} {out.dtype} {_shape(out)}"
@@ -363,6 +419,7 @@ def build(q, kv, block_ids, positions, out, *, scale: float, config: Config = DE
         "CB_KREQ": CB_KREQ,
         "CB_KACK": CB_KACK,
         "CB_TILECTL": CB_TILECTL,
+        "CB_PT": CB_PT,
     }
     writer_named = {
         **shared,
@@ -381,6 +438,7 @@ def build(q, kv, block_ids, positions, out, *, scale: float, config: Config = DE
         "CB_KREQ": CB_KREQ,
         "CB_KACK": CB_KACK,
         "CB_TILECTL": CB_TILECTL,
+        "CB_PT": CB_PT,
     }
     compute_named = {
         "TQ": config.tile_queries,
@@ -422,14 +480,27 @@ def build(q, kv, block_ids, positions, out, *, scale: float, config: Config = DE
     ]
     writer_cta = [*fp.accessor_args(out), *fp.accessor_args(kv)]
     addresses = (q.buffer_address(), kv.buffer_address(), block_ids.buffer_address(), positions.buffer_address())
+    paged_args, defines = [], []
+    if page_table is not None:
+        # PAGE_SIZE keys the program on the page size (the kernels take shift and mask from it at compile time)
+        defines = [PAGED_DEFINE, ("PAGE_SIZE", str(page_size))]
+        reader_cta += fp.accessor_args(page_table)
+        writer_cta += fp.accessor_args(page_table)
+        paged_args = [page_table.buffer_address(), page_table_row, g["pt_w"]]
     reader = fp.reader_kernel(
-        READER, cores, reader_cta, [(w.core, [*addresses, w.start, w.count]) for w in work], named=reader_named
+        READER,
+        cores,
+        reader_cta,
+        [(w.core, [*addresses, w.start, w.count, *paged_args]) for w in work],
+        defines=defines,
+        named=reader_named,
     )
     writer = fp.writer_kernel(
         WRITER,
         cores,
         writer_cta,
-        [(w.core, [out.buffer_address(), kv.buffer_address(), w.start, w.count]) for w in work],
+        [(w.core, [out.buffer_address(), kv.buffer_address(), w.start, w.count, *paged_args]) for w in work],
+        defines=defines,
         named=writer_named,
     )
     compute = fp.compute_kernel(
@@ -442,17 +513,44 @@ def build(q, kv, block_ids, positions, out, *, scale: float, config: Config = DE
         fp32_dest=config.fp32_dest,
         approx=config.approx,
     )
-    return [q, kv, block_ids, positions, out], fp.program_descriptor([reader, writer, compute], cbs=cbs)
+    io = [q, kv, block_ids, positions, out]
+    if page_table is not None:
+        io.insert(4, page_table)
+    return io, fp.program_descriptor([reader, writer, compute], cbs=cbs)
 
 
-def sparse_sdpa_tiled(q, kv, block_ids, positions, *, scale: float | None = None, config: Config = DEFAULT, out=None):
-    """The block-shared attention of the slab's query rows: ``[1, H, S, v_dim]`` bf16 ROW_MAJOR."""
+def sparse_sdpa_tiled(
+    q,
+    kv,
+    block_ids,
+    positions,
+    *,
+    scale: float | None = None,
+    config: Config = DEFAULT,
+    out=None,
+    page_table=None,
+    page_size: int = 0,
+    page_table_row: int = 0,
+):
+    """The block-shared attention of the slab's query rows: ``[1, H, S, v_dim]`` bf16 ROW_MAJOR.  ``page_table`` /
+    ``page_size`` / ``page_table_row``: the paged form of ``build``."""
 
-    g = geometry(q, kv, block_ids, positions, config)
+    g = geometry(q, kv, block_ids, positions, config, page_table, page_size, page_table_row)
     scale = g["Dq"] ** -0.5 if scale is None else float(scale)
     if out is None:
         out = fp.allocate((1, g["H"], g["S"], config.v_dim), BF16, ttnn.ROW_MAJOR_LAYOUT, q.device())
-    io, descriptor = build(q, kv, block_ids, positions, out, scale=scale, config=config)
+    io, descriptor = build(
+        q,
+        kv,
+        block_ids,
+        positions,
+        out,
+        scale=scale,
+        config=config,
+        page_table=page_table,
+        page_size=page_size,
+        page_table_row=page_table_row,
+    )
     tokens = g["IDS"] * config.block_tokens  # the selected tokens of one row
     # Q, the block ids and the positions in, the attention out; the K/V rows at the union's floor (one row's selection
     # per tile: the measured union ratios over it, 1.03-3.45 at TQ 16, are in PREFILL.md); the FLOPs of every row's

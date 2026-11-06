@@ -50,7 +50,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import Qwen38Asy
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
 
 LANES = 32  # decode buckets (1, 2, 4, 8, 16, 32) need 32 lanes
-BLOCK = 64
+BLOCK = 128
 STEPS = 48  # decode steps per request group in (i) and (ii)
 LENGTHS = {"a": 128, "b": 200, "c": 300, "d": 160}
 A_TOKENS, B_TOKENS, C_TOKENS = 12, 40, 24  # (iii): tokens each request produces (the prefill token included)

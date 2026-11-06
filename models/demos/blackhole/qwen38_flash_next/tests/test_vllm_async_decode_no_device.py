@@ -44,6 +44,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import (
     Qwen38ForCausalLM,
     greedy_batch_sampling_params,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging, paged_table_width
 
 LANES = batch_tests.LANES
 ORDER: list = []  # the host-visible order of the fake device operations of every fake below
@@ -645,6 +646,54 @@ def test_the_single_slot_chain_steady_steps(async_on) -> None:
     ORDER.clear()
     model.release_request(0)
     assert ORDER[0].startswith("sync:") and model.slot.committed == [] and model._inflight == []
+
+
+def test_the_single_slot_async_steps_write_the_page_table_before_the_replay(async_on) -> None:
+    chain = AsyncChain()
+    model = Qwen38ForCausalLM(chain, allocated_context=ALLOCATED_CONTEXT)
+    model.paging = Qwen38LanePaging(page_size=128, num_pages=16, max_blocks=paged_table_width(ALLOCATED_CONTEXT, 128))
+    model.block_size, model.num_blocks = 128, 16
+
+    def table(*ids):
+        row = torch.zeros(1, 8, dtype=torch.int32)
+        row[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+        return row
+
+    ids = list(range(1000, 1126))  # 126 tokens: block 0 of the row
+    logits, _ = model.prefill_forward(
+        tokens=torch.tensor([ids], dtype=torch.int32),
+        page_table=table(5, 6),
+        kv_cache=None,
+        enable_trace=True,
+        prompt_lens=[len(ids)],
+        start_pos=torch.zeros(1, dtype=torch.int32),
+        empty_slots=[0],
+        sampling_params=greedy_batch_sampling_params(1),
+    )
+
+    def call(token, position, page_table, **overrides):
+        kwargs = dict(
+            tokens=torch.tensor([[token]], dtype=torch.int32),
+            start_pos=torch.tensor([position], dtype=torch.int32),
+            page_table=page_table,
+            kv_cache=None,
+            enable_trace=True,
+            read_from_device=False,
+            sampling_params=greedy_batch_sampling_params(1),
+        )
+        kwargs.update(overrides)
+        return model.decode_forward(**kwargs)
+
+    call(int(logits[0, 0]), len(ids), table(5, 6))  # blocking first step
+    call(0, 0, None, reload_inputs=False)  # steady, nothing reloaded: no table needed, none read
+    assert ORDER.count("table:(5, 6)") == 1
+    mark = len(ORDER)
+    # the step at position 128 is the first in block 1: the plugin reloads the table (the new block is appended)
+    handle = call(0, 0, table(5, 6, 7), reload_inputs=False, reload_page_table=True)
+    assert isinstance(handle, Qwen38AsyncStep)
+    new = ORDER[mark:]
+    assert new[0] == "table:(5, 6, 7)" and new.index("table:(5, 6, 7)") < new.index("read_nb")
+    assert not [op for op in new[1:] if op.startswith("table")]
 
 
 # -- QWEN38_STEP_SPLIT --------------------------------------------------------------------------------------------------

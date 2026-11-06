@@ -17,7 +17,7 @@ Every request's greedy tokens are compared with its B=1 reference.  The referenc
 process's DRAM); the batch ids read it.  Gate: the first 8 tokens equal the reference and the pass key is in the output
 of every request with at least 32 new tokens; the exact-match count and the first divergence are logged.
 
-Ids: ``ref_b1`` (run first), ``contract_b8_bs64``, ``contract_b8_bs32``; ``m1_b8`` and ``m1_b32`` measure the free DRAM per
+Ids: ``ref_b1`` (run first), ``contract_b8_bs128``, ``contract_b8_bs256``; ``m1_b8`` and ``m1_b32`` measure the free DRAM per
 device after the batch build (context 32768, a small pool) for the token budget; ``cap_b32`` builds B=32 with the pool
 ``get_max_tokens_all_users`` gives (the DRAM budget's cap), warms up and serves a 30000-token prompt, an 8000-token one
 and a short one (the cap's margin holds under the prefill's transients).
@@ -59,6 +59,7 @@ from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prom
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
     PROMPT_FILE,
+    allocate_demo_pages,
     device_params,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import Qwen38ForCausalLM, greedy_batch_sampling_params
@@ -408,13 +409,13 @@ class PluginHost:
             iteration += 1
 
 
-def single_slot_reference(model, prompt: list[int], max_new: int) -> list[int]:
+def single_slot_reference(model, prompt: list[int], max_new: int, page_table: torch.Tensor) -> list[int]:
     """B=1: greedy prefill token, then ``max_new - 1`` greedy decode steps (the P1d reference)."""
 
     params = greedy_batch_sampling_params(1)
     out, _ = model.prefill_forward(
         tokens=torch.tensor([prompt], dtype=torch.int32),
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         enable_trace=True,
         prompt_lens=[len(prompt)],
@@ -427,7 +428,7 @@ def single_slot_reference(model, prompt: list[int], max_new: int) -> list[int]:
         out = model.decode_forward(
             tokens=torch.tensor([[tokens[-1]]], dtype=torch.int32),
             start_pos=[len(prompt) + step - 1],
-            page_table=None,
+            page_table=page_table,
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
@@ -444,14 +445,14 @@ def single_slot_reference(model, prompt: list[int], max_new: int) -> list[int]:
 @pytest.mark.parametrize(
     "kind, lanes, block_size",
     [
-        pytest.param("ref", 1, 64, id="ref_b1", marks=pytest.mark.timeout(7200)),
-        pytest.param("contract", 8, 64, id="contract_b8_bs64", marks=pytest.mark.timeout(10800)),
-        pytest.param("contract", 8, 32, id="contract_b8_bs32", marks=pytest.mark.timeout(10800)),
-        pytest.param("m1", 8, 64, id="m1_b8", marks=pytest.mark.timeout(5400)),
-        pytest.param("m1", 32, 64, id="m1_b32", marks=pytest.mark.timeout(5400)),
-        pytest.param("cap", 32, 64, id="cap_b32", marks=pytest.mark.timeout(7200)),
-        pytest.param("ref32", 1, 64, id="ref_pack32", marks=pytest.mark.timeout(7200)),
-        pytest.param("contract32", PACK32_LANES, 64, id="contract_b32_pack", marks=pytest.mark.timeout(10800)),
+        pytest.param("ref", 1, 128, id="ref_b1", marks=pytest.mark.timeout(7200)),
+        pytest.param("contract", 8, 128, id="contract_b8_bs128", marks=pytest.mark.timeout(10800)),
+        pytest.param("contract", 8, 256, id="contract_b8_bs256", marks=pytest.mark.timeout(10800)),
+        pytest.param("m1", 8, 128, id="m1_b8", marks=pytest.mark.timeout(5400)),
+        pytest.param("m1", 32, 128, id="m1_b32", marks=pytest.mark.timeout(5400)),
+        pytest.param("cap", 32, 128, id="cap_b32", marks=pytest.mark.timeout(7200)),
+        pytest.param("ref32", 1, 128, id="ref_pack32", marks=pytest.mark.timeout(7200)),
+        pytest.param("contract32", PACK32_LANES, 128, id="contract_b32_pack", marks=pytest.mark.timeout(10800)),
     ],
 )
 def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, record_property):
@@ -484,11 +485,11 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
     if kind in ("ref", "ref32"):
         model = initialize(mesh_device, checkpoint, 1)
         try:
-            model.allocate_kv_cache((1, 1, block_size, 128), None, 12)
+            page_table = allocate_demo_pages(model, MAX_SEQ_LEN)  # paged single slot: opens the chain
             references = []
             for i, (prompt, max_new) in enumerate(zip(prompts, news)):
                 started = time.perf_counter()
-                references.append(single_slot_reference(model, prompt, max_new))
+                references.append(single_slot_reference(model, prompt, max_new, page_table))
                 logger.info(
                     f"reference {i} (P={len(prompt)}, n={max_new}) in {time.perf_counter() - started:.1f} s: "
                     f"{references[-1][:8]}"

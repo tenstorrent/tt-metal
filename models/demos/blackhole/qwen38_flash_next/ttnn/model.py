@@ -129,6 +129,107 @@ GENERIC_TRACE_PARTS_SINGLE = ("body",)
 GENERIC_TRACE_PARTS_SPLIT = ("head", "tail")
 
 
+# Byte layout of a GDN layer's state inside a K/V pool block (per device, tile order), see the paging spec.
+BOUNDARY_RECURRENT_BYTES = 393_216
+BOUNDARY_CONV_OFFSET = BOUNDARY_RECURRENT_BYTES
+BOUNDARY_CONV_BYTES = 81_920
+BOUNDARY_CONV_SLOTS = 4
+BOUNDARY_PLE_OFFSET = BOUNDARY_CONV_OFFSET + BOUNDARY_CONV_SLOTS * BOUNDARY_CONV_BYTES
+BOUNDARY_PLE_BYTES = 20_480
+BOUNDARY_PLE_SLOTS = 9
+BOUNDARY_MIN_BLOCK_SIZE = 1024
+_BOUNDARY_DTYPE_BYTES = {ttnn.float32: 4, ttnn.bfloat16: 2}
+
+
+def _boundary_tensor_bytes(tensor: Any, label: str) -> int:
+    count = 1
+    for extent in tensor.padded_shape:
+        count *= int(extent)
+    if tensor.dtype not in _BOUNDARY_DTYPE_BYTES:
+        raise RuntimeError(f"{label} has unsupported dtype {tensor.dtype}")
+    return count * _BOUNDARY_DTYPE_BYTES[tensor.dtype]
+
+
+def boundary_state_pieces(
+    state: Any, layer_index: int, *, block_size: int = BOUNDARY_MIN_BLOCK_SIZE
+) -> list[tuple[Any, int]]:
+    """The (tensor, byte offset) pieces of one GDN layer's boundary state; every size is checked against the layout."""
+
+    if layer_index % 4 == 3 or not 0 <= layer_index < len(state.layers):
+        raise ValueError(f"layer {layer_index} is not a GDN layer of this state")
+    layer_state = state.layers[layer_index]
+    gdn = layer_state.attention
+    if len(gdn.conv) != BOUNDARY_CONV_SLOTS:
+        raise RuntimeError(f"GDN layer {layer_index} has {len(gdn.conv)} conv slots, expected {BOUNDARY_CONV_SLOTS}")
+    pieces = [(gdn.recurrent, 0, BOUNDARY_RECURRENT_BYTES, "recurrent")]
+    pieces += [
+        (tensor, BOUNDARY_CONV_OFFSET + i * BOUNDARY_CONV_BYTES, BOUNDARY_CONV_BYTES, f"conv[{i}]")
+        for i, tensor in enumerate(gdn.conv)
+    ]
+    if layer_index == PLE_CHECKPOINT_LAYER:
+        ple = layer_state.ple
+        if ple is None or len(ple.conv) != BOUNDARY_PLE_SLOTS:
+            raise RuntimeError(f"layer {layer_index} must hold a PLE state with {BOUNDARY_PLE_SLOTS} conv slots")
+        pieces += [
+            (tensor, BOUNDARY_PLE_OFFSET + j * BOUNDARY_PLE_BYTES, BOUNDARY_PLE_BYTES, f"PLE conv[{j}]")
+            for j, tensor in enumerate(ple.conv)
+        ]
+    for tensor, offset, expected, name in pieces:
+        actual = _boundary_tensor_bytes(tensor, f"layer {layer_index} {name}")
+        if actual != expected:
+            raise RuntimeError(f"layer {layer_index} {name} is {actual} bytes, the boundary layout needs {expected}")
+        if offset + expected > block_size * 1024:
+            raise RuntimeError(
+                f"layer {layer_index} {name} ends at byte {offset + expected}, past the {block_size * 1024}-byte block"
+            )
+    return [(tensor, offset) for tensor, offset, _, _ in pieces]
+
+
+def _boundary_gdn_layers(state: Any) -> list[int]:
+    return [index for index in range(len(state.layers)) if index % 4 != 3]
+
+
+def _check_boundary_call(state: Any, layer_blocks: dict, block_size: int, position: int) -> None:
+    if block_size < BOUNDARY_MIN_BLOCK_SIZE or block_size & (block_size - 1):
+        raise ValueError(f"boundary block_size must be a power of two >= {BOUNDARY_MIN_BLOCK_SIZE}, got {block_size}")
+    if position % block_size:
+        raise ValueError(f"boundary position {position} is not a multiple of block_size {block_size}")
+    if set(layer_blocks) != set(_boundary_gdn_layers(state)):
+        raise ValueError(f"layer_blocks must cover exactly the GDN layers {_boundary_gdn_layers(state)}")
+
+
+def save_boundary_state(state: Any, layer_blocks: dict, *, block_size: int, position: int) -> None:
+    from models.demos.blackhole.qwen38_flash_next.ttnn.fused.pool_blocks import state_to_block
+
+    _check_boundary_call(state, layer_blocks, block_size, position)
+    # The host conv_phase is not checked: the traced decode step advances the ring on device without updating it.
+    if position % 4:
+        raise ValueError(f"boundary position {position} is not a multiple of 4 (the conv ring layout)")
+    for index in _boundary_gdn_layers(state):
+        pool, block_id = layer_blocks[index]
+        for tensor, offset in boundary_state_pieces(state, index, block_size=block_size):
+            state_to_block(tensor, pool, block_id, block_size=block_size, byte_offset=offset)
+
+
+def restore_boundary_state(
+    state: Any, layer_blocks: dict, *, block_size: int, position: int, zero_qsa: Callable[[int, Any], None]
+) -> None:
+    from models.demos.blackhole.qwen38_flash_next.ttnn.fused.pool_blocks import block_to_state
+
+    _check_boundary_call(state, layer_blocks, block_size, position)
+    for index in _boundary_gdn_layers(state):
+        pool, block_id = layer_blocks[index]
+        for tensor, offset in boundary_state_pieces(state, index, block_size=block_size):
+            block_to_state(pool, tensor, block_id, block_size=block_size, byte_offset=offset)
+        state.layers[index].attention.conv_phase = position % 4
+        if state.layers[index].ple is not None:
+            state.layers[index].ple.token_context = None
+    for index, layer_state in enumerate(state.layers):
+        if index % 4 == 3:
+            zero_qsa(index, layer_state.attention)
+    state.position.reset(position, 0)
+
+
 class Qwen38TTNNCleanupError(RuntimeError):
     """One or more independent task-owned tensor releases failed."""
 
@@ -183,6 +284,54 @@ def _copy_inplace(source, target, *, label: str) -> None:
         raise RuntimeError(f"{label} target address changed during ttnn.copy")
     if copied is not None and _tensor_key(copied) != target_id:
         raise RuntimeError(f"{label} ttnn.copy returned a different tensor")
+
+
+def generic_page_table_host(paging: qsa_module.Qwen38LanePaging | None, block_ids: Sequence[int]) -> torch.Tensor:
+    """Host image ``[1,1,32,max_blocks]`` int32 of the chain page table: all 32 rows = ``block_ids`` padded with 0."""
+
+    if paging is None:
+        raise ValueError("the generic state is not paged")
+    ids = [int(block) for block in block_ids]
+    if len(ids) > paging.max_blocks:
+        raise ValueError(f"the page table holds {paging.max_blocks} blocks, got {len(ids)}")
+    if any(not 1 <= block < paging.num_pages for block in ids):
+        raise ValueError(f"block ids must be in [1, {paging.num_pages}) (block 0 is scratch), got {ids}")
+    host = torch.zeros(1, 1, CHUNK_ROWS, paging.max_blocks, dtype=torch.int32)
+    if ids:
+        host[0, 0, :, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+    return host
+
+
+def pack_page_table_host(
+    paging: qsa_module.Qwen38LanePaging | None, users_block_ids: Sequence[Sequence[int]], rows_per_user: int
+) -> torch.Tensor:
+    """Host image ``[1,1,32,max_blocks]`` int32 of the chain page table for a multi-user pack on the slab at position 0:
+    all 32 rows = the flat pack row.  User ``u`` owns slab rows ``[u * S, (u + 1) * S)`` (``S = rows_per_user``), i.e.
+    virtual pages ``[u * S / bs, (u + 1) * S / bs)``; page ``u * S / bs + j`` holds the user's ``j``-th block id, 0 where the
+    user has none."""
+
+    if paging is None:
+        raise ValueError("the generic state is not paged")
+    block = paging.page_size
+    rows_per_user = int(rows_per_user)
+    if rows_per_user < block or rows_per_user % block:
+        raise ValueError(f"a paged pack needs rows per user a multiple of the block size {block}, got {rows_per_user}")
+    per_user = rows_per_user // block
+    total = pack_module.PACK_ROWS // block
+    if total > paging.max_blocks:
+        raise ValueError(f"the pack row needs {total} pages, the page table holds {paging.max_blocks}")
+    if len(users_block_ids) > pack_module.PACK_ROWS // rows_per_user:
+        raise ValueError(f"a {rows_per_user}-row bucket holds {pack_module.PACK_ROWS // rows_per_user} users")
+    row = torch.zeros(paging.max_blocks, dtype=torch.int32)
+    for user, user_ids in enumerate(users_block_ids):
+        ids = [int(b) for b in user_ids]
+        if len(ids) > per_user:
+            raise ValueError(f"user {user} holds {len(ids)} blocks, the bucket has {per_user} pages per user")
+        if any(not 1 <= b < paging.num_pages for b in ids):
+            raise ValueError(f"block ids must be in [1, {paging.num_pages}) (block 0 is scratch), got {ids}")
+        if ids:
+            row[user * per_user : user * per_user + len(ids)] = torch.tensor(ids, dtype=torch.int32)
+    return row.reshape(1, 1, 1, -1).repeat(1, 1, CHUNK_ROWS, 1).contiguous()
 
 
 def _release_tensor_slot_indices(
@@ -666,6 +815,9 @@ class Qwen38TTNNTextModelGenericState:
     position: Qwen38TTNNDevicePosition
     layers: tuple[Qwen38TTNNDecoderLayerGenericState, ...]
     _owner: object = field(repr=False, compare=False)
+    # PAGED chain: the one page table ``[1,1,32,max_blocks]`` shared by every QSA layer (None: flat caches).
+    paging: qsa_module.Qwen38LanePaging | None = None
+    page_table: Any = None
 
 
 @dataclass
@@ -2140,8 +2292,67 @@ class Qwen38TTNNTextModel:
                 raise ValueError(f"generic target state {layer_index} identity does not match its layer")
             layer.validate_generic_state(layer_state)
 
-    def allocate_generic_state(self) -> Qwen38TTNNTextModelGenericState:
+    def allocate_paged_pools(
+        self, paging: qsa_module.Qwen38LanePaging
+    ) -> dict[int, qsa_module.Qwen38TTNNQSAPagedPools]:
+        """The shared KV / index pools of every QSA layer, keyed by layer index (zeros)."""
+
+        self._require_healthy()
+        pools: dict[int, qsa_module.Qwen38TTNNQSAPagedPools] = {}
+        try:
+            for index, layer in enumerate(self.layers):
+                if layer.layer_type is Qwen38TTNNLayerType.QSA:
+                    pools[index] = layer.attention.allocate_paged_pools(paging)
+        except BaseException:
+            for pool in pools.values():
+                ttnn.deallocate(pool.kv)
+                ttnn.deallocate(pool.index)
+            raise
+        return pools
+
+    def write_generic_page_table(self, state: Qwen38TTNNTextModelGenericState, block_ids: Sequence[int]) -> None:
+        """Host upload of the chain page table, in place: every one of the 32 rows = ``block_ids`` padded with 0 to
+        ``max_blocks`` (block 0 is the scratch block; live ids are in [1, num_pages))."""
+
+        self._validate_generic_state(state)
+        host = generic_page_table_host(state.paging, block_ids)
+        host_table = ttnn.from_torch(
+            host,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host_table, state.page_table)
+
+    def write_pack_page_table(
+        self,
+        state: Qwen38TTNNTextModelGenericState,
+        users_block_ids: Sequence[Sequence[int]],
+        rows_per_user: int,
+    ) -> None:
+        """Host upload, in place, of the flat pack row (:func:`pack_page_table_host`) into the chain page table, for a
+        multi-user pack on shared pools.  The chain's next prefill rewrites its own table (``write_generic_page_table``).
+        """
+
+        self._validate_generic_state(state)
+        host = pack_page_table_host(state.paging, users_block_ids, rows_per_user)
+        host_table = ttnn.from_torch(
+            host,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host_table, state.page_table)
+
+    def allocate_generic_state(
+        self,
+        paging: qsa_module.Qwen38LanePaging | None = None,
+        pools: dict[int, qsa_module.Qwen38TTNNQSAPagedPools] | None = None,
+    ) -> Qwen38TTNNTextModelGenericState:
         """Allocate the device position and every layer's fixed-address generic state.
+
+        With ``paging`` (and the shared ``pools`` of :meth:`allocate_paged_pools`) every QSA layer's caches are the
+        pools and one chain page table is allocated; the pools are not owned by the state.
 
         The first call also builds the model-lifetime generic constants: the
         resident RoPE tables and the QSA position constants.
@@ -2157,12 +2368,38 @@ class Qwen38TTNNTextModel:
             self.qsa_position_constants = qsa_module.Qwen38TTNNQSAPositionConstants.build(
                 self.mesh_device, self.mesh_contract, qsa.allocated_compressed_blocks
             )
+        if paging is None:
+            if pools is not None:
+                raise ValueError("generic paged pools require paging")
+        else:
+            if pools is None:
+                raise ValueError("generic paged state requires pools")
+            qsa_module.validate_index_paging(paging, self.allocated_context)
+            missing = [index for index, layer in enumerate(self.layers) if layer.layer_type is Qwen38TTNNLayerType.QSA]
+            if any(index not in pools for index in missing):
+                raise ValueError(f"generic paged pools must cover QSA layers {missing}")
         position = Qwen38TTNNDevicePosition.allocate(self.mesh_device, self.mesh_contract, position=0)
         allocated: list[Qwen38TTNNDecoderLayerGenericState] = []
+        page_table = None
         try:
-            for layer in self.layers:
-                allocated.append(layer.allocate_generic_state())
-            result = Qwen38TTNNTextModelGenericState(position, tuple(allocated), self._state_owner)
+            if paging is not None:
+                page_table = ttnn.from_torch(
+                    torch.zeros(1, 1, CHUNK_ROWS, paging.max_blocks, dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+                )
+                self.mesh_contract.validate_tensor(page_table, placement=TensorPlacement.REPLICATED)
+            for index, layer in enumerate(self.layers):
+                if paging is not None and layer.layer_type is Qwen38TTNNLayerType.QSA:
+                    allocated.append(layer.allocate_generic_state(paging, pools[index], page_table))
+                else:
+                    allocated.append(layer.allocate_generic_state())
+            result = Qwen38TTNNTextModelGenericState(
+                position, tuple(allocated), self._state_owner, paging=paging, page_table=page_table
+            )
             self._validate_generic_state(result)
             return result
         except BaseException as error:
@@ -2174,6 +2411,8 @@ class Qwen38TTNNTextModel:
                 for index, (layer, layer_state) in reversed(tuple(enumerate(zip(self.layers, allocated))))
             ]
             actions.append(("device position", position.deallocate))
+            if page_table is not None:
+                actions.append(("chain page table", lambda: ttnn.deallocate(page_table)))
             cause = _cleanup_failure_cause("generic text-model state allocation", actions, error)
             if cause is not error:
                 self._mark_poisoned("allocate_generic_state cleanup", 0, cause)
@@ -2190,6 +2429,52 @@ class Qwen38TTNNTextModel:
         except BaseException as error:
             self._mark_poisoned("reset_generic_state_inplace", 0, error)
 
+    def boundary_state_pieces(
+        self, state: Qwen38TTNNTextModelGenericState, layer_index: int, *, block_size: int = BOUNDARY_MIN_BLOCK_SIZE
+    ) -> list[tuple[Any, int]]:
+        """(tensor, byte offset in the K/V pool block) of every GDN/PLE buffer of ``layer_index``'s boundary state."""
+
+        self._validate_generic_state(state)
+        return boundary_state_pieces(state, layer_index, block_size=block_size)
+
+    def save_boundary_state(
+        self,
+        state: Qwen38TTNNTextModelGenericState,
+        layer_blocks: dict[int, tuple[Any, int]],
+        *,
+        block_size: int,
+        position: int,
+    ) -> None:
+        """Copy every GDN layer's recurrent, conv and (layer 1) PLE buffers into its K/V pool block.
+
+        ``layer_blocks`` maps each GDN layer index to ``(kv_pool, block_id)``; ``position`` is the host-known chain
+        position, a multiple of ``block_size``."""
+
+        self._validate_generic_state(state)
+        save_boundary_state(state, layer_blocks, block_size=block_size, position=position)
+
+    def restore_boundary_state(
+        self,
+        state: Qwen38TTNNTextModelGenericState,
+        layer_blocks: dict[int, tuple[Any, int]],
+        *,
+        block_size: int,
+        position: int,
+    ) -> None:
+        """Inverse of :meth:`save_boundary_state`, then position ``position``, empty QSA staging/ring and no PLE
+        token context (the next chunk_prefill takes the context from its caller).  K/V and Index pools stay."""
+
+        self._validate_generic_state(state)
+        _check_boundary_call(state, layer_blocks, block_size, position)
+
+        def zero_qsa(index: int, qsa_state: Any) -> None:
+            self.layers[index].attention.reset_generic_state_inplace(qsa_state)
+
+        try:
+            restore_boundary_state(state, layer_blocks, block_size=block_size, position=position, zero_qsa=zero_qsa)
+        except BaseException as error:
+            self._mark_poisoned("restore_boundary_state", position, error)
+
     def release_generic_state(self, state: Qwen38TTNNTextModelGenericState) -> None:
         self._validate_generic_state(state)
         actions = [
@@ -2200,6 +2485,8 @@ class Qwen38TTNNTextModel:
             for index, (layer, layer_state) in reversed(tuple(enumerate(zip(self.layers, state.layers))))
         ]
         actions.append(("device position", state.position.deallocate))
+        if state.page_table is not None:
+            actions.append(("chain page table", lambda: ttnn.deallocate(state.page_table)))
         try:
             _run_cleanup_actions("generic text-model state", actions)
         except BaseException as error:
@@ -3800,6 +4087,7 @@ class Qwen38TTNNTextModel:
         indexer_form: str = "wide",
         residue_free: bool = False,
         paged: qsa_module.Qwen38LanePaging | None = None,
+        pools: dict[int, qsa_module.Qwen38TTNNQSAPagedPools] | None = None,
     ) -> Qwen38TTNNTextModelLaneState:
         """Allocate the position row, every layer's lane state, the lane constants and the host-written inputs of
         B lanes (before any capture).  The first call also builds the model-lifetime generic constants.
@@ -3809,7 +4097,10 @@ class Qwen38TTNNTextModel:
         ``paged`` (a :class:`~qsa.Qwen38LanePaging`, requires ``residue_free``): every QSA layer's lane cache is the
         page pool of ``paged.num_pages`` pages and the lane constants carry the zero-offset ids and the one page table
         (written by :meth:`write_lane_page_table`); the KV of an admitted lane is scattered into its pages by
-        :meth:`admit_lane_kv_paged`, not moved by the pager."""
+        :meth:`admit_lane_kv_paged`, not moved by the pager.
+        ``pools`` (:meth:`allocate_paged_pools`, requires ``paged`` with the pools' page size and page count): the
+        lane caches are the SHARED pools the B=1 chain uses (not owned, not released with the state); a request
+        prefilled on the chain is already in them, so only the fixed-size states are admitted."""
 
         self._require_healthy()
         lanes = require_lane_count(lanes, label="text-model lanes")
@@ -3817,6 +4108,24 @@ class Qwen38TTNNTextModel:
             if not residue_free:
                 raise ValueError("paged lane state requires residue_free=True (the plain lane body)")
             paged.validate(self.allocated_context)
+        if pools is not None:
+            if paged is None:
+                raise ValueError("shared lane pools require the lane paging (paged=)")
+            qsa_indexes = [layer.layer_index for layer in self.layers if layer.layer_type is Qwen38TTNNLayerType.QSA]
+            missing = [index for index in qsa_indexes if index not in pools]
+            if missing:
+                raise ValueError(f"shared lane pools must cover QSA layers {missing}")
+            for index in qsa_indexes:
+                kv_shape, index_shape = tuple(pools[index].kv.shape), tuple(pools[index].index.shape)
+                if (
+                    kv_shape[2] != paged.pool_rows
+                    or index_shape[0] != paged.num_pages
+                    or (index_shape[2] * qsa_module.COMPRESS_RATIO != paged.page_size)
+                ):
+                    raise ValueError(
+                        f"layer {index} pools (kv {kv_shape}, index {index_shape}) do not match the lane paging "
+                        f"(page_size {paged.page_size}, num_pages {paged.num_pages})"
+                    )
         if self.rope_table is None:
             self.rope_table = Qwen38TTNNRoPETable.build(
                 self.mesh_device, self.mesh_contract, self.config, self.allocated_context
@@ -3848,11 +4157,16 @@ class Qwen38TTNNTextModel:
                 paging=paged,
             )
             for layer in self.layers:
-                allocated.append(
-                    layer.allocate_lane_state(lanes)
-                    if paged is None
-                    else layer.allocate_lane_state(lanes, pool_rows=paged.pool_rows)
-                )
+                if paged is None:
+                    allocated.append(layer.allocate_lane_state(lanes))
+                elif pools is not None:
+                    allocated.append(
+                        layer.allocate_lane_state(lanes, pools=pools[layer.layer_index])
+                        if layer.layer_type is Qwen38TTNNLayerType.QSA
+                        else layer.allocate_lane_state(lanes)
+                    )
+                else:
+                    allocated.append(layer.allocate_lane_state(lanes, pool_rows=paged.pool_rows))
                 if residue_free and isinstance(allocated[-1].attention, gdn_module.Qwen38TTNNGDNState):
                     allocated[-1].attention.fixed_phase = True
             token_row = self.model_io.embedding.upload_token_row(0)
@@ -4096,7 +4410,8 @@ class Qwen38TTNNTextModel:
     ) -> None:
         """PAGED admission of the KV: for each of the 12 QSA layers copy rows ``[0, rows)`` (rounded up to 32) of the
         generic B=1 cache into lane ``lane``'s pages of the pool (``kv_page_scatter``).  Call AFTER
-        :meth:`write_lane_page_table` wrote lane ``lane``'s row (with at least ``ceil(rows / page_size)`` pages)."""
+        :meth:`write_lane_page_table` wrote lane ``lane``'s row (with at least ``ceil(rows / page_size)`` pages).
+        A no-op when the chain and the lanes share the pools (``pools_shared``): the rows are already in place."""
 
         from models.demos.blackhole.qwen38_flash_next.ttnn.fused.kv_page_scatter import kv_page_scatter
 
@@ -4110,6 +4425,11 @@ class Qwen38TTNNTextModel:
             raise ValueError(f"lane must be an int in [0,{state.lanes}), got {lane!r}")
         if isinstance(rows, bool) or type(rows) is not int or not 1 <= rows <= self.allocated_context:
             raise ValueError(f"rows must be an int in [1,{self.allocated_context}], got {rows!r}")
+        if chain_state.paging is not None and any(
+            isinstance(layer.attention, qsa_module.Qwen38TTNNQSALaneState) and layer.attention.pools_shared
+            for layer in state.layers
+        ):
+            return
         try:
             for lane_layer, generic_layer in zip(state.layers, chain_state.layers):
                 if not isinstance(lane_layer.attention, qsa_module.Qwen38TTNNQSALaneState):
@@ -4129,7 +4449,8 @@ class Qwen38TTNNTextModel:
         """The lane state's per-lane device tensors by family for the lane pager (``lanes.Qwen38TTNNLanePager``:
         eviction to the host pool and re-admission): the 12 QSA caches, staging tiles and rings, the 36 GDN
         recurrent states and 144 ring slots, the 9 PLE slots.  The position row and the host-written inputs stay
-        with the model (re-admission goes through ``state.position.admit`` first)."""
+        with the model (re-admission goes through ``state.position.admit`` first).  A paged state omits ``kv`` and a
+        state on shared pools (``pools_shared``) omits ``kv`` and ``compressed``: the pager never moves the pools."""
 
         lanes = self._validate_lane_state(state)
         self._require_parent_lane_state(state, "lane_layout")
@@ -4138,11 +4459,12 @@ class Qwen38TTNNTextModel:
         ple_state = state.layers[PLE_CHECKPOINT_LAYER].ple
         if ple_state is None:
             raise RuntimeError("checkpoint layer 1 PLE lanes state is unavailable")
+        shared = any(s.pools_shared for s in qsa_states)
         layout = Qwen38LaneLayout(
             lanes=lanes,
             allocated_context=self.allocated_context,
-            kv=() if state.paging is not None else tuple(s.packed_kv_cache for s in qsa_states),
-            compressed=tuple(s.compressed_index_cache for s in qsa_states),
+            kv=() if state.paging is not None or shared else tuple(s.packed_kv_cache for s in qsa_states),
+            compressed=() if shared else tuple(s.compressed_index_cache for s in qsa_states),
             staging=tuple(s.kv_staging for s in qsa_states),
             ring=tuple(s.raw_key_ring for s in qsa_states),
             recurrent=tuple(s.recurrent for s in gdn_states),
@@ -4153,11 +4475,17 @@ class Qwen38TTNNTextModel:
         return layout
 
     def generic_lane_layout(
-        self, state: Qwen38TTNNTextModelGenericState, *, exclude_kv: bool = False
+        self,
+        state: Qwen38TTNNTextModelGenericState,
+        *,
+        exclude_kv: bool = False,
+        exclude_compressed: bool = False,
     ) -> Qwen38LaneLayout:
         """The generic (single-lane) state's tensors as a 1-lane layout for the lane pager: the state the chunk
         trace prefills is packed into a host slot and re-admitted into a lane (the lane server's prefill import).
-        The device position scalar and the GDN ring phases stay with the model (the importer resets them)."""
+        The device position scalar and the GDN ring phases stay with the model (the importer resets them).
+        ``exclude_kv`` / ``exclude_compressed`` drop the K/V and compressed index caches (paged chain; both for a chain
+        and lanes on shared pools, where the importer must not touch the pools)."""
 
         self._validate_generic_state(state)
         gdn_states = [s.attention for s in state.layers if isinstance(s.attention, gdn_module.Qwen38TTNNGDNState)]
@@ -4171,7 +4499,7 @@ class Qwen38TTNNTextModel:
             lanes=1,
             allocated_context=self.allocated_context,
             kv=() if exclude_kv else tuple(s.packed_kv_cache for s in qsa_states),
-            compressed=tuple(s.compressed_index_cache for s in qsa_states),
+            compressed=() if exclude_compressed else tuple(s.compressed_index_cache for s in qsa_states),
             staging=tuple(s.kv_staging for s in qsa_states),
             ring=tuple(s.raw_key_ring for s in qsa_states),
             recurrent=tuple(s.recurrent for s in gdn_states),

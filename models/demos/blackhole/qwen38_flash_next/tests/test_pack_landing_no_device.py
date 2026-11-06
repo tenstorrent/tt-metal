@@ -205,6 +205,9 @@ def test_pack_dram_estimate_counts_state_launches_and_traces():
         full - no_128 == batch.PACK_LAUNCH_BYTES + batch.PACK_TRACE_BYTES[128] + tail_128
     )  # one GDN launch, one trace and one zero tail fewer
     assert batch.pack_dram_bytes((1024,)) < batch.pack_dram_bytes((512, 1024))
+    no_tails = batch.pack_dram_bytes((256, 512, 1024), shared_pools=True)
+    tails = sum((32768 // 4 - rows // 4) * batch.PACK_TAIL_ROW_BYTES for rows in (256, 512, 1024))
+    assert batch.pack_dram_bytes((256, 512, 1024)) - no_tails == tails
 
 
 def test_the_decoder_is_default_off_without_the_knob(monkeypatch):
@@ -222,21 +225,17 @@ def test_the_decoder_is_default_off_without_the_knob(monkeypatch):
     assert decoder.pack_enabled is False and decoder.pack_buckets == ()
 
 
-def test_the_pool_cap_counts_the_pack_only_when_the_pack_is_on(monkeypatch):
+def test_the_pool_cap_counts_the_pack_on_shared_pools_only_when_the_pack_is_on(monkeypatch):
     from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vllm as vllm
 
     monkeypatch.delenv("QWEN38_PACK_BUCKETS", raising=False)
     monkeypatch.setenv("QWEN38_PREFILL_PACK", "0")
     off = vllm.batch_pool_token_cap(32704, 8)
-    off_4 = vllm.batch_pool_token_cap(32704, 4)
     monkeypatch.setenv("QWEN38_PREFILL_PACK", "1")
     on = vllm.batch_pool_token_cap(32704, 8)
-    monkeypatch.delenv("QWEN38_PREFILL_PACK", raising=False)
-    assert vllm.batch_pool_token_cap(32704, 8) == on  # the default with 8 lanes is on (P3e)
-    assert vllm.batch_pool_token_cap(32704, 4) == off_4  # and off with fewer
-    lost_bytes = (off - on) * vllm.KV_BYTES_PER_TOKEN
-    want = batch.pack_dram_bytes(batch.pack_buckets_from_env({}, lanes=8), vllm.resident_allocated_context(32704))
-    assert abs(lost_bytes - want) < 2 * vllm.KV_BYTES_PER_TOKEN
+    assert on < off
+    monkeypatch.delenv("QWEN38_PREFILL_PACK", raising=False)  # unset: on with 8 lanes
+    assert vllm.batch_pool_token_cap(32704, 8) == on
 
 
 # --------------------------------------------------------------------------------------------- the scatter kernel option

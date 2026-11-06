@@ -11,6 +11,9 @@ One chain pass verifies the block, decides the acceptance on the device, drafts 
 (the ``K + 1`` argmaxes and the next pass's ``[t', d_1 .. d_K]``).  The adapter keeps the drafts and hands them to
 ``propose_draft_tokens`` (no device call).  Select the class with ``TT_MODEL_CLASS_OVERRIDES`` (see the README of the
 vLLM bundle); without ``speculative_config`` the plain class is the one served.
+Batch 1 runs on the plain adapter's paged pools: ``allocate_kv_cache`` opens the chain on vLLM's blocks, ``prefill_forward``
+writes the request's block ids (page-table row 0) into the chain's page table after the reset, and every verify writes them
+before its device work, with the blocks up to row ``position + K`` of the pass.
 
 The contract's split of work: ``spec_plan`` (host), ``prefill_forward`` (prefill and the first token), ``decode_forward``
 (verify, returns ``VerifyOutput(argmax_ids)``), ``propose_draft_tokens`` (the drafts the last verify left),
@@ -25,6 +28,11 @@ rules without its queue).  A request is a state slot of the plugin; its lane is 
 adapter's map: the lanes never move on the device, ``slot_remap`` only permutes the map).  One ``decode_forward`` is one
 lane pass for every live row; requests join (a prefill into a free lane) and leave (``release_request`` parks the lane)
 between passes.
+The lanes run on vLLM's blocks like batch 1: ``allocate_kv_cache`` builds the paging from vLLM's cache shape and opens the chain
+with it (the lanes share the chain's pools, page id = vLLM block id, page 0 the scratch).  A prefill takes the request's block
+ids from its page-table row; every verify sets each live lane's row from the plugin's table (blocks up to row
+``position + K``), zeroes the rows of the other lanes and uploads the tables before the pass; ``release_request`` zeroes the
+lane's row so its junk writes land in block 0, never in blocks vLLM hands to another request.  The pools are never freed.
 
 Hybrid single (``QWEN38_MTP_HYBRID_SINGLE``, default on, batch mode only): a lone request, prefilled when no lane holds a
 request, runs on the chain's own pass loop (the batch-1 path above, same K) in a lane-free state; the lane chain is not
@@ -65,11 +73,13 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import (
     WARMUP_PROMPT_TOKEN_IDS,
     Qwen38ForCausalLM,
     _ModelCapabilities,
+    check_paged_block_size,
     device_greedy_contract,
     parse_slot_remap,
     prefill_form,
     resident_allocated_context,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging, paged_table_width, validate_index_paging
 
 MTP_DRAFTS_VARIABLE = "QWEN38_VLLM_MTP_K"  # the draft count the chain is built for (3, 4 or 5); default 4
 MTP_PLE_EARLY_VARIABLE = (
@@ -139,6 +149,8 @@ class _MTPModelCapabilities:
                 # the chain has no sampled tail: prefill returns a logits row and the decode steps are verifies
                 "supports_sample_on_device": False,
                 "supports_device_penalties": False,
+                # its prefill takes position 0 only
+                "supports_chunked_prefill": False,
             }
         )
         return capabilities
@@ -173,13 +185,17 @@ class Qwen38VLLMMTPDriver:
 
     # -- prefill ---------------------------------------------------------------------------------------------------
 
-    def prefill(self, ids: Sequence[int]) -> int:
+    def prefill(self, ids: Sequence[int], page_ids: Sequence[int] | None = None) -> int:
         """The prompt into the reset state as ``Qwen38ChatSession.complete`` prefills a chunked prompt; returns the model's
-        first token (the token row after the last prompt token's TAIL).  Leaves an open pass loop first."""
+        first token (the token row after the last prompt token's TAIL).  Leaves an open pass loop first.  ``page_ids`` (a
+        paged chain): the request's vLLM block ids, written into the chain's page table after the reset, before any chunk.
+        """
 
         self.close()
         session = self.session
         session.reset()
+        if page_ids is not None:
+            self.chain.write_page_table(page_ids)
         suffix = [int(token) for token in ids]
         if session.chunk_prefill_rows(len(suffix) - 1) >= CHUNK_PREFILL_MIN_ROWS:
             session.resolve_prefill_mode("chunked")  # refused by name when the chain has no chunk trace
@@ -194,10 +210,19 @@ class Qwen38VLLMMTPDriver:
 
     # -- verify ----------------------------------------------------------------------------------------------------
 
-    def verify(self, tokens: Sequence[int], positions: Sequence[int], num_valid: int, accepted: int) -> list[int]:
+    def verify(
+        self,
+        tokens: Sequence[int],
+        positions: Sequence[int],
+        num_valid: int,
+        accepted: int,
+        page_ids: Sequence[int] | None = None,
+    ) -> list[int]:
         """One verify block of the plugin: ``tokens`` ``[t, d_1 .. d_K]`` at ``positions``, ``num_valid`` real drafts,
         ``accepted`` the tokens the plugin's previous step committed for the request (1 after a prefill).  Returns the
-        pass's ``K + 1`` argmaxes (``argmax_ids``)."""
+        pass's ``K + 1`` argmaxes (``argmax_ids``).  ``page_ids`` (a paged chain): the request's vLLM block ids, written
+        into the chain's page table (a no-op when unchanged) before the pass's device work, the resync's leave included.
+        """
 
         k = self.drafts
         tokens = [int(token) for token in tokens]
@@ -205,6 +230,8 @@ class Qwen38VLLMMTPDriver:
             raise ValueError(
                 f"the verify block must be {k + 1} wide, got {len(tokens)} tokens, {len(positions)} positions"
             )
+        if page_ids is not None:
+            self.chain.write_page_table(page_ids)
         first, position = tokens[0], int(positions[0])
         run = self.run
         if run is not None:
@@ -335,16 +362,26 @@ class _LaneRun:
 
 class VerifyRow:
     """One live row of a verify call: the lane it runs in, the plugin's block, its position, its valid drafts and the tokens
-    the plugin committed for the request in its previous step (1 after a prefill)."""
+    the plugin committed for the request in its previous step (1 after a prefill), and (paged lanes) the request's vLLM block
+    ids for the pass."""
 
-    __slots__ = ("lane", "tokens", "position", "num_valid", "accepted")
+    __slots__ = ("lane", "tokens", "position", "num_valid", "accepted", "pages")
 
-    def __init__(self, lane: int, tokens: Sequence[int], position: int, num_valid: int, accepted: int) -> None:
+    def __init__(
+        self,
+        lane: int,
+        tokens: Sequence[int],
+        position: int,
+        num_valid: int,
+        accepted: int,
+        pages: Sequence[int] | None = None,
+    ) -> None:
         self.lane = int(lane)
         self.tokens = [int(token) for token in tokens]
         self.position = int(position)
         self.num_valid = int(num_valid)
         self.accepted = int(accepted)
+        self.pages = None if pages is None else [int(block) for block in pages]
 
 
 class SimpleTicket:
@@ -367,9 +404,10 @@ class Qwen38VLLMMTPLanesDriver:
     the active mask (the live rows).  The decision of acceptance stays on the device (greedy, fused); the plugin walks the same
     argmaxes, so both agree, and a disagreement (the plugin committed less, or trimmed drafts) is a per-lane resync."""
 
-    def __init__(self, device: Any, lanes: int, drafts: int) -> None:
+    def __init__(self, device: Any, lanes: int, drafts: int, paged: bool = False) -> None:
         lane_geometry(lanes, drafts)
         self.device = device
+        self.paged = paged  # the lanes run on the chain's shared paged pools: the device owns lane page tables
         self.lanes = lanes
         self.drafts = drafts
         self.runs: list[_LaneRun | None] = [None] * lanes
@@ -390,13 +428,19 @@ class Qwen38VLLMMTPLanesDriver:
 
     # -- admission and release -------------------------------------------------------------------------------------
 
-    def admit(self, lane: int, ids: Sequence[int]) -> int:
+    def admit(self, lane: int, ids: Sequence[int], block_ids: Sequence[int] | None = None) -> int:
         """The prompt prefilled into ``lane`` (the lanes session's admission); returns the model's first token.  The lane's
-        first pass is the bootstrap pass on ``[pending, placeholders]`` committing nothing (count -1)."""
+        first pass is the bootstrap pass on ``[pending, placeholders]`` committing nothing (count -1).  ``block_ids`` (paged
+        lanes): the request's vLLM blocks, the prefill's and the lane's."""
 
         if self.runs[lane] is not None:
             raise Qwen38ChatChainError(f"admission into lane {lane}, which still holds a request")
-        admitted = self.device.admit(lane, SimpleTicket(ids))
+        if self.paged:
+            if block_ids is None:
+                raise Qwen38ChatChainError(f"admission into lane {lane} on paged lanes needs the request's block ids")
+            admitted = self.device.admit(lane, SimpleTicket(ids), block_ids=list(block_ids))
+        else:
+            admitted = self.device.admit(lane, SimpleTicket(ids))
         pending, position = int(admitted.pending), int(admitted.position)
         if position != len(ids):
             raise Qwen38ChatChainError(f"lane {lane}: admitted position {position} for a prompt of {len(ids)} tokens")
@@ -408,16 +452,31 @@ class Qwen38VLLMMTPLanesDriver:
         self.writes = True
         return pending
 
-    def admit_from_chain(self, lane: int, position: int, pending: int, settled: int, ple_context: Any) -> None:
+    def admit_from_chain(
+        self,
+        lane: int,
+        position: int,
+        pending: int,
+        settled: int,
+        ple_context: Any,
+        block_ids: Sequence[int] | None = None,
+    ) -> None:
         """``lane`` takes the request the chain holds in its settled 1-row state (``admit`` without the reset and the prefill):
         ``position`` rows committed, ``pending`` the model's next token, ``settled`` the rows the chain's last pass committed
-        (the plugin's next ``accepted_counts``).  The lane's first pass is the bootstrap pass on the plugin's block."""
+        (the plugin's next ``accepted_counts``).  The lane's first pass is the bootstrap pass on the plugin's block.  Paged
+        lanes: the KV is already in the shared pools, the import is state only and the lane's row takes ``block_ids``, the
+        blocks the chain's table holds."""
 
         if self.runs[lane] is not None:
             raise Qwen38ChatChainError(f"chain move into lane {lane}, which still holds a request")
         if not 0 <= pending < VOCAB_SIZE:
             raise Qwen38ChatChainError(f"token row holds {pending}, outside the vocabulary [0, {VOCAB_SIZE})")
+        if self.paged and block_ids is None:
+            raise Qwen38ChatChainError(f"chain move into lane {lane} on paged lanes needs the chain's block ids")
         self._import_chain_state(lane, position, ple_context)
+        if self.paged:
+            self.device.set_lane_pages(lane, list(block_ids))
+            self.device.sync_page_tables()
         self.runs[lane] = _LaneRun(position, pending, settled)
         self.counts[lane] = -1
         self.blocks[lane] = self._placeholders(pending)
@@ -451,11 +510,16 @@ class Qwen38VLLMMTPLanesDriver:
         ttnn.synchronize_device(device.mesh)
 
     def release(self, lane: int) -> None:
-        """The request left (finished, preempted): the lane parks at the next pass (it still commits its last real pass)."""
+        """The request left (finished, preempted): the lane parks at the next pass (it still commits its last real pass).
+        Paged lanes: the lane's page row is zeroed and uploaded now (between passes), so the parked lane's junk writes land
+        in block 0 and never in blocks vLLM reassigns."""
 
         self.runs[lane] = None
         self.counts[lane] = -1
         self.blocks[lane] = None
+        if self.paged:
+            self.device.clear_lane_pages(lane)
+            self.device.sync_page_tables()
 
     # -- verify ----------------------------------------------------------------------------------------------------
 
@@ -477,6 +541,8 @@ class Qwen38VLLMMTPLanesDriver:
             raise Qwen38ChatChainError(f"contract error: live rows map to lanes {strangers} with no prefilled request")
         for lane, row in sorted(live.items()):
             self._plan(lane, row)
+        if self.paged:
+            self._sync_pages(live)
         if self.writes:
             self.device.write_counts(list(self.counts))
             self.device.set_blocks(self.blocks)
@@ -515,6 +581,20 @@ class Qwen38VLLMMTPLanesDriver:
             self.accepted_drafts += run.accepted
             out[lane] = list(run.argmaxes)
         return out
+
+    def _sync_pages(self, live: Mapping[int, VerifyRow]) -> None:
+        """Paged lanes: each live lane's page row from its verify row, the other lanes' rows zero, uploaded before the pass
+        (a no-op for what did not change)."""
+
+        missing = sorted(lane for lane, row in live.items() if row.pages is None)
+        if missing:
+            raise Qwen38ChatChainError(f"paged lanes: the live rows of lanes {missing} carry no block ids")
+        for lane in range(self.lanes):
+            if lane in live:
+                self.device.set_lane_pages(lane, live[lane].pages)
+            else:
+                self.device.clear_lane_pages(lane)
+        self.device.sync_page_tables()
 
     def _plan(self, lane: int, row: VerifyRow) -> None:
         """Check the row against the lane's state; queue the resync writes when the plugin's block is not the device's."""
@@ -595,6 +675,8 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
 
     model_capabilities = _MTPModelCapabilities()
     decode_input_update_contract = 0  # decode_forward is overridden and runs no reload command
+    _paged_single_slot = True  # batch 1: the chain opens in allocate_kv_cache on vLLM's pools (lanes mode: flat caches)
+    _mamba_spec_capable = False  # QWEN38_MAMBA_SPEC applies to the plain class only
     _open_lanes = 1  # the lane count the chain opens for (set by initialize_vllm_model before the open)
 
     def __init__(self, chain: Any, *, allocated_context: int, **kwargs: Any) -> None:
@@ -613,15 +695,70 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             self.mtp_hybrid_single = mtp_hybrid_single_from_env()
             self.mtp_hybrid_slot: int | None = None
             self.mtp_hybrid_pending = 0
+            self.mtp_hybrid_pages: list[
+                int
+            ] | None = None  # paged: the block ids the chain's table holds for that request
             self.driver: Qwen38VLLMMTPDriver | None = None
             return
         super().__init__(chain, allocated_context=allocated_context, **kwargs)
-        mtp = getattr(chain, "mtp", None)
+        self.drafts = mtp_drafts_from_env()
+        self.session: Qwen38ChatSession | None = None
+        self.driver: Qwen38VLLMMTPDriver | None = None
+        if chain is not None:  # a chain opened by the caller (flat); else allocate_kv_cache opens it, paged
+            self._attach_chain()
+
+    def _attach_chain(self) -> None:
+        """The pass-loop driver and the chat session over ``self.chain``."""
+
+        mtp = getattr(self.chain, "mtp", None)
         if mtp is None:
             raise ValueError("the MTP adapter needs a chain opened with mtp=K")
         self.drafts = int(mtp.drafts)
-        self.session = Qwen38ChatSession(chain, None, allocated_context=allocated_context)
-        self.driver = Qwen38VLLMMTPDriver(chain, self.session, self.drafts)
+        self.session = Qwen38ChatSession(self.chain, None, allocated_context=self.allocated_context)
+        self.driver = Qwen38VLLMMTPDriver(self.chain, self.session, self.drafts)
+
+    def _open_paged_single(self, kv_cache_shape: Any) -> None:
+        super()._open_paged_single(kv_cache_shape)  # the opener applies ``_chain_open_options`` (the MTP chain)
+        self._attach_chain()
+
+    def _pass_blocks(self, position: int) -> int:
+        """The blocks a verify pass at ``position`` needs.  The pass writes rows ``position .. position + K`` (the entry pass
+        and every following pass feed K + 1 rows), so the last row's block ``(position + K) // block_size`` must be in the
+        row; rows past the resident context are not written."""
+
+        return min(position + self.drafts, self.allocated_context - 1) // self.block_size + 1
+
+    def _verify_pages(self, page_table: Any, position: int) -> list[int] | None:
+        """The request's block ids for a verify pass at ``position`` (None: flat chain): row 0 of the table, the blocks of
+        ``_pass_blocks``."""
+
+        if self.paging is None:
+            return None
+        return self._slot_page_ids(page_table, needed=self._pass_blocks(position), label="verify")
+
+    def _row_page_ids(self, page_table: Any, row: int, *, needed: int, label: str) -> list[int]:
+        """The vLLM block ids of row ``row`` of the plugin's page table (``_page_row``'s checks), for the paged lanes."""
+
+        if page_table is None:
+            raise ValueError(f"{label}: the paged lanes need the plugin's page_table")
+        table = torch.as_tensor(page_table)
+        if table.ndim != 2 or not 0 <= row < table.shape[0]:
+            raise ValueError(f"{label}: page_table must be [rows, blocks] with row {row}, got {tuple(table.shape)}")
+        return self._page_row(table[row], needed=needed, label=label)
+
+    def _warm_page_table(self, rows: int, used: int, tokens: int) -> torch.Tensor | None:
+        """The warm-up's page table (None: flat chain): ``used`` rows each hold the blocks of ``tokens`` rows, distinct per
+        row and counted from block 1 (block 0 is the scratch); the other rows are zero."""
+
+        if self.paging is None:
+            return None
+        blocks = (tokens - 1) // self.block_size + 1
+        if 1 + used * blocks > self.num_blocks:
+            raise ValueError(f"the warm-up needs {1 + used * blocks} blocks, the pool has {self.num_blocks}")
+        table = torch.zeros(rows, self.paging.max_blocks, dtype=torch.int32)
+        for row in range(used):
+            table[row, :blocks] = torch.arange(1 + row * blocks, 1 + (row + 1) * blocks, dtype=torch.int32)
+        return table
 
     # -- construction ----------------------------------------------------------------------------------------------
 
@@ -649,15 +786,11 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
     def get_max_tokens_all_users(
         cls, *, max_model_len: int | None = None, max_num_seqs: int | None = None, **kwargs: Any
     ) -> int:
-        """The plugin's block-table pool: one context per sequence (the lanes hold their own resident contexts, the paged
-        pool of the plain batch mode is not allocated); ``QWEN38_MAX_TOKENS_ALL_USERS`` overrides."""
+        """The plugin's block-table pool.  The lanes run on vLLM-sized shared paged pools like the plain batch mode, so the
+        plain sizing applies: ``max_model_len * max_num_seqs`` capped by the pool's DRAM budget (``batch_pool_token_cap``);
+        batch 1 is one context.  ``QWEN38_MAX_TOKENS_ALL_USERS`` overrides."""
 
-        override = os.environ.get("QWEN38_MAX_TOKENS_ALL_USERS", "").strip()
-        if override:
-            if not override.isascii() or not override.isdigit() or int(override) < 1:
-                raise ValueError(f"QWEN38_MAX_TOKENS_ALL_USERS must be a positive integer, got {override!r}")
-            return int(override)
-        return int(max_model_len) * int(max_num_seqs)
+        return super().get_max_tokens_all_users(max_model_len=max_model_len, max_num_seqs=max_num_seqs, **kwargs)
 
     # -- config time -----------------------------------------------------------------------------------------------
 
@@ -736,6 +869,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         if self.lanes_mode:
             return self._prefill_lanes(
                 tokens=tokens,
+                page_table=page_table,
                 enable_trace=enable_trace,
                 prompt_lens=prompt_lens,
                 start_pos=start_pos,
@@ -759,13 +893,19 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         if min(ids) < 0 or max(ids) >= TOKENIZER_SIZE:
             raise ValueError(f"prompt ids must be in [0, {TOKENIZER_SIZE}), got {min(ids)}..{max(ids)}")
         self._require_serviceable(enable_trace, recovering=True)
-        return self._chain_prefill(ids, greedy_token)[:2]
+        page_ids = None
+        if self.paging is not None:
+            page_ids = self._slot_page_ids(page_table, needed=-(-length // self.block_size), label="prefill")
+        return self._chain_prefill(ids, greedy_token, page_ids)[:2]
 
-    def _chain_prefill(self, ids: list[int], greedy_token: bool) -> tuple[torch.Tensor, torch.Tensor, int]:
-        """The prompt on the chain's pass-loop driver; the first token as ``prefill_forward`` returns it (and as an int)."""
+    def _chain_prefill(
+        self, ids: list[int], greedy_token: bool, page_ids: list[int] | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, int]:
+        """The prompt on the chain's pass-loop driver (``page_ids``: the paged chain's request blocks); the first token as
+        ``prefill_forward`` returns it (and as an int)."""
 
         try:
-            token = self.driver.prefill(ids)
+            token = self.driver.prefill(ids, page_ids)
         except BaseException:
             self.slot.failed = True
             raise
@@ -790,6 +930,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         num_valid_drafts: Any = None,
         accepted_counts: Any = None,
         slot_remap: Any = None,
+        page_table: Any = None,
         **kwargs: Any,
     ):
         """The verify of the plugin's ``[1, 1+K]`` block: ``VerifyOutput(argmax_ids [1, 1+K])``.  Every decode step of a
@@ -805,6 +946,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 num_valid_drafts=num_valid_drafts,
                 accepted_counts=accepted_counts,
                 slot_remap=slot_remap,
+                page_table=page_table,
             )
         if spec_mode is None:
             raise ValueError(
@@ -827,9 +969,10 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             raise ValueError(f"one resident slot: slot_remap must be the identity, got {slot_remap}")
         if int(positions[0, 0]) < 0:
             raise ValueError("the verify's only row is a padding row (position -1): nothing to verify")
+        page_ids = self._verify_pages(page_table, int(positions[0, 0]))  # a refused table touches no device state
         try:
             ids = self.driver.verify(
-                tokens[0].tolist(), positions[0].tolist(), int(num_valid_drafts[0]), int(accepted_counts[0])
+                tokens[0].tolist(), positions[0].tolist(), int(num_valid_drafts[0]), int(accepted_counts[0]), page_ids
             )
         except BaseException:
             self.slot.failed = True
@@ -875,7 +1018,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         if self.lanes_mode:
             self._close_lanes()
             return
-        if not self.slot.failed:
+        if not self.slot.failed and self.driver is not None:
             try:
                 self.driver.close()
             except Exception as error:  # the mesh close below frees the traces either way
@@ -908,15 +1051,25 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             return
         k = self.drafts
         ids = list(WARMUP_PROMPT_TOKEN_IDS)
-        first = self.driver.prefill(ids)
+        warm_table = None
+        if (
+            self.paging is not None
+        ):  # the warm-up request's blocks: 1.. (block 0 is the scratch), up to the last verify row
+            warm_blocks = (len(ids) + 1 + k) // self.block_size + 1
+            warm_table = torch.zeros(1, self.paging.max_blocks, dtype=torch.int32)
+            warm_table[0, :warm_blocks] = torch.arange(1, warm_blocks + 1, dtype=torch.int32)
+        warm_ids = None if warm_table is None else self._slot_page_ids(warm_table, needed=warm_blocks, label="warmup")
+        first = self.driver.prefill(ids, warm_ids)
         block = torch.full((1, k + 1), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
         block[0, 0] = first
         positions = torch.full((1, k + 1), -1, dtype=torch.int32)
         positions[0, 0] = len(ids)
-        committed = self.driver.verify(block[0].tolist(), positions[0].tolist(), 0, 1)[:1]
+        committed = self.driver.verify(block[0].tolist(), positions[0].tolist(), 0, 1, warm_ids)[:1]
         drafts, valid = self.driver.propose(committed, 1)
         if valid == k:  # a second pass on the drafts the first one left
-            self.driver.verify([committed[0], *drafts], [len(ids) + 1 + column for column in range(k + 1)], k, 1)
+            self.driver.verify(
+                [committed[0], *drafts], [len(ids) + 1 + column for column in range(k + 1)], k, 1, warm_ids
+            )
         self.driver.close()
         try:
             self.session.reset()
@@ -928,8 +1081,10 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
     # -- batch 2..8: the lane chain --------------------------------------------------------------------------------
 
     def allocate_kv_cache(self, kv_cache_shape: Any, dtype: Any, num_layers: int) -> None:
-        """Batch mode: open the chain with the lanes' allocation as its warm hook (the text demo's form), capture the lane
-        traces.  The vLLM cache is not used (the lanes hold their resident contexts).  Batch 1: nothing to do."""
+        """Batch mode: open the chain on vLLM's pools (the paging from ``kv_cache_shape``, as the plain adapter's
+        ``_open_paged_single``) with the lanes' allocation as its warm hook (the text demo's form), capture the lane traces;
+        the lanes share the chain's pools, page id = vLLM block id.  Batch 1: the parent opens the paged chain (vLLM's block
+        count and size) through the chain opener, ``_chain_open_options`` applied."""
 
         if not self.lanes_mode:
             return super().allocate_kv_cache(kv_cache_shape, dtype, num_layers)
@@ -938,6 +1093,20 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         from models.demos.blackhole.qwen38_flash_next.demo.mtp_demo import _lanes_warm_hook
         from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lanes_session import Qwen38LanesSession
 
+        shape = tuple(int(extent) for extent in kv_cache_shape)
+        if len(shape) != 4:
+            raise ValueError(f"kv_cache_shape must be (num_blocks, heads, block_size, head_size), got {shape}")
+        num_blocks, block_size = shape[0], check_paged_block_size(shape[2])
+        if num_blocks < 2:
+            raise ValueError(f"vLLM num_blocks must be >= 2 (block 0 is the scratch), got {num_blocks}")
+        paging = validate_index_paging(
+            Qwen38LanePaging(
+                page_size=block_size,
+                num_pages=num_blocks,
+                max_blocks=paged_table_width(self.allocated_context, block_size),
+            ),
+            self.allocated_context,
+        )
         long_chunks, slab_rows = prefill_form()
         lanes_session = Qwen38LanesSession(lanes=self.lanes, drafts=self.drafts, marker=logger.info)
 
@@ -946,13 +1115,17 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 chain
             )
 
-        logger.info(f"mtp lanes: {self.lanes} lanes x {self.drafts} drafts, context {self.allocated_context}")
-        self.chain = self.chain_opener(warm_hook)
+        logger.info(
+            f"mtp lanes: {self.lanes} lanes x {self.drafts} drafts, context {self.allocated_context}, block size "
+            f"{block_size}, {num_blocks} blocks, page table width {paging.max_blocks}"
+        )
+        self.paging, self.block_size, self.num_blocks = paging, block_size, num_blocks
+        self.chain = self.chain_opener(warm_hook, paging=paging)
         self.session = Qwen38ChatSession(self.chain, None, allocated_context=self.allocated_context)
         self.session.reset()
         lanes_session.capture(self.chain, self.session)
         self.lanes_session = lanes_session
-        self.lane_driver = Qwen38VLLMMTPLanesDriver(lanes_session, self.lanes, self.drafts)
+        self.lane_driver = Qwen38VLLMMTPLanesDriver(lanes_session, self.lanes, self.drafts, paged=True)
         self.driver = Qwen38VLLMMTPDriver(self.chain, self.session, self.drafts)  # the hybrid single's pass loop
         logger.info(f"mtp lanes ready: {lanes_session.summary()}")
         summary = lanes_session.summary()
@@ -988,6 +1161,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         self,
         *,
         tokens: torch.Tensor,
+        page_table: Any = None,
         enable_trace: bool,
         prompt_lens: Any,
         start_pos: Any,
@@ -995,7 +1169,8 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         greedy_token: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Each row alone into the lane of its state slot (the lanes session's admission); the first tokens as int32
-        ``[rows, 1]`` for a greedy contract or one-hot float32 logits ``[rows, 1, VOCAB_SIZE]``."""
+        ``[rows, 1]`` for a greedy contract or one-hot float32 logits ``[rows, 1, VOCAB_SIZE]``.  Paged lanes: row ``i``'s
+        blocks are the ``ceil(length / block_size)`` leading entries of ``page_table[i]``."""
 
         driver = self._require_lanes()
         rows = int(tokens.shape[0])
@@ -1006,7 +1181,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         slots = [int(slot) for slot in empty_slots]
         if len(set(slots)) != rows or any(not 0 <= slot < self.lanes for slot in slots):
             raise ValueError(f"batch mode: empty_slots must be distinct slots in [0, {self.lanes}), got {slots}")
-        prompts = []
+        prompts, pages = [], []
         for i in range(rows):
             if int(start_pos[i]) != 0:
                 raise ValueError(
@@ -1021,29 +1196,34 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             if min(ids) < 0 or max(ids) >= TOKENIZER_SIZE:
                 raise ValueError(f"prompt ids must be in [0, {TOKENIZER_SIZE}), got {min(ids)}..{max(ids)}")
             prompts.append(ids)
+            if self.paging is not None:
+                pages.append(
+                    self._row_page_ids(page_table, i, needed=-(-length // self.block_size), label=f"prefill row {i}")
+                )
         self._require_serviceable(enable_trace, recovering=True)
         if self.mtp_hybrid_slot in slots:
             logger.warning(f"prefill into slot {self.mtp_hybrid_slot} whose request still runs on the chain: released")
             self._release_hybrid()
         if self._hybrid_starts(rows):
             try:
-                out, rope, first = self._chain_prefill(prompts[0], greedy_token)
+                out, rope, first = self._chain_prefill(prompts[0], greedy_token, pages[0] if pages else None)
             except BaseException:
                 self.batch_failed = True
                 raise
             self.mtp_hybrid_slot, self.mtp_hybrid_pending = slots[0], first
+            self.mtp_hybrid_pages = pages[0] if pages else None
             return out, rope
         if self.mtp_hybrid_slot is not None:
             self._move_hybrid_to_lane()  # before the admission below resets the chain
         firsts = []
         try:
-            for slot, ids in zip(slots, prompts):
+            for index, (slot, ids) in enumerate(zip(slots, prompts)):
                 lane = self.lane_of_slot[slot]
                 if driver.runs[lane] is not None:
                     logger.warning(f"prefill into slot {slot} whose lane {lane} still holds a request: released")
                     driver.release(lane)
                 lane = self._take_lane(slot)
-                firsts.append(driver.admit(lane, ids))
+                firsts.append(driver.admit(lane, ids, pages[index] if pages else None))
         except BaseException:
             self.batch_failed = True
             raise
@@ -1069,11 +1249,12 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         num_valid_drafts: Any,
         accepted_counts: Any,
         slot_remap: Any,
+        page_table: Any = None,
     ):
         """One lane pass for the live rows of the plugin's ``[lanes, 1+K]`` verify block.  Row ``i`` is live when
         ``start_pos[i, 0] >= 0`` and runs in lane ``lane_of_slot[slot_remap[i]]`` (the map the plain batch adapter keeps:
         ``slot_remap`` is applied to it once, no device move).  Returns ``VerifyOutput(argmax_ids [lanes, 1+K])``, padding
-        rows 0."""
+        rows 0.  Paged lanes: row ``i``'s lane takes the blocks of ``_pass_blocks`` from ``page_table[i]``."""
 
         from vllm_tt_plugin.spec_decode import VerifyOutput, check_spec_side_tensors
 
@@ -1104,8 +1285,17 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         if self.mtp_hybrid_slot is not None:
             if [remap[row] for row in live_rows] == [self.mtp_hybrid_slot]:
                 return self._decode_hybrid(
-                    live_rows[0], tokens, positions, num_valid_drafts, accepted_counts, remap, new_map
+                    live_rows[0], tokens, positions, num_valid_drafts, accepted_counts, remap, new_map, page_table
                 )
+        pages = {}
+        if self.paging is not None:  # a refused table touches no device state
+            pages = {
+                row: self._row_page_ids(
+                    page_table, row, needed=self._pass_blocks(int(positions[row, 0])), label=f"verify row {row}"
+                )
+                for row in live_rows
+            }
+        if self.mtp_hybrid_slot is not None:
             self._move_hybrid_to_lane()
         rows = [
             VerifyRow(
@@ -1114,6 +1304,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 int(positions[row, 0]),
                 int(num_valid_drafts[row]),
                 int(accepted_counts[row]),
+                pages.get(row),
             )
             for row in live_rows
         ]
@@ -1165,20 +1356,33 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
             self.mtp_hybrid_single and rows == 1 and self.mtp_hybrid_slot is None and not self._require_lanes().holders
         )
 
-    def _decode_hybrid(self, row: int, tokens, positions, num_valid_drafts, accepted_counts, remap, new_map):
+    def _decode_hybrid(
+        self, row: int, tokens, positions, num_valid_drafts, accepted_counts, remap, new_map, page_table=None
+    ):
         """The only live row is the chain's request: one chain pass (``Qwen38VLLMMTPDriver.verify``); the other rows are
-        padding (0), as the lane path pads its idle rows.  The request's slot follows the row (``slot_remap``)."""
+        padding (0), as the lane path pads its idle rows.  The request's slot follows the row (``slot_remap``).  Paged: the
+        chain's table takes the row's blocks of ``_pass_blocks`` (as batch 1) before the pass."""
 
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
         k, lanes = self.drafts, self.lanes
+        page_ids = None
+        if self.paging is not None:  # a refused table touches no device state
+            page_ids = self._row_page_ids(
+                page_table, row, needed=self._pass_blocks(int(positions[row, 0])), label=f"verify row {row}"
+            )
         try:
             ids = self.driver.verify(
-                tokens[row].tolist(), positions[row].tolist(), int(num_valid_drafts[row]), int(accepted_counts[row])
+                tokens[row].tolist(),
+                positions[row].tolist(),
+                int(num_valid_drafts[row]),
+                int(accepted_counts[row]),
+                page_ids,
             )
         except BaseException:
             self.batch_failed = self.slot.failed = True
             raise
+        self.mtp_hybrid_pages = page_ids
         self._pending_note = (
             {remap[r]: r for r in range(lanes) if remap[r] != r} if remap != list(range(lanes)) else None
         )
@@ -1207,17 +1411,19 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                     f"chain move: committed {len(single.session.committed)} rows, device position "
                     f"{int(self.chain.position())}, expected {position}"
                 )
-            driver.admit_from_chain(lane, position, pending, rows, single.session.ple_context)
+            driver.admit_from_chain(lane, position, pending, rows, single.session.ple_context, self.mtp_hybrid_pages)
         except BaseException:
             self.batch_failed = self.slot.failed = True
             raise
         logger.info(f"mtp hybrid single: slot {self.mtp_hybrid_slot} moved to lane {lane} at position {position}")
         self.mtp_hybrid_slot = None
+        self.mtp_hybrid_pages = None
 
     def _release_hybrid(self) -> None:
         """The chain's request is gone.  Its pass loop is left now: an admission's reset needs the 1-row state."""
 
         self.mtp_hybrid_slot = None
+        self.mtp_hybrid_pages = None
         try:
             self.driver.close()
         except BaseException:
@@ -1261,16 +1467,17 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         driver = self._require_lanes()
         slots = [0, 1]  # two prompts never start a hybrid single: the warmup runs the lane path only
         prompt = torch.tensor([list(WARMUP_PROMPT_TOKEN_IDS)] * len(slots), dtype=torch.int32)
+        length = int(prompt.shape[1])
+        warm_table = self._warm_page_table(lanes, len(slots), length + k + 2)  # rows up to the second pass's last
         out, _ = self.prefill_forward(
             tokens=prompt,
-            page_table=None,
+            page_table=None if warm_table is None else warm_table[: len(slots)],
             kv_cache=None,
             enable_trace=True,
             prompt_lens=[prompt.shape[1]] * len(slots),
             start_pos=[0] * len(slots),
             empty_slots=slots,
         )
-        length = int(prompt.shape[1])
         firsts = [int(out[i, 0].argmax()) for i in range(len(slots))]
         block = torch.full((lanes, k + 1), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
         positions = torch.full((lanes, k + 1), -1, dtype=torch.int32)
@@ -1280,7 +1487,12 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         valid = torch.zeros(lanes, dtype=torch.int32)
         counts = torch.ones(lanes, dtype=torch.int32)
         verified = self.decode_forward(
-            tokens=block, start_pos=positions, spec_mode="argmax_ids", num_valid_drafts=valid, accepted_counts=counts
+            tokens=block,
+            start_pos=positions,
+            spec_mode="argmax_ids",
+            num_valid_drafts=valid,
+            accepted_counts=counts,
+            page_table=warm_table,
         )
         committed = torch.zeros(lanes, k + 1, dtype=torch.int32)
         for row in slots:
@@ -1299,6 +1511,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 spec_mode="argmax_ids",
                 num_valid_drafts=torch.tensor([k if row in slots else 0 for row in range(lanes)], dtype=torch.int32),
                 accepted_counts=counts,
+                page_table=warm_table,
             )
         warm_widths = getattr(self.lanes_session, "warm_widths", None)
         if warm_widths is not None:  # every lane width's traces replay once here (the two warm lanes are still live)
@@ -1316,6 +1529,7 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
         k, lanes = self.drafts, self.lanes
         ids = list(WARMUP_PROMPT_TOKEN_IDS)
         length = len(ids)
+        warm_table = self._warm_page_table(lanes, 1, length + 4 * (k + 1) + 1)  # rows up to the lane pass's last
         clock, marks = time.perf_counter, []
         mark = clock()
 
@@ -1339,11 +1553,12 @@ class Qwen38MTPForCausalLM(Qwen38ForCausalLM):
                 spec_mode="argmax_ids",
                 num_valid_drafts=valid,
                 accepted_counts=counts,
+                page_table=warm_table,
             )
 
         out, _ = self.prefill_forward(
             tokens=torch.tensor([ids], dtype=torch.int32),
-            page_table=None,
+            page_table=None if warm_table is None else warm_table[:1],
             kv_cache=None,
             enable_trace=True,
             prompt_lens=[length],

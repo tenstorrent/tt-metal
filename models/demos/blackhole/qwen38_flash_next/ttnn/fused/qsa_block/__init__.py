@@ -58,10 +58,10 @@ MAIN_TAIL = {
         "writer_staging",
     )
 }
-# QWEN38_QSA_MT_ROW (default "1"; "0" keeps the 16-tile staging path): with one lane (rows == 1, unpaged, no KV stage)
+# QWEN38_QSA_MT_ROW (default "1"; "0" keeps the 16-tile staging path): with one lane (rows == 1, no KV stage)
 # main_tail's staging core runs the one-row kernels: the readers build the new row [v | k] in L1 with the value rule the
 # 16-tile path stores (exponent 0 -> +0.0, NaN -> Inf, exponents 1..8 -> RNE(x + 2^-127); main_tail_row.h) and the writer
-# puts it into the KV cache row P and into row P % 32 of the 16 staging tiles; no compute kernel on that core, no staging
+# puts it into the KV cache row P (paged: the page pool's row of P) and into row P % 32 of the 16 staging tiles; no compute kernel on that core, no staging
 # read, no 32-row write.  Every other call keeps the kernels above.
 MT_ROW_ENV = "QWEN38_QSA_MT_ROW"
 MAIN_TAIL_ROW = {role: fp.kernel_source(NAME, f"main_tail_{role}_staging_row.cpp") for role in ("reader", "writer")}
@@ -86,9 +86,9 @@ def mt_row_enabled(environ=None) -> bool:
 
 
 def mt_row_admits(rows: int, paged: bool, kv_stage) -> bool:
-    """The one-row staging core serves the single-lane decode only: rows == 1, unpaged, no KV stage."""
+    """The one-row staging core serves the single-lane decode only: rows == 1, no KV stage (paged or not)."""
 
-    return rows == 1 and not paged and kv_stage is None
+    return rows == 1 and kv_stage is None
 
 
 BF16, FP32 = ttnn.bfloat16, ttnn.float32
@@ -420,12 +420,19 @@ def index_tail(
     eps: float = EPS,
     index_q_first: int = 0,
     index_k_first: int = 0,
+    page_table=None,
+    page_size: int = 0,
 ):
     """The fused index tail on ``rows`` lanes; returns the rotated index query [1, 1, rows, 128] bf16 TILE and
     updates ``ring`` [1, rows, 32, 128] and ``compressed_cache`` [rows, 1, H, 128] in place.  ``position`` carries the
     chain's ``kv_block_start`` and ``kv_row_hit`` (see ``_position_inputs``).  ``index_q_ws`` / ``raw_key_ws`` hold
     the index query / raw key from tile ``index_q_first`` / ``index_k_first``: the separate projection shards at 0,
-    or both the merged projection shard with its windows' first tiles."""
+    or both the merged projection shard with its windows' first tiles.
+
+    With ``page_table`` (int32 ROW_MAJOR [1, 1, 32, max_blocks], row u = lane u) and ``page_size`` (the PAGED program)
+    ``compressed_cache`` is the Index pool [NB, 1, page_size / 4, 128] and logical tile row t of lane u is the pool's
+    tile row ``page_table[u][t >> s] * tpb + (t & (tpb - 1))`` (tpb = page_size / 128 tiles per block, s = log2(tpb)).
+    """
 
     rows = fp.rows_of(index_q_ws)
     if fp.rows_of(raw_key_ws) != rows:
@@ -439,9 +446,10 @@ def index_tail(
         _expect(table, (1, 1, rows, ROPE_DIM), BF16, ttnn.TILE_LAYOUT, label)
     _expect_lane_state(ring, rows, (fp.TILE, INDEX_HEAD_DIM), BF16, ttnn.TILE_LAYOUT, "raw-key ring")
     cache_shape = tuple(compressed_cache.shape)
+    paged = page_table is not None
     if (
         len(cache_shape) != 4
-        or cache_shape[0] < rows
+        or cache_shape[0] < (1 if paged else rows)
         or cache_shape[1] != 1
         or cache_shape[2] % fp.TILE
         or cache_shape[3] != INDEX_HEAD_DIM
@@ -449,7 +457,17 @@ def index_tail(
         or compressed_cache.layout != ttnn.TILE_LAYOUT
     ):
         raise ValueError(f"compressed cache must be TILE bf16 [>= {rows}, 1, 32k, 128], got {cache_shape}")
-    lane_tile_rows = cache_shape[2] // fp.TILE
+    if paged:
+        page_table_blocks(page_table, page_size, rows)
+        if page_size < INDEX_PAGE_MIN or page_size > INDEX_PAGE_MAX or cache_shape[2] != page_size // COMPRESS_RATIO:
+            raise ValueError(
+                f"the Index pool must be [NB, 1, page_size / {COMPRESS_RATIO}, 128] with page_size a power of two in "
+                f"[{INDEX_PAGE_MIN}, {INDEX_PAGE_MAX}], got {cache_shape} for page_size {page_size}"
+            )
+    lane_tile_rows = 0 if paged else cache_shape[2] // fp.TILE
+    tile_shift = page_shift(page_size) - (INDEX_PAGE_MIN.bit_length() - 1) if paged else 0
+    paged_args = lambda: [page_table.buffer_address(), tile_shift] if paged else []
+    paged_defines = [PAGED_DEFINE] if paged else ()
     mesh = index_q_ws.device()
     out = fp.allocate((1, 1, rows, INDEX_HEAD_DIM), BF16, ttnn.TILE_LAYOUT, mesh)
     # one core pair per lane: lane u's norm core on row 2 * (u // 8), its rope core on the row below; the first pair also
@@ -473,6 +491,8 @@ def index_tail(
     )
     cbs += [fp.cb_descriptor(cb, ttnn.uint32, POS_PAGE, 1, both) for cb in (CB_POS_R, CB_POS_W)]
     cbs += [fp.cb_descriptor(cb, ttnn.uint32, POSC_BYTES, 1, both) for cb in (CB_POSCR, CB_POSCW)]
+    if paged:
+        cbs.append(fp.cb_descriptor(CB_IT_PT, ttnn.uint32, 2 * PT_WINDOW_BYTES, 1, both))
     eps_bits = _bits(eps)
     acc = fp.accessor_args
     xy = lambda c: coords[(c.x, c.y)]
@@ -519,7 +539,14 @@ def index_tail(
         fp.writer_kernel(
             INDEX_TAIL["writer_norm"],
             norm_set,
-            [*acc(out), *acc(ring), *acc(compressed_cache), *acc(block_start), *acc(row_hit)],
+            [
+                *acc(out),
+                *acc(ring),
+                *acc(compressed_cache),
+                *acc(block_start),
+                *acc(row_hit),
+                *(acc(page_table) if paged else ()),
+            ],
             [
                 (
                     norm_cores[u],
@@ -535,10 +562,12 @@ def index_tail(
                         u,
                         1,
                         int(u == 0),
+                        *paged_args(),
                     ],
                 )
                 for u in lanes
             ],
+            defines=paged_defines,
         ),
         fp.reader_kernel(
             INDEX_TAIL["reader_rope"],
@@ -572,7 +601,7 @@ def index_tail(
         fp.writer_kernel(
             INDEX_TAIL["writer_rope"],
             rope_set,
-            [*acc(out), *acc(compressed_cache), *acc(block_start), *acc(row_hit)],
+            [*acc(out), *acc(compressed_cache), *acc(block_start), *acc(row_hit), *(acc(page_table) if paged else ())],
             [
                 (
                     rope_cores[u],
@@ -586,10 +615,12 @@ def index_tail(
                         u,
                         1,
                         int(u == 0),
+                        *paged_args(),
                     ],
                 )
                 for u in lanes
             ],
+            defines=paged_defines,
         ),
     ]
     semaphores = [fp.semaphore_descriptor(i, both) for i in range(3)]
@@ -606,6 +637,7 @@ def index_tail(
         block_sin,
         ring,
         compressed_cache,
+        *((page_table,) if paged else ()),
         out,
     )
     # per lane: the index query and raw key windows (four tiles each, from the projection shard), the position
@@ -621,6 +653,7 @@ def index_tail(
             (index_q_ws, INDEX_TILES * TILE_BF16),
             (raw_key_ws, INDEX_TILES * TILE_BF16),
             (compressed_cache, rows * INDEX_HEAD_DIM * 2),
+            *(((page_table, rows * PT_WINDOW_BYTES),) if paged else ()),
         ),
         flops=rows * (8 * INDEX_HEAD_DIM + 12 * ROPE_DIM + 3 * fp.TILE * INDEX_HEAD_DIM),
         cores=2 * rows,
@@ -749,6 +782,8 @@ _MAIN_TAIL_CBS = (
 CB_STGC, CB_STGW, CB_MT_POS_R, CB_MT_POS_W, CB_MT_POSCR, CB_MT_POSCW = 21, 22, 25, 26, 27, 28
 CB_MT_PT = 29  # the paged writer's page-table window (PAGED only)
 CB_MT_ROW = 30  # the one-row staging core's packed row (two 512 B pages: the V half, the K half)
+CB_IT_PT = 36  # index_tail's paged writers' page-table window (PAGED only)
+INDEX_PAGE_MIN, INDEX_PAGE_MAX = 128, 4096  # the Index pool's page sizes: one tile (128 tokens) up to 32 tiles
 PT_WINDOW_BYTES = 64  # one DRAM-aligned window of the page table row that holds a lane's page entry
 
 
@@ -1017,7 +1052,7 @@ def main_tail(
             fp.writer_kernel(
                 MAIN_TAIL_ROW["writer"],
                 staging_set,
-                [*acc(staging), *acc(kv_cache), *acc(block_start), *acc(row_hit)],
+                [*acc(staging), *acc(kv_cache), *acc(block_start), *acc(row_hit), *(acc(page_table) if paged else ())],
                 [
                     (
                         staging_cores[0],
@@ -1029,9 +1064,11 @@ def main_tail(
                             rows,
                             lane_rows,
                             lane,
+                            *((page_table.buffer_address(), page_shift(page_size), page_size) if paged else ()),
                         ],
                     )
                 ],
+                defines=[PAGED_DEFINE] if paged else (),
             ),
         ]
 
@@ -1470,7 +1507,7 @@ def selection_row(
         paged_args = [page_table.buffer_address(), page_shift(page_size), page_size, max_blocks]
         defines = [PAGED_DEFINE]
         cb_bytes = max(cb_bytes, 256 + 1024 + 128 + 3 * 1152 + PT_ALIGN_SLACK + max_blocks * 4)
-    spread = rows == 1 and page_table is None and sel_spread_enabled()
+    spread = rows == 1 and sel_spread_enabled()
     # QWEN38_QSA_VERIFY_LIVE: rows >= live_rows are written as a one-token row (id 0, then masked slots), not computed
     live = (
         qsa_verify_live_enabled() and live_rows is not None and live_rows < rows and page_table is None and not spread
@@ -1483,13 +1520,20 @@ def selection_row(
         cores, coords = _grid_cores(n_cores)
         max_cols = max(c for _, c in segments)
         stride = 5 * ((max_cols * 4 + 64 + 63) // 64 * 64) + 192
+        spread_defines = [("SEL_HALF", "{}"), ("SEL_MAXC", str(max_cols))]
+        if page_table is not None:  # every RISC keeps its own copy of the page-table row after its scratch
+            stride += (max_blocks * 4 + 64 + 63) // 64 * 64
+            spread_defines += [PAGED_DEFINE, ("SEL_PTB", str(max_blocks))]
         kernels = [
             make(
                 SELECTION_ROW_SPREAD,
                 cores,
                 compile_args,
-                [(coords[k], [*addresses[:6], rows, offset_rows, *segments[2 * k + half]]) for k in range(n_cores)],
-                defines=[("SEL_HALF", str(half)), ("SEL_MAXC", str(max_cols))],
+                [
+                    (coords[k], [*addresses[:6], rows, offset_rows, *segments[2 * k + half], *paged_args])
+                    for k in range(n_cores)
+                ],
+                defines=[(n, v.format(half)) for n, v in spread_defines],
             )
             for make, half in ((fp.reader_kernel, 0), (fp.writer_kernel, 1))
         ]
@@ -1576,13 +1620,22 @@ def paged_rows_composed(values, page_table, page_size: int):
     return out
 
 
-def paged_lane_row_starts_composed(block_start, page_table, page_size: int, lanes: int):
+def paged_lane_row_starts_composed(block_start, page_table, page_size: int, lanes: int, active_row=None):
     """The paged lanes' KV write rows as composed ops: ``block_start`` (uint32 ROW_MAJOR [1, 1, 1, >= lanes], lane u's
     P & ~31) -> lanes tensors uint32 [1, 1, 1, 1], lane u's ``page_table[u][P >> shift] * page_size + (P & (page_size -
-    1))`` (the ``update_padded_kv_cache`` start rows)."""
+    1))`` (the ``update_padded_kv_cache`` start rows).  ``active_row`` (uint32 [1, 1, 1, >= lanes], 0/1 per lane): an
+    inactive lane's start is taken as 0, so it resolves through its table's first entry (block 0 for a zero row)."""
 
     dram = ttnn.DRAM_MEMORY_CONFIG
-    starts = ttnn.slice(block_start, (0, 0, 0, 0), (1, 1, 1, lanes), memory_config=dram)
+    if active_row is not None:
+        masked_source = ttnn.multiply(block_start, active_row, memory_config=dram)
+        try:
+            return paged_lane_row_starts_composed(masked_source, page_table, page_size, lanes)
+        finally:
+            ttnn.deallocate(masked_source)
+    # a full-width slice may come back as the input itself: only a tensor made here is released
+    narrow = tuple(block_start.shape)[3] != lanes
+    starts = ttnn.slice(block_start, (0, 0, 0, 0), (1, 1, 1, lanes), memory_config=dram) if narrow else block_start
     column = ttnn.reshape(starts, (1, 1, lanes, 1))
     physical = paged_rows_composed(column, page_table, page_size)
     per_lane = tuple(
@@ -1591,7 +1644,8 @@ def paged_lane_row_starts_composed(block_start, page_table, page_size: int, lane
     )
     if lanes > 1:
         ttnn.deallocate(physical)
-    ttnn.deallocate(starts)
+    if narrow:
+        ttnn.deallocate(starts)
     return per_lane
 
 

@@ -36,7 +36,9 @@ from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_direc
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prompt_ids, load_context_text
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
+    MAX_SEQ_LEN,
     PROMPT_FILE,
+    allocate_demo_pages,
     device_params,
 )
 from models.demos.blackhole.qwen38_flash_next.tests.test_vllm_batch_contract_device import initialize
@@ -72,7 +74,7 @@ class Harness:
 
     def __init__(self, mesh_device, checkpoint: Path) -> None:
         self.model = initialize(mesh_device, checkpoint, 1)
-        self.model.allocate_kv_cache((1, 1, 64, 128), None, 12)
+        self.page_table = allocate_demo_pages(self.model, MAX_SEQ_LEN)
         self.mesh = mesh_device
         self.pad_token = PAD_TOKENS[0]
         self.timing = None
@@ -111,7 +113,7 @@ class Harness:
         started = time.perf_counter()
         out, _ = self.model.prefill_forward(
             tokens=torch.tensor([prompt], dtype=torch.int32),
-            page_table=None,
+            page_table=self.page_table,
             kv_cache=None,
             enable_trace=True,
             prompt_lens=[len(prompt)],
@@ -126,7 +128,7 @@ class Harness:
             out = self.model.decode_forward(
                 tokens=torch.tensor([[tokens[-1] if force is None else force[step - 1]]], dtype=torch.int32),
                 start_pos=[len(prompt) + step - 1],
-                page_table=None,
+                page_table=self.page_table,
                 kv_cache=None,
                 enable_trace=True,
                 read_from_device=True,

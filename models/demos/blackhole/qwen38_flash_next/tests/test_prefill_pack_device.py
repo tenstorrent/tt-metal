@@ -40,7 +40,9 @@ from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_direc
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import load_context_text
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
+    MAX_SEQ_LEN,
     PROMPT_FILE,
+    allocate_demo_pages,
     device_params,
 )
 from models.demos.blackhole.qwen38_flash_next.tests.test_vllm_batch_contract_device import initialize
@@ -135,7 +137,7 @@ class PackHarness:
         started = time.time()
         with chain_warm_hook(hook):
             self.model = initialize(mesh_device, checkpoint, 1)
-        self.model.allocate_kv_cache((1, 1, 64, 128), None, 12)
+            self.page_table = allocate_demo_pages(self.model, MAX_SEQ_LEN)  # opens the chain, under the warm hook
         self.open_s = time.time() - started
         self.warm_s = held["warm_s"]
         self.pack = held["pack"]
@@ -552,7 +554,7 @@ def test_pack_layer_error_profile(mesh_device, harness_factory):
             try:
                 h.model.prefill_forward(
                     tokens=torch.tensor([tokens], dtype=torch.int32),
-                    page_table=None,
+                    page_table=h.page_table,
                     kv_cache=None,
                     enable_trace=True,
                     prompt_lens=[length],
@@ -648,7 +650,7 @@ def first_token_logits_single(h: PackHarness, prompt: list[int], plan: str = "co
     try:
         out, _ = h.model.prefill_forward(
             tokens=torch.tensor([prompt], dtype=torch.int32),
-            page_table=None,
+            page_table=h.page_table,
             kv_cache=None,
             enable_trace=True,
             prompt_lens=[len(prompt)],

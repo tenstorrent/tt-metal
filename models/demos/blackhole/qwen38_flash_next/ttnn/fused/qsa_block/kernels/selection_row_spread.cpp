@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// selection_row_spread (QWEN38_QSA_SEL_SPREAD=1, unpaged only): the same row as selection_row.cpp
+// selection_row_spread (QWEN38_QSA_SEL_SPREAD=1): the same row as selection_row.cpp
 // (sparse[i] = (((ids[i >> 2] << 2) + offsets[r][i]) & keep[i]) | fill[i] for i < 2048, (sentinel[i - 2048] & keep[i])
 // | fill[i] after), with the 2080 columns cut into segments of whole 16-column blocks, one segment per data-movement
 // RISC (the same source is built for NCRISC with SEL_HALF 0 and for BRISC with SEL_HALF 1; each RISC has its own L1
@@ -9,6 +9,10 @@
 // args: TensorAccessorArgs ids, offsets, sentinel, keep, fill, out.  Defines: SEL_HALF, SEL_MAXC (the widest segment in
 // columns). Runtime args: 0-5 the addresses, 6 rows, 7 offset rows (1 or >= rows), 8 first column (a multiple of 16), 9
 // columns (a multiple of 16).
+// PAGED (compile-time define; the unpaged program is unchanged): as in selection_row.cpp each finished value v other
+// than 0xFFFFFFFF becomes pt[r][v >> shift] * bs + (v & (bs - 1)) for this segment's columns; every RISC reads page
+// table row r into its own L1 buffer after its scratch. Extra compile-time arg: TensorAccessorArgs page table; define
+// SEL_PTB (max_blocks); extra runtime args: 10 page table address, 11 shift, 12 bs, 13 max_blocks.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -29,13 +33,24 @@ void kernel_main() {
     constexpr uint32_t REGION =
         (SEL_MAXC * 4 + 64 + 63) & ~63u;  // one buffer: the data, 63 bytes of ids alignment slack
     constexpr uint32_t SENT_BYTES = 192;
+#ifdef PAGED
+    constexpr uint32_t PT_REGION = (SEL_PTB * 4 + 64 + 63) & ~63u;
+    constexpr uint32_t STRIDE = 5 * REGION + SENT_BYTES + PT_REGION;
+#else
     constexpr uint32_t STRIDE = 5 * REGION + SENT_BYTES;
+#endif
     constexpr auto ids_args = TensorAccessorArgs<0>();
     constexpr auto off_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
     constexpr auto sentinel_args = TensorAccessorArgs<off_args.next_compile_time_args_offset()>();
     constexpr auto keep_args = TensorAccessorArgs<sentinel_args.next_compile_time_args_offset()>();
     constexpr auto fill_args = TensorAccessorArgs<keep_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<fill_args.next_compile_time_args_offset()>();
+#ifdef PAGED
+    constexpr auto pt_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    const uint32_t shift = get_arg_val<uint32_t>(11);
+    const uint32_t bs = get_arg_val<uint32_t>(12);
+    const auto pt = TensorAccessor(pt_args, get_arg_val<uint32_t>(10));
+#endif
     const auto ids = TensorAccessor(ids_args, ids_addr);
     const auto off = TensorAccessor(off_args, off_addr);
     const auto sentinel = TensorAccessor(sentinel_args, sentinel_addr);
@@ -47,6 +62,9 @@ void kernel_main() {
     const uint32_t base = get_write_ptr(0) + SEL_HALF * STRIDE;
     const uint32_t ids_buf = base, off_buf = base + REGION, keep_buf = base + 2 * REGION, fill_buf = base + 3 * REGION,
                    out_buf = base + 4 * REGION, sentinel_buf = base + 5 * REGION;
+#ifdef PAGED
+    const uint32_t pt_buf = base + 5 * REGION + SENT_BYTES;
+#endif
     const uint32_t main_cols = col0 >= EXPANDED ? 0 : (col0 + cols > EXPANDED ? EXPANDED - col0 : cols);
     const uint32_t tail_cols = cols - main_cols;
     const uint32_t ids_skew = col0 & 63u;  // ids bytes start at col0 (4 columns per word): DRAM reads are 64-aligned
@@ -67,6 +85,9 @@ void kernel_main() {
         }
         noc_async_read(keep.get_noc_addr(r, col0 * 4), keep_buf, cols * 4);
         noc_async_read(fill.get_noc_addr(r, col0 * 4), fill_buf, cols * 4);
+#ifdef PAGED
+        noc_async_read(pt.get_noc_addr(r, 0), pt_buf, SEL_PTB * 4);
+#endif
         noc_async_read_barrier();
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* ids_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_buf + ids_skew);
@@ -96,6 +117,15 @@ void kernel_main() {
             out_l1[i + 2] = (s2 & k2) | f2;
             out_l1[i + 3] = (s3 & k3) | f3;
         }
+#ifdef PAGED
+        volatile tt_l1_ptr uint32_t* pt_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pt_buf);
+        for (uint32_t i = 0; i < cols; ++i) {
+            const uint32_t v = out_l1[i];
+            if (v != 0xFFFFFFFFu) {
+                out_l1[i] = pt_l1[v >> shift] * bs + (v & (bs - 1));
+            }
+        }
+#endif
         noc_async_write(out_buf, out.get_noc_addr(r, col0 * 4), cols * 4);
         noc_async_write_barrier();
     }

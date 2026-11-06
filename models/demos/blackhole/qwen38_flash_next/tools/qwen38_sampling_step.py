@@ -262,6 +262,7 @@ WARM_UNIFORM = 0.37500011920928955  # 6291458 * 2**-24
 # candidate row, so the per-shard top-k chain (~228 us per step) is dead weight in every TAIL.  Only with no device sampler
 # (the sampler reads the row).
 SKIP_CANDIDATE_ROW = False
+TTSAMPLER_BATCH = 32  # the standard sampler's lanes: the 1-row logits are padded to them
 
 
 class Qwen38SamplingChainExtension:
@@ -271,6 +272,9 @@ class Qwen38SamplingChainExtension:
     writes the sampled token (or the greedy one, by the request's flag) into the token row itself, and a sampled
     request runs the greedy loop plus one draw write per step (:func:`generate_sampled_on_device`).
     """
+
+    ttsampler: Any = None
+    out_tok: Any = None
 
     def __init__(
         self,
@@ -301,22 +305,59 @@ class Qwen38SamplingChainExtension:
         self.presence_on_device = device_sampler and fused_sampler
         self.trace_logits: list[Qwen38ShardedLogits] = []  # TAIL residue r's logits (trace-stable), for the fallback
         self.trace_rows: list[Any] = []
+        # the greedy TAIL set's logits (a device-sampler chain captures it beside the sampler set, no candidate row or
+        # sampler in it); empty when the chain has one set
+        self.greedy_trace_logits: list[Qwen38ShardedLogits] = []
+        # the standard sampler of a ttsampler chain (``enable_ttsampler``): the sampler set's epilogue runs it on the
+        # padded logits instead of the candidate row and the model's own sampler
 
-    def _epilogue(self, logits: Qwen38ShardedLogits, token_row_io: Any) -> tuple[Any, Any, Any, Any]:
+    def enable_ttsampler(self, ttsampler: Any, out_tok: Any) -> None:
+        """The sampler set's epilogue samples with ``ttsampler`` into ``out_tok`` (see ``_ttsampler_epilogue``)."""
+
+        self.ttsampler = ttsampler
+        self.out_tok = out_tok
+
+    def _ttsampler_epilogue(self, logits: Qwen38ShardedLogits, token_row_io: Any) -> Any:
+        """The sampler set's TAIL ops with the standard sampler: the per-device logits padded to the sampler's 32 rows,
+        ``ttsampler.sample`` into the persistent token tensor, its lane 0 as a token row copied into the row HEAD
+        reads.  Eager in the warm pass and captured, one function.  Neither the candidate row nor the model's own
+        sampler runs."""
+
+        rows = int(logits.global_shape[2])
+        # ``ttnn.pad`` over a tile-aligned row count and the sampler's own input frees can hand back or free the
+        # caller's buffer: the sampler works on a clone this function owns, the caller's logits stay alive for the
+        # greedy passes and the host fallback
+        owned = ttnn.clone(logits.tensor)
+        padded = ttnn.pad(owned, [(0, 0), (0, 0), (0, TTSAMPLER_BATCH - rows), (0, 0)], value=0.0)
+        self.ttsampler.sample(padded, self.out_tok)
+        ttnn.deallocate(padded)
+        if padded is not owned:
+            ttnn.deallocate(owned)
+        token_row = self.ttsampler.token_row_from_out(self.out_tok)
+        ttnn.copy(token_row, token_row_io)
+        ttnn.deallocate(token_row)
+        return token_row_io
+
+    def _epilogue(
+        self, logits: Qwen38ShardedLogits, token_row_io: Any, *, greedy_only: bool = False
+    ) -> tuple[Any, Any, Any, Any]:
         """TAIL's last ops, eager in the warm pass and captured in the trace, one function so the capture asks only for
         programs the warm compiled (a cache miss inside a trace capture is fatal, and a program's cache key is its
         compile-time form, not its buffer addresses): the greedy path exactly as today (its resolve into the resident
         row, greedy_tail's ``copy_into`` is a compile-time argument), the candidate row into the readback buffer, and
         with the device sampler the sampler on the row and the resolve's own row, its token row (greedy or sampled, by
         the flag) copied into the resident row.  Returns ``(candidates, row, greedy_row, token_row)``; without the
-        sampler the token row is the greedy row."""
+        sampler the token row is the greedy row.  With a ttsampler the sampler set runs ``_ttsampler_epilogue`` instead.  ``greedy_only`` (the greedy TAIL set of a device-sampler chain) stops after
+        the resolve exactly like ``SKIP_CANDIDATE_ROW`` without a sampler."""
 
+        if self.ttsampler is not None and not greedy_only:
+            return None, None, None, self._ttsampler_epilogue(logits, token_row_io)
         if self.candidate_row:
             candidates = self.lm_head.greedy_candidates(logits, candidate_row=self.constants)
         else:
             candidates = self.lm_head.greedy_candidates(logits)
         greedy_row = self.lm_head.resolve_greedy_on_device(candidates, into=token_row_io)
-        if SKIP_CANDIDATE_ROW and self.sampler is None:
+        if greedy_only or (SKIP_CANDIDATE_ROW and self.sampler is None):
             return candidates, None, greedy_row, greedy_row  # QWEN38_GREEDY_TAIL: no candidate row in the TAIL
         row = self.lm_head.sampling_candidates(logits, self.constants, candidates=candidates)
         if self.sampler is None:
@@ -325,13 +366,22 @@ class Qwen38SamplingChainExtension:
         ttnn.copy(token_row, token_row_io)
         return candidates, row, greedy_row, token_row
 
-    def capture_epilogue(self, trace_output: Any, token_row_io: Any) -> tuple[Any, Any]:
+    def capture_epilogue(self, trace_output: Any, token_row_io: Any, *, greedy_only: bool = False) -> tuple[Any, Any]:
         """The epilogue inside the TAIL capture: its row and logits kept for the residue (the host read, the fallback
         gather); the resolve's own row freed when the sampler's token row is the trace's."""
 
         if trace_output.logits is None:
             raise RuntimeError("TAIL capture returned no logits")
-        candidates, row, greedy_row, trace_token_row = self._epilogue(trace_output.logits, token_row_io)
+        candidates, row, greedy_row, trace_token_row = self._epilogue(
+            trace_output.logits, token_row_io, greedy_only=greedy_only
+        )
+        if greedy_only:
+            self.greedy_trace_logits.append(trace_output.logits)
+            return candidates, trace_token_row
+        if self.ttsampler is not None:  # no candidates, row or token row of its own: the sampler wrote the resident row
+            self.trace_rows.append(None)
+            self.trace_logits.append(trace_output.logits)
+            return None, None
         if trace_token_row is not greedy_row:
             ttnn.deallocate(greedy_row)
         self.trace_rows.append(row)
@@ -347,6 +397,17 @@ class Qwen38SamplingChainExtension:
         acknowledge_corruptible(self.constants.readback_row)
         if self.sampler is not None:
             self.sampler.mark_corruptible()
+        if self.ttsampler is not None:
+            for tensor in (self.out_tok, *self.ttsampler_host_written()):
+                acknowledge_corruptible(tensor)
+
+    def ttsampler_host_written(self) -> list[Any]:
+        """The standard sampler's persistent tensors the host rewrites between replays (parameters, seeds, user ids)
+        and its greedy-lane column."""
+
+        sampling = self.ttsampler.generator.tt_sampling
+        names = ("k_tensor", "p_tensor", "temp_tensor", "_greedy_col", "seeds_tt_tensor", "user_ids_tt_tensor")
+        return [getattr(sampling, name) for name in names if getattr(sampling, name, None) is not None]
 
     def mark_trace_rows_corruptible(self) -> None:
         """After a capture: its row is rewritten by every replay, like the greedy candidates."""
@@ -364,6 +425,7 @@ class Qwen38SamplingChainExtension:
         """
 
         full = self._gather(logits)
+        ttsampler, self.ttsampler = self.ttsampler, None  # the passes below are the model's own sampler's references
         passes: tuple[tuple[str | None, Any], ...] = ((None, None),)
         if self.sampler is not None:
             passes = (("sampled", WARM_POLICY), ("greedy", Qwen38DeviceSamplerPolicy.greedy_policy()))
@@ -417,6 +479,13 @@ class Qwen38SamplingChainExtension:
                     f"{label}: the resident token row holds {resident} after the warm passes, not {greedy}"
                 )
             agreement["device_sampler"] = checks
+        if ttsampler is not None:
+            # last, after the greedy passes: the sampler set's epilogue compiles here and leaves the resident row on
+            # the greedy token
+            ttsampler.write_step_seeds()
+            self.ttsampler = ttsampler
+            self._ttsampler_epilogue(logits, token_row_io)
+        self.ttsampler = ttsampler
         return agreement
 
     @staticmethod
@@ -437,6 +506,7 @@ class Qwen38SamplingChainExtension:
             self.sampler.release()
         self.trace_rows.clear()
         self.trace_logits.clear()
+        self.greedy_trace_logits.clear()
         if getattr(self, "device_accept", None) is not None:
             self.device_accept.release()
 
@@ -504,10 +574,13 @@ class Qwen38SamplingChainExtension:
 
         return Qwen38CandidateRow.from_host_row(ttnn.to_torch(ttnn.get_device_tensors(self.constants.readback_row)[0]))
 
-    def read_full_logits(self, residue: int) -> torch.Tensor:
-        """The fallback's eager full-vocabulary gather of TAIL(residue)'s logits, about 2 MB, as fp32 ``[VOCAB_SIZE]``."""
+    def read_full_logits(self, residue: int, *, sampled: bool = False) -> torch.Tensor:
+        """The fallback's eager full-vocabulary gather of TAIL(residue)'s logits, about 2 MB, as fp32 ``[VOCAB_SIZE]``.
+        ``sampled`` names the TAIL set that ran (the sampler set); the default is the greedy set when the chain has one.
+        """
 
-        return self._gather(self.trace_logits[residue])
+        logits = self.trace_logits if sampled or not self.greedy_trace_logits else self.greedy_trace_logits
+        return self._gather(logits[residue])
 
     def read_full_logits_rows(self, logits: Qwen38ShardedLogits) -> torch.Tensor:
         """The verify rows' fallback: the eager gather of the split verify's retained logits (about 2.5 MB at k = 4),
@@ -627,17 +700,17 @@ class Qwen38SampledDraftingStats:
         return {
             "passes": self.passes,
             "accepted_drafts": self.accepted_drafts,
-            "tokens_per_pass": None
-            if not self.passes
-            else round((self.passes + self.accepted_drafts) / self.passes, 4),
+            "tokens_per_pass": (
+                None if not self.passes else round((self.passes + self.accepted_drafts) / self.passes, 4)
+            ),
             "draws": self.draws,
             "fallbacks": self.fallbacks,
             "resampled": self.resampled,
             "guard_deviations": self.guard_deviations,
             "rows_drawn": len(probabilities),
-            "acceptance_probability_mean": None
-            if not probabilities
-            else round(sum(probabilities) / len(probabilities), 4),
+            "acceptance_probability_mean": (
+                None if not probabilities else round(sum(probabilities) / len(probabilities), 4)
+            ),
             "acceptance_probability_histogram": histogram,  # equal bins over [0, 1]; the last one holds 1.0
         }
 
@@ -760,7 +833,7 @@ def sample_tail_logits(
     counted in ``request.clocks.fallbacks``."""
 
     request.clocks.fallbacks += 1
-    full = session.sampling.read_full_logits(tail_residue)
+    full = session.sampling.read_full_logits(tail_residue, sampled=True)
     return sample_full_vocabulary(
         full,
         request.parameters,
@@ -888,6 +961,7 @@ def generate_sampled(
     forced_step: Callable[[int], None] | None = None,
     clock_ns: Callable[[], int] | None = None,
     prompt_tokens: int | None = None,
+    sampled: bool = True,
 ) -> Iterator[tuple[int | None, str | None]]:
     """The sampled A-G loop over ``session.chain`` and ``session.sampling``; yields ``(x_t, finish)`` like ``_generate``.
 
@@ -944,14 +1018,14 @@ def generate_sampled(
         token_id = sample.token_id
         clocks.token_available_ns.append(now())
         chain.write_token_row(token_id)
-        chain.execute_head(residue)
+        chain.execute_head(residue, sampled=sampled)
         clocks.head_enqueued_ns.append(now())
         produced += 1
         if thinking_open:
             thinking_open = token_id != THINK_END_ID
             reasoning_tokens += 1
         session.ple_context = chain.refresh_ple_row(token_id, session.ple_context)
-        chain.execute_tail(residue)
+        chain.execute_tail(residue, sampled=sampled)
         clocks.tail_enqueued_ns.append(now())
         session.committed.append(token_id)
         request.samples.append(sample)
@@ -975,6 +1049,7 @@ def generate_sampled_on_device(
     forced_step: Callable[[int], None] | None = None,
     clock_ns: Callable[[], int] | None = None,
     verify_each_step: bool = False,
+    sampled: bool = True,
 ) -> Iterator[tuple[int | None, str | None]]:
     """The device-sampled loop: the greedy A-G loop plus one draw write per step; yields ``(x_t, finish)`` like
     :func:`generate_sampled`.
@@ -1074,7 +1149,7 @@ def generate_sampled_on_device(
             device_token = chain.pending_value(pending)
             token_id = fall_back() if guard else device_token
             clocks.token_available_ns.append(now())
-        chain.execute_head(residue)
+        chain.execute_head(residue, sampled=sampled)
         sampler.write_uniform(request.next_uniform())  # behind HEAD(t), before TAIL(t)
         clocks.head_enqueued_ns.append(now())
         if not check_guard:
@@ -1095,7 +1170,7 @@ def generate_sampled_on_device(
             thinking_open = token_id != THINK_END_ID
             reasoning_tokens += 1
         session.ple_context = chain.refresh_ple_row(token_id, session.ple_context)
-        chain.execute_tail(residue)
+        chain.execute_tail(residue, sampled=sampled)
         clocks.tail_enqueued_ns.append(now())
         session.committed.append(token_id)
         request.samples.append(None)
@@ -1130,7 +1205,7 @@ def compare_candidate_rows_with_full_gathers(
         residue = len(session.committed) % RESIDUE_CLASSES
         forced_step(token)
         row = session.sampling.read_candidate_row()  # blocking: completes this TAIL
-        full = session.sampling.read_full_logits(residue)
+        full = session.sampling.read_full_logits(residue, sampled=True)
         greedy_argmax = int(torch.argmax(full))
         row_greedy = int(row.ids.reshape(-1)[int(torch.argmax(row.values.reshape(-1)))])
         records.append(

@@ -37,8 +37,8 @@ def test_segments_cover_every_column_once():
 
 def test_wiring():
     source = inspect.getsource(qsa_block.selection_row)
-    assert "rows == 1 and page_table is None and sel_spread_enabled()" in source
+    assert "rows == 1 and sel_spread_enabled()" in source
     assert source.count("SEL_HALF") == 1 and "fp.reader_kernel, 0" in source and "fp.writer_kernel, 1" in source
     kernel = (fp.REPO_ROOT / qsa_block.SELECTION_ROW_SPREAD).read_text()
-    assert "SEL_HALF" in kernel and "SEL_MAXC" in kernel and "PAGED" not in kernel
+    assert "SEL_HALF" in kernel and "SEL_MAXC" in kernel and "#ifdef PAGED" in kernel
     assert "(ids_l1[i >> 2] << 2)" not in kernel and "const uint32_t id4 = ids_l1[i >> 2] << 2;" in kernel

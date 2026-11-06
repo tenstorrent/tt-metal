@@ -51,11 +51,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lane_scheduler import
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_lanes, mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import LONG_CHUNK_ROWS
-from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
-    Qwen38LaneHostPool,
-    Qwen38LaneLayout,
-    Qwen38TTNNLanePager,
-)
+from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import Qwen38LaneHostPool, Qwen38TTNNLanePager
 from models.demos.blackhole.qwen38_flash_next.ttnn.layer import PLE_CHECKPOINT_LAYER
 
 # The residue variants an import compiles: the GDN ring phase and the QSA raw-history slot rows are ``position % 4``.
@@ -132,6 +128,11 @@ class Qwen38LanesSession:
     warmup_ms: dict[str, float] = field(default_factory=dict)
     program_cache_entries: dict[str, int] = field(default_factory=dict)
     closed: bool = False
+    # Paged mode (the chain runs shared pools): the host mirror of the lane page table (lane -> block ids, a lane
+    # without an entry is parked: its rows are zeros) and what the device table holds (None: unknown, write next sync).
+    paged: bool = False
+    lane_pages: dict[int, list[int]] = field(default_factory=dict)
+    synced_pages: tuple[tuple[int, tuple[int, ...]], ...] | None = None
 
     def __post_init__(self) -> None:
         self.lanes, self.rows = lane_geometry(self.lanes, self.drafts)
@@ -158,19 +159,15 @@ class Qwen38LanesSession:
         ttnn.synchronize_device(mesh)
         self.dram["before_prepare"] = _dram_view(mesh)
         started = self.clock_ns()
-        backbone_layout = model.generic_lane_layout(chain.state)
+        self.paged = paged = chain.paging is not None
+        self.lane_pages = {}
+        self.synced_pages = None
+        if paged:
+            backbone_layout = model.generic_lane_layout(chain.state, exclude_kv=True, exclude_compressed=True)
+        else:
+            backbone_layout = model.generic_lane_layout(chain.state)
         alignment_generic = chain.mtp.alignment.generic_state.attention
-        alignment_layout = Qwen38LaneLayout(
-            lanes=1,
-            allocated_context=context,
-            kv=(alignment_generic.packed_kv_cache,),
-            compressed=(alignment_generic.compressed_index_cache,),
-            staging=(alignment_generic.kv_staging,),
-            ring=(alignment_generic.raw_key_ring,),
-            recurrent=(),
-            conv=(),
-            ple=(),
-        )
+        alignment_layout = mtp_lanes.lane_alignment_layout(alignment_generic, context, shared=paged)
         for name, layout in (("backbone", backbone_layout), ("alignment", alignment_layout)):
             unallocated = [i for i, t in enumerate(layout.tensors()) if not t.is_allocated()]
             if unallocated:
@@ -187,6 +184,7 @@ class Qwen38LanesSession:
             drafts=self.drafts,
             mtp_components=chain.mtp.components,
             positions=[0] * self.lanes,
+            **({"pools": chain.pools, "mtp_pools": chain.mtp_paged_pools, "paging": chain.paging} if paged else {}),
         )
         self.draft = mtp_lanes.allocate_lane_draft_state(model, self.verify)
         self.buckets = mtp_lane_buckets_from_env(self.lanes, self.drafts, self.environ)
@@ -207,6 +205,8 @@ class Qwen38LanesSession:
         self.alignment_pager.evict(0, self.alignment_pool.slots[0])
         base = int(chain.state.position.read())
         gdn_layers = sum(1 for layer in model.layers if isinstance(layer.attention, gdn_module.Qwen38TTNNGDN))
+        if paged:  # real, distinct blocks per lane: the warm imports and eager passes write their rows
+            self._write_warm_page_table(base)
         for shift in range(IMPORT_RESIDUES):
             position = base + shift
             for lane in range(self.lanes):
@@ -221,6 +221,7 @@ class Qwen38LanesSession:
                     backbone_pager=self.backbone_pager,
                     alignment_slot=self.alignment_pool.slots[0],
                     alignment_pager=self.alignment_pager,
+                    shared=paged,
                 )
         ttnn.synchronize_device(mesh)
         self.warmup_ms["imports"] = (self.clock_ns() - started) / 1e6
@@ -286,9 +287,57 @@ class Qwen38LanesSession:
         for pager in (self.backbone_pager, self.alignment_pager):
             for tensor in (*pager.packs.values(), *pager.kv_stagings):
                 acknowledge_corruptible(tensor)
+        if paged:  # every lane parked until an admission sets its pages
+            self.lane_pages = {}
+            self.synced_pages = None
+            self.sync_page_tables()
         self.program_cache_entries["after_prepare"] = resident_decode.program_cache_count(mesh)
         self.dram["after_prepare"] = _dram_view(mesh)
         self.marker("after-lanes-prepare")
+
+    def _write_warm_page_table(self, base: int) -> None:
+        """Every lane's row = its own blocks 1..n (block 0 is the null block), n covering the warm imports and the eager
+        passes past ``base``."""
+
+        paging = self.chain.paging
+        span = base + IMPORT_RESIDUES + EAGER_PASSES * self.verify.rows + 1
+        blocks = max(1, -(-span // paging.page_size))
+        if blocks > paging.max_blocks or 1 + self.lanes * blocks > paging.num_pages:
+            raise Qwen38LanesSessionError(
+                f"the warm page table needs {self.lanes} x {blocks} blocks, the pool has {paging.num_pages - 1}"
+            )
+        rows = [list(range(1 + lane * blocks, 1 + (lane + 1) * blocks)) for lane in range(self.lanes)]
+        mtp_lanes.write_lane_page_table(self.model, self.verify, rows, range(self.lanes), draft=self.draft)
+        self.synced_pages = None
+
+    # -- the lane page table (paged mode) ----------------------------------------------------------
+
+    def set_lane_pages(self, lane: int, block_ids: Sequence[int]) -> None:
+        """Host mirror only: lane ``lane`` holds ``block_ids`` (in order).  :meth:`sync_page_tables` uploads."""
+
+        if not 0 <= int(lane) < self.lanes:
+            raise ValueError(f"lane must be in [0, {self.lanes}), got {lane!r}")
+        ids = [int(block) for block in block_ids]
+        if not ids:
+            raise ValueError("a lane's pages must not be empty (clear_lane_pages parks it)")
+        self.lane_pages[int(lane)] = ids
+
+    def clear_lane_pages(self, lane: int) -> None:
+        """Host mirror only: lane ``lane`` is parked (its rows go to zeros at the next sync)."""
+
+        self.lane_pages.pop(int(lane), None)
+
+    def sync_page_tables(self, keep: list | None = None) -> bool:
+        """Upload the lane, verify and draft page tables when the mirror changed since the last upload; True if
+        written.  Between passes only, never during a replay (``keep`` collects the host tensors of the upload)."""
+
+        state = tuple(sorted((lane, tuple(ids)) for lane, ids in self.lane_pages.items()))
+        if state == self.synced_pages:
+            return False
+        rows = [self.lane_pages.get(lane, []) for lane in range(self.lanes)]
+        mtp_lanes.write_lane_page_table(self.model, self.verify, rows, sorted(self.lane_pages), keep, draft=self.draft)
+        self.synced_pages = state
+        return True
 
     def _eager_passes_at(self, width_set) -> None:
         """The two eager passes (bootstrap, one split step) of a narrow width: the device bodies on its view and draft view,
@@ -518,7 +567,11 @@ class Qwen38LanesSession:
     # -- the device protocol (the driver thread) ------------------------------------------------
 
     def admit(
-        self, lane: int, ticket: Qwen38LaneTicket, between: Callable[[str, int, int], float] | None = None
+        self,
+        lane: int,
+        ticket: Qwen38LaneTicket,
+        between: Callable[[str, int, int], float] | None = None,
+        block_ids: Sequence[int] | None = None,
     ) -> Qwen38LaneAdmitted:
         """The request's prompt prefilled on the traced chain (the session's own prefill section: the reset, the
         chunked prefill of all but the last token when the prompt admits it, the last token forced, the model's next
@@ -533,7 +586,11 @@ class Qwen38LanesSession:
         and the rows of the prefill), after the forced last step and its row read (``"prefilled"``) and after the
         eviction (``"evicted"``), each time with the device idle and every chunk input for the next segment prepared
         but not uploaded; it returns the seconds it spent (the decoding lanes' passes), which the segment records
-        below exclude.  None: the admission runs whole (the single-stream event cadence)."""
+        below exclude.  None: the admission runs whole (the single-stream event cadence).
+
+        Paged mode: ``block_ids`` (the request's blocks, required) go into the chain's page table before the prefill,
+        and into the lane's row (host mirror, then uploaded) after the import; the import moves only the state
+        families, the KV and compressed rows are already in the pools."""
 
         session, chain, model = self.session, self.chain, self.model
         if session is None or self.lane_chain is None:
@@ -541,6 +598,10 @@ class Qwen38LanesSession:
         ids = [int(token) for token in ticket.prompt_ids]
         if not ids:
             raise Qwen38LanesSessionError("an admission needs a prompt")
+        if self.paged:
+            if not block_ids:
+                raise Qwen38LanesSessionError("a paged admission needs the request's block ids")
+            chain.write_page_table(block_ids)
         spent = 0.0  # seconds ``between`` took inside the prefill segment
 
         def between_chunks(done: int, total: int) -> None:
@@ -614,7 +675,11 @@ class Qwen38LanesSession:
             alignment_slot=self.alignment_pool.slots[0],
             alignment_pager=self.alignment_pager,
             rope_shift=rope_shift,
+            shared=self.paged,
         )
+        if self.paged:
+            self.set_lane_pages(lane, block_ids)
+            self.sync_page_tables()
         ttnn.synchronize_device(self.mesh)
         imported = self.clock_ns()
         timing = None if chunked is None else chunked.timing
@@ -688,7 +753,8 @@ class Qwen38LanesSession:
     # -- release ---------------------------------------------------------------------------------
 
     def close(self) -> None:
-        """The lane traces, the output, the draft and verify states, the pagers; before the chain's own close."""
+        """The lane traces, the output, the draft and verify states, the pagers; before the chain's own close.  The
+        shared pools (paged mode) belong to the chain and stay."""
 
         if self.closed or self.mesh is None:
             return

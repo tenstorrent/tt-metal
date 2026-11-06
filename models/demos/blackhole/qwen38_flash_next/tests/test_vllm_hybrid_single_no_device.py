@@ -88,11 +88,33 @@ def test_decode_runs_on_the_chain_with_the_live_row_set_in_a_lanes_by_one_output
 
 
 def test_the_page_row_is_kept_from_each_decode_call(rig: Rig) -> None:
-    token = _start(rig, length=63, blocks=(5,))
-    _chain_decode(rig, token, 63, [5])
+    token = _start(rig, length=127, blocks=(5,))
+    _chain_decode(rig, token, 127, [5])
     assert rig.model.hybrid_pages == [5]
-    _chain_decode(rig, token, 64, [5, 9])  # position 64 needs the second block
+    _chain_decode(rig, token, 128, [5, 9])  # position 128 needs the second block
     assert rig.model.hybrid_pages == [5, 9]
+
+
+def test_the_chain_table_follows_the_row_before_each_chain_step(rig: Rig) -> None:
+    token = _start(rig, length=127, blocks=(5,))
+    chain = rig.chain
+    assert chain.page_table_ids == (5,)  # written by the prefill, after the reset
+    chain.log.clear()
+    _chain_decode(rig, token, 127, [5])
+    assert not [entry for entry in chain.log if entry.startswith("table:")]  # unchanged: no write
+    chain.log.clear()
+    _chain_decode(rig, token, 128, [5, 9])
+    table = next(i for i, entry in enumerate(chain.log) if entry.startswith("table:"))
+    head = next(i for i, entry in enumerate(chain.log) if entry.startswith("head:"))
+    assert chain.log[table] == "table:(5, 9)" and table < head  # before the step's device work
+    assert chain.page_table_ids == (5, 9)
+
+
+def test_the_demote_imports_states_only_and_leaves_the_chain_table_alone(rig: Rig) -> None:
+    _start(rig)
+    rig.chain.log.clear()
+    rig.model._demote_hybrid()
+    assert not [entry for entry in rig.chain.log if entry.startswith("table:")]
 
 
 def test_the_batch_decode_log_line_works_with_the_step_split_and_the_chain_row(rig: Rig, monkeypatch) -> None:
@@ -296,3 +318,64 @@ def test_an_import_failure_at_the_demote_sets_batch_failed_and_reraises(rig: Rig
     with expect_error(RuntimeError, "device|import"):
         rig.prefill([_prompt(20, 5000)], [1], [[7]], greedy_batch_sampling_params(1))
     assert rig.model.batch_failed
+
+
+# -- chunked prefill in batch mode ----------------------------------------------------------------------------------
+
+
+def _chunk(rig: Rig, full: list[int], start: int, end: int, blocks, slot: int = 0, sampling=None):
+    out, _ = rig.prefill(
+        [full[:end]], [slot], [list(blocks)], sampling, start_pos=torch.tensor([start], dtype=torch.int32)
+    )
+    return out
+
+
+def test_a_chunk_continues_on_the_chain_for_the_hybrid_request(rig: Rig) -> None:
+    full = _prompt(300, 1000)
+    _chunk(rig, full, 0, 128, (5,))
+    model, chain = rig.model, rig.chain
+    assert model.hybrid_slot == 0 and _imports(rig) == [] and len(model.slot.committed) == 128
+    chain.log.clear()
+    _chunk(rig, full, 128, 300, (5, 9, 11))
+    assert not any(entry.startswith("reset") for entry in chain.log)
+    assert model.hybrid_slot == 0 and _imports(rig) == [] and model.slot.committed == full
+    assert model.hybrid_pages == [5, 9, 11]
+
+
+def test_a_chunk_of_a_request_that_left_the_chain_is_refused(rig: Rig, expect_error) -> None:
+    full = _prompt(300, 1000)
+    _chunk(rig, full, 0, 128, (5,))
+    rig.prefill([_prompt(20, 5000)], [1], [[7]])  # a second request demotes the first into a lane
+    assert rig.model.hybrid_slot is None
+    rig.chain.log.clear()
+    with expect_error(NotImplementedError, "chunked prefill in batch mode"):
+        _chunk(rig, full, 128, 300, (5, 9, 11))
+    assert rig.chain.log == []
+
+
+def test_a_chunk_in_batch_mode_without_the_hybrid_is_refused(rig: Rig, expect_error) -> None:
+    rig.model.hybrid_single = False
+    full = _prompt(300, 1000)
+    _chunk(rig, full, 0, 128, (5,))
+    assert len(_imports(rig)) == 1
+    with expect_error(NotImplementedError, "chunked prefill in batch mode"):
+        _chunk(rig, full, 128, 300, (5, 9, 11))
+
+
+def test_a_continuation_of_another_slot_or_several_rows_is_refused(rig: Rig, expect_error) -> None:
+    full = _prompt(300, 1000)
+    _chunk(rig, full, 0, 128, (5,))
+    with expect_error(NotImplementedError, "chunked prefill in batch mode"):
+        _chunk(rig, full, 128, 300, (5, 9, 11), slot=1)
+    with expect_error(NotImplementedError, "chunked prefill in batch mode"):
+        rig.prefill(
+            [full, _prompt(20, 5000)], [0, 1], [[5, 9, 11], [7]], start_pos=torch.tensor([128, 0], dtype=torch.int32)
+        )
+    assert rig.model.hybrid_slot == 0 and len(rig.model.slot.committed) == 128
+
+
+def test_a_start_that_is_not_the_chain_length_is_refused(rig: Rig, expect_error) -> None:
+    full = _prompt(300, 1000)
+    _chunk(rig, full, 0, 128, (5,))
+    with expect_error(Exception, "starts at position 256"):
+        _chunk(rig, full, 256, 300, (5, 9, 11))

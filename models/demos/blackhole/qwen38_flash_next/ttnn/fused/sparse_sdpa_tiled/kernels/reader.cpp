@@ -18,6 +18,11 @@
 // SEED and the CB ids CB_Q_RM CB_K_RM CB_IDS CB_POS CB_BITMAP CB_SEEDMAP CB_RANK CB_UNION CB_MEMBER CB_CTRL
 // CB_KREQ CB_KACK CB_TILECTL.  Positional compile-time args: TensorAccessorArgs of q, kv, block_ids, positions.
 // Runtime args: 0 q, 1 kv, 2 block_ids, 3 positions addresses, 4 tile_start, 5 tile_count.
+// PAGED (compile-time define; the unpaged program is unchanged; PAGE_SIZE = the block size bs, a power of two): kv is
+// the K/V pool and the gather row of logical token t = union slot block * BT + j is pt[t >> s] * bs + (t & (bs - 1)),
+// pt = row `page_table_row` of the int32 ROW_MAJOR page table, copied once into the CB_PT scratch.  The bitmap, the
+// union and the positions stay logical.  Extra named arg CB_PT, extra positional compile-time args: the page table's
+// TensorAccessorArgs; extra runtime args: 6 page table address, 7 row, 8 width W (entries).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -27,6 +32,10 @@
 #include "../../kernels/zones.h"
 
 namespace {
+
+#ifdef PAGED
+constexpr uint32_t PAGE_SHIFT = 31 - __builtin_clz(PAGE_SIZE);
+#endif
 
 // One 1 KB row per selected token: chunk row p is token p % BT of the block at union slot slot0 + p / BT.
 // Depth-D transaction-id ring (sparse_sdpa_gather.hpp's trid_ring_gather over a block list).
@@ -39,7 +48,12 @@ FORCE_INLINE void union_gather(
     uint32_t slot0,
     uint32_t lo,
     uint32_t hi,
-    uint32_t row_bytes) {
+    uint32_t row_bytes
+#ifdef PAGED
+    ,
+    volatile tt_l1_ptr uint32_t* pt_l1
+#endif
+) {
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
     for (uint32_t i = 0; i < cnt; ++i) {
@@ -49,7 +63,12 @@ FORCE_INLINE void union_gather(
             experimental::async_read_barrier_with_trid(noc, trid);
         }
         experimental::set_read_trid(noc, trid);
+#ifdef PAGED
+        const uint32_t t = union_ptr[slot0 + p / BT] * BT + p % BT;
+        const uint32_t page = pt_l1[t >> PAGE_SHIFT] * PAGE_SIZE + (t & (PAGE_SIZE - 1));
+#else
         const uint32_t page = union_ptr[slot0 + p / BT] * BT + p % BT;
+#endif
         noc.async_read(kv, local_l1, row_bytes, {.page_id = page}, {.addr = dst_l1 + p * row_bytes});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
@@ -100,6 +119,13 @@ void kernel_main() {
     constexpr auto kv_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto ids_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto pos_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
+#ifdef PAGED
+    constexpr auto pt_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_pt = get_named_compile_time_arg_val("CB_PT");
+    const uint32_t pt_addr = get_arg_val<uint32_t>(6);
+    const uint32_t pt_row = get_arg_val<uint32_t>(7);
+    const uint32_t pt_w = get_arg_val<uint32_t>(8);
+#endif
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t kv_addr = get_arg_val<uint32_t>(1);
@@ -116,6 +142,22 @@ void kernel_main() {
     const auto kv = TensorAccessor(kv_args, kv_addr);
     const auto ids_acc = TensorAccessor(ids_args, ids_addr);
     const auto pos_acc = TensorAccessor(pos_args, pos_addr);
+
+#ifdef PAGED
+    // The user's page-table row, once; the writer reads it at the same address (64-byte aligned inside the CB).
+    experimental::CB pt_cb(cb_pt);
+    pt_cb.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* pt_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>((pt_cb.get_write_ptr() + 63) & ~63u);
+    {
+        const auto pt = TensorAccessor(pt_args, pt_addr);
+        const UnicastEndpoint local_l1;
+        noc.async_read(
+            pt, local_l1, pt_w * sizeof(uint32_t), {.page_id = pt_row}, {.addr = reinterpret_cast<uint32_t>(pt_l1)});
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+    }
+#endif
 
     // Reader scratch: reserved once, never pushed; the writer reads union / member / positions at the same
     // addresses (its copy of the CB interface starts at the same fifo base and never advances).
@@ -298,7 +340,20 @@ void kernel_main() {
             }
             kreq_cb.push_back(1);
 
-            union_gather<RING_DEPTH, BT>(noc, kv, dst, uni, slot0, split, valid, K_ROW_BYTES);
+            union_gather<RING_DEPTH, BT>(
+                noc,
+                kv,
+                dst,
+                uni,
+                slot0,
+                split,
+                valid,
+                K_ROW_BYTES
+#ifdef PAGED
+                ,
+                pt_l1
+#endif
+            );
 
             kack_cb.wait_front(1);
             kack_cb.pop_front(1);

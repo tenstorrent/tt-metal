@@ -213,8 +213,12 @@ def test_the_pool_cap_counts_the_pack_with_the_context(monkeypatch):
         off = vllm.batch_pool_token_cap(max_len, seqs)
         monkeypatch.setenv("QWEN38_PREFILL_PACK", "1")
         on = vllm.batch_pool_token_cap(max_len, seqs)
-        want = batch.pack_dram_bytes(batch.pack_buckets_from_env({}, lanes=seqs), context)
+        want = batch.pack_dram_bytes(batch.pack_buckets_from_env({}, lanes=seqs), context, shared_pools=True)
         assert abs((off - on) * vllm.KV_BYTES_PER_TOKEN - want) < 2 * vllm.KV_BYTES_PER_TOKEN
+        monkeypatch.setenv("QWEN38_PACK_BUCKETS", "128,256,512,1024")
+        filtered = vllm.batch_pool_token_cap(max_len, seqs, block_size=512)  # only the 512 and 1024 buckets remain
+        monkeypatch.delenv("QWEN38_PACK_BUCKETS")
+        assert filtered > vllm.batch_pool_token_cap(max_len, seqs)
 
 
 def test_the_force_knob_parses_strictly(expect_error):
@@ -235,11 +239,13 @@ class PackDecoder(FakeDecoder):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.pack_enabled = True
         self.pack_buckets = LANE_BUCKETS if self.lanes <= 8 else ALL
         self.packs: list = []
         self.last_pack = {}
 
     def admit_pack(self, lanes, prompts, rows_per_user, pages=None, users=None):
+        self.chain.log.append("pack_table:flat")  # the pack writes its flat row into the chain's page table
         self.packs.append((list(lanes), [len(p) for p in prompts], rows_per_user, [list(p) for p in pages]))
         for lane, prompt, rows in zip(lanes, prompts, pages):
             assert self.positions[lane] is None and not self.page_rows[lane]
@@ -276,15 +282,15 @@ def pack_rig(monkeypatch):
     rig.order = []
     adapter._fake_dram(monkeypatch)
 
-    def opener(warm_hook):
+    def opener(warm_hook, paging=None):
         warm_hook(rig.chain)
         return rig.chain
 
     rig.model = Qwen38ForCausalLM(None, allocated_context=ALLOCATED_CONTEXT, batch_lanes=8, chain_opener=opener)
-    rig.lanes, rig.block_size, rig.num_blocks = 8, 64, 2048
-    rig.model.allocate_kv_cache((2048, 1, 64, 128), None, 12)
+    rig.lanes, rig.block_size, rig.num_blocks = 8, 128, 2048
+    rig.model.allocate_kv_cache((2048, 1, 128, 128), None, 12)
     rig.decoder = FakeDecoder.instances[-1]
-    rig.width = -(-ALLOCATED_CONTEXT // 64)
+    rig.width = -(-ALLOCATED_CONTEXT // 128)
     return rig
 
 
@@ -293,13 +299,13 @@ def test_the_grouped_prefill_packs_short_rows_keeps_long_ones_single_and_the_row
     calls = []
     original = rig.model._prefill_one
 
-    def tracked(ids, *, greedy_token):
+    def tracked(ids, **kwargs):
         calls.append(len(ids))
-        return original(ids, greedy_token=greedy_token)
+        return original(ids, **kwargs)
 
     monkeypatch.setattr(rig.model, "_prefill_one", tracked)
     prompts = [_prompt(100, 10), _prompt(1500, 20), _prompt(90, 30), _prompt(80, 40), _prompt(70, 50), _prompt(60, 60)]
-    blocks = [[1 + i * 30 + j for j in range(-(-len(p) // 64))] for i, p in enumerate(prompts)]
+    blocks = [[1 + i * 30 + j for j in range(-(-len(p) // 128))] for i, p in enumerate(prompts)]
     out, deltas = rig.prefill(prompts, [3, 0, 5, 1, 7, 2], blocks, greedy_batch_sampling_params(6))
     assert calls == [1500]  # only the long row ran alone
     (lanes, lengths, bucket, pages) = rig.decoder.packs[0]
@@ -314,6 +320,21 @@ def test_the_grouped_prefill_packs_short_rows_keeps_long_ones_single_and_the_row
     for slot, i in lane_of.items():
         lane = rig.model.lane_of_slot[slot]
         assert rig.decoder.positions[lane] == len(prompts[i]) and rig.decoder.page_rows[lane] == blocks[i]
+
+
+def test_the_chain_prefill_after_a_pack_rewrites_the_chain_table(pack_rig):
+    rig = pack_rig
+    short = [_prompt(100, 10 + i) for i in range(4)]
+    long = _prompt(1500, 70)
+    prompts = short + [long]
+    blocks = [[1 + i * 30 + j for j in range(-(-len(p) // 128))] for i, p in enumerate(prompts)]
+    rig.prefill(prompts, [0, 1, 2, 3, 4], blocks, greedy_batch_sampling_params(5))
+    log = rig.chain.log
+    pack = log.index("pack_table:flat")
+    resets = [i for i, e in enumerate(log) if e.startswith("reset:") and i > pack]
+    tables = [i for i, e in enumerate(log) if e.startswith("table:") and i > pack]
+    assert resets and tables and pack < resets[0] < tables[0]  # the long row's reset and its own table follow the pack
+    assert log[tables[0]] == f"table:{tuple(blocks[4])}"
 
 
 def test_the_grouped_prefill_without_sampling_params_returns_masked_logits(pack_rig):

@@ -50,7 +50,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
 from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import LANE_AXIS
 
 LANES = 8
-BLOCK = 64
+BLOCK = 128
 TARGET_BASE = 1024
 FILLER_LENS = (300, 777, 1500)  # live lanes: prompts of other lengths (and ring residues 0, 1, 3 -> 300 % 4 == 0)
 STALE_LEN = 450

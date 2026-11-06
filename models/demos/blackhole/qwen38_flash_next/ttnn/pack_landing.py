@@ -59,7 +59,12 @@ class Qwen38TTNNPackLander:
         self.page_size = paging.page_size
         self.gdn_layers = [i for i, layer in enumerate(pack_state.layers) if layer is not None]
         self.qsa_layers = [i for i, layer in enumerate(pack_state.layers) if layer is None]
-        if len(self.gdn_layers) != len(layout.recurrent) or len(self.qsa_layers) != len(layout.compressed):
+        # shared pools: the pack's QSA writes already went through the chain's paged table into the pools, so the lane
+        # layout holds no compressed caches and the landing writes no K/V and no index rows
+        self.shared_pools = not layout.compressed
+        if len(self.gdn_layers) != len(layout.recurrent) or (
+            not self.shared_pools and len(self.qsa_layers) != len(layout.compressed)
+        ):
             raise ValueError("the pack state and the lane layout disagree on the layer counts")
         if len(layout.conv) != pack_module.CONV_RING_ROWS * len(self.gdn_layers):
             raise ValueError("the lane layout holds a different number of ring slots than four per GDN layer")
@@ -85,18 +90,10 @@ class Qwen38TTNNPackLander:
                 persistent(pack_module.conv_hit_image(lanes, [], slot)) for slot in range(pack_module.CONV_RING_ROWS)
             )
             self.conv_keep = persistent(pack_module.conv_keep_image(lanes, []))
-            self.compressed_select = {
-                rows: persistent(torch.zeros(bucket.blocks_per_user, COMPRESSED_HEAD_ROWS))
-                for rows, bucket in pack_state.buckets.items()
-            }
-            # the lane's compressed rows past the user's segment: written as zero with the landed rows, so a landed lane
-            # holds no row of its previous occupant (the importer writes the whole generic cache; the rows are dead
-            # either way: a decode reads only the complete blocks of its position)
-            lane_rows = int(layout.compressed[0].shape[2])
-            self.compressed_zero_tail = {
-                rows: persistent(torch.zeros(lane_rows - bucket.blocks_per_user, qsa_module.INDEX_HEAD_DIM))
-                for rows, bucket in pack_state.buckets.items()
-            }
+            self.compressed_select = {}
+            self.compressed_zero_tail = {}
+            if not self.shared_pools:
+                self._allocate_compressed(persistent)
             self.staging_select = persistent(torch.zeros(pack_module.CHUNK, pack_module.PACK_ROWS))
             self.raw_select = persistent(torch.zeros(pack_module.CHUNK, pack_module.PACK_ROWS))
             self.ple_select = persistent(torch.zeros(PLE_WINDOW_ROWS, pack_module.CHUNK))
@@ -112,6 +109,21 @@ class Qwen38TTNNPackLander:
         except BaseException:
             self.release()
             raise
+
+    def _allocate_compressed(self, persistent) -> None:
+        pack_state, layout = self.pack_state, self.layout
+        self.compressed_select = {
+            rows: persistent(torch.zeros(bucket.blocks_per_user, COMPRESSED_HEAD_ROWS))
+            for rows, bucket in pack_state.buckets.items()
+        }
+        # the lane's compressed rows past the user's segment: written as zero with the landed rows, so a landed lane
+        # holds no row of its previous occupant (the importer writes the whole generic cache; the rows are dead
+        # either way: a decode reads only the complete blocks of its position)
+        lane_rows = int(layout.compressed[0].shape[2])
+        self.compressed_zero_tail = {
+            rows: persistent(torch.zeros(lane_rows - bucket.blocks_per_user, qsa_module.INDEX_HEAD_DIM))
+            for rows, bucket in pack_state.buckets.items()
+        }
 
     def release(self) -> None:
         _deallocate(*self.owned)
@@ -187,7 +199,8 @@ class Qwen38TTNNPackLander:
         rows = bucket.rows_per_user
         pager = self.pager
         # host-written selects of this user (one persistent buffer each: the next landing rewrites them in order)
-        self._write(self.compressed_select[rows], pack_module.compressed_select_image(bucket, user, length))
+        if not self.shared_pools:
+            self._write(self.compressed_select[rows], pack_module.compressed_select_image(bucket, user, length))
         self._write(self.staging_select, pack_module.staging_select_image(bucket, user, length))
         self._write(self.raw_select, pack_module.raw_ring_select_image(bucket, user, length))
         self._write(self.ple_select, pack_module.ple_history_select_image(length))
@@ -210,33 +223,34 @@ class Qwen38TTNNPackLander:
             generic = self.chain_state.layers[layer_index].attention
             kept = self.pack_state.chunk_state.layers[layer_index].attention
             lane_attention = self.lane_state.layers[layer_index].attention
-            kv_page_scatter(
-                generic.packed_kv_cache,
-                lane_attention.packed_kv_cache,
-                self.lane_state.page_table,
-                lane=lane,
-                rows=length,
-                page_size=self.page_size,
-                src_row0=user * rows,
-            )
-            head = ttnn.slice(
-                generic.compressed_index_cache,
-                (0, 0, 0, 0),
-                (1, 1, COMPRESSED_HEAD_ROWS, qsa_module.INDEX_HEAD_DIM),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            compressed = ttnn.matmul(
-                self.compressed_select[rows],
-                head,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_config,
-            )
-            whole = ttnn.concat(
-                [compressed, self.compressed_zero_tail[rows]], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            view = pager.views["compressed"][index]
-            _landed(ttnn.fill_cache(view, whole, batch_idx=lane), view, f"pack landing compressed[{index}]")
-            _deallocate(head, compressed, whole)
+            if not self.shared_pools:
+                kv_page_scatter(
+                    generic.packed_kv_cache,
+                    lane_attention.packed_kv_cache,
+                    self.lane_state.page_table,
+                    lane=lane,
+                    rows=length,
+                    page_size=self.page_size,
+                    src_row0=user * rows,
+                )
+                head = ttnn.slice(
+                    generic.compressed_index_cache,
+                    (0, 0, 0, 0),
+                    (1, 1, COMPRESSED_HEAD_ROWS, qsa_module.INDEX_HEAD_DIM),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                compressed = ttnn.matmul(
+                    self.compressed_select[rows],
+                    head,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_config,
+                )
+                whole = ttnn.concat(
+                    [compressed, self.compressed_zero_tail[rows]], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                view = pager.views["compressed"][index]
+                _landed(ttnn.fill_cache(view, whole, batch_idx=lane), view, f"pack landing compressed[{index}]")
+                _deallocate(head, compressed, whole)
             for name, select, source in (
                 ("staging", self.staging_select, kept.kept_kv),
                 ("ring", self.raw_select, kept.kept_raw),

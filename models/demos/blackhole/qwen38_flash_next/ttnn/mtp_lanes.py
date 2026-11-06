@@ -30,7 +30,7 @@ import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import torch
@@ -62,6 +62,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
     KV_WIDTH,
     RECURRENT_ROWS,
     Qwen38LaneHostSlot,
+    Qwen38LaneLayout,
     Qwen38TTNNLanePager,
     slice_owned,
 )
@@ -660,8 +661,18 @@ def _allocate_lane_moe(layer: Qwen38TTNNDecoderLayer, moe_rows: int) -> Qwen38TT
 
 
 def _allocate_layer_lane_state(
-    layer: Qwen38TTNNDecoderLayer, lanes: int, rows: int, gdn_rows_constants, gdn_lane_constants, *, moe_rows: int
+    layer: Qwen38TTNNDecoderLayer,
+    lanes: int,
+    rows: int,
+    gdn_rows_constants,
+    gdn_lane_constants,
+    *,
+    moe_rows: int,
+    pools=None,
 ) -> Qwen38TTNNMTPLaneLayerState:
+    """``pools``: the shared pools of this QSA layer (:meth:`Qwen38TTNNQSA.allocate_paged_pools`): its lane caches
+    are the pools (no scratch rows: an inactive lane's page-table row is all zeros, its writes land in block 0)."""
+
     actions: list[tuple[str, Callable[[], Any]]] = []
     try:
         if isinstance(layer.attention, Qwen38TTNNGDN):
@@ -670,9 +681,12 @@ def _allocate_layer_lane_state(
             attention_rows = layer.attention.allocate_lane_rows_state(gdn_rows_constants, gdn_lane_constants)
             actions.append(("GDN lane rows state", attention_rows.deallocate))
         else:
-            attention_state = layer.attention.allocate_lane_state(
-                lanes, kv_scratch_rows=kv_scratch_rows(layer.attention.allocated_context)
-            )
+            if pools is None:
+                attention_state = layer.attention.allocate_lane_state(
+                    lanes, kv_scratch_rows=kv_scratch_rows(layer.attention.allocated_context)
+                )
+            else:
+                attention_state = layer.attention.allocate_lane_state(lanes, pools=pools)
             actions.append(("QSA lane state", lambda: layer.attention.release_lane_state(attention_state)))
             attention_rows = layer.attention.allocate_lane_verify_state(lanes)
             actions.append(("QSA lane verify state", lambda: layer.attention.release_lane_verify_state(attention_rows)))
@@ -753,6 +767,105 @@ def _allocate_lane_ple_rows(
     return Qwen38TTNNPLERowsPreparedInput(tensor, (0,) * rows, ())
 
 
+def _validate_shared_pools(model, mtp_layer, pools, mtp_pools, paging) -> None:
+    if paging is None:
+        if pools is not None or mtp_pools is not None:
+            raise ValueError("shared lane pools require the lane paging (paging=)")
+        return
+    if pools is None or mtp_pools is None:
+        raise ValueError("lane paging needs the chain's pools and the MTP layer's pools (pools=, mtp_pools=)")
+    missing = [
+        layer.layer_index
+        for layer in model.layers
+        if not isinstance(layer.attention, Qwen38TTNNGDN) and layer.layer_index not in pools
+    ]
+    if missing:
+        raise ValueError(f"shared lane pools must cover QSA layers {missing}")
+    if isinstance(mtp_layer.attention, Qwen38TTNNGDN):
+        raise ValueError("the MTP alignment layer must be a QSA layer to run on shared pools")
+
+
+def lane_verify_paged(verify) -> bool:
+    """Whether the lane verify state runs on shared pools (paged lane constants)."""
+
+    return verify.qsa_lane_constants.paging is not None
+
+
+def lane_page_table_host(verify, lane_rows_host, active_lanes: Sequence[int]) -> torch.Tensor:
+    """The lane page table image: int32 ``[32, W]`` from ``lane_rows_host`` (``[u][...]`` block ids, or a tensor of
+    ``[32, W]`` / ``[1,1,32,W]``; short rows and missing lanes are padding), with every row of a lane outside
+    ``active_lanes`` (and every row past ``verify.lanes``) forced to zeros: an inactive, parked or released lane
+    writes into the null block 0."""
+
+    paging = verify.qsa_lane_constants.paging
+    if paging is None:
+        raise ValueError("the lane verify state is not paged")
+    width = paging.max_blocks
+    active = sorted({int(lane) for lane in active_lanes})
+    if any(not 0 <= lane < verify.lanes for lane in active):
+        raise ValueError(f"active lanes must be in [0, {verify.lanes}), got {active}")
+    host = torch.zeros(CHUNK_ROWS, width, dtype=torch.int32)
+    if isinstance(lane_rows_host, torch.Tensor):
+        table = lane_rows_host.to(torch.int32).reshape(-1, lane_rows_host.shape[-1])
+        if table.shape[0] > CHUNK_ROWS or table.shape[1] > width:
+            raise ValueError(f"the lane page table must fit [{CHUNK_ROWS}, {width}], got {tuple(table.shape)}")
+        host[: table.shape[0], : table.shape[1]] = table
+    else:
+        if len(lane_rows_host) > CHUNK_ROWS:
+            raise ValueError(f"the page table has {CHUNK_ROWS} rows, got {len(lane_rows_host)}")
+        for lane, pages in enumerate(lane_rows_host):
+            pages = [int(page) for page in pages]
+            if len(pages) > width:
+                raise ValueError(f"lane {lane} holds {len(pages)} blocks, the table {width}")
+            host[lane, : len(pages)] = torch.tensor(pages, dtype=torch.int32)
+    if bool((host < 0).any()) or bool((host >= paging.num_pages).any()):
+        raise ValueError(f"lane page table block ids must be in [0, {paging.num_pages})")
+    keep_rows = torch.zeros(CHUNK_ROWS, dtype=torch.bool)
+    keep_rows[active] = True
+    host[~keep_rows] = 0
+    return host
+
+
+def write_lane_page_table(
+    model: Qwen38TTNNTextModel,
+    verify: Qwen38TTNNMTPLaneVerifyState,
+    lane_rows_host,
+    active_lanes: Sequence[int],
+    keep: list | None = None,
+    *,
+    draft: Qwen38TTNNMTPLaneDraftState | None = None,
+) -> torch.Tensor:
+    """Host upload, in place (outside any trace), of every page table of the lane verify on shared pools: the
+    ``[1,1,32,W]`` lane table (read by the lane body, the verify's page-table starts and the draft), the verify's row
+    table (row r = lane ``r // R``'s row, ``R = k + 1``) and, with ``draft``, the draft's R = 1 row table.  The rows
+    of the lanes outside ``active_lanes`` are zeros (:func:`lane_page_table_host`), so their writes land in the null
+    block.  Width views share these tables: write through the parent state.  ``keep`` collects the host tensors of
+    the uploads (they must outlive a replay enqueued without blocking; write only between passes).  Returns the
+    ``[32, W]`` image that was written."""
+
+    _validate_lane_verify_state(model, verify)
+    _require_parent(verify, "write_lane_page_table")
+    if draft is not None:
+        _validate_lane_draft_state(model, verify, draft)
+        if draft.is_view:
+            raise RuntimeError("write_lane_page_table takes the parent draft state, not a width view")
+    host = lane_page_table_host(verify, lane_rows_host, active_lanes)
+    table = verify.qsa_lane_constants.page_table
+    uploaded = ttnn.from_torch(
+        host.reshape(1, 1, CHUNK_ROWS, host.shape[1]),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=replicate_tensor_2d_mesh_mapper(model.mesh_device),
+    )
+    ttnn.copy_host_to_device_tensor(uploaded, table)
+    if keep is not None:
+        keep.append(uploaded)
+    verify.qsa_lane_verify_constants.write_row_page_table(model.mesh_device, host, keep)
+    if draft is not None:
+        draft.qsa_lane_verify_constants.write_row_page_table(model.mesh_device, host, keep)
+    return host
+
+
 def allocate_lane_verify_state(
     model: Qwen38TTNNTextModel,
     *,
@@ -761,11 +874,19 @@ def allocate_lane_verify_state(
     mtp_components,
     moe_rows: int | None = None,
     positions: Sequence[int] | None = None,
+    pools: Mapping[int, Any] | None = None,
+    mtp_pools: Any = None,
+    paging: qsa_module.Qwen38LanePaging | None = None,
 ) -> Qwen38TTNNMTPLaneVerifyState:
     """Allocate every constant and buffer of a B-lane verify at k drafts beside the resident weights (before any
     capture).  ``moe_rows`` (default the exact ``B*R`` instance; 32 = the proven 32-row form) sets every layer's
     verify MoE row count.  The MTP components (the builder's) give the alignment layer its lane state.  Lanes start
-    at ``positions`` (default 0), active, with ``accepted_u = R - 1``."""
+    at ``positions`` (default 0), active, with ``accepted_u = R - 1``.
+
+    ``paging`` (with ``pools``: QSA layer index -> the chain's shared pools, and ``mtp_pools``: the MTP layer's) runs
+    the lanes on the shared pools: the lane and verify constants are paged (one ``[1,1,32,W]`` lane page table, the
+    MTP layer reading the same one, and the verify's row table), no layer has scratch rows, and a lane's blocks are
+    named by its page-table row (:func:`write_lane_page_table`; an inactive lane's rows are all zeros)."""
 
     model._require_healthy()
     lanes, rows = _validate_lane_geometry(lanes, drafts)
@@ -774,6 +895,7 @@ def allocate_lane_verify_state(
     if model.rope_table is None or model.qsa_position_constants is None:
         raise RuntimeError("generic constants are missing; allocate a generic or lane state through this owner first")
     mtp_layer, input_mixer, final_mixer = _validate_mtp_components(model, mtp_components)
+    _validate_shared_pools(model, mtp_layer, pools, mtp_pools, paging)
     gdn = next(layer.attention for layer in model.layers if isinstance(layer.attention, Qwen38TTNNGDN))
     qsa = next(layer.attention for layer in model.layers if not isinstance(layer.attention, Qwen38TTNNGDN))
     mesh_device, mesh_contract = model.mesh_device, model.mesh_contract
@@ -803,17 +925,25 @@ def allocate_lane_verify_state(
         )
         keep("QSA verify constants", verify_constants, verify_constants.deallocate)
         lane_constants = qsa_module.Qwen38TTNNQSALaneConstants.build(
-            mesh_device, mesh_contract, lanes=lanes, allocated_context=model.allocated_context
+            mesh_device, mesh_contract, lanes=lanes, allocated_context=model.allocated_context, paging=paging
         )
         keep("QSA lane constants", lane_constants, lane_constants.deallocate)
         lane_verify_constants = qsa_module.Qwen38TTNNQSALaneVerifyConstants.build(
-            mesh_device, mesh_contract, lanes=lanes, rows=rows, allocated_context=model.allocated_context
+            mesh_device,
+            mesh_contract,
+            lanes=lanes,
+            rows=rows,
+            allocated_context=model.allocated_context,
+            paging=paging,
         )
         keep("QSA lane verify constants", lane_verify_constants, lane_verify_constants.deallocate)
         layers: list[Qwen38TTNNMTPLaneLayerState] = []
         for layer in (*model.layers, mtp_layer):
+            layer_pools = None
+            if paging is not None and not isinstance(layer.attention, Qwen38TTNNGDN):
+                layer_pools = mtp_pools if layer is mtp_layer else pools[layer.layer_index]
             layer_state = _allocate_layer_lane_state(
-                layer, lanes, rows, gdn_rows_constants, gdn_lane_constants, moe_rows=moe_rows
+                layer, lanes, rows, gdn_rows_constants, gdn_lane_constants, moe_rows=moe_rows, pools=layer_pools
             )
             layers.append(layer_state)
             keep(
@@ -1220,14 +1350,17 @@ def import_qsa_lane(
 ) -> None:
     """Lane ``lane`` of a QSA layer from image ``index``: the KV slab at row ``u*C`` (the pager's re-admission write
     through its staging), the compressed blocks (``fill_cache`` at batch u) and the raw history rows 0..2 <- ring slots
-    ``(P - 3 .. P - 1) % 4`` (``sync_verify_raw_history_from_ring`` landing in batch u)."""
+    ``(P - 3 .. P - 1) % 4`` (``sync_verify_raw_history_from_ring`` landing in batch u).  On shared pools
+    (``state.pools_shared``) the KV and the compressed blocks are already in the pools (the chain prefilled into the
+    blocks the lane's page-table row names): only the raw history lands."""
 
-    staging = pager.kv_stagings[index % KV_STAGINGS]
-    ttnn.copy_host_to_device_tensor(slot.tensors["kv"][index], staging)
-    write_kv_slab_lane(state.packed_kv_cache, staging, lane, allocated_context, label=f"QSA layer image {index}")
-    part = _slice0(pager.packs["compressed"], index)
-    _fill_lane(state.compressed_index_cache, part, lane, label=f"QSA layer image {index} compressed blocks")
-    _deallocate(part)
+    if not getattr(state, "pools_shared", False):
+        staging = pager.kv_stagings[index % KV_STAGINGS]
+        ttnn.copy_host_to_device_tensor(slot.tensors["kv"][index], staging)
+        write_kv_slab_lane(state.packed_kv_cache, staging, lane, allocated_context, label=f"QSA layer image {index}")
+        part = _slice0(pager.packs["compressed"], index)
+        _fill_lane(state.compressed_index_cache, part, lane, label=f"QSA layer image {index} compressed blocks")
+        _deallocate(part)
     ring = _slice0(pager.packs["ring"], index)  # [1,1,32,128]: slot s at row s
     rows = []
     for back in range(qsa_module.RAW_HISTORY_ROWS, 0, -1):  # positions P - 3, P - 2, P - 1
@@ -1271,6 +1404,25 @@ def import_ple_lane(lanes_state, pager: Qwen38TTNNLanePager, *, lane: int, conte
     lanes_state.validate()
 
 
+def lane_alignment_layout(alignment_generic, allocated_context: int, *, shared: bool) -> Qwen38LaneLayout:
+    """The 1-lane layout of the alignment (MTP) layer's generic state for its pager.  ``shared`` (the lanes run on
+    shared pools): no KV and no compressed cache (the pools hold them; the pager never moves them), the staging tile
+    and the raw-key ring only, as ``model.generic_lane_layout(chain_state, exclude_kv=True, exclude_compressed=True)``
+    does for the backbone."""
+
+    return Qwen38LaneLayout(
+        lanes=1,
+        allocated_context=allocated_context,
+        kv=() if shared else (alignment_generic.packed_kv_cache,),
+        compressed=() if shared else (alignment_generic.compressed_index_cache,),
+        staging=(alignment_generic.kv_staging,),
+        ring=(alignment_generic.raw_key_ring,),
+        recurrent=(),
+        conv=(),
+        ple=(),
+    )
+
+
 def import_lane_state(
     model: Qwen38TTNNTextModel,
     verify: Qwen38TTNNMTPLaneVerifyState,
@@ -1284,6 +1436,7 @@ def import_lane_state(
     alignment_slot: Qwen38LaneHostSlot,
     alignment_pager: Qwen38TTNNLanePager,
     rope_shift: int = 0,
+    shared: bool | None = None,
 ) -> None:
     """Admit a prefilled sequence into lane ``lane`` from its 1-lane images: the pager's host slot of the generic
     state (``model.generic_lane_layout``) and of the alignment layer's generic state, evicted after the prompt's
@@ -1292,10 +1445,25 @@ def import_lane_state(
     phase-bound families are converted at P into the MTP-lane families (the B=1 seed forms of ``mtp_v2`` per lane).
     Then the lane's position, rotary shift (``rope_shift``: the prompt's ``mrope`` shift, 0 for text) and n-gram
     context.  Eager, never traced; the caller writes the lane's accept count (-1: the next commit keeps everything)
-    and active flag, and warms every (lane) variant before the captures."""
+    and active flag, and warms every (lane) variant before the captures.
+
+    ``shared`` (default: whether ``verify`` runs on shared pools): both pagers' layouts carry no KV and no compressed
+    cache (``model.generic_lane_layout(chain.state, exclude_kv=True, exclude_compressed=True)`` and
+    :func:`lane_alignment_layout` ``(..., shared=True)``), the slots hold none and the import lands only the raw
+    history of each QSA layer.  The caller writes the lane's row of the page table (:func:`write_lane_page_table`,
+    the blocks the chain prefilled) before the next pass."""
 
     _validate_lane_verify_state(model, verify)
     _require_parent(verify, "import_lane_state")
+    if shared is None:
+        shared = lane_verify_paged(verify)
+    if shared != lane_verify_paged(verify):
+        raise ValueError(f"shared={shared} does not match the lane verify state (paged: {lane_verify_paged(verify)})")
+    if shared:
+        for name, pager in (("backbone", backbone_pager), ("alignment", alignment_pager)):
+            layout = pager.layout
+            if layout.kv or layout.compressed:
+                raise ValueError(f"the {name} pager layout must drop the KV and compressed caches on shared pools")
     if isinstance(lane, bool) or type(lane) is not int or not 0 <= lane < verify.lanes:
         raise ValueError(f"lane must be an int in [0, {verify.lanes}), got {lane!r}")
     if isinstance(position, bool) or type(position) is not int or position < 0:
@@ -1982,7 +2150,8 @@ def allocate_lane_draft_state(
 ) -> Qwen38TTNNMTPLaneDraftState:
     """Allocate the lane draft body's buffers beside ``verify`` (before any capture): the rows = 1 QSA verify and
     lane verify constants, the draft raw history per lane, the MTP layer's rows-B MoE instance, the a = 0 lane
-    selectors, the step offset rows, the sentinels and the pass row."""
+    selectors, the step offset rows, the sentinels and the pass row.  On shared pools the draft's verify constants
+    are paged: its row table (R = 1: row u = lane u's row) is written by :func:`write_lane_page_table`."""
 
     _validate_lane_verify_state(model, verify)
     alignment = verify.alignment
@@ -2006,7 +2175,12 @@ def allocate_lane_draft_state(
         )
         keep("lane draft QSA verify constants", verify_constants, verify_constants.deallocate)
         lane_verify_constants = qsa_module.Qwen38TTNNQSALaneVerifyConstants.build(
-            mesh_device, mesh_contract, lanes=lanes, rows=1, allocated_context=model.allocated_context
+            mesh_device,
+            mesh_contract,
+            lanes=lanes,
+            rows=1,
+            allocated_context=model.allocated_context,
+            paging=verify.qsa_lane_constants.paging,
         )
         keep("lane draft QSA lane verify constants", lane_verify_constants, lane_verify_constants.deallocate)
         qsa_state = qsa.allocate_lane_verify_state(lanes)
@@ -2191,6 +2365,45 @@ def _lane_layer_state_view(
     )
 
 
+def _build_view_lane_verify_constants(
+    mesh_device,
+    mesh_contract,
+    parent_constants,
+    *,
+    lanes: int,
+    rows: int,
+    allocated_context: int,
+    storage_lanes: int,
+    paging,
+):
+    """The width view's lane verify constants.  Paged parent: they share the parent's row page table (its rows
+    ``0 .. W*R - 1`` are lane-major identical at any width, the pad rows only feed discarded rows) and do not own it
+    (``release`` frees every other tensor).  Returns ``(constants, release)``."""
+
+    if not parent_constants.paged:
+        built = qsa_module.Qwen38TTNNQSALaneVerifyConstants.build(
+            mesh_device,
+            mesh_contract,
+            lanes=lanes,
+            rows=rows,
+            allocated_context=allocated_context,
+            storage_lanes=storage_lanes,
+        )
+        return built, built.deallocate
+    built = qsa_module.Qwen38TTNNQSALaneVerifyConstants.build(
+        mesh_device,
+        mesh_contract,
+        lanes=lanes,
+        rows=rows,
+        allocated_context=allocated_context,
+        storage_lanes=storage_lanes,
+        paging=paging,
+    )
+    _deallocate(built.row_page_table)
+    shared = replace(built, row_page_table=parent_constants.row_page_table)
+    return shared, replace(shared, row_page_table=None).deallocate
+
+
 def _check_width_view_parent(model, parent: Qwen38TTNNMTPLaneVerifyState, lanes: int) -> None:
     _validate_lane_verify_state(model, parent)
     if parent.is_view:
@@ -2244,19 +2457,26 @@ def allocate_lane_width_view(
         ledger.keep("lane accept constants", constants, constants.deallocate)
         gdn_lane_constants = gdn.allocate_lane_rows_constants(lanes, rows)
         ledger.keep("GDN lane rows constants", gdn_lane_constants, gdn_lane_constants.deallocate)
-        lane_constants = qsa_module.Qwen38TTNNQSALaneConstants.build(
-            mesh_device, mesh_contract, lanes=lanes, allocated_context=model.allocated_context
-        )
+        if lane_verify_paged(parent):
+            lane_constants = qsa_module.Qwen38TTNNQSALaneConstants.build_view(
+                mesh_device, mesh_contract, parent.qsa_lane_constants, lanes=lanes
+            )
+        else:
+            lane_constants = qsa_module.Qwen38TTNNQSALaneConstants.build(
+                mesh_device, mesh_contract, lanes=lanes, allocated_context=model.allocated_context
+            )
         ledger.keep("QSA lane constants", lane_constants, lane_constants.deallocate)
-        lane_verify_constants = qsa_module.Qwen38TTNNQSALaneVerifyConstants.build(
+        lane_verify_constants, release_verify_constants = _build_view_lane_verify_constants(
             mesh_device,
             mesh_contract,
+            parent.qsa_lane_verify_constants,
             lanes=lanes,
             rows=rows,
             allocated_context=model.allocated_context,
             storage_lanes=parent.lanes,
+            paging=parent.qsa_lane_constants.paging,
         )
-        ledger.keep("QSA lane verify constants", lane_verify_constants, lane_verify_constants.deallocate)
+        ledger.keep("QSA lane verify constants", lane_verify_constants, release_verify_constants)
         layers = [
             _lane_layer_state_view(layer, state, lanes, gdn_lane_constants, moe_rows, ledger)
             for layer, state in zip(model.layers, parent.layers)
@@ -2360,15 +2580,17 @@ def _lane_draft_state_view(
         tensor = _upload_replicated(mesh_device, mesh_contract, values, dtype, layout, label=label)
         return ledger.own_tensor(label, tensor)
 
-    lane_verify_constants = qsa_module.Qwen38TTNNQSALaneVerifyConstants.build(
+    lane_verify_constants, release_verify_constants = _build_view_lane_verify_constants(
         mesh_device,
         mesh_contract,
+        parent_draft.qsa_lane_verify_constants,
         lanes=lanes,
         rows=1,
         allocated_context=model.allocated_context,
         storage_lanes=parent.lanes,
+        paging=parent.qsa_lane_constants.paging,
     )
-    ledger.keep("lane draft QSA lane verify constants", lane_verify_constants, lane_verify_constants.deallocate)
+    ledger.keep("lane draft QSA lane verify constants", lane_verify_constants, release_verify_constants)
     qsa_state = qsa.lane_verify_state_view(parent_draft.qsa_state, lanes, ledger.alias)
     moe_rows = resolve_moe_rows(lanes, lanes)
     moe = _allocate_lane_moe(layer, moe_rows)
@@ -3003,7 +3225,9 @@ class Qwen38MTPLaneImage:
     ``[0, kv_rows)`` on device d; ``compressed[i][d]`` its whole compressed cache; ``recurrent[j][d]`` GDN layer j's
     ``[H, 128, 128]`` fp32; ``gdn_history[j][d]`` its three FIR rows; ``raw_history[i][d]`` QSA layer i's three raw
     history rows; ``alignment_*`` the MTP layer's; ``ple_history[d]`` the nine slots ``[9, 4, 640]``), the position,
-    the PLE n-gram context and the accept count the lane parks with."""
+    the PLE n-gram context and the accept count the lane parks with.  An image of a lane on shared pools holds no KV
+    and no compressed rows (``kv``, ``compressed``, ``alignment_kv``, ``alignment_compressed`` empty, ``kv_rows`` 0):
+    the blocks stay in the pools under the request's page-table row."""
 
     position: int
     kv_rows: int
@@ -3014,8 +3238,8 @@ class Qwen38MTPLaneImage:
     recurrent: list[list[torch.Tensor]]
     gdn_history: list[list[torch.Tensor]]
     raw_history: list[list[torch.Tensor]]
-    alignment_kv: list[torch.Tensor]
-    alignment_compressed: list[torch.Tensor]
+    alignment_kv: list[torch.Tensor] | None
+    alignment_compressed: list[torch.Tensor] | None
     alignment_raw_history: list[torch.Tensor]
     ple_history: list[torch.Tensor]
     rope_shift: int = 0  # the lane's rotary shift (mrope; 0 for text)
@@ -3034,10 +3258,10 @@ class Qwen38MTPLaneImage:
         def update(shard: torch.Tensor) -> None:
             digest.update(shard.contiguous().view(torch.uint8).numpy().tobytes())
 
-        for shards in (*self.kv, self.alignment_kv):
+        for shards in (*self.kv, *(() if self.alignment_kv is None else (self.alignment_kv,))):
             for shard in shards:
                 update(shard[:, :, : self.position])
-        for shards in (*self.compressed, self.alignment_compressed):
+        for shards in (*self.compressed, *(() if self.alignment_compressed is None else (self.alignment_compressed,))):
             for shard in shards:
                 update(shard[:, :, :blocks])
         for family in (
@@ -3108,7 +3332,8 @@ def evict_lane(
     """Lane ``lane``'s image to the host (outside any trace, between passes, after the host commit of the last pass
     the lane ran): its KV prefix rows, compressed caches, recurrent states, FIR / raw / PLE history rows, position,
     n-gram context and ``accepted`` (the accept count the lane parks with: -1 for a lane whose last pass is already
-    committed).  The device state is left as it is."""
+    committed).  The device state is left as it is.  On shared pools the image holds no KV and no compressed rows (the
+    pools keep them; the caller keeps the request's blocks)."""
 
     _validate_lane_verify_state(model, verify)
     _require_parent(verify, "evict_lane")
@@ -3116,7 +3341,8 @@ def evict_lane(
         raise ValueError(f"lane must be an int in [0, {verify.lanes}), got {lane!r}")
     context = model.allocated_context
     position = int(verify.positions.positions[lane])
-    kv_rows = kv_image_rows(position, context)
+    shared = lane_verify_paged(verify)
+    kv_rows = 0 if shared else kv_image_rows(position, context)
     width = 2 * qsa_module.HEAD_DIM
     history_rows = gdn_module.CONV_HISTORY_ROWS
 
@@ -3136,15 +3362,21 @@ def evict_lane(
         ple_context=ple_state.token_contexts[lane],
         accepted=int(accepted),
         rope_shift=int(verify.positions.shifts[lane]),
-        kv=[kv_rows_of(s.attention_state) for s in qsa_layers],
-        compressed=[_read_shards(_lane_slice(s.attention_state.compressed_index_cache, 0, lane)) for s in qsa_layers],
+        kv=[] if shared else [kv_rows_of(s.attention_state) for s in qsa_layers],
+        compressed=(
+            []
+            if shared
+            else [_read_shards(_lane_slice(s.attention_state.compressed_index_cache, 0, lane)) for s in qsa_layers]
+        ),
         recurrent=[_read_shards(_lane_slice(s.attention_state.recurrent, 0, lane)) for s in gdn_layers],
         gdn_history=[
             _read_shards(_lane_slice(s.attention_rows.history, 1, lane, rows=history_rows)) for s in gdn_layers
         ],
         raw_history=[raw_history_of(s.attention_rows) for s in qsa_layers],
-        alignment_kv=kv_rows_of(alignment.attention_state),
-        alignment_compressed=_read_shards(_lane_slice(alignment.attention_state.compressed_index_cache, 0, lane)),
+        alignment_kv=None if shared else kv_rows_of(alignment.attention_state),
+        alignment_compressed=(
+            None if shared else _read_shards(_lane_slice(alignment.attention_state.compressed_index_cache, 0, lane))
+        ),
         alignment_raw_history=raw_history_of(alignment.attention_rows),
         ple_history=_read_shards(_lane_slice(ple_state.history, 0, lane)),
     )
@@ -3156,7 +3388,11 @@ def readmit_lane(
 ) -> None:
     """``image`` into lane ``lane`` (outside any trace, between passes): every family through the import's landing
     forms, then the lane's position and n-gram context.  The caller writes the accept count (``image.accepted``, -1
-    for a seeded lane), the active mask and the lane's next tokens before the next pass."""
+    for a seeded lane), the active mask and the lane's next tokens before the next pass.
+
+    On shared pools (``lane_verify_paged``) the image holds no KV or compressed rows and none is landed: the pools
+    keep them.  The caller must write the lane's page-table row (:func:`write_lane_page_table`: the request's blocks;
+    the row is all zeros while the lane is parked or released) before the next pass."""
 
     _validate_lane_verify_state(model, verify)
     _require_parent(verify, "readmit_lane")
@@ -3167,6 +3403,11 @@ def readmit_lane(
     mesh, context = model.mesh_device, model.allocated_context
     lanes = verify.lanes
     chunk = kv_scratch_rows(context)
+    shared = lane_verify_paged(verify)
+    if shared and (image.kv or image.compressed or image.alignment_kv is not None or image.kv_rows):
+        raise ValueError("an image carrying KV or compressed rows cannot be re-admitted into lanes on shared pools")
+    if not shared and image.alignment_kv is None:
+        raise ValueError("an image without KV rows cannot be re-admitted into flat lanes")
     if image.kv_rows % chunk or image.kv_rows > context:
         raise ValueError(f"image KV rows {image.kv_rows} are not whole {chunk}-row chunks of the {context}-row lane")
     width = 2 * qsa_module.HEAD_DIM
@@ -3195,10 +3436,11 @@ def readmit_lane(
     qsa_layers, gdn_layers = _qsa_lane_layers(verify), _gdn_lane_layers(verify)
     for index, layer_state in enumerate(qsa_layers):
         state = layer_state.attention_state
-        land_kv(state, image.kv[index])
-        part = _upload_shards(mesh, image.compressed[index], bf16, tile, None)
-        _fill_lane(state.compressed_index_cache, part, lane, label=f"lane {lane} image compressed {index}")
-        _deallocate(part)
+        if not shared:
+            land_kv(state, image.kv[index])
+            part = _upload_shards(mesh, image.compressed[index], bf16, tile, None)
+            _fill_lane(state.compressed_index_cache, part, lane, label=f"lane {lane} image compressed {index}")
+            _deallocate(part)
         land_rows(
             layer_state.attention_rows.raw_history,
             image.raw_history[index],
@@ -3228,12 +3470,16 @@ def readmit_lane(
             f"lane {lane} image FIR history {index}",
         )
     alignment = verify.alignment.layer_state
-    land_kv(alignment.attention_state, image.alignment_kv)
-    part = _upload_shards(mesh, image.alignment_compressed, bf16, tile, None)
-    _fill_lane(
-        alignment.attention_state.compressed_index_cache, part, lane, label=f"lane {lane} image alignment compressed"
-    )
-    _deallocate(part)
+    if not shared:
+        land_kv(alignment.attention_state, image.alignment_kv)
+        part = _upload_shards(mesh, image.alignment_compressed, bf16, tile, None)
+        _fill_lane(
+            alignment.attention_state.compressed_index_cache,
+            part,
+            lane,
+            label=f"lane {lane} image alignment compressed",
+        )
+        _deallocate(part)
     land_rows(
         alignment.attention_rows.raw_history,
         image.alignment_raw_history,

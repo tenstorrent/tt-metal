@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import math
 import os
+import secrets
 import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
@@ -84,6 +85,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import (
     Qwen38PlainLaneDecoder,
     lane_page_count,
     lane_token_ids,
+    pack_buckets_for_block,
     pack_buckets_from_env,
     pack_dram_bytes,
     prefill_pack_enabled,
@@ -113,8 +115,15 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     fabric_config,
     is_slab_rows,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.device_sampler import (
+    MAX_TEMPERATURE,
+    MAX_TOP_K,
+    Qwen38DeviceSamplerPolicy,
+)
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, SAMPLING_CANDIDATES_PER_DEVICE
-from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused import pool_blocks
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging, paged_table_width, validate_index_paging
+from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import UniformStream
 
 OPTIMIZATIONS = (None, "performance", "accuracy")  # the plugin's tt.optimizations values; no effect on this chain
 # The warmup smoke's prompt: one full 32-row chunk, a 7-row padded tail, the hand-off, one forced step, one gather.
@@ -134,6 +143,8 @@ PLE_EARLY_DECODE_VARIABLE = (
 TOKEN_FEEDBACK_VARIABLE = "QWEN38_TOKEN_FEEDBACK"  # B=1 decode skips the token-row write when the device row already holds the token (default on since x53: -0.35..-0.62 ms; "0" off)
 HOST_LEAN_VARIABLE = "QWEN38_HOST_LEAN"  # default "1": with HOST_FAST, the B=1 greedy decode path also drops per-step host work that only the sampled, logprob and batched paths need (cached contract parse, one token-row read check, no per-step env lookups); same tokens
 HOST_FAST_VARIABLE = "QWEN38_HOST_FAST"  # default "1": B=1 decode skips redundant per-step host work (one policy parse, no loop guard, persistent token read, PLE proofs behind the TAIL enqueue); "0": the guarded path
+DEVICE_SAMPLER_VARIABLE = "QWEN38_VLLM_DEVICE_SAMPLER"  # "1": the single-slot chain opens with the on-device sampler in TAIL (greedy policy written at open); default "0"
+DEVICE_SAMPLER = os.environ.get(DEVICE_SAMPLER_VARIABLE, "0") == "1"  # read once
 BATCH_CANDIDATES_VARIABLE = "QWEN38_BATCH_CANDIDATES"  # "1" (default) / "0": candidate rows for the sampled lanes
 BATCH_NORMALIZER_VARIABLE = (
     "QWEN38_BATCH_NORMALIZER"  # "1" (default) / "0": the device normalizer for top-k-off sampled rows
@@ -168,6 +179,15 @@ ASYNC_DECODE = (
 STEP_SPLIT = os.environ.get("QWEN38_STEP_SPLIT") == "1"  # per-part host timings in the decode log lines (read once)
 SPLIT_STEP_PARTS = ("ple", "tok", "exe", "adv", "read")  # Qwen38PlainLaneDecoder.step_split keys
 ASYNC_SPLIT_STEP_PARTS = ("wait", *SPLIT_STEP_PARTS)  # async decode: exe is the enqueue time, wait the block on step N
+
+
+def trace_set_kwargs(sampled: bool) -> dict[str, bool]:
+    """The chain's trace-set argument: empty for the default (greedy) set, so a chain without a second set sees the
+    call it always saw."""
+
+    return {"sampled": True} if sampled else {}
+
+
 SPLIT_CHAIN_PARTS = {  # single-slot decode: chain method -> part
     "write_token_row": "feed",
     "feed_token_row": "feed",
@@ -198,9 +218,22 @@ class _SplitMarks:
 
 DECODE_LOG_INTERVAL = 256  # batch mode: one adapter log line per this many decode calls
 BATCH_LANE_INDEXER_FORM = "wide"
-KV_BYTES_PER_TOKEN = 12 * 512 * 2  # 12 QSA layers x one 512-wide bf16 row, per device
-BATCH_MIN_BLOCK_SIZE = 32  # the QSA page scatter works in 32-row slabs
+# Per device, per pooled token: 12 QSA layers x (one 512-wide bf16 K/V row + one 128-wide index row per 4 tokens).
+KV_BYTES_PER_TOKEN = 12 * (512 * 2 + 128 * 2 // 4)
 BATCH_MAX_BLOCK_SIZE = 4096
+WARM_BLOCKS = (1, 2)  # MambaSpec mode: the blocks the open's warm hook saves, restores, zeroes and copies
+MAMBA_SPEC_VARIABLE = (
+    "QWEN38_MAMBA_SPEC"  # "1": GDN layers are MambaSpec layers of vLLM's hybrid KV cache (default off)
+)
+BACKBONE_LAYERS = 48
+QSA_LAYER_PERIOD = 4  # layer i is a QSA layer when i % 4 == 3, else a GDN layer
+KV_ROW_BYTES = 1024  # one token's packed K/V row (512 bf16); the index pool adds 64 bytes per token
+QSA_SPEC_HEAD_SIZE = 272  # (1024 + 64) bytes per token / (2 x 2 bytes): the attention page is 1088 x block_size bytes
+# Largest GDN state per device (layer 1, with the PLE conv slots): recurrent 393,216 + conv 4 x 81,920 + PLE 9 x 20,480
+MAMBA_STATE_BYTES = 905_216
+MAMBA_STATE_FLOATS = MAMBA_STATE_BYTES // 4
+MAMBA_MIN_BLOCK_SIZE = 1024
+PAGED_MIN_BLOCK_SIZE = 128  # one index page (block_size / 4 rows) is a whole number of 32-row tiles
 # The DRAM admission's refusal of the slab's resident prefill weights (ttnn/prefill_dense.py, admit_prefill_dense_dram).
 PREFILL_DENSE_REFUSAL_MARK = "refused: the resident prefill weights need"
 
@@ -836,20 +869,45 @@ def bucket_dram_bytes(buckets: Sequence[int], lanes: int) -> int:
     return sum(BUCKET_FIXED_BYTES_32K + r * BUCKET_PER_LANE_BYTES_32K for r in buckets if r < lanes)
 
 
-def batch_pool_token_cap(max_model_len: int, max_num_seqs: int, buckets: Sequence[int] = ()) -> int:
-    """Tokens the paged KV pool may hold in batch mode: ``(free - lanes - margin) // KV_BYTES_PER_TOKEN`` where
-    ``free`` is the DRAM free per device after the chain build at the allocated context, and ``lanes`` the lane states
+def paged_chain_free_bytes(allocated_context: int) -> int:
+    """DRAM free per device after the chain build at ``allocated_context`` when the chain holds no flat caches (batch mode
+    allocates the shared pools instead): the flat build's free bytes at that context plus the flat KV and index caches
+    it did hold, ``allocated_context * CONTEXT_BYTES_PER_TOKEN``.  The two context terms cancel against the 32768 base.
+    """
+
+    flat_free = DRAM_CHAIN_FREE_32K - (allocated_context - 32768) * CONTEXT_BYTES_PER_TOKEN
+    return flat_free + allocated_context * CONTEXT_BYTES_PER_TOKEN
+
+
+def pack_pool_dram_bytes(lanes: int, context: int, block_size: int | None = None) -> int:
+    """DRAM per device of the prefill pack on shared pools, 0 when the pack is off.  The buckets are the environment's
+    (``pack_buckets_from_env``), filtered by ``pack_buckets_for_block`` when ``block_size`` is known (the decoder's own
+    rule); without it (``get_max_tokens_all_users`` runs before the block size exists) the unfiltered buckets are
+    counted, an upper bound, so the pool is never sized too large."""
+
+    if not prefill_pack_enabled(lanes=lanes, shared_pools=True):
+        return 0
+    buckets = pack_buckets_from_env(lanes=lanes)
+    if block_size is not None:
+        buckets = pack_buckets_for_block(buckets, block_size)
+    return pack_dram_bytes(buckets, context, shared_pools=True) if buckets else 0
+
+
+def batch_pool_token_cap(
+    max_model_len: int, max_num_seqs: int, buckets: Sequence[int] = (), block_size: int | None = None
+) -> int:
+    """Tokens the shared paged pool may hold in batch mode: ``(free - lanes - margin) // KV_BYTES_PER_TOKEN`` where
+    ``free`` is ``paged_chain_free_bytes`` (the chain build without flat caches), and ``lanes`` the lane states
     (GDN, ring, PLE and compressed index caches) of ``max_num_seqs`` lanes.  Both are measured at context 32768 and
     scaled by ``CONTEXT_BYTES_PER_TOKEN`` (and per lane) for the other contexts.  The decode ``buckets`` narrower than
     ``max_num_seqs`` add ``bucket_dram_bytes``."""
 
     context = resident_allocated_context(max_model_len)
     extra = context - 32768
-    free = DRAM_CHAIN_FREE_32K - extra * CONTEXT_BYTES_PER_TOKEN
+    free = paged_chain_free_bytes(context)
     lanes = LANE_FIXED_BASE_32K + max_num_seqs * (LANE_FIXED_PER_LANE_32K + extra * CONTEXT_BYTES_PER_TOKEN_PER_LANE)
     lanes += bucket_dram_bytes(buckets, max_num_seqs)
-    if prefill_pack_enabled(lanes=max_num_seqs):  # the pack's persistent state and bucket traces take DRAM too
-        lanes += pack_dram_bytes(pack_buckets_from_env(lanes=max_num_seqs), context)
+    lanes += pack_pool_dram_bytes(max_num_seqs, context, block_size)
     return max(0, (free - lanes - POOL_MARGIN_BYTES) // KV_BYTES_PER_TOKEN)
 
 
@@ -894,24 +952,61 @@ def plain_lanes_max_batch(
     }
 
 
-def check_block_size(block_size: Any) -> int:
-    """Batch mode's page size is vLLM's block size: a power of two >= 32 (the QSA page scatter works in 32-row slabs),
-    at most ``BATCH_MAX_BLOCK_SIZE``; anything else is refused naming the knob (``--block-size``)."""
+def check_paged_block_size(block_size: Any) -> int:
+    """The page size of the shared pools (single slot and batch mode) is vLLM's block size: a power of two in
+    ``PAGED_MIN_BLOCK_SIZE``..``BATCH_MAX_BLOCK_SIZE`` (the index pool's page holds ``block_size / 4`` rows, whole tiles);
+    anything else is refused naming ``--block-size``."""
 
     if isinstance(block_size, bool) or not isinstance(block_size, int):
         raise ValueError(f"vLLM block_size must be an int, got {block_size!r}")
-    if block_size < BATCH_MIN_BLOCK_SIZE or block_size & (block_size - 1) or block_size > BATCH_MAX_BLOCK_SIZE:
+    if block_size < PAGED_MIN_BLOCK_SIZE or block_size & (block_size - 1) or block_size > BATCH_MAX_BLOCK_SIZE:
         raise ValueError(
-            f"batch mode serves a paged KV pool whose page is vLLM's block: --block-size must be a power of two in "
-            f"{BATCH_MIN_BLOCK_SIZE}..{BATCH_MAX_BLOCK_SIZE}, got {block_size}"
+            f"the model serves paged KV pools whose page is vLLM's block: --block-size must be a power of two "
+            f"in {PAGED_MIN_BLOCK_SIZE}..{BATCH_MAX_BLOCK_SIZE}, got {block_size}"
         )
     return block_size
 
 
-def batch_max_blocks(allocated_context: int, block_size: int) -> int:
-    """The lane page table's width: ``ceil(allocated_context / block_size)`` rounded up to a multiple of 8."""
+def mamba_spec_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """``QWEN38_MAMBA_SPEC=1``: the plain adapter declares its GDN layers to vLLM as MambaSpec (default off)."""
 
-    return -(-(-(-allocated_context // block_size)) // 8) * 8
+    return (os.environ if environ is None else environ).get(MAMBA_SPEC_VARIABLE, "").strip() == "1"
+
+
+def check_mamba_block_size(block_size: Any) -> int:
+    """MambaSpec mode: ``check_paged_block_size`` and a block whose K/V rows (``block_size`` KiB per device) hold the
+    largest GDN state (``MAMBA_STATE_BYTES``): ``block_size`` >= 1024."""
+
+    block_size = check_paged_block_size(block_size)
+    if block_size * KV_ROW_BYTES < MAMBA_STATE_BYTES:
+        raise ValueError(
+            f"{MAMBA_SPEC_VARIABLE}=1 stores a GDN layer's state ({MAMBA_STATE_BYTES} bytes per device) in the K/V rows of "
+            f"one vLLM block: --block-size must be >= {MAMBA_MIN_BLOCK_SIZE}, got {block_size}"
+        )
+    return block_size
+
+
+def split_block_copies(copies: Sequence[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+    """``(src, dst)`` pairs in list order, as runs the ``pool_blocks`` op accepts in one call (its dst blocks distinct and
+    none a src of another pair of the run); a pair that conflicts with the run starts the next run, so the runs applied in
+    order give the sequential result.  A pair with ``src == dst`` moves nothing and is dropped."""
+
+    runs: list[list[tuple[int, int]]] = []
+    run: list[tuple[int, int]] = []
+    srcs: set[int] = set()
+    dsts: set[int] = set()
+    for src, dst in ((int(src), int(dst)) for src, dst in copies):
+        if src == dst:
+            continue
+        if dst in dsts or dst in srcs or src in dsts:
+            runs.append(run)
+            run, srcs, dsts = [], set(), set()
+        run.append((src, dst))
+        srcs.add(src)
+        dsts.add(dst)
+    if run:
+        runs.append(run)
+    return runs
 
 
 def resident_allocated_context(max_model_len: int) -> int:
@@ -965,6 +1060,63 @@ class Qwen38AsyncStep:
 
 
 @dataclass
+class Qwen38DeviceSamplingState:
+    """A slot's on-device sampling bookkeeping: the device policy last written, its fingerprint, the request's draw
+    stream and the draws consumed from it (``None`` fields: no device-sampled request on the slot).  ``sampled``: the
+    request's tokens come from the chain's sampler TAIL set (its ``ttsampler`` holds the slot's parameters); False: the
+    greedy set, or the host sampler when ``policy`` names a host fallback."""
+
+    policy: Qwen38DeviceSamplerPolicy | None = None
+    fingerprint: tuple | None = None
+    stream: UniformStream | None = None
+    draws: int = 0
+    sampled: bool = False
+
+
+def device_policy_of_contract(
+    policy: Qwen38HostSamplingPolicy,
+) -> tuple[Qwen38DeviceSamplerPolicy | None, str]:
+    """The device sampler's policy for a sampled request, or ``(None, the refusal)``: greedy (the greedy path's), a
+    temperature above the table's, ``top_k`` outside [1, 32], a penalty other than a non-negative presence one
+    (presence is refused until the history is on the device), or logprobs keep the host sampler."""
+
+    if policy.greedy:
+        return None, "greedy"
+    if not 0 < policy.temperature <= MAX_TEMPERATURE:
+        return None, "temperature"
+    if not 1 <= policy.top_k <= MAX_TOP_K:
+        return None, "top_k"
+    if not 0 < policy.top_p <= 1:
+        return None, "top_p"
+    if policy.frequency_penalty != 0.0:
+        return None, "frequency"
+    if policy.repetition_penalty != 1.0:
+        return None, "repetition"
+    if policy.presence_penalty != 0.0:
+        return None, "presence"
+    if policy.logprobs:
+        return None, "logprobs"
+    return (
+        Qwen38DeviceSamplerPolicy(
+            temperature=policy.temperature, top_k=policy.top_k, top_p=policy.top_p, min_p=0.0, presence_penalty=0.0
+        ),
+        "",
+    )
+
+
+def device_policy_fingerprint(policy: Qwen38DeviceSamplerPolicy) -> tuple:
+    """Every field of the device policy: two requests with equal fingerprints need no policy write between them."""
+
+    return (policy.temperature, policy.top_k, policy.top_p, policy.min_p, policy.greedy, policy.presence_penalty)
+
+
+def slot_draw_stream(seed: int | None) -> UniformStream:
+    """The request's draw stream: seeded from ``seed``, or from a fresh random 64-bit seed when it is ``None``."""
+
+    return UniformStream(secrets.randbits(64) if seed is None else seed)
+
+
+@dataclass
 class Qwen38VLLMSlot:
     """Host mirror of the one resident slot: the tokens the device consumed (their count is the device position),
     the PLE n-gram context, whether a chain call failed (the device state is not trusted afterwards), and under the
@@ -976,6 +1128,7 @@ class Qwen38VLLMSlot:
     policy: Qwen38HostSamplingPolicy | None = None
     generator: torch.Generator | None = None
     lean_env: bool | None = None  # QWEN38_HOST_LEAN: the env checks the lean step needs, made once per request
+    device_sampling: Qwen38DeviceSamplingState = field(default_factory=Qwen38DeviceSamplingState)
 
 
 _CONTRACT_FIELDS = (
@@ -1016,11 +1169,14 @@ class _ModelCapabilities:
     """Class attribute computed on first access, so the ring choice (``contracts.ring_enabled``) is not made at import time."""
 
     def __get__(self, instance, owner) -> dict:
+        mamba = bool(getattr(owner, "_mamba_spec_capable", False)) and mamba_spec_enabled()
         return {
             "fabric_config": fabric_config(),
             "supports_device_penalties": True,
-            "supports_chunked_prefill": False,
-            "supports_prefix_caching": False,
+            # QWEN38_VLLM_CHUNKED_PREFILL=1 opts in: batch mode continues a later chunk only for the hybrid-single chain request.
+            # QWEN38_MAMBA_SPEC=1 (plain class only) adds prefix caching and chunked prefill: the GDN state travels in blocks.
+            "supports_chunked_prefill": mamba or os.environ.get("QWEN38_VLLM_CHUNKED_PREFILL") == "1",
+            "supports_prefix_caching": mamba,
             "supports_async_decode": ASYNC_DECODE,
             "supports_sample_on_device": True,
         }
@@ -1093,6 +1249,8 @@ class Qwen38ForCausalLM:
 
     model_capabilities = _ModelCapabilities()
     decode_input_update_contract = 1
+    _paged_single_slot = True  # single slot: the chain runs on pools sized by vLLM, opened in allocate_kv_cache
+    _mamba_spec_capable = True  # QWEN38_MAMBA_SPEC=1 turns it on; the MTP subclass keeps it off
 
     def __init__(
         self,
@@ -1103,7 +1261,7 @@ class Qwen38ForCausalLM:
         chain_opener: Callable[[Callable[[Any], None] | None], Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        self.chain = chain  # batch mode: None until allocate_kv_cache opens it
+        self.chain = chain  # None until allocate_kv_cache opens it (batch mode, paged single slot)
         if STEP_SPLIT:
             self._split_outside: deque[float] = deque(
                 maxlen=DECODE_LOG_INTERVAL
@@ -1135,13 +1293,17 @@ class Qwen38ForCausalLM:
         self.slot = Qwen38VLLMSlot()
         self.trace_mode_warned = False
         self._warned_padded_greedy = False
-        # batch mode (batch_lanes > 1); single-slot mode never reads these
+        # batch mode (batch_lanes > 1); single-slot mode reads only chain_opener, block_size, num_blocks and paging
         self.lanes = batch_lanes
         self.batch_mode = batch_lanes > 1
         self.chain_opener = chain_opener
         self.decoder: Qwen38PlainLaneDecoder | None = None
         self.block_size: int | None = None
         self.num_blocks: int | None = None
+        self.paging: Qwen38LanePaging | None = None  # paged single slot: the chain's pools
+        # MambaSpec mode: vLLM layer slot (tensor_idx) -> the QSA layer whose pools host it; GDN layer -> its slot
+        self.slot_qsa_layer: dict[int, int] = {}
+        self.gdn_slot: dict[int, int] = {}
         self.lane_of_slot: list[int] = list(range(batch_lanes))  # slot -> lane (the lane holding that slot's state)
         # decode-width buckets (QWEN38_DECODE_BUCKETS; refused at start when bad): a step replays the smallest bucket that
         # holds the highest live lane, so a new request takes the lowest free lane (_take_lane)
@@ -1222,7 +1384,7 @@ class Qwen38ForCausalLM:
         overrides it in both modes.  Single-slot mode (``max_num_seqs`` 1): one context per sequence,
         ``max_model_len * max_num_seqs``.  Batch mode: ``min(max_model_len * max_num_seqs, cap)``, where ``cap`` is the
         paged pool's DRAM budget (``batch_pool_token_cap``): the free DRAM per device after the chain build, less the
-        lane states of ``max_num_seqs`` lanes and a margin, over the pool's 12,288 bytes per token per device."""
+        lane states of ``max_num_seqs`` lanes and a margin, over the pools' 13,056 bytes per token per device."""
 
         tokens = int(max_model_len) * int(max_num_seqs)
         override = os.environ.get(MAX_TOKENS_ALL_USERS_VARIABLE, "").strip()
@@ -1257,9 +1419,9 @@ class Qwen38ForCausalLM:
         repo id, else ``Qwen/Qwen3.8-Flash-Next``; a repo id resolves to the pinned revision in the local Hugging Face
         hub cache.
         The prefill form is ``prefill_form()``'s (the slab rows and the 128-row chunks); the slab's DRAM admission
-        refusal is re-raised naming ``QWEN38_PREFILL_SLAB``.  ``max_batch_size`` 1: the chain is open on return.
-        ``max_batch_size`` 2..32 (batch mode): the construction is done and the chain is NOT open; ``allocate_kv_cache``
-        opens it (the lane tensors need the pool's size)."""
+        refusal is re-raised naming ``QWEN38_PREFILL_SLAB``.  The chain is NOT open on return for ``max_batch_size`` 2..32 (batch mode) and for the
+        paged single slot: ``allocate_kv_cache`` opens it (the lane tensors, or the pools, need vLLM's block count).  A
+        subclass with ``_paged_single_slot`` False (MTP) opens the single-slot chain here, on flat caches."""
 
         if not TRACE_ALLOC_TRACKING:
             raise ValueError("the trace chain needs TT_METAL_TRACE_ALLOC_TRACKING=1 exported before ttnn is imported")
@@ -1289,14 +1451,23 @@ class Qwen38ForCausalLM:
             stage_missing_bf4=os.environ.get("QWEN38_VLLM_ALLOW_BF4_CONVERSION") == "1",
         )
 
-        def open_chain(warm_hook: Callable[[Any], None] | None) -> Any:
+        def open_chain(warm_hook: Callable[[Any], None] | None, paging: Qwen38LanePaging | None = None) -> Any:
             options = {} if warm_hook is None else {"warm_hook": warm_hook}
             # QWEN38_GREEDY_TAIL default on; "0" keeps the candidate chain in the TAIL
             options.update(cls._chain_open_options(mesh_device))
             candidate_tail = options.get(
                 "sampling", True
             )  # the MTP subclass opens a greedy chain without the candidate row
-            if os.environ.get("QWEN38_GREEDY_TAIL", "1") == "1" and max_batch_size == 1 and candidate_tail:
+            device_sampler = DEVICE_SAMPLER and max_batch_size == 1 and cls._paged_single_slot
+            if device_sampler:
+                options["device_sampler"] = True  # TAIL keeps the candidate row and the sampler
+                if options.get("mtp") is None:
+                    # a greedy HEAD / TAIL set beside it: greedy steps skip the candidate row and the sampler
+                    options["greedy_tail_set"] = True
+                    options[
+                        "ttsampler"
+                    ] = True  # the sampler set draws on the device (per-step seeds, per-slot parameters)
+            elif os.environ.get("QWEN38_GREEDY_TAIL", "1") == "1" and max_batch_size == 1 and candidate_tail:
                 # the single-slot host sampler draws from the full-vocabulary row, never the candidate row: the TAIL
                 # traces skip the candidate chain (tools/qwen38_sampling_step.SKIP_CANDIDATE_ROW)
                 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step
@@ -1309,6 +1480,7 @@ class Qwen38ForCausalLM:
                     chunked_prefill=True,
                     long_chunks=long_chunks,
                     slab_rows=slab_rows,
+                    paging=paging,
                     **{"sampling": True, **options},
                 )
             except Exception as error:
@@ -1321,13 +1493,20 @@ class Qwen38ForCausalLM:
                     f"{allocated_context}: {detail}; {PREFILL_SLAB_VARIABLE}=0 serves this context without the slab "
                     f"({LONG_CHUNKS_VARIABLE}=1 keeps the 128-row chunks)"
                 ) from error
+            if device_sampler:
+                # the greedy flag resolves to the greedy token bit for bit (ttnn/device_sampler.py)
+                sampler = getattr(chain.sampling, "sampler", None)
+                if sampler is None:
+                    raise ValueError(f"{DEVICE_SAMPLER_VARIABLE}=1 but the chain opened without a device sampler")
+                sampler.write_policy(Qwen38DeviceSamplerPolicy.greedy_policy())
             logger.info(
                 f"prefill form: {describe_prefill_form(long_chunks, slab_rows, plan)}"
             )  # the form the chain opened in
             return chain
 
-        if max_batch_size > 1:
-            # Batch mode: the chain opens in allocate_kv_cache, where the pool's size is known (see the module docstring).
+        if max_batch_size > 1 or cls._paged_single_slot:
+            # Batch mode and the paged single slot: the chain opens in allocate_kv_cache, where the pool's size is known
+            # (see the module docstring).
             return cls(None, allocated_context=allocated_context, batch_lanes=max_batch_size, chain_opener=open_chain)
         return cls(open_chain(None), allocated_context=allocated_context)
 
@@ -1337,9 +1516,238 @@ class Qwen38ForCausalLM:
 
         return {}
 
+    # -- QWEN38_MAMBA_SPEC=1: the GDN state as vLLM MambaSpec blocks (the plugin's hybrid KV cache contract) ----------------
+
+    @classmethod
+    def _mamba_spec_on(cls) -> bool:
+        return bool(cls._mamba_spec_capable) and mamba_spec_enabled()
+
+    @classmethod
+    def get_kv_cache_spec(cls, vllm_config: Any) -> dict[str, Any] | None:
+        """None unless ``QWEN38_MAMBA_SPEC=1`` (vLLM's homogeneous spec).  On: one spec per layer, named ``layers.<i>`` (the
+        plugin's index rule): a QSA layer (``i % 4 == 3``) a FullAttentionSpec whose page (K and V of ``block_size`` tokens,
+        2 x 272 x 2 bytes each) is one block of the K/V row (1024 bytes per token) plus the index row (64 bytes per
+        token) of one device; a GDN layer the one MambaSpec of the largest state (``MAMBA_STATE_BYTES`` as float32),
+        padded to the attention page.  Layer slot j (``tensor_idx``) is shared by QSA layer j and the GDN layers of
+        each Mamba group at position j, so vLLM's block id b addresses the same bytes in all of them."""
+
+        if not cls._mamba_spec_on():
+            return None
+        from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
+
+        cache_config = vllm_config.cache_config
+        block_size = check_mamba_block_size(cache_config.block_size)
+        mode = cache_config.mamba_cache_mode
+        if mode != "align":
+            raise ValueError(
+                f"{MAMBA_SPEC_VARIABLE}=1 needs vLLM's mamba_cache_mode 'align' (prefix caching on), got {mode!r}"
+            )
+        page_size = 2 * block_size * QSA_SPEC_HEAD_SIZE * 2
+        attention = FullAttentionSpec(
+            block_size=block_size, num_kv_heads=1, head_size=QSA_SPEC_HEAD_SIZE, dtype=torch.bfloat16
+        )
+        if attention.page_size_bytes != page_size:
+            raise RuntimeError(f"the attention page is {attention.page_size_bytes} bytes, expected {page_size}")
+        mamba_kwargs: dict[str, Any] = {}
+        try:
+            from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
+
+            mamba_kwargs["mamba_type"] = MambaAttentionBackendEnum.GDN_ATTN
+        except (ImportError, AttributeError):
+            pass
+        gdn = MambaSpec(
+            block_size=block_size,
+            shapes=((MAMBA_STATE_FLOATS,),),
+            dtypes=(torch.float32,),
+            page_size_padded=page_size,
+            mamba_cache_mode=mode,
+            num_speculative_blocks=0,
+            **mamba_kwargs,
+        )
+        return {
+            (
+                f"model.layers.{i}.self_attn"
+                if i % QSA_LAYER_PERIOD == QSA_LAYER_PERIOD - 1
+                else f"model.layers.{i}.linear_attn"
+            ): (attention if i % QSA_LAYER_PERIOD == QSA_LAYER_PERIOD - 1 else gdn)
+            for i in range(BACKBONE_LAYERS)
+        }
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs: Sequence[tuple[Any, Any, int]]) -> Any:
+        """The plugin's allocator hook: ``(shape, dtype, tensor_idx)`` per layer, in layer-index order.  Off: the uniform
+        ``allocate_kv_cache``.  On: a QSA layer's entry is the attention shape ``(num_blocks, 1, block_size, 272)``, a GDN
+        layer's ``(MambaSpec.shapes, MambaSpec.dtypes, tensor_idx)``; the slot maps are learned from the list positions,
+        the chain opens as ``allocate_kv_cache`` opens it (the per-QSA-layer pools are the backing store of slot j) and
+        the returned dict is the opaque ``kv_cache`` the hooks get back."""
+
+        specs = list(per_layer_specs)
+        if not self._mamba_spec_on():
+            shape, dtype, _ = specs[0]
+            for entry_shape, entry_dtype, _ in specs[1:]:
+                if (entry_shape, entry_dtype) != (shape, dtype):
+                    raise ValueError(
+                        f"per-layer KV specs differ ({(entry_shape, entry_dtype)} vs {(shape, dtype)}) without {MAMBA_SPEC_VARIABLE}=1"
+                    )
+            return self.allocate_kv_cache(shape, dtype, len(specs))
+        if len(specs) != BACKBONE_LAYERS:
+            raise ValueError(f"MambaSpec mode: {BACKBONE_LAYERS} per-layer entries expected, got {len(specs)}")
+        slot_qsa_layer: dict[int, int] = {}
+        gdn_slot: dict[int, int] = {}
+        attention_shape: tuple[int, ...] | None = None
+        for layer, (shape, _dtype, tensor_idx) in enumerate(specs):
+            is_qsa = layer % QSA_LAYER_PERIOD == QSA_LAYER_PERIOD - 1
+            is_state = len(shape) > 0 and isinstance(shape[0], (tuple, list))
+            if is_qsa == is_state:
+                raise ValueError(
+                    f"MambaSpec mode: layer {layer} must be a {'QSA' if is_qsa else 'GDN'} entry, got shape {shape!r}"
+                )
+            if is_state:
+                gdn_slot[layer] = int(tensor_idx)
+                continue
+            layer_shape = tuple(int(extent) for extent in shape)
+            if len(layer_shape) != 4 or layer_shape[1] != 1 or layer_shape[3] != QSA_SPEC_HEAD_SIZE:
+                raise ValueError(
+                    f"layer {layer}: the attention shape must be (num_blocks, 1, block_size, {QSA_SPEC_HEAD_SIZE}), got {layer_shape}"
+                )
+            if attention_shape is not None and layer_shape != attention_shape:
+                raise ValueError(f"layer {layer}: attention shape {layer_shape} differs from {attention_shape}")
+            attention_shape = layer_shape
+            if int(tensor_idx) in slot_qsa_layer:
+                raise ValueError(f"layer {layer}: tensor_idx {tensor_idx} is shared by two attention layers")
+            slot_qsa_layer[int(tensor_idx)] = layer
+        missing = sorted(set(gdn_slot.values()) - set(slot_qsa_layer))
+        if missing or attention_shape is None:
+            raise ValueError(f"MambaSpec mode: GDN layers use slots {missing} that no attention layer backs")
+        num_blocks, block_size = attention_shape[0], check_mamba_block_size(attention_shape[2])
+        self.slot_qsa_layer, self.gdn_slot = slot_qsa_layer, gdn_slot
+        if self.batch_mode:
+            self._open_batch(num_blocks=num_blocks, block_size=block_size)
+        else:
+            self._open_paged_single(attention_shape)
+        return {
+            "slot_qsa_layer": slot_qsa_layer,
+            "gdn_slot": gdn_slot,
+            "block_size": block_size,
+            "num_blocks": num_blocks,
+        }
+
+    def _block_pools(self) -> list[Any]:
+        """The QSA layers' pools in layer order (MambaSpec mode, chain open): the backing store of every layer slot."""
+
+        pools = None if self.chain is None else self.chain.pools
+        if not pools:
+            raise RuntimeError("the KV block hooks need the paged chain: allocate_kv_cache_per_layer runs first")
+        return [pools[layer] for layer in sorted(pools)]
+
+    @staticmethod
+    def _check_block_ids(ids: Sequence[int], num_blocks: int | None) -> None:
+        for block in ids:
+            if block == 0:
+                raise ValueError("block 0 is vLLM's null block (the scratch): it is never zeroed or copied")
+            if block < 0 or (num_blocks is not None and block >= num_blocks):
+                raise ValueError(f"block {block} is outside the {num_blocks} blocks")
+
+    def _mamba_layer_blocks(self, state_block_ids_per_layer: Any, row: int) -> dict[int, tuple[Any, int]]:
+        """MambaSpec mode: row ``row``'s state block of every GDN layer, ``{gdn layer: (K/V pool, block id)}`` for the
+        model's boundary copies.  The pool is the one of the QSA layer that backs the GDN layer's slot."""
+
+        if state_block_ids_per_layer is None:
+            raise ValueError("MambaSpec mode: the state block ids per layer (state_block_ids_per_layer) are missing")
+        if len(state_block_ids_per_layer) != BACKBONE_LAYERS or not self.gdn_slot:
+            raise ValueError(
+                f"MambaSpec mode: {BACKBONE_LAYERS} per-layer state block entries and the allocated slot maps expected"
+            )
+        pools = None if self.chain is None else self.chain.pools
+        if not pools:
+            raise RuntimeError("the state blocks need the paged chain: allocate_kv_cache_per_layer runs first")
+        out: dict[int, tuple[Any, int]] = {}
+        for layer, slot in sorted(self.gdn_slot.items()):
+            table = state_block_ids_per_layer[layer]
+            if table is None:
+                raise ValueError(f"MambaSpec mode: GDN layer {layer} has no state block ids")
+            table = torch.as_tensor(table)
+            if table.dim() != 2 or table.shape[1] < 1 or not 0 <= row < table.shape[0]:
+                raise ValueError(
+                    f"MambaSpec mode: layer {layer} state block ids {tuple(table.shape)} have no row {row}"
+                )
+            block = int(table[row, 0])
+            self._check_block_ids([block], self.num_blocks)
+            out[layer] = (pools[self.slot_qsa_layer[slot]].kv, block)
+        return out
+
+    def _block_warm_hook(self) -> Callable[[Any], None] | None:
+        """MambaSpec mode: the chain's warm hook that compiles every pool_blocks program (state save and restore of the
+        GDN layers' pieces, zero and copy of the QSA pools) before the miss guard closes.  None when the mode is off."""
+
+        if not self._mamba_spec_on():
+            return None
+        done = False
+
+        def hook(chain: Any) -> None:
+            nonlocal done
+            if done:
+                return
+            done = True
+            block_size = self.block_size
+            pools = chain.pools
+            model = chain.built_target.model
+            layer_blocks = {
+                layer: (pools[self.slot_qsa_layer[slot]].kv, WARM_BLOCKS[0])
+                for layer, slot in sorted(self.gdn_slot.items())
+            }
+            # block ids 1 and 2: no request owns a block during the open; the chain's warm passes are done
+            model.save_boundary_state(chain.state, layer_blocks, block_size=block_size, position=0)
+            model.restore_boundary_state(chain.state, layer_blocks, block_size=block_size, position=0)
+            for pool in (pools[layer] for layer in sorted(pools)):
+                pool_blocks.zero_blocks(pool.kv, pool.index, [WARM_BLOCKS[0]], block_size=block_size)
+                pool_blocks.copy_blocks(pool.kv, pool.index, [WARM_BLOCKS], block_size=block_size)
+            ttnn.synchronize_device(chain.mesh)
+
+        return hook
+
+    def _needs_state_blocks(self, length: int, start: int) -> bool:
+        """MambaSpec mode: does the prefill of a row to ``length`` from ``start`` touch its state block (a restore at
+        ``start > 0``, a save at a block-aligned end)?"""
+
+        return self._mamba_spec_on() and (start > 0 or length % self.block_size == 0)
+
+    def zero_kv_cache_blocks(self, kv_cache: Any = None, block_ids: Sequence[int] = ()) -> None:
+        """The plugin's hook, before the forward: zero-fill each listed block (K/V rows and index block) in every QSA
+        layer's pools.  Eager; the in-flight async step is waited first.  A no-op unless ``QWEN38_MAMBA_SPEC=1``."""
+
+        if not self._mamba_spec_on():
+            return
+        ids = list(dict.fromkeys(int(block) for block in block_ids))
+        if not ids:
+            return
+        self._check_block_ids(ids, self.num_blocks)
+        pools = self._block_pools()
+        self._quiesce_pending()
+        for pool in pools:
+            pool_blocks.zero_blocks(pool.kv, pool.index, ids, block_size=self.block_size)
+
+    def copy_kv_cache_blocks(self, kv_cache: Any = None, copies: Sequence[tuple[int, int]] = ()) -> None:
+        """The plugin's hook: copy block ``src`` to ``dst`` (K/V rows and index block) in every QSA layer's pools, the
+        pairs applied in list order (a pair the op rejects in one call, a dst that is another pair's src or dst, starts
+        a new call).  A no-op unless ``QWEN38_MAMBA_SPEC=1``."""
+
+        if not self._mamba_spec_on():
+            return
+        pairs = [(int(src), int(dst)) for src, dst in copies]
+        if not pairs:
+            return
+        self._check_block_ids([block for pair in pairs for block in pair], self.num_blocks)
+        pools = self._block_pools()
+        self._quiesce_pending()
+        for run in split_block_copies(pairs):
+            for pool in pools:
+                pool_blocks.copy_blocks(pool.kv, pool.index, run, block_size=self.block_size)
+
     def allocate_kv_cache(self, kv_cache_shape: Any, dtype: Any, num_layers: int) -> None:
-        """Single-slot mode: vLLM's paged KV is not used, the chain allocated the resident QSA caches at open, sized by
-        the context.  Batch mode: the shape's ``num_blocks`` (``shape[0]``) and ``block_size`` (``shape[2]``) size the
+        """Paged single slot: the shape's ``num_blocks`` and ``block_size`` size the chain's shared pools (K/V rows and
+        compressed index rows), a request's blocks are vLLM's block ids (``prefill_forward`` and ``decode_forward`` write
+        them into the chain's page table); the chain opens here.  Flat single slot (MTP): vLLM's paged KV is not used,
+        the chain allocated the resident QSA caches at open, sized by the context.  Batch mode: the shape's ``num_blocks`` (``shape[0]``) and ``block_size`` (``shape[2]``) size the
         lane pool (the head count, head size, dtype and layer count of vLLM's spec are ignored: the pool's rows are the
         QSA's 512-wide bf16 rows); the chain opens here with the lane decoder's ``prepare`` as its warm hook, then the
         lane trace is captured.  Returns None (the pool is the decoder's; vLLM's ``kv_cache`` argument is not read)."""
@@ -1350,10 +1758,62 @@ class Qwen38ForCausalLM:
                 raise ValueError(f"kv_cache_shape must be (num_blocks, heads, block_size, head_size), got {shape}")
             self._open_batch(num_blocks=shape[0], block_size=shape[2])
             return None
+        if self._paged_single_slot:
+            self._open_paged_single(kv_cache_shape)
+            return None
         logger.info(
             f"vLLM KV cache {tuple(kv_cache_shape)} {dtype} x {num_layers} layers not allocated: "
             f"resident QSA caches at context {self.allocated_context}"
         )
+
+    def _open_paged_single(self, kv_cache_shape: Any) -> None:
+        """Open the single slot's chain on pools of ``num_blocks`` pages of ``block_size`` rows, page id = vLLM block id,
+        page 0 (vLLM's null block) the scratch."""
+
+        if self.chain is not None:
+            raise RuntimeError("the chain is already open: allocate_kv_cache runs once")
+        if self.chain_opener is None:
+            raise RuntimeError("the paged single slot needs the chain opener initialize_vllm_model hands in")
+        shape = tuple(int(extent) for extent in kv_cache_shape)
+        if len(shape) != 4:
+            raise ValueError(f"kv_cache_shape must be (num_blocks, heads, block_size, head_size), got {shape}")
+        num_blocks, block_size = shape[0], check_paged_block_size(shape[2])
+        if num_blocks < 2:
+            raise ValueError(f"vLLM num_blocks must be >= 2 (block 0 is the scratch), got {num_blocks}")
+        paging = validate_index_paging(
+            Qwen38LanePaging(
+                page_size=block_size,
+                num_pages=num_blocks,
+                max_blocks=paged_table_width(self.allocated_context, block_size),
+            ),
+            self.allocated_context,
+        )
+        logger.info(
+            f"paged single slot: block size {block_size}, {num_blocks} blocks, page table width {paging.max_blocks}, "
+            f"context {self.allocated_context}"
+        )
+        self.paging, self.block_size = paging, block_size
+        self.chain = self.chain_opener(self._block_warm_hook(), paging=paging)
+        self.num_blocks = num_blocks
+        if STEP_SPLIT:
+            self._install_split_probes(self.chain)
+
+    def _slot_page_ids(self, page_table: Any, *, needed: int, label: str) -> list[int]:
+        """The single slot's vLLM block ids: row 0 of the plugin's page table (``_page_row``'s checks)."""
+
+        if page_table is None:
+            raise ValueError(f"{label}: the paged single slot needs the plugin's page_table")
+        table = torch.as_tensor(page_table)
+        if table.ndim != 2 or table.shape[0] < 1:
+            raise ValueError(f"{label}: page_table must be [rows, blocks], got {tuple(table.shape)}")
+        return self._page_row(table[0], needed=needed, label=label)
+
+    def _write_decode_table(self, page_table: Any, position: int) -> None:
+        """The paged single slot's table for the step at ``position``: row 0's blocks into the chain's page table (a no-op
+        when they are unchanged), before any device work of the step."""
+
+        ids = self._slot_page_ids(page_table, needed=position // self.block_size + 1, label="decode")
+        self.chain.write_page_table(ids)
 
     # -- the two forward calls -------------------------------------------------------------------------------------
 
@@ -1371,7 +1831,11 @@ class Qwen38ForCausalLM:
         **kwargs: Any,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """The prompt into the reset state; returns the last position's logits (or, for a plain greedy
-        ``sampling_params``, the device's greedy token as int32 ``[1, 1]``) and the zero mrope delta."""
+        ``sampling_params``, the device's greedy token as int32 ``[1, 1]``) and the zero mrope delta.  ``start_pos > 0``
+        continues a chunked prefill of the same request: ``tokens[0, start_pos:prompt_lens]`` on the slot's state (it
+        must hold exactly ``start_pos`` tokens).  The plugin does not say whether a chunk is the last, so every chunk
+        ends the same way (its last token teacher-forced, its output read); an intermediate chunk's output is dropped
+        by the plugin."""
 
         self._quiesce_pending()  # a step the plugin discards may still be in flight; the prefill resets the state
         if self.batch_mode:
@@ -1383,46 +1847,97 @@ class Qwen38ForCausalLM:
                 start_pos=start_pos,
                 empty_slots=empty_slots,
                 sampling_params=sampling_params,
+                state_block_ids_per_layer=kwargs.get("state_block_ids_per_layer"),
             )
         greedy_token = sampling_params is not None
         if greedy_token and not device_greedy_contract(sampling_params):
             raise ValueError("prefill returns logits: sample_on_device_mode must be decode_only, not all")
         if tokens.shape[0] != 1:
             raise ValueError(f"one resident slot: tokens must be [1, P], got {tuple(tokens.shape)}")
-        if int(start_pos[0]) != 0:
-            raise ValueError(
-                f"prefill must start at position 0 (no prefix caching, no chunking), got {int(start_pos[0])}"
-            )
+        start = int(start_pos[0])
         length = int(prompt_lens[0])
         if not 1 <= length <= min(self.context_limit, tokens.shape[1]):
             raise ValueError(
                 f"prompt length {length} must be in [1, {self.context_limit}] and within tokens {tuple(tokens.shape)}"
             )
+        if not 0 <= start < length:
+            raise ValueError(f"prefill start {start} must be in [0, {length}) (no prefix caching)")
         if list(empty_slots) != [0]:
             raise ValueError(f"one resident slot: empty_slots must be [0], got {list(empty_slots)}")
         ids = tokens[0, :length].tolist()
         if min(ids) < 0 or max(ids) >= TOKENIZER_SIZE:
             raise ValueError(f"prompt ids must be in [0, {TOKENIZER_SIZE}), got {min(ids)}..{max(ids)}")
         self._require_serviceable(enable_trace, recovering=True)
-        out = self._prefill_one(ids, greedy_token=greedy_token)
+        page_ids = None
+        if self.paging is not None:
+            page_ids = self._slot_page_ids(page_table, needed=-(-length // self.block_size), label="prefill")
+        layer_blocks = None
+        if self._needs_state_blocks(length, start):
+            layer_blocks = self._mamba_layer_blocks(kwargs.get("state_block_ids_per_layer"), 0)
+        out = self._prefill_one(
+            ids, greedy_token=greedy_token, page_ids=page_ids, start=start, layer_blocks=layer_blocks
+        )
         return out, torch.zeros(1, dtype=torch.long)
 
-    def _prefill_one(self, ids: list[int], *, greedy_token: bool) -> torch.Tensor:
-        """The B=1 chain prefill of ``ids`` into the reset state (the single-slot path, and batch mode's per-row
-        prefill before its import); returns the device greedy token ``[1, 1]`` int32 or the masked full logits
+    def _prefill_one(
+        self,
+        ids: list[int],
+        *,
+        greedy_token: bool,
+        page_ids: list[int] | None = None,
+        start: int = 0,
+        layer_blocks: dict[int, tuple[Any, int]] | None = None,
+    ) -> torch.Tensor:
+        """The B=1 chain prefill of ``ids`` (the single-slot path, and batch mode's per-row prefill before its import);
+        ``page_ids`` (the paged single slot) go into the chain's page table.  ``start == 0``: into the reset state.
+        ``start > 0``: the continuation of a chunked prefill, no reset; ``ids[:start]`` must be exactly what the
+        slot has committed.  Returns the device greedy token ``[1, 1]`` int32 or the masked full logits
         ``[1, 1, VOCAB_SIZE]``.  The state it leaves (``self.slot``, the chain's generic state) is the one request's."""
 
+        restore = False
+        if start > 0:
+            held = len(self.slot.committed) == start and self.slot.committed == ids[:start]
+            if self._mamba_spec_on() and not held:
+                restore = True  # a prefix-cache hit, or a row whose state left the chain: the block holds it
+                if start % self.block_size:
+                    raise ValueError(
+                        f"MambaSpec mode: a prefill that does not continue the chain's request starts at a block "
+                        f"boundary, got {start} with block size {self.block_size}"
+                    )
+            else:
+                if self.slot.failed:
+                    raise Qwen38ChatChainError(
+                        "a chain call failed earlier; the state a chunked prefill continues is not trusted"
+                    )
+                if not held:
+                    raise Qwen38ChatChainError(
+                        f"chunked prefill starts at position {start}, the slot has committed {len(self.slot.committed)} "
+                        "tokens (or different ones)"
+                    )
+        save = self._mamba_spec_on() and len(ids) % self.block_size == 0
+        if (restore or save) and layer_blocks is None:
+            raise ValueError("MambaSpec mode: this prefill reads or writes the state block, layer_blocks is missing")
         head = ids[:-1]
+        new = head[start:]
         try:
-            self.chain.reset_and_seed(SEED_TOKEN_ID)
-            self.slot = Qwen38VLLMSlot()
-            if len(head) >= CHUNK_PREFILL_MIN_ROWS:
+            if start == 0:
+                self.chain.reset_and_seed(SEED_TOKEN_ID)
+            if page_ids is not None:
+                self.chain.write_page_table(page_ids)
+            if start == 0:
+                self.slot = Qwen38VLLMSlot()
+            elif restore:
+                context = self.chain.restore_prefix_state(start, ids, layer_blocks, self.block_size)
+                self.slot = Qwen38VLLMSlot(committed=list(ids[:start]), ple_context=context)
+            if len(new) >= CHUNK_PREFILL_MIN_ROWS:
 
                 def forced_step(token_id: int, _context: tuple[int, int] | None) -> tuple[int, int] | None:
-                    self._step(token_id)  # the driver's alignment steps; none from position 0
+                    self._step(token_id)  # the driver's alignment steps; none from a 32-aligned start
                     return self.slot.ple_context
 
-                result = self.chain.chunk_prefill(head, start_position=0, ple_context=None, forced_step=forced_step)
+                result = self.chain.chunk_prefill(
+                    new, start_position=start, ple_context=self.slot.ple_context, forced_step=forced_step
+                )
                 if result.stopped is not None or result.position != len(head):
                     raise Qwen38ChatChainError(
                         f"chunk prefill ended at position {result.position} (stopped {result.stopped!r}), "
@@ -1432,12 +1947,14 @@ class Qwen38ForCausalLM:
                 self.slot.ple_context = result.ple_context
             else:
                 with self.chain.loop_guard():
-                    for token_id in head:
+                    for token_id in new:
                         self._step(token_id)
             # The last prompt token is the first decode replay: teacher-forced under the guard, like every decode step.
             with self.chain.loop_guard():
                 residue = self._step(ids[-1])
                 out = self._greedy_token(residue) if greedy_token else self._read_logits(residue)
+            if save:
+                self.chain.save_prefix_state(len(ids), layer_blocks, self.block_size)
         except BaseException:
             self.slot.failed = True
             raise
@@ -1547,6 +2064,7 @@ class Qwen38ForCausalLM:
             return self._decode_lean(
                 tokens,
                 start_pos,
+                page_table,
                 enable_trace,
                 slot_remap,
                 sampling_params,
@@ -1595,7 +2113,19 @@ class Qwen38ForCausalLM:
         if policy is not None and policy.penalized:
             history = penalty_history(prompt_tokens, output_tokens)
         logprobs = policy is not None and policy.logprobs
-        steady = self.async_decode and resident and read_from_device is False and greedy_token and not logprobs
+        device_steady = (
+            self.slot.device_sampling.sampled
+            and policy is not None
+            and policy == self.slot.policy
+            and not reset_sampling_state
+        )  # a policy or seed change goes through the blocking step: the sampler's parameters are written with none in flight
+        steady = (
+            self.async_decode
+            and resident
+            and read_from_device is False
+            and (greedy_token or device_steady)
+            and not logprobs
+        )
         if self.async_decode and not steady:
             self._quiesce_pending()
         self._require_serviceable(enable_trace)
@@ -1609,13 +2139,22 @@ class Qwen38ForCausalLM:
             position = int(start_pos[0])
             if position != len(self.slot.committed):
                 raise Qwen38ChatChainError(f"runner position {position} vs device position {len(self.slot.committed)}")
+        if self.paging is not None and (reload_inputs or reload_page_table):
+            # before the step's replays (a steady step's HEAD included): cq 0 is in order, so the write also lands after
+            # the step in flight
+            self._write_decode_table(page_table, position)
         if policy is not None:
             self._adopt_policy(policy, reseed=reset_sampling_state)
+        device_sampled = policy is not None and self.slot.device_sampling.sampled
         if steady:
-            return self._async_chain_step()[0]
+            return self._async_chain_step(sampled=device_sampled)[0]
         try:
             with nullcontext() if host_fast else self.chain.loop_guard():  # the guard only rebinds ttnn names
-                residue = self._step(token_id)
+                residue = self._step(token_id, sampled=device_sampled)
+                if device_sampled:
+                    token = self._sampled_token()
+                    self._remember_tokens({0: int(token)})
+                    return token
                 if greedy_token:
                     token = self._greedy_token(residue)
                     if not logprobs:
@@ -1657,6 +2196,7 @@ class Qwen38ForCausalLM:
         self,
         tokens,
         start_pos,
+        page_table,
         enable_trace,
         slot_remap,
         sampling_params,
@@ -1684,10 +2224,13 @@ class Qwen38ForCausalLM:
         self._require_serviceable(enable_trace)
         if int(start_pos[0]) != len(slot.committed):
             raise Qwen38ChatChainError(f"runner position {int(start_pos[0])} vs device position {len(slot.committed)}")
+        if self.paging is not None:
+            self._write_decode_table(page_table, len(slot.committed))
         if policy is not None and (
             policy is not slot.policy or reset_sampling_state or (slot.generator is None and policy.seed is not None)
         ):
             self._adopt_policy(policy, reseed=reset_sampling_state)
+        device_sampled = policy is not None and slot.device_sampling.sampled
         lean_env = slot.lean_env
         if lean_env is None:
             lean_env = slot.lean_env = (
@@ -1697,19 +2240,24 @@ class Qwen38ForCausalLM:
         try:
             if lean_env:
                 chain = self.chain
+                set_kwargs = trace_set_kwargs(device_sampled)
                 residue = len(slot.committed) % RESIDUE_CLASSES
                 chain.feed_token_row(token_id)
-                chain.execute_head(residue)
+                chain.execute_head(residue, **set_kwargs)
                 slot.ple_context = chain.refresh_ple_row(token_id, slot.ple_context)
-                chain.execute_tail(residue)
+                if device_sampled:
+                    chain.prepare_sampled_step()
+                chain.execute_tail(residue, **set_kwargs)
                 slot.committed.append(token_id)
             else:
-                residue = self._step(token_id)
-            if greedy_token:
+                residue = self._step(token_id, sampled=device_sampled)
+            if greedy_token or device_sampled:
                 result = torch.empty((1, 1), dtype=torch.int32)  # built while the TAIL runs
                 image = result.numpy()
                 token = int(self.chain.read_token_row_lean())
                 if not 0 <= token < TOKENIZER_SIZE:
+                    if device_sampled:
+                        raise Qwen38ChatChainError(f"device-sampled token {token} is outside the tokenizer")
                     token = self._padded_greedy_fallback(residue)
                 image[0, 0] = token
                 if not logprobs:
@@ -1750,13 +2298,49 @@ class Qwen38ForCausalLM:
         (the prefill cleared the slot), a new seed, or the plugin's ``reset_sampling_state``.  ``slot``: batch mode's
         per-lane slot (default: the one resident slot)."""
 
-        slot = self.slot if slot is None else slot
-        if policy != slot.policy:
+        single = slot is None
+        slot = self.slot if single else slot
+        changed = policy != slot.policy
+        if changed:
             logger.info(f"host sampler under the device-sampling contract: {policy}")
             reseed = reseed or slot.policy is None or policy.seed != slot.policy.seed
             slot.policy = policy
         if reseed or slot.generator is None:
             slot.generator = None if policy.seed is None else torch.Generator().manual_seed(policy.seed)
+        if single and (changed or reseed) and self._device_sampler_on():
+            self._adopt_device_policy(policy, slot)
+
+    def _device_sampler_on(self) -> bool:
+        """The chain carries the sampler TAIL set and its ``ttsampler`` (QWEN38_VLLM_DEVICE_SAMPLER=1, single slot)."""
+
+        return DEVICE_SAMPLER and getattr(self.chain, "ttsampler", None) is not None
+
+    def _adopt_device_policy(self, policy: Qwen38HostSamplingPolicy, slot: Qwen38VLLMSlot) -> None:
+        """Route the request: a policy the device sampler serves writes the slot's parameters (this resets the seed
+        counters) and selects the sampler set; greedy selects the greedy set; any other policy keeps the host sampler.
+        """
+
+        state = slot.device_sampling
+        device_policy, reason = device_policy_of_contract(policy)
+        if device_policy is None:
+            if reason != "greedy":
+                logger.info(f"device sampler refused ({reason}): the host sampler draws from the full row")
+            slot.device_sampling = Qwen38DeviceSamplingState()
+            return
+        stream = slot_draw_stream(policy.seed)
+        self.chain.ttsampler.set_slot_params(
+            0, device_policy.temperature, device_policy.top_k, device_policy.top_p, stream.seed
+        )
+        state.policy, state.fingerprint = device_policy, device_policy_fingerprint(device_policy)
+        state.stream, state.draws, state.sampled = stream, 0, True
+
+    def _sampled_token(self) -> torch.Tensor:
+        """The sampler TAIL's token (in the token row, as the greedy set's) as int32 ``[1, 1]``."""
+
+        token = int(self.chain.read_token_row())
+        if not 0 <= token < TOKENIZER_SIZE:
+            raise Qwen38ChatChainError(f"device-sampled token {token} is outside the tokenizer")
+        return torch.tensor([[token]], dtype=torch.int32)
 
     # -- warmup and release ------------------------------------------------------------------------------------------
 
@@ -1800,9 +2384,14 @@ class Qwen38ForCausalLM:
         if not enable_trace:
             return
         prompt = torch.tensor([WARMUP_PROMPT_TOKEN_IDS], dtype=torch.int32)
+        warm_table = None
+        if self.paging is not None:  # the warm-up request's blocks: 1.. (block 0 is the scratch)
+            warm_blocks = -(-(prompt.shape[1] + 1) // self.block_size)
+            warm_table = torch.zeros(1, self.paging.max_blocks, dtype=torch.int32)
+            warm_table[0, :warm_blocks] = torch.arange(1, warm_blocks + 1, dtype=torch.int32)
         logits, _rope_deltas = self.prefill_forward(
             tokens=prompt,
-            page_table=None,
+            page_table=warm_table,
             kv_cache=kv_cache,
             enable_trace=True,
             prompt_lens=[prompt.shape[1]],
@@ -1812,7 +2401,7 @@ class Qwen38ForCausalLM:
         self.decode_forward(
             tokens=torch.tensor([[int(logits.argmax())]], dtype=torch.int32),
             start_pos=[prompt.shape[1]],
-            page_table=None,
+            page_table=warm_table,
             kv_cache=kv_cache,
             enable_trace=True,
             read_from_device=False,
@@ -1850,8 +2439,8 @@ class Qwen38ForCausalLM:
         if self.batch_mode:
             if self.decoder is not None:
                 self.decoder.release()
-            if self.chain is None:
-                return  # allocate_kv_cache never ran: nothing is captured
+        if self.chain is None:
+            return  # allocate_kv_cache never ran: nothing is captured
         self.chain.close()
 
     def note_state_slots_moved(self, moves: Mapping[int, int]) -> None:
@@ -2029,12 +2618,13 @@ class Qwen38ForCausalLM:
         self._register_step(handle)
         return handle, wait_s
 
-    def _async_chain_step(self, rows: int = 1, row: int = 0) -> tuple[Qwen38AsyncStep, float]:
+    def _async_chain_step(self, rows: int = 1, row: int = 0, sampled: bool = False) -> tuple[Qwen38AsyncStep, float]:
         """A steady chain step (the single slot, or the hybrid's lone row ``row`` of ``rows``): with a step in flight HEAD
         is enqueued before the wait for that step's token, then the fence, the token joins ``committed``, the PLE row,
         TAIL; with none, the blocking path's ``_step`` of the token last returned.  Then the token-row read and the two
         events.  No ``loop_guard`` (it patches ttnn process-wide, and the plugin's output thread calls ttnn).  Returns the
-        handle and the seconds blocked on the previous step."""
+        handle and the seconds blocked on the previous step.  ``sampled``: the sampler TAIL set (seeds prepared before
+        each TAIL), the token still comes back through the token row."""
 
         chain = self.chain
         prev = self._async_pending
@@ -2047,10 +2637,13 @@ class Qwen38ForCausalLM:
         wait_s = 0.0
         try:
             if prev is None:
-                self._step(token)
+                self._step(token, sampled=sampled)
             else:
                 residue = len(self.slot.committed) % RESIDUE_CLASSES
-                chain.execute_head(residue)  # HEAD reads the token row on the device: it does not need the host token
+                set_kwargs = trace_set_kwargs(sampled)
+                chain.execute_head(
+                    residue, **set_kwargs
+                )  # HEAD reads the token row on the device: it does not need the host token
                 values, _synced, wait_s = self._previous_tokens()
                 token = values[0]
                 self._check_async_token(token, "chain")
@@ -2058,7 +2651,9 @@ class Qwen38ForCausalLM:
                 chain.upload_ple_row(host_row)
                 self.slot.ple_context = context
                 self.slot.committed.append(token)
-                chain.execute_tail(residue)
+                if sampled:
+                    chain.prepare_sampled_step()
+                chain.execute_tail(residue, **set_kwargs)
             host = chain.read_token_row_nonblocking()
             adapter_event = chain.record_event()
             plugin_event = chain.record_event()
@@ -2117,19 +2712,22 @@ class Qwen38ForCausalLM:
             raise RuntimeError("the lane pool is already allocated: allocate_kv_cache runs once")
         if self.chain_opener is None:
             raise RuntimeError("batch mode needs the chain opener initialize_vllm_model hands in")
-        block_size = check_block_size(block_size)
+        block_size = check_paged_block_size(block_size)
         if isinstance(num_blocks, bool) or not isinstance(num_blocks, int) or num_blocks < 2:
             raise ValueError(f"vLLM num_blocks must be an int >= 2 (block 0 is the scratch), got {num_blocks!r}")
-        paging = Qwen38LanePaging(
-            page_size=block_size,
-            num_pages=num_blocks,
-            max_blocks=batch_max_blocks(self.allocated_context, block_size),
-        ).validate(self.allocated_context)
+        paging = validate_index_paging(
+            Qwen38LanePaging(
+                page_size=block_size,
+                num_pages=num_blocks,
+                max_blocks=paged_table_width(self.allocated_context, block_size),
+            ),
+            self.allocated_context,
+        )
         decoder = Qwen38PlainLaneDecoder(
             self.lanes,
             paging=paging,
+            shared_pools=True,  # the chain's pools are the lanes' pools; the pack is off with them
             indexer_form=BATCH_LANE_INDEXER_FORM,
-            pack=prefill_pack_enabled(lanes=self.lanes),  # on with >= 8 lanes (P3e); QWEN38_PREFILL_PACK wins
             candidates=self.batch_candidates,
             normalizer=self.batch_normalizer,
             row_read=self.batch_row_read,
@@ -2138,17 +2736,21 @@ class Qwen38ForCausalLM:
         decoder.warm_logits_gather = True  # host-sampled rows and host logits read the lane logits under the miss guard
         self.decoder, self.block_size, self.num_blocks = decoder, block_size, num_blocks
         logger.info(
-            f"batch mode: {self.lanes} lanes, KV pool {num_blocks} blocks x {block_size} rows = "
+            f"batch mode: {self.lanes} lanes, shared KV and index pools {num_blocks} blocks x {block_size} rows = "
             f"{paging.pool_rows} rows ({paging.pool_rows * KV_BYTES_PER_TOKEN / 2**30:.2f} GiB per device), page table "
             f"{paging.max_blocks} blocks per lane, context {self.allocated_context}, indexer {decoder.indexer_form}, "
             f"decode buckets {self.decode_buckets}"
         )
 
+        block_warm = self._block_warm_hook()
+
         def warm_hook(chain: Any) -> None:
             self._admit_pool(chain, paging)
             decoder.prepare(chain)
+            if block_warm is not None:
+                block_warm(chain)
 
-        self.chain = self.chain_opener(warm_hook)
+        self.chain = self.chain_opener(warm_hook, paging=paging)  # the pools exist before the warm hook
         decoder.capture(self)
         self.dram["after_capture"] = self._dram_free(self.chain.mesh)
         logger.info(
@@ -2170,7 +2772,8 @@ class Qwen38ForCausalLM:
         }
 
     def _admit_pool(self, chain: Any, paging: Qwen38LanePaging) -> None:
-        """Refuse a pool the free DRAM cannot hold (the chain is built, the lanes are not yet), naming the knob."""
+        """Refuse lanes the free DRAM cannot hold (the chain is built with the shared pools allocated, the lanes are not
+        yet), naming the knob.  The free figure already excludes the pools."""
 
         self.dram["chain_only"] = self._dram_free(chain.mesh)
         free = self.dram["chain_only"]["free_bytes"]
@@ -2179,18 +2782,20 @@ class Qwen38ForCausalLM:
             LANE_FIXED_PER_LANE_32K + (self.allocated_context - 32768) * CONTEXT_BYTES_PER_TOKEN_PER_LANE
         )
         lanes += bucket_dram_bytes(self.decode_buckets, self.lanes)  # the extra decode buckets' views and traces
-        if prefill_pack_enabled(lanes=self.lanes):  # the pack's persistent state and bucket traces
-            lanes += pack_dram_bytes(pack_buckets_from_env(lanes=self.lanes), self.allocated_context)
+        decoder = self.decoder
+        if decoder.pack_enabled and decoder.pack_buckets:  # the decoder's own buckets, prepared after this check
+            lanes += pack_dram_bytes(decoder.pack_buckets, self.allocated_context, shared_pools=True)
         logger.info(
-            f"batch pool admission: free {free / 2**30:.2f} GiB per device, pool {pool / 2**30:.2f} GiB, lane states "
-            f"~{lanes / 2**30:.2f} GiB, margin {POOL_ADMISSION_MARGIN_BYTES / 2**30:.2f} GiB"
+            f"batch lane admission: free {free / 2**30:.2f} GiB per device after the shared pools "
+            f"({pool / 2**30:.2f} GiB), lane states ~{lanes / 2**30:.2f} GiB, margin "
+            f"{POOL_ADMISSION_MARGIN_BYTES / 2**30:.2f} GiB"
         )
-        if pool + lanes + POOL_ADMISSION_MARGIN_BYTES > free:
+        if lanes + POOL_ADMISSION_MARGIN_BYTES > free:
             raise ValueError(
-                f"the KV pool of {paging.num_pages} blocks x {paging.page_size} rows needs {pool / 2**30:.2f} GiB per "
-                f"device beside ~{lanes / 2**30:.2f} GiB of lane states and a {POOL_ADMISSION_MARGIN_BYTES / 2**30:.2f} GiB "
-                f"margin, the free DRAM is {free / 2**30:.2f} GiB: set {MAX_TOKENS_ALL_USERS_VARIABLE} lower (or "
-                f"--max-model-len, --max-num-seqs)"
+                f"the lane states need ~{lanes / 2**30:.2f} GiB per device and a "
+                f"{POOL_ADMISSION_MARGIN_BYTES / 2**30:.2f} GiB margin beside the shared pools of {paging.num_pages} "
+                f"blocks x {paging.page_size} rows ({pool / 2**30:.2f} GiB), the free DRAM is {free / 2**30:.2f} GiB: set "
+                f"{MAX_TOKENS_ALL_USERS_VARIABLE} lower (or --max-model-len, --max-num-seqs)"
             )
 
     def _require_batch_ready(self) -> Qwen38PlainLaneDecoder:
@@ -2213,8 +2818,9 @@ class Qwen38ForCausalLM:
             raise ValueError(f"{label}: block 0 (vLLM's null block) inside the page-table row {pages}")
         if pages and (min(pages) < 0 or max(pages) >= self.num_blocks):
             raise ValueError(f"{label}: block ids must be in [1, {self.num_blocks}), got {pages}")
-        if len(pages) > self.decoder.paging.max_blocks:
-            raise ValueError(f"{label}: {len(pages)} blocks exceed the lane table's {self.decoder.paging.max_blocks}")
+        paging = self.decoder.paging if self.decoder is not None else self.paging
+        if len(pages) > paging.max_blocks:
+            raise ValueError(f"{label}: {len(pages)} blocks exceed the lane table's {paging.max_blocks}")
         if len(pages) < needed:
             raise ValueError(f"{label}: needs {needed} blocks for its tokens, the page-table row holds {len(pages)}")
         return pages
@@ -2267,6 +2873,7 @@ class Qwen38ForCausalLM:
         start_pos: Any,
         empty_slots: Any,
         sampling_params: Any,
+        state_block_ids_per_layer: Any = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Each row alone: the B=1 chain prefill, then its import into the lane that owns ``empty_slots[i]`` with the
         row's vLLM blocks as its pages.  Returns ``(out, rope_deltas)``: with ``sampling_params`` the next tokens int32
@@ -2288,17 +2895,17 @@ class Qwen38ForCausalLM:
         prompts: list[list[int]] = []
         pages: list[list[int]] = []
         policies: list[Qwen38HostSamplingPolicy | None] = []
+        starts: list[int] = []
         for i in range(rows):
-            if int(start_pos[i]) != 0:
-                raise ValueError(
-                    f"prefill must start at position 0 (no prefix caching, no chunking), got {int(start_pos[i])}"
-                )
             length = int(prompt_lens[i])
             if not 1 <= length <= min(self.context_limit, tokens.shape[1]):
                 raise ValueError(
                     f"prompt length {length} must be in [1, {self.context_limit}] and within tokens "
                     f"{tuple(tokens.shape)}"
                 )
+            if not 0 <= int(start_pos[i]) < length:
+                raise ValueError(f"prefill start {int(start_pos[i])} must be in [0, {length}) (no prefix caching)")
+            starts.append(int(start_pos[i]))
             ids = tokens[i, :length].tolist()
             if min(ids) < 0 or max(ids) >= TOKENIZER_SIZE:
                 raise ValueError(f"prompt ids must be in [0, {TOKENIZER_SIZE}), got {min(ids)}..{max(ids)}")
@@ -2308,25 +2915,56 @@ class Qwen38ForCausalLM:
                 None if sampling_params is None else Qwen38HostSamplingPolicy.from_contract(sampling_params, i)
             )
         policy = policies[0] if rows == 1 else None
+        # A chunked prefill continues only on the chain: the request the hybrid single mode keeps there.  A request
+        # imported into a lane (every other path imports after each chunk) cannot be taken back.
+        continues = any(starts)
+        on_chain = continues and rows == 1 and self.hybrid_slot == slots[0]
+        # MambaSpec mode: a row that starts past 0 and is not on the chain restores its state from its block.
+        restoring = continues and not on_chain
+        if restoring and not self._mamba_spec_on():
+            raise NotImplementedError(
+                f"chunked prefill in batch mode: rows start at {starts} but their state is not on the chain "
+                "(it continues only the one request the hybrid single mode keeps there)"
+            )
         hybrid_start = (
-            self.hybrid_single
+            (not continues or restoring)
+            and self.hybrid_single
             and self.hybrid_slot is None
             and rows == 1
             and (policy is None or (policy.greedy and not policy.penalized and not policy.logprobs))
             and all(position is None for position in decoder.positions)
         )
-        if self.hybrid_slot is not None:
+        if self.hybrid_slot is not None and not on_chain:
             self._demote_hybrid()  # before anything touches the chain: the prefill's reset_and_seed would destroy it
         self._require_serviceable(enable_trace, recovering=True)
-        if hybrid_start:
-            out = self._prefill_row_chain(slots[0], prompts[0], pages[0], policy)
+        blocks: list[dict[int, tuple[Any, int]] | None] = [
+            self._mamba_layer_blocks(state_block_ids_per_layer, i)
+            if self._needs_state_blocks(len(prompts[i]), starts[i])
+            else None
+            for i in range(rows)
+        ]
+        if hybrid_start or on_chain:
+            out = self._prefill_row_chain(
+                slots[0], prompts[0], pages[0], policy, start=starts[0], layer_blocks=blocks[0]
+            )
             return out, torch.zeros(rows, dtype=torch.long)
-        if prefill_pack_enabled(lanes=self.lanes):
+        if decoder.pack_enabled and not self._mamba_spec_on():  # the packed path has no state-block copies
             return self._prefill_batch_grouped(prompts, pages, policies, slots), torch.zeros(rows, dtype=torch.long)
         outputs: list[torch.Tensor] = []
         claimed: set[int] = set()  # the lanes this call hands out (not live until their row is imported)
         for i in range(rows):
-            outputs.append(self._prefill_row_single(decoder, slots[i], prompts[i], pages[i], policies[i], claimed))
+            outputs.append(
+                self._prefill_row_single(
+                    decoder,
+                    slots[i],
+                    prompts[i],
+                    pages[i],
+                    policies[i],
+                    claimed,
+                    start=starts[i],
+                    layer_blocks=blocks[i],
+                )
+            )
         return torch.cat(outputs, dim=0), torch.zeros(rows, dtype=torch.long)
 
     def _take_lane(self, decoder: Qwen38PlainLaneDecoder, slot: int, claimed: set[int]) -> int:
@@ -2357,13 +2995,17 @@ class Qwen38ForCausalLM:
         pages: list[int],
         policy: Qwen38HostSamplingPolicy | None,
         claimed: set[int] | None = None,
+        start: int = 0,
+        layer_blocks: dict[int, tuple[Any, int]] | None = None,
     ) -> torch.Tensor:
-        """One row alone: the B=1 chain prefill, its import into the lane of ``slot`` (a still-live lane is released first)
+        """One row alone: the B=1 chain prefill (from ``start``, restoring the row's state block when ``start > 0``), its import into the lane of ``slot`` (a still-live lane is released first)
         and the row's output (the device greedy token, a host draw, or the host logits ``[1, 1, VOCAB_SIZE]``)."""
 
         lane = self._take_lane(decoder, slot, set() if claimed is None else claimed)
         device_greedy = policy is not None and policy.greedy and not policy.penalized
-        out = self._prefill_one(prompt, greedy_token=device_greedy)
+        out = self._prefill_one(
+            prompt, greedy_token=device_greedy, page_ids=pages, start=start, layer_blocks=layer_blocks
+        )
         try:
             decoder.import_lane(self, lane, len(prompt), self.slot.ple_context, pages)
         except BaseException:
@@ -2384,7 +3026,13 @@ class Qwen38ForCausalLM:
         return out
 
     def _prefill_row_chain(
-        self, slot: int, prompt: list[int], pages: list[int], policy: Qwen38HostSamplingPolicy | None
+        self,
+        slot: int,
+        prompt: list[int],
+        pages: list[int],
+        policy: Qwen38HostSamplingPolicy | None,
+        start: int = 0,
+        layer_blocks: dict[int, tuple[Any, int]] | None = None,
     ) -> torch.Tensor:
         """Hybrid single: the one row's B=1 chain prefill, no import.  The request stays on the chain (``self.slot``
         holds its host state) with ``slot`` as its state slot and ``pages`` as its last page row.  Returns what
@@ -2393,7 +3041,9 @@ class Qwen38ForCausalLM:
         ``[1, 1, VOCAB_SIZE]``.  The first decode carries the real policy (``_hybrid_stays`` demotes a non-greedy one).
         """
 
-        out = self._prefill_one(prompt, greedy_token=policy is not None)
+        out = self._prefill_one(
+            prompt, greedy_token=policy is not None, page_ids=pages, start=start, layer_blocks=layer_blocks
+        )
         self.hybrid_slot = slot
         self.hybrid_pages = list(pages)
         if policy is not None:
@@ -2497,6 +3147,7 @@ class Qwen38ForCausalLM:
         if marks:
             marks.lap("row_checks")
         self.hybrid_pages = pages
+        self.chain.write_page_table(pages)  # before the step's device work (cq 0 is in order); a no-op when unchanged
         self._pending_note = (
             {remap[r]: r for r in range(lanes) if remap[r] != r} if remap != list(range(lanes)) else None
         )
@@ -3182,9 +3833,11 @@ class Qwen38ForCausalLM:
             self.trace_mode_warned = True
             logger.warning("trace_mode is not honoured: every step replays the captured traces")
 
-    def _step(self, token_id: int) -> int:
-        """Write x_t into the token row, HEAD(t), the PLE row for x_t, TAIL(t); returns the residue t mod 4."""
+    def _step(self, token_id: int, sampled: bool = False) -> int:
+        """Write x_t into the token row, HEAD(t), the PLE row for x_t, TAIL(t); returns the residue t mod 4.
+        ``sampled`` picks the sampler TAIL set of a device-sampler chain (the greedy set otherwise)."""
 
+        set_kwargs = trace_set_kwargs(sampled)
         residue = len(self.slot.committed) % RESIDUE_CLASSES
         write_token = (
             self.chain.feed_token_row
@@ -3195,16 +3848,20 @@ class Qwen38ForCausalLM:
             # lookup + host row before HEAD is enqueued: only the upload sits between HEAD and TAIL
             host_row, next_context = self.chain.prepare_ple_row(token_id, self.slot.ple_context)
             write_token(token_id)
-            self.chain.execute_head(residue)
+            self.chain.execute_head(residue, **set_kwargs)
             self.chain.upload_ple_row(host_row)
             self.slot.ple_context = next_context
-            self.chain.execute_tail(residue)
+            if sampled:
+                self.chain.prepare_sampled_step()
+            self.chain.execute_tail(residue, **set_kwargs)
             self.slot.committed.append(token_id)
             return residue
         write_token(token_id)
-        self.chain.execute_head(residue)
+        self.chain.execute_head(residue, **set_kwargs)
         self.slot.ple_context = self.chain.refresh_ple_row(token_id, self.slot.ple_context)
-        self.chain.execute_tail(residue)
+        if sampled:
+            self.chain.prepare_sampled_step()
+        self.chain.execute_tail(residue, **set_kwargs)
         self.slot.committed.append(token_id)
         return residue
 
@@ -3224,10 +3881,11 @@ class Qwen38ForCausalLM:
             token = int(self._read_logits(residue).argmax())
         return torch.tensor([[token]], dtype=torch.int32)
 
-    def _read_logits(self, residue: int) -> torch.Tensor:
-        """TAIL(residue)'s full-vocabulary gather (blocking), the padding rows masked, as ``[1, 1, VOCAB_SIZE]``."""
+    def _read_logits(self, residue: int, sampled: bool = False) -> torch.Tensor:
+        """TAIL(residue)'s full-vocabulary gather (blocking), the padding rows masked, as ``[1, 1, VOCAB_SIZE]``;
+        ``sampled`` names the sampler TAIL set, as for ``_step``."""
 
-        logits = self.chain.sampling.read_full_logits(residue)
+        logits = self.chain.sampling.read_full_logits(residue, **trace_set_kwargs(sampled))
         self.chain.mark_ple_fenced()  # the gather is blocking: the TAIL (after the PLE upload) has finished
         logits[TOKENIZER_SIZE:] = float("-inf")
         return logits.view(1, 1, VOCAB_SIZE)

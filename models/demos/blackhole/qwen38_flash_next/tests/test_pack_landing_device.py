@@ -3,7 +3,7 @@
 
 """P3d-3 device tests: landing a multi-user pack's users directly into decode lanes (``ttnn/pack_landing.py``).
 
-The adapter is built in batch mode (B=8, block 64) with ``QWEN38_PREFILL_PACK=1``: the pack state, one eager pack per bucket and
+The adapter is built in batch mode (B=8, block 128) with ``QWEN38_PREFILL_PACK=1``: the pack state, one eager pack per bucket and
 the landing programs are allocated and compiled in the chain's warm hook, the pack traces are captured after the lane trace.
 
 ``land_<S>``  (A) every landed family bitwise: lane ``l`` read back after ``admit_pack`` against a host (torch) re-implementation of
@@ -62,7 +62,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
 
 OUT = os.environ.get("P3D3_OUT")
 LANES = 8
-BLOCK = 64
+BLOCK = 128
 BUCKETS = {"s128": 128, "s256": 256, "s512": 512, "s1024": 1024}
 PAGE_WINDOW = (
     160  # pages 1 .. 159 hold every lane of the exactness test (the KV pool is read back only over this window)
@@ -378,7 +378,7 @@ def check_kv_pages(h: Landing, before_pool, after_pool, src: dict, rows: int, wa
             for lane, user, length in wave:
                 pages = d_.page_rows[lane]
                 for t in range(-(-length // 32) * 32):
-                    row = pages[t >> 6] * BLOCK + (t & (BLOCK - 1))
+                    row = pages[t // BLOCK] * BLOCK + (t & (BLOCK - 1))
                     touched.add(row)
                     if not torch.equal(pool_after[row], dense[user * rows + t]):
                         bad.append(("kv_row", q, dev, lane, t))
@@ -579,7 +579,7 @@ def kv_report(h: Landing, pool_single, pool_packed, lane_pages: dict, lengths: d
         for dev in range(4):
             a, b = pool_single[q][dev].reshape(-1, 512), pool_packed[q][dev].reshape(-1, 512)
             for lane, pages in lane_pages.items():
-                rows = [pages[t >> 6] * BLOCK + (t & (BLOCK - 1)) for t in range(lengths[lane])]
+                rows = [pages[t // BLOCK] * BLOCK + (t & (BLOCK - 1)) for t in range(lengths[lane])]
                 ra, rb = a[rows], b[rows]
                 errors.append(rel_error(rb, ra))
                 structure += sum(x != y for x, y in zip(nonzero_rows(ra), nonzero_rows(rb)))
@@ -866,7 +866,7 @@ def test_lane_level_leak(mesh_device, landing_factory, bucket):
             for dev in range(4):
                 a = left["pool"][q][dev].reshape(-1, 512)
                 b = right["pool"][q][dev].reshape(-1, 512)
-                rows_a = [pages[t >> 6] * BLOCK + (t & (BLOCK - 1)) for t in range(length)]
+                rows_a = [pages[t // BLOCK] * BLOCK + (t & (BLOCK - 1)) for t in range(length)]
                 if not torch.equal(a[rows_a], b[rows_a]):
                     kv_bad.append((q, dev))
         pair = {

@@ -33,6 +33,7 @@ from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prom
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
     PROMPT_FILE,
+    allocate_demo_pages,
     device_params,
     greedy_sampling_params,
 )
@@ -51,12 +52,12 @@ STEPS = 32
 EXACT_PREFIX = 8
 
 
-def reference_decode(vm, prompt_ids: list[int]) -> tuple[list[int], float]:
+def reference_decode(vm, prompt_ids: list[int], page_table: torch.Tensor) -> tuple[list[int], float]:
     """B=1: greedy prefill token t0, then STEPS greedy decode steps; returns ([t0..tSTEPS], mean decode seconds)."""
 
     out, _ = vm.prefill_forward(
         tokens=torch.tensor([prompt_ids], dtype=torch.int32),
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         enable_trace=True,
         prompt_lens=[len(prompt_ids)],
@@ -71,7 +72,7 @@ def reference_decode(vm, prompt_ids: list[int]) -> tuple[list[int], float]:
         out = vm.decode_forward(
             tokens=torch.tensor([[tokens[-1]]], dtype=torch.int32),
             start_pos=[len(prompt_ids) + step - 1],
-            page_table=None,
+            page_table=page_table,
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
@@ -144,13 +145,14 @@ def test_plain_lanes_match_single_user(mesh_device, lanes, page_size, tmp_path, 
         vm = Qwen38ForCausalLM.initialize_vllm_model(
             SimpleNamespace(_name_or_path=str(checkpoint)), mesh_device, max_batch_size=1, max_seq_len=max_seq_len
         )
+        page_table = allocate_demo_pages(vm, max_seq_len)  # opens the chain, under the warm hook
     model_ready_s = time.perf_counter() - started
     logger.info(f"model ready in {model_ready_s:.1f} s (lane prepare {decoder.timing.get('allocate_s', 0):.1f} s)")
 
     try:
         references, ref_step_s = [], []
         for u, prompt in enumerate(prompts):
-            tokens, mean_s = reference_decode(vm, prompt)
+            tokens, mean_s = reference_decode(vm, prompt, page_table)
             references.append(tokens)
             ref_step_s.append(mean_s)
             logger.info(f"reference lane {u} (P={len(prompt)}): {tokens[:8]}...")

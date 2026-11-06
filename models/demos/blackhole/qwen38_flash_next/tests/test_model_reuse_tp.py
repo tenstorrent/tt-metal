@@ -15,7 +15,12 @@ import pytest
 
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import Qwen38OfficialChatTemplate
-from models.demos.blackhole.qwen38_flash_next.demo.text_demo import DEVICE_PARAMS, MAX_SEQ_LEN, generate
+from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (
+    DEVICE_PARAMS,
+    MAX_SEQ_LEN,
+    allocate_demo_pages,
+    generate,
+)
 from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import checkpoint_root
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import Qwen38ForCausalLM, prefill_form
 from models.demos.blackhole.qwen38_flash_next.tools.resident_decode import program_cache_count
@@ -41,12 +46,13 @@ def test_fresh_requests_reuse_traces_at_prefill_boundaries(mesh_device, tmp_path
     model = Qwen38ForCausalLM.initialize_vllm_model(
         SimpleNamespace(_name_or_path=str(checkpoint)), mesh_device, max_batch_size=1, max_seq_len=MAX_SEQ_LEN
     )
+    page_table = allocate_demo_pages(model, MAX_SEQ_LEN)
     profiler = BenchmarkProfiler()
     report = {"prefill_slab_rows": prefill_form()[1], "eos": "ignored", "concurrency": 1, "requests": []}
 
     def run(label, tokens, count):
         before = program_cache_count(mesh_device)
-        generated, ttft, steps = generate(model, tokens, count, profiler)
+        generated, ttft, steps = generate(model, tokens, count, profiler, page_table=page_table)
         after = program_cache_count(mesh_device)
         row = {
             "label": label,

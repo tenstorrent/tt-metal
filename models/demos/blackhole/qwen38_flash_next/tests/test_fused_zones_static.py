@@ -32,7 +32,7 @@ BUILDERS = sorted(FUSED.glob("**/*.py"))
 INCLUDE = '#include "../../kernels/zones.h"'
 ZONE = re.compile(r'FUSED_ZONE\("([^"]+)"\)')
 NAME = re.compile(r"^fz_[a-z0-9_]+$")
-KERNEL_FILES = 208
+KERNEL_FILES = 211
 ZONES = 496  # zone marks over the kernels; a variant program's copy (gdn_step conv_split, gr_recip_last front2, ...) reuses its original's names
 # Sources that run no phase of the served decode (microbenchmark / idle / empty stand-ins and the KV page scatter): no zones, no include.
 FUNCTION_SCOPE_ZONE = {  # kernels added after the one-block-per-zone rule: a zone that does not follow a "{" line (the kernel keeps its own scoping)
@@ -69,12 +69,15 @@ FUNCTION_SCOPE_ZONE = {  # kernels added after the one-block-per-zone rule: a zo
     "row_reduce/kernels/compute3.cpp",
 }
 ZONELESS = {
+    "index_page_fill/kernels/fill_tiles.cpp",
     "kv_page_scatter/kernels/scatter_rows.cpp",
     "mm_stream/kernels/bench_mm_compute.cpp",
     "mm_stream/kernels/idle_mm_stream.cpp",
     "mm_stream2/kernels/empty_mm_stream2.cpp",
     "moe_experts/kernels/bench_compute_moe_experts.cpp",
     "moe_experts/kernels/bench_reader_moe_experts.cpp",
+    "pool_blocks/kernels/copy_blocks.cpp",
+    "pool_blocks/kernels/state_copy.cpp",
 }
 # every kernel's zone names carry its prefix (the census table's phase column reads them)
 PREFIX = {

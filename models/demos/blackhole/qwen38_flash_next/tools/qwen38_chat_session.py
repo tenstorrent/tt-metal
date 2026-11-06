@@ -190,6 +190,14 @@ MTP_WARM_ACCEPT_UNIFORMS = tuple(
 )
 
 
+def build_ttsampler(mesh: Any, tt_ccl: Any) -> Any:
+    """The chain's standard sampler (``tools/qwen38_ttsampler.py``) on the model's CCL manager."""
+
+    from models.demos.blackhole.qwen38_flash_next.tools.qwen38_ttsampler import Qwen38TTSampler
+
+    return Qwen38TTSampler(mesh, tt_ccl)
+
+
 def mtp_verify_forms(mtp_sampled: bool, mtp_device_accept: bool = False) -> tuple[str, ...]:
     """The verify forms an MTP chain captures with the switches (``MTP_VERIFY_FORMS_BY_SWITCH``); the device
     acceptance needs the split verify."""
@@ -565,20 +573,26 @@ LANES_MEASURED_FREE_AFTER_CAPTURES_BYTES_PER_BANK_4X4_128K = 456_988_928
 LANES_SERVED_EXTRAS_BYTES_PER_BANK = 100_444_352
 
 
-def lanes_image_bytes_per_device(allocated_context: int) -> int:
-    """One lane's image per device (the seven families at ``allocated_context`` rows)."""
+def lanes_image_bytes_per_device(allocated_context: int, *, paged: bool = False) -> int:
+    """One lane's image per device (the seven families at ``allocated_context`` rows).  ``paged`` (shared pools): the
+    12 KV slabs and 12 compressed caches live in the chain's pools, only the fixed part is per lane."""
 
+    if paged:
+        return LANES_IMAGE_BYTES_PER_DEVICE_FIXED
     return LANES_IMAGE_BYTES_PER_DEVICE_SLOPE * int(allocated_context) + LANES_IMAGE_BYTES_PER_DEVICE_FIXED
 
 
-def lanes_mtp_extra_bytes_per_device(allocated_context: int, rows: int) -> int:
+def lanes_mtp_extra_bytes_per_device(allocated_context: int, rows: int, *, paged: bool = False) -> int:
     """Beyond the lane image, per lane and device: the MTP layer's own lane QSA state, the backbone QSA lane verify
     states, the GDN lane rows buffers and constants, the PLE lane rows state, the residual and draft rows."""
 
     context = int(allocated_context)
     qsa_layers, gdn_layers, heads, head_dim = 12, GDN_LAYERS, gdn_module.VALUE_HEADS_PER_DEVICE, gdn_module.HEAD_DIM
     qkv_width, chunk_rows = gdn_module.QKV_WIDTH_PER_DEVICE, CHUNK_ROWS
-    mtp_layer_qsa = Qwen38ResidentContext(context).qsa_generic_state_bytes + 2 * 32 * 128 * 2
+    mtp_layer_qsa = Qwen38ResidentContext(context).qsa_generic_state_bytes
+    if paged:  # the MTP layer's KV and compressed cache are its pools' rows
+        mtp_layer_qsa = max(mtp_layer_qsa - context * 512 * 2 - (context // 4 + 32) * 128 * 2, 0)
+    mtp_layer_qsa += 2 * 32 * 128 * 2
     backbone_qsa_verify = qsa_layers * 2 * 32 * 128 * 2
     gdn_rows_per_layer = (
         2 * chunk_rows * qkv_width * 2 + 3 * chunk_rows * heads * head_dim * 2 + 2 * chunk_rows * heads * 4
@@ -591,12 +605,13 @@ def lanes_mtp_extra_bytes_per_device(allocated_context: int, rows: int) -> int:
     return mtp_layer_qsa + backbone_qsa_verify + gdn_rows + gdn_lane_constants + ple_rows + misc
 
 
-def lanes_pager_bytes_per_device(allocated_context: int) -> int:
+def lanes_pager_bytes_per_device(allocated_context: int, *, paged: bool = False) -> int:
     """The two 1-lane pagers (the generic state's and the alignment layer's): their pack buffers and the whole-lane KV
-    staging pair each, from the family shapes."""
+    staging pair each, from the family shapes.  ``paged``: no compressed pack and no KV staging (the pools hold them).
+    """
 
     context = int(allocated_context)
-    compressed_rows = context // 4 + 32
+    compressed_rows = 0 if paged else context // 4 + 32
     backbone = (
         12 * compressed_rows * 128 * 2
         + 36 * gdn_module.VALUE_HEADS_PER_DEVICE * gdn_module.HEAD_DIM * gdn_module.HEAD_DIM * 4
@@ -606,7 +621,7 @@ def lanes_pager_bytes_per_device(allocated_context: int) -> int:
         + 9 * 4 * gdn_module.HIDDEN_SIZE_PER_DEVICE * 2
     )
     alignment = compressed_rows * 128 * 2 + 32 * 512 * 2 + 32 * 128 * 2
-    stagings = 2 * LANE_KV_STAGINGS * context * 512 * 2
+    stagings = 0 if paged else 2 * LANE_KV_STAGINGS * context * 512 * 2
     return backbone + alignment + stagings
 
 
@@ -627,6 +642,7 @@ def lanes_capacity_admission(
     live: Mapping[str, Any] | None = None,
     reserved_bytes_per_bank: int = 0,
     gdn_rows_scan: bool = False,
+    paged: bool = False,
 ) -> dict[str, Any]:
     """Whether ``lanes`` MTP lanes at ``drafts`` drafts fit beside the resident build and its single-lane MTP chain
     at ``allocated_context``: the one-tile rule (``B x (k + 1) <= 32``), then the DRAM per bank.
@@ -639,7 +655,9 @@ def lanes_capacity_admission(
     without a device.  ``gdn_rows_scan`` (the verify-rows fold serving the lanes) adds the fold's prefix states at the
     lanes' row count (:func:`lanes_fold_prefix_states_bytes_per_bank`) to the states remainder.  The largest single
     lane tensor, the flat KV ``[1, 1, B x C + scratch, 512]`` of one QSA layer,
-    must fit the largest contiguous block.  The open measures the growth (states, traces) and refuses READY when it
+    must fit the largest contiguous block.  ``paged`` (the lanes run on the chain's shared pools, allocated before this
+    admission): no lane carries KV, compressed cache, import scratch or KV staging, so those terms and the flat-KV
+    contiguity requirement drop out.  The open measures the growth (states, traces) and refuses READY when it
     exceeds the required side: the estimate's margins are what the measurement is judged against."""
 
     if isinstance(lanes, bool) or type(lanes) is not int or not 2 <= lanes <= 8:
@@ -659,6 +677,8 @@ def lanes_capacity_admission(
         raise ValueError(f"reserved_bytes_per_bank must be a non-negative int, got {reserved_bytes_per_bank!r}")
     if type(gdn_rows_scan) is not bool:
         raise ValueError(f"gdn_rows_scan must be a bool, got {gdn_rows_scan!r}")
+    if type(paged) is not bool:
+        raise ValueError(f"paged must be a bool, got {paged!r}")
     if live is None:
         measured_at = [c for c in sorted(RESIDENT_FREE_BYTES_PER_BANK_AFTER_CAPTURES) if c >= context]
         if not measured_at:
@@ -688,10 +708,15 @@ def lanes_capacity_admission(
     def with_margin(remainder: int) -> int:
         return -(-remainder * (100 + MTP_GROWTH_ESTIMATE_MARGIN_PERCENT) // 100)
 
-    per_lane = lanes_image_bytes_per_device(context) + lanes_mtp_extra_bytes_per_device(context, rows)
+    per_lane = lanes_image_bytes_per_device(context, paged=paged) + lanes_mtp_extra_bytes_per_device(
+        context, rows, paged=paged
+    )
     per_lane_corrected = -(-per_lane * (100 + LANES_PER_LANE_SLOPE_CORRECTION_PERCENT) // 100)
-    lane_states_per_device = lanes * per_lane_corrected + LANES_FIXED_BYTES_PER_DEVICE
-    pagers_per_device = lanes_pager_bytes_per_device(context)
+    fixed_per_device = LANES_FIXED_BYTES_PER_DEVICE
+    if paged:  # the KV import scratch (13 layers x 4,096 rows) is gone; the GDN lane rows qkv stay
+        fixed_per_device -= 13 * 4096 * 512 * 2
+    lane_states_per_device = lanes * per_lane_corrected + fixed_per_device
+    pagers_per_device = lanes_pager_bytes_per_device(context, paged=paged)
     moe_states = (
         MTP_STATES_BEYOND_QSA_STATE_BYTES_PER_BANK_BY_MOE_ROWS[5]
         + (total_rows - 5) * LANES_MOE_ROWS_SLOPE_BYTES_PER_BANK
@@ -714,7 +739,9 @@ def lanes_capacity_admission(
     }
     required = sum(estimate.values())
     # the largest single lane tensor: one QSA layer's flat KV over the banks (page-interleaved)
-    flat_kv_per_bank = -(-(lanes * context + mtp_lanes_scratch_rows(context)) * 512 * 2 // RESIDENT_DRAM_BANKS)
+    flat_kv_per_bank = (
+        0 if paged else -(-(lanes * context + mtp_lanes_scratch_rows(context)) * 512 * 2 // RESIDENT_DRAM_BANKS)
+    )
     contiguous = max(flat_kv_per_bank, RESIDENT_MIN_CONTIGUOUS_BYTES_PER_BANK)
     shortfalls = [
         name
@@ -732,6 +759,7 @@ def lanes_capacity_admission(
         "total_rows": total_rows,
         "one_tile": total_rows <= CHUNK_ROWS,
         "gdn_rows_scan": gdn_rows_scan,
+        "paged": paged,
         "num_banks": RESIDENT_DRAM_BANKS,
         **source,
         "free_bytes_per_bank": free,
@@ -747,7 +775,8 @@ def lanes_capacity_admission(
         "decided_by": {
             "free_side": source["free_bytes_source"],
             "required_side": f"estimate lanes={lanes} k={drafts} rows={total_rows} (modeled, +{LANES_PER_LANE_SLOPE_CORRECTION_PERCENT} % slope, {MTP_GROWTH_ESTIMATE_MARGIN_PERCENT} % margin)"
-            + (" gdn_rows_scan" if gdn_rows_scan else ""),
+            + (" gdn_rows_scan" if gdn_rows_scan else "")
+            + (" paged" if paged else ""),
             "shortfalls": shortfalls,
         },
         "fits": not shortfalls,
@@ -2564,8 +2593,71 @@ HOST_SPIN_VARIABLE = (
 SPIN_TIMEOUT_S = 60.0
 
 
+PAGED_KV_VARIABLE = (
+    "QWEN38_PAGED_KV"  # "1": the B=1 chain runs on paged pools with a shuffled block mapping (a test switch)
+)
+PAGED_BLOCK_SIZE_VARIABLE = "QWEN38_PAGED_BLOCK_SIZE"  # default 128
+PAGED_SEED_VARIABLE = "QWEN38_PAGED_SEED"  # default 0
+PAGED_SPARE_BLOCKS = 9  # pool blocks beyond the page-table width (block 0 is the scratch block)
+
+
+def paged_kv_settings(environ: Mapping[str, str] | None = None) -> tuple[int, int] | None:
+    """(block size, seed) when ``QWEN38_PAGED_KV=1``, else None."""
+
+    environ = os.environ if environ is None else environ
+    if environ.get(PAGED_KV_VARIABLE, "0") != "1":
+        return None
+    return int(environ.get(PAGED_BLOCK_SIZE_VARIABLE, "128")), int(environ.get(PAGED_SEED_VARIABLE, "0"))
+
+
+def paged_kv_paging(allocated_context: int, block_size: int):
+    """The switch's pool geometry: W = paged_table_width, NB = W + PAGED_SPARE_BLOCKS."""
+
+    from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
+
+    width = qsa_module.paged_table_width(allocated_context, block_size)
+    return qsa_module.Qwen38LanePaging(page_size=block_size, num_pages=width + PAGED_SPARE_BLOCKS, max_blocks=width)
+
+
+def paged_kv_block_ids(paging, seed: int) -> list[int]:
+    """The first ``max_blocks`` entries of a seeded permutation of 1..num_pages-1 (deterministic, no scratch block)."""
+
+    import random
+
+    ids = list(range(1, paging.num_pages))
+    random.Random(seed).shuffle(ids)
+    return ids[: paging.max_blocks]
+
+
 def host_fast_enabled() -> bool:
     return os.environ.get(HOST_FAST_VARIABLE, "1") == "1"
+
+
+def _open_pools(model: Any, paging: Any, pools: Any, *, paged_kv_env: bool = False) -> tuple[Any, Any, bool]:
+    """(paging, pools, pools_owned) for the open: the test switch builds the paging; given a paging and no pools the
+    model allocates them (validated against its allocated context); given pools the caller owns them."""
+
+    from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
+
+    if paging is None and paged_kv_env:
+        settings = paged_kv_settings()
+        if settings is not None:  # pools sized by the chain's context, blocks shuffled per prompt by the caller
+            paging = paged_kv_paging(model.allocated_context, settings[0])
+    if paging is None:
+        return None, pools, False
+    qsa_module.validate_index_paging(paging, model.allocated_context)
+    if pools is not None:
+        return paging, pools, False
+    return paging, model.allocate_paged_pools(paging), True
+
+
+def _open_mtp_pools(mtp_components: Any, paging: Any) -> Any:
+    """The MTP QSA layer's pools for the open (None unpaged): the layer shares the target's page table, so its pools
+    follow the same paging; open allocates and owns them (the MTP layer exists only after its build)."""
+
+    if paging is None or mtp_components is None:
+        return None
+    return mtp_components.decoder_layer.attention.allocate_paged_pools(paging)
 
 
 @dataclass
@@ -2607,7 +2699,13 @@ class Qwen38TracedChain:
     # The allocation tracker verified every trace once after the captures; per-prefill re-verification (140-290 ms
     # in the full-model gate) is a diagnostic switch.
     verify_each_prefill: bool = False
+    # (``greedy_tail_set``) the greedy HEAD / TAIL set per residue beside head_trace_ids / tail_trace_ids (the sampler
+    # set); empty when the chain has one set.
+    greedy_head_trace_ids: list[int] = field(default_factory=list)
+    greedy_tail_trace_ids: list[int] = field(default_factory=list)
     sampling: sampling_step.Qwen38SamplingChainExtension | None = None
+    ttsampler: Any = None  # (``open(ttsampler=True)``) the standard sampler of the sampler set; None: the model's own
+    ttsampler_out_tok: Any = None
     mtp: Qwen38ChainMTP | None = None
     # (QWEN38_MTP_DRAFTS_PER_REQUEST) every drafting chain captured at open by draft count, ``mtp`` (the default)
     # included; the others share the MTP layer's generic state, the step inputs and the chunk extensions with it and
@@ -2617,6 +2715,33 @@ class Qwen38TracedChain:
     # layer's), allocated before the warm pass; the session captures and restores through the two methods below.
     snapshot: Any = None
     closed: bool = field(default=False, repr=False)
+    # The index paging of the KV and index pools (None: unpaged) and the pools themselves (kept alive for the chain's
+    # lifetime); ``pools_owned`` when open allocated them (close releases them), else the caller owns them.
+    paging_config: Any = None
+    paged_pools: Any = None
+    pools_owned: bool = False
+    mtp_paged_pools: Any = None  # the MTP layer's pools (paged chain with MTP); always allocated, so owned, by open
+    _page_table_ids: tuple[int, ...] | None = field(default=None, repr=False)
+
+    @property
+    def paging(self) -> Any:
+        return self.paging_config
+
+    @property
+    def pools(self) -> Any:
+        return self.paged_pools
+
+    def write_page_table(self, block_ids: Sequence[int]) -> bool:
+        """Upload the chain page table (every row = ``block_ids``) unless it already holds them; True if written."""
+
+        if self.paging_config is None:
+            raise Qwen38ChatChainError("write_page_table needs a paged chain (open with paging)")
+        ids = tuple(int(block) for block in block_ids)
+        if ids == self._page_table_ids:
+            return False
+        self.built_target.model.write_generic_page_table(self.state, ids)
+        self._page_table_ids = ids
+        return True
 
     @property
     def mesh(self) -> Any:
@@ -2660,14 +2785,25 @@ class Qwen38TracedChain:
         self.mtp.step_inputs.write_next_token(next_token_id)
         self.mtp.step_written = True
 
-    def execute_head(self, residue: int) -> None:
+    def prepare_sampled_step(self) -> None:
+        """Before every replay of the sampler set's TAIL: the standard sampler's host seed write (no-op without it)."""
+
+        if self.ttsampler is not None:
+            self.ttsampler.write_step_seeds()
+
+    def execute_head(self, residue: int, sampled: bool = False) -> None:
+        """HEAD(residue) of the set ``sampled`` names: the sampler set when True or when the chain has one set, else
+        the greedy set (HEAD and TAIL of one step must run the same set)."""
+
         self._token_row_value = None  # HEAD consumes the row; TAIL rewrites it, so only a later read re-records
         if self.mtp is not None and not self.mtp.step_written:
             self.write_mtp_next_token(None)  # a device-token step: the MTP row takes the resolved argmax
-        ttnn._ttnn_execute_trace(self.mesh, self.head_trace_ids[residue], cq_id=0, blocking=False)
+        ids = self.head_trace_ids if sampled or not self.greedy_head_trace_ids else self.greedy_head_trace_ids
+        ttnn._ttnn_execute_trace(self.mesh, ids[residue], cq_id=0, blocking=False)
 
-    def execute_tail(self, residue: int) -> None:
-        ttnn._ttnn_execute_trace(self.mesh, self.tail_trace_ids[residue], cq_id=0, blocking=False)
+    def execute_tail(self, residue: int, sampled: bool = False) -> None:
+        ids = self.tail_trace_ids if sampled or not self.greedy_tail_trace_ids else self.greedy_tail_trace_ids
+        ttnn._ttnn_execute_trace(self.mesh, ids[residue], cq_id=0, blocking=False)
         if self.mtp is not None:
             self.mtp.step_written = False
         self.prove_ple_reads()  # the PLE row's identity proofs run behind the enqueued TAIL, not between HEAD and TAIL
@@ -2902,6 +3038,34 @@ class Qwen38TracedChain:
                 f"restore left the device position at {position}, expected {self.snapshot.position}"
             )
 
+    def restore_prefix_state(
+        self, position: int, token_ids: Sequence[int], layer_blocks: dict[int, tuple[Any, int]], block_size: int
+    ) -> tuple[int, int]:
+        """The generic state at block boundary ``position`` from the GDN layers' K/V pool blocks (position, GDN phases
+        and QSA staging included), then the device position read back.  Returns the PLE n-gram context the next chunk
+        prefill takes: the raw history ``(token_ids[position - 2], token_ids[position - 1])``."""
+
+        if position < 2 or position > len(token_ids):
+            raise Qwen38ChatChainError(
+                f"restore position {position} needs two prompt tokens before it ({len(token_ids)})"
+            )
+        self.built_target.model.restore_boundary_state(
+            self.state, layer_blocks, block_size=block_size, position=position
+        )
+        if self.mtp is not None:
+            self.mtp.step_written = False
+        ttnn.synchronize_device(self.mesh)
+        device_position = self.state.position.read()
+        if device_position != position:
+            raise Qwen38ChatChainError(f"restore left the device position at {device_position}, expected {position}")
+        return (int(token_ids[position - 2]), int(token_ids[position - 1]))
+
+    def save_prefix_state(self, position: int, layer_blocks: dict[int, tuple[Any, int]], block_size: int) -> None:
+        """The GDN layers' state at block boundary ``position`` into their K/V pool blocks (device copies queued
+        behind the work that produced the state)."""
+
+        self.built_target.model.save_boundary_state(self.state, layer_blocks, block_size=block_size, position=position)
+
     def chunk_prefill(
         self,
         token_ids: Sequence[int],
@@ -3106,6 +3270,11 @@ class Qwen38TracedChain:
         mtp_moe_rows: int | None = None,
         mtp_alternates: Sequence[int] = (),
         mtp_ple_early: bool = False,
+        paging=None,
+        pools=None,
+        paged_kv_env: bool = False,
+        greedy_tail_set: bool = False,
+        ttsampler: bool = False,
     ) -> Qwen38TracedChain:
         """Target build, generic state (+ chunk state), warm pass (+ one eager chunk and both hand-off forms), miss
         guard, 8 decode captures (+ the chunk capture): the runner's chain prologue and the full-model gate's order.
@@ -3138,6 +3307,15 @@ class Qwen38TracedChain:
         ``mtp_ple_early`` (``QWEN38_MTP_PLE_EARLY``; the mesh opened with two command queues) makes the fused and the
         device-decided pass loops read the verify lanes on the second queue and look the next pass's PLE rows 0-1 up
         under the draft (``mtp_enter`` builds the reader; the host-decided split keeps its order).
+        ``greedy_tail_set`` (needs ``device_sampler``, no ``mtp``) captures a second HEAD / TAIL set per residue whose
+        TAIL stops after the greedy resolve (no candidate row, no sampler), beside the sampler set: ``execute_head`` and
+        ``execute_tail`` replay it unless the caller passes ``sampled=True``, so a greedy step skips the candidate row
+        and the sampler (the HEAD's one layer is captured again with the set, the TAIL reads that HEAD's residual).
+        ``ttsampler`` (needs ``sampling`` and ``greedy_tail_set``, no ``mtp``) builds one standard sampler
+        (``chain.ttsampler``, ``tools/qwen38_ttsampler.py``) and captures the sampler set's TAIL with it in place of the
+        candidate row and the model's own sampler: the logits padded to 32 rows, sampled into a persistent token
+        tensor, copied as a token row into the resident row.  ``prepare_sampled_step`` (the sampler's host seed write)
+        must run before every replay of that TAIL.
         """
 
         if type(chunk_gdn_step_anchor) is not bool:
@@ -3148,6 +3326,14 @@ class Qwen38TracedChain:
             raise ValueError(f"device_sampler must be a bool, got {device_sampler!r}")
         if device_sampler and not sampling:
             raise ValueError("device_sampler needs sampling: the composite reads the candidate row")
+        if type(greedy_tail_set) is not bool:
+            raise ValueError(f"greedy_tail_set must be a bool, got {greedy_tail_set!r}")
+        if greedy_tail_set and (not device_sampler or mtp is not None):
+            raise ValueError("greedy_tail_set needs device_sampler and no mtp")
+        if type(ttsampler) is not bool:
+            raise ValueError(f"ttsampler must be a bool, got {ttsampler!r}")
+        if ttsampler and (not sampling or not greedy_tail_set or mtp is not None):
+            raise ValueError("ttsampler needs sampling and greedy_tail_set and no mtp")
         if long_chunks and (not chunked_prefill or chunk_gdn_step_anchor):
             raise ValueError("long chunks need the chunked prefill and run without the GDN step anchor")
         if mtp is not None and mtp not in MTP_DRAFTS:
@@ -3218,6 +3404,8 @@ class Qwen38TracedChain:
                 f"expected {resident_decode.EXPECTED_CACHE_LOADS}"
             )
         model = built_target.model
+        # the pools first: the MTP admission below and every later allocation read the live free DRAM
+        paging, pools, pools_owned = _open_pools(model, paging, pools, paged_kv_env=paged_kv_env)
         lm_head = model.model_io.lm_head
         mtp_components = None
         mtp_dram_bytes_per_bank: dict[str, int] = {}
@@ -3261,7 +3449,8 @@ class Qwen38TracedChain:
                     f"expected {MTP_EXPECTED_CACHE_LOADS}"
                 )
             marker("after-chat-mtp-build")
-        state = model.allocate_generic_state()
+        mtp_pools = _open_mtp_pools(mtp_components, paging)
+        state = model.allocate_generic_state(paging=paging, pools=pools)
         chunk_state = None
         long_chunk_state = None
         if chunked_prefill:
@@ -3298,6 +3487,7 @@ class Qwen38TracedChain:
                 mtp_components=mtp_components,
                 gdn_step_anchor_layers=MTP_GDN_ANCHOR_LAYERS[mtp_gdn_anchor],
                 candidates_constants=None if sampling_extension is None else sampling_extension.constants,
+                mtp_pools=mtp_pools,
             )
             chain_mtp = Qwen38ChainMTP(
                 drafts=mtp,
@@ -3423,6 +3613,11 @@ class Qwen38TracedChain:
         prepared = model.prepare_generic_decode_inputs(SEED_TOKEN_ID, state, device_token=token_row_io)
         ple_row_mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=MESH_SHAPE, dims=(None, 3))
         synchronize()
+        ttsampler_object = None
+        ttsampler_out_tok = None
+        if ttsampler:
+            ttsampler_object = build_ttsampler(mesh, construction.builder.tt_ccl)
+            ttsampler_out_tok = ttsampler_object.make_out_tok()
         chain = cls(
             construction=construction,
             built_target=built_target,
@@ -3430,6 +3625,8 @@ class Qwen38TracedChain:
             prepared=prepared,
             token_row_io=token_row_io,
             ple_row_mapper=ple_row_mapper,
+            ttsampler=ttsampler_object,
+            ttsampler_out_tok=ttsampler_out_tok,
             head_trace_ids=[],
             tail_trace_ids=[],
             captures=[],
@@ -3454,7 +3651,13 @@ class Qwen38TracedChain:
             mtp=chain_mtp,
             mtp_chains=mtp_chains,
             snapshot=snapshot,
+            paging_config=paging,
+            paged_pools=pools,
+            pools_owned=pools_owned,
+            mtp_paged_pools=mtp_pools,
         )
+        if ttsampler:
+            chain.sampling.enable_ttsampler(ttsampler_object, ttsampler_out_tok)
 
         def warm_step(position: int, warm_token_id: int, ple_context, *, mtp_next: int | None):
             """One eager 1-row step: PLE row (checked against the host oracle), the body, the epilogue's ops."""
@@ -3845,6 +4048,8 @@ class Qwen38TracedChain:
                     f"GDN ring phases {label} residue {residue}: actual {actual} vs expected {expected}"
                 )
 
+        greedy_round = False  # the greedy TAIL set's capture round (``greedy_tail_set``)
+
         def capture_epilogue(trace_output: Any) -> tuple[Any, Any]:
             """TAIL's last ops: local candidates, device greedy resolve, copy into the persistent token row; a
             sampling chain's epilogue runs the same three and then the candidate row.  An MTP chain's epilogue
@@ -3864,7 +4069,7 @@ class Qwen38TracedChain:
                     chain.sampling.trace_logits.append(trace_output.logits)
                 return candidates, trace_token_row
             if chain.sampling is not None:
-                return chain.sampling.capture_epilogue(trace_output, token_row_io)
+                return chain.sampling.capture_epilogue(trace_output, token_row_io, greedy_only=greedy_round)
             if trace_output.logits is None:
                 raise Qwen38ChatChainError("TAIL capture returned no logits")
             candidates = lm_head.greedy_candidates(trace_output.logits)
@@ -3874,7 +4079,11 @@ class Qwen38TracedChain:
         marker("before-chat-captures")
         capture_ns = 0
         dram_before_captures = dram_allocated_per_bank()
-        for phase in range(RESIDUE_CLASSES):
+        for greedy_round, phase in [
+            (round_is_greedy, phase)
+            for round_is_greedy in ((False, True) if greedy_tail_set else (False,))
+            for phase in range(RESIDUE_CLASSES)
+        ]:
             capture = model.capture_decode_generic(
                 prepared,
                 state,
@@ -3901,19 +4110,21 @@ class Qwen38TracedChain:
                     f"capture residue {phase} attempted host I/O in-body: {capture.guard_attempts}"
                 )
             chain.captures.append(capture)
-            chain.head_trace_ids.append(
+            (chain.greedy_head_trace_ids if greedy_round else chain.head_trace_ids).append(
                 capture.trace_ids[Qwen38TTNNGenericTraceKey("head", phase, resident_decode.SINGLE_TRACE_INDEXER_REGIME)]
             )
-            chain.tail_trace_ids.append(
+            (chain.greedy_tail_trace_ids if greedy_round else chain.tail_trace_ids).append(
                 capture.trace_ids[Qwen38TTNNGenericTraceKey("tail", phase, resident_decode.SINGLE_TRACE_INDEXER_REGIME)]
             )
             capture_ns += sum(capture.capture_ns.values())
             candidates, trace_token_row = capture.epilogue
-            chain.trace_candidates.append(candidates)
-            chain.trace_token_rows.append(trace_token_row)
-            acknowledge_corruptible(candidates.local_indices)
-            acknowledge_corruptible(candidates.local_values)
-            if chain.sampling is not None:
+            if candidates is not None:  # the ttsampler set's TAIL has no greedy candidates
+                chain.trace_candidates.append(candidates)
+                acknowledge_corruptible(candidates.local_indices)
+                acknowledge_corruptible(candidates.local_values)
+            if trace_token_row is not None:
+                chain.trace_token_rows.append(trace_token_row)
+            if chain.sampling is not None and not greedy_round:
                 chain.sampling.mark_trace_rows_corruptible()
             synchronize()
         marker("after-chat-captures")
@@ -4119,6 +4330,8 @@ class Qwen38TracedChain:
         return (
             self.head_trace_ids
             + self.tail_trace_ids
+            + self.greedy_head_trace_ids
+            + self.greedy_tail_trace_ids
             + [
                 trace_id
                 for trace_id in (self.chunk_trace_id, self.long_chunk_trace_id, self.slab_trace_id)
@@ -4141,6 +4354,8 @@ class Qwen38TracedChain:
             ttnn.release_trace(mesh, trace_id)
         self.head_trace_ids.clear()
         self.tail_trace_ids.clear()
+        self.greedy_head_trace_ids.clear()
+        self.greedy_tail_trace_ids.clear()
         self.chunk_trace_id = None
         self.long_chunk_trace_id = None
         self.slab_trace_id = None
@@ -4198,6 +4413,17 @@ class Qwen38TracedChain:
             self.built_target.model.release_generic_snapshot(self.snapshot)
             self.snapshot = None
         self.built_target.model.release_generic_state(self.state)
+        if (
+            self.pools_owned and self.paged_pools is not None
+        ):  # after every state on them; lanes are released by their owner first
+            for pool in self.paged_pools.values():
+                ttnn.deallocate(pool.kv)
+                ttnn.deallocate(pool.index)
+            self.paged_pools = None
+        if self.mtp_paged_pools is not None:
+            ttnn.deallocate(self.mtp_paged_pools.kv)
+            ttnn.deallocate(self.mtp_paged_pools.index)
+            self.mtp_paged_pools = None
         ttnn.synchronize_device(mesh)
         self.built_target.components.close_resident_experts()
         ttnn.synchronize_device(mesh)

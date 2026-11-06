@@ -503,6 +503,8 @@ def test_qsa_slab_selection_never_frees_its_block_ids_before_use(monkeypatch, ro
         indexer_compute_config="compute",
         collective_topology="linear",
         glue=SimpleNamespace(enabled=lambda name: False),  # the per-layer derivation, the chain's selection
+        _paged_indexer_kwargs=lambda state: {},
+        _paged_selection_rows=lambda ids, state: ids,
         mesh_contract=SimpleNamespace(
             mark_local_partial=lambda tensor, **kwargs: fake.live(tensor),
             validate_tensor=lambda tensor, **kwargs: fake.live(tensor),

@@ -359,7 +359,7 @@ def test_chunk_body_has_no_host_ints_no_host_io_and_the_decode_order() -> None:
         "self._index_projection_rows(full_hidden, hidden_tiles, cos, sin, constants)",
         "self._write_compressed_index_chunk(",
         "self._score_blocks_chunk(index_query, state, chunk)",
-        "self._materialize_rows_chunk(masked_scores, chunk, constants)",
+        "self._materialize_rows_chunk(masked_scores, chunk, constants, state=state)",
         "self._main_projection_rows(full_hidden, hidden_tiles, cos, sin, constants)",
         "self._write_packed_kv_chunk(state, chunk_state, key, value, chunk)",
         "self._sparse_value_attention_rows(query, gate, sparse_indices, state, constants)",

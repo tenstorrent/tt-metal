@@ -1819,9 +1819,10 @@ def test_lane_draft_body_moves_ids_by_copy_and_orders_history_rows_and_assembly(
 # --------------------------------------------------------------------------- stage 4: the lane image round trip
 
 
-def _lifecycle_world(fake, monkeypatch, gdn_weights, positions=(10, 20, 30, 40)):
+def _lifecycle_world(fake, monkeypatch, gdn_weights, positions=(10, 20, 30, 40), *, paged: bool = False):
     """A 4-lane MTP verify state of one QSA layer, one GDN layer with the PLE (checkpoint layer 1) and the alignment
-    layer's lane state, over the real lane modules on the fake."""
+    layer's lane state, over the real lane modules on the fake.  ``paged``: the lane QSA states are marked as living
+    on shared pools (``pools_shared``; the KV / compressed tensors stand for the pools)."""
 
     _install_admission_ops(fake)
     lanes, rows = 4, 5
@@ -1831,10 +1832,11 @@ def _lifecycle_world(fake, monkeypatch, gdn_weights, positions=(10, 20, 30, 40))
     ple = _ple_module()
     moe = SimpleNamespace(rows=lanes * rows)
     gdn_constants = gdn.allocate_rows_constants(rows)
+    shared = {"pools_shared": True} if paged else {}
     qsa_layer = mtp_lanes.Qwen38TTNNMTPLaneLayerState(
         "backbone",
         0,
-        qsa.allocate_lane_state(lanes, kv_scratch_rows=scratch),
+        dataclasses.replace(qsa.allocate_lane_state(lanes, kv_scratch_rows=scratch), **shared),
         qsa.allocate_lane_verify_state(lanes),
         None,
         moe,
@@ -1852,7 +1854,7 @@ def _lifecycle_world(fake, monkeypatch, gdn_weights, positions=(10, 20, 30, 40))
     alignment_layer = mtp_lanes.Qwen38TTNNMTPLaneLayerState(
         "mtp",
         0,
-        qsa.allocate_lane_state(lanes, kv_scratch_rows=scratch),
+        dataclasses.replace(qsa.allocate_lane_state(lanes, kv_scratch_rows=scratch), **shared),
         qsa.allocate_lane_verify_state(lanes),
         None,
         moe,
@@ -1862,6 +1864,7 @@ def _lifecycle_world(fake, monkeypatch, gdn_weights, positions=(10, 20, 30, 40))
         lanes=lanes,
         rows=rows,
         drafts=rows - 1,
+        qsa_lane_constants=SimpleNamespace(paging=PAGING if paged else None),
         layers=(qsa_layer, gdn_layer),
         alignment=SimpleNamespace(layer_state=alignment_layer),
         positions=mtp_lanes.Qwen38TTNNMTPLanePositions.allocate("mesh", FakeContract(), list(positions), lanes=lanes),
@@ -1870,6 +1873,9 @@ def _lifecycle_world(fake, monkeypatch, gdn_weights, positions=(10, 20, 30, 40))
     model = SimpleNamespace(mesh_device="mesh", allocated_context=CONTEXT)
     monkeypatch.setattr(mtp_lanes, "_validate_lane_verify_state", lambda model_, verify_: None)
     return model, verify
+
+
+PAGING = qsa_module.Qwen38LanePaging(128, 64, 24)
 
 
 def _lane_tensors(verify, lane: int) -> dict[str, list[torch.Tensor]]:

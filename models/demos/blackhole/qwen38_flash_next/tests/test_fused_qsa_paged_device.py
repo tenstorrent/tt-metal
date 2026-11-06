@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Paged KV mode of the QSA fused programs on the held four-die mesh: selection_row (fused == composed == torch,
+"""Paged KV mode of the QSA fused programs on the held one-by-eight mesh: selection_row (fused == composed == torch,
 bitwise), main_tail (the 32-row blocks land at the page-table rows), kv_page_scatter (== torch == composed), and the
 unpaged selection_row / main_tail unchanged."""
 
@@ -14,14 +14,17 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.tests import qsa_paged_reference as ref
 from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused.kv_page_scatter import (
     kv_page_scatter,
     kv_page_scatter_composed,
 )
 
-pytestmark = pytest.mark.skipif(os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1", reason="requires held four-die mesh")
-MESH = pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+pytestmark = pytest.mark.skipif(
+    os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1", reason="requires held one-by-eight mesh"
+)
+MESH = pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 PARAMS = pytest.mark.parametrize("device_params", [{**DEVICE_PARAMS, "trace_region_size": 2_000_000}], indirect=True)
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 
@@ -97,6 +100,39 @@ def test_selection_row_paged(mesh_device, rows, page_size):
 
 @MESH
 @PARAMS
+@pytest.mark.parametrize("page_size", [128, 2048])
+def test_selection_row_spread_paged_matches_composed(mesh_device, page_size, monkeypatch):
+    """The one-row decode step on the spread cores translates each core's columns with the user's page-table row."""
+
+    rows, blocks = 1, 16
+    generator = torch.Generator().manual_seed(300 + page_size)
+    table, _ = ref.random_page_table(rows, blocks, generator)
+    ids, _, keep, fill, sentinel = selection_inputs(
+        generator, rows, blocks * page_size, torch.zeros(rows, dtype=torch.int64)
+    )
+    zero_offsets = (torch.arange(2048) % 4).unsqueeze(0)
+    padded = lambda t, width: torch.cat([t, torch.zeros(32 - rows, width, dtype=torch.int64)])
+    d_ids = up(mesh_device, ids.reshape(1, 1, rows, 512), ttnn.uint32)
+    d_off = up(mesh_device, zero_offsets.reshape(1, 1, 1, 2048), ttnn.uint32)
+    d_sent = up(mesh_device, sentinel.reshape(1, 1, 1, 32), ttnn.uint32)
+    d_keep = up(mesh_device, padded(keep, 2080).reshape(1, 1, 32, 2080), ttnn.uint32)
+    d_fill = up(mesh_device, padded(fill, 2080).reshape(1, 1, 32, 2080), ttnn.uint32)
+    d_pt = up(mesh_device, table.reshape(1, 1, 32, blocks), ttnn.int32)
+    unpaged = ref.selection_row_reference(ids, zero_offsets, keep, fill, sentinel)
+    expected = ref.selection_row_paged_reference(unpaged, table, page_size)
+    monkeypatch.setenv(qsa_block.SEL_SPREAD_ENV, "1")
+    spread = u32(qsa_block.selection_row(d_ids, d_sent, d_off, d_keep, d_fill, d_pt, page_size))
+    composed = u32(qsa_block.selection_row_composed(d_ids, d_sent, d_off, d_keep, d_fill, d_pt, page_size))
+    monkeypatch.setenv(qsa_block.SEL_SPREAD_ENV, "0")
+    single = u32(qsa_block.selection_row(d_ids, d_sent, d_off, d_keep, d_fill, d_pt, page_size))
+    assert torch.equal(spread, expected)
+    assert torch.equal(spread, composed)
+    assert torch.equal(spread, single)
+    assert (expected == ref.MASKED).any() and (expected != ref.MASKED).any()
+
+
+@MESH
+@PARAMS
 @pytest.mark.parametrize("rows", [1, 8])
 def test_selection_row_unpaged_unchanged(mesh_device, rows):
     generator = torch.Generator().manual_seed(200 + rows)
@@ -154,7 +190,8 @@ def as_rows(tensor):
 @PARAMS
 @pytest.mark.parametrize("page_size", [32, 64])
 @pytest.mark.parametrize("rows", [1, 8, 32])
-def test_main_tail_paged_writes_land_at_page_rows(mesh_device, rows, page_size):
+def test_main_tail_paged_writes_land_at_page_rows(mesh_device, rows, page_size, monkeypatch):
+    monkeypatch.setenv(qsa_block.MT_ROW_ENV, "0")  # the 32-row block writer, also for one lane
     generator = torch.Generator().manual_seed(300 + rows + page_size)
     blocks = 16
     table, pages = ref.random_page_table(rows, blocks, generator)
@@ -173,8 +210,46 @@ def test_main_tail_paged_writes_land_at_page_rows(mesh_device, rows, page_size):
 
 @MESH
 @PARAMS
+@pytest.mark.parametrize("page_size,blocks", [(128, 16), (2048, 8)])
+@pytest.mark.parametrize("position", [0, 31, 100, 127, 128, 2047, 2048, 4095, 5000])
+def test_main_tail_one_row_paged_matches_unpaged(mesh_device, page_size, blocks, position):
+    capacity = blocks * page_size
+    if position >= capacity:
+        pytest.skip("position past the context")
+    assert qsa_block.mt_row_admits(1, True, None)
+    generator = torch.Generator().manual_seed(500 + page_size + position)
+    table, pages = ref.random_page_table(1, blocks, generator)
+    positions = torch.tensor([position])
+    cache_host = torch.randn(1, 1, capacity, 512, generator=generator).to(torch.bfloat16)
+    pool_host = torch.zeros(1, 1, pages * page_size, 512, dtype=torch.bfloat16)
+    logical = torch.arange(capacity)
+    physical = table[0].to(torch.int64)[logical // page_size] * page_size + logical % page_size
+    pool_host[0, 0, physical] = cache_host[0, 0]
+    state = generator.get_state()
+
+    inputs = main_tail_inputs(mesh_device, generator, 1, positions)
+    cache = up(mesh_device, cache_host, ttnn.bfloat16)
+    flat_query = qsa_block.main_tail(**inputs, kv_cache=cache, lane_rows=capacity)
+    flat = (host(cache), host(inputs["staging"]), host(flat_query))
+
+    generator.set_state(state)
+    inputs = main_tail_inputs(mesh_device, generator, 1, positions)
+    pool = up(mesh_device, pool_host, ttnn.bfloat16)
+    d_pt = up(mesh_device, table.reshape(1, 1, 32, blocks), ttnn.int32)
+    paged_query = qsa_block.main_tail(**inputs, kv_cache=pool, page_table=d_pt, page_size=page_size)
+    gathered = host(pool)[:, :, physical]
+    assert torch.equal(as_rows(gathered), as_rows(flat[0]))
+    assert torch.equal(as_rows(host(pool)[0, 0, :page_size]), as_rows(pool_host[0, 0, :page_size]))  # block 0 untouched
+    assert not torch.equal(as_rows(flat[0]), as_rows(cache_host))
+    assert torch.equal(as_rows(host(inputs["staging"])), as_rows(flat[1]))
+    assert torch.equal(as_rows(host(paged_query)), as_rows(flat[2]))
+
+
+@MESH
+@PARAMS
 @pytest.mark.parametrize("rows", [1, 8])
-def test_main_tail_unpaged_unchanged(mesh_device, rows):
+def test_main_tail_unpaged_unchanged(mesh_device, rows, monkeypatch):
+    monkeypatch.setenv(qsa_block.MT_ROW_ENV, "0")  # the 32-row block writer, also for one lane
     generator = torch.Generator().manual_seed(400 + rows)
     lane_rows = 512
     positions = torch.randint(0, lane_rows, (rows,), generator=generator)

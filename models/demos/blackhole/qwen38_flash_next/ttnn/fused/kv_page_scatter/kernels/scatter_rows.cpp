@@ -9,6 +9,9 @@
 // Runtime args: 0 src, 1 pool, 2 page table addresses, 3 groups, 4 lane, 5 shift, 6 bs, 7 max_blocks, 8 core index,
 // 9 core count, 10 source row offset (a multiple of 32; 0 = the head of the source).  CB 0: one 64-byte aligned region
 // = the 32-row group buffer, then the page table row.
+// DEVICE_POSITION (opt-in): the destination start P is read on device from a UINT32 [1, 1, 1, 1] ROW_MAJOR scalar
+// (TensorAccessorArgs after the page table's; runtime arg 11 = its address), and group g goes to the logical rows
+// [P + 32 * g, P + 32 * g + 32) (P a multiple of 32).  CB 0 then holds one more 64-byte aligned slot for P.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -29,6 +32,10 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr auto pool_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto pt_args = TensorAccessorArgs<pool_args.next_compile_time_args_offset()>();
+#ifdef DEVICE_POSITION
+    constexpr auto pos_args = TensorAccessorArgs<pt_args.next_compile_time_args_offset()>();
+    const auto position = TensorAccessor(pos_args, get_arg_val<uint32_t>(11));
+#endif
     const auto src = TensorAccessor(src_args, src_addr);
     const auto pool = TensorAccessor(pool_args, pool_addr);
     const auto pt = TensorAccessor(pt_args, pt_addr);
@@ -40,12 +47,24 @@ void kernel_main() {
     const uint32_t buffer = (get_write_ptr(0) + 63) & ~63u;
     const uint32_t pt_l1 = buffer + GROUP_ROWS * ROW_BYTES;
     noc_async_read(pt.get_noc_addr(lane, 0), pt_l1, max_blocks * 4);
+#ifdef DEVICE_POSITION
+    const uint32_t pos_l1 = (pt_l1 + max_blocks * 4 + 63) & ~63u;
+    noc_async_read_page(0, position, pos_l1);
+#endif
     noc_async_read_barrier();
     invalidate_l1_cache();
+#ifdef DEVICE_POSITION
+    const uint32_t start = *reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(pos_l1);
+#endif
     const volatile tt_l1_ptr uint32_t* table = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(pt_l1);
     for (uint32_t g = core; g < groups; g += cores) {
         const uint32_t t0 = g * GROUP_ROWS;
+#ifdef DEVICE_POSITION
+        const uint32_t d0 = start + t0;
+        const uint32_t dst0 = table[d0 >> shift] * bs + (d0 & (bs - 1));
+#else
         const uint32_t dst0 = table[t0 >> shift] * bs + (t0 & (bs - 1));
+#endif
         for (uint32_t k = 0; k < GROUP_ROWS; ++k) {
             noc_async_read(src.get_noc_addr(src_row0 + t0 + k, 0), buffer + k * ROW_BYTES, ROW_BYTES);
         }

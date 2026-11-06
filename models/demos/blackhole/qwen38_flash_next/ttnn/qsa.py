@@ -451,9 +451,11 @@ def _index_q_per_device(index_q: torch.Tensor) -> torch.Tensor:
 
     heads = index_q.reshape(INDEX_QUERY_HEADS, INDEX_HEAD_DIM, HIDDEN_SIZE)
     blocks = [
-        heads[device // INDEX_HEAD_STRIDE]
-        if device % INDEX_HEAD_STRIDE == 0
-        else torch.zeros_like(heads[device // INDEX_HEAD_STRIDE])
+        (
+            heads[device // INDEX_HEAD_STRIDE]
+            if device % INDEX_HEAD_STRIDE == 0
+            else torch.zeros_like(heads[device // INDEX_HEAD_STRIDE])
+        )
         for device in range(TP_SIZE)
     ]
     return torch.stack(blocks, dim=0).reshape(TP_SIZE * INDEX_HEAD_DIM, HIDDEN_SIZE)
@@ -1994,6 +1996,33 @@ class Qwen38LanePaging:
         return self.num_pages * self.page_size
 
 
+PAGED_INDEX_WINDOW_ROWS = 128
+
+
+def paged_table_width(allocated_context: int, page_size: int) -> int:
+    """Page-table width W = roundup8(ceil((C + 128) / page_size)): W * page_size >= C + 128, so the indexer's window
+    tile past the last context tile falls on a padding entry (the scratch page)."""
+
+    blocks = -(-(allocated_context + PAGED_INDEX_WINDOW_ROWS) // page_size)
+    return -(-blocks // 8) * 8
+
+
+def validate_index_paging(paging: Qwen38LanePaging, allocated_context: int) -> Qwen38LanePaging:
+    """The paging of the generic chain's KV and index pools: ``page_size`` a power of two in [128, 4096] (one index
+    page = ``page_size / 4`` rows, a whole number of tiles), ``max_blocks`` a multiple of 8 covering
+    ``allocated_context`` plus the index window."""
+
+    paging.validate(allocated_context)
+    if not 128 <= paging.page_size <= 4096:
+        raise ValueError(f"index paging page_size must be a power of two in [128, 4096], got {paging.page_size}")
+    if paging.max_blocks * paging.page_size < allocated_context + PAGED_INDEX_WINDOW_ROWS:
+        raise ValueError(
+            f"index paging max_blocks {paging.max_blocks} x page_size {paging.page_size} must cover the allocated "
+            f"context {allocated_context} plus {PAGED_INDEX_WINDOW_ROWS} window rows"
+        )
+    return paging
+
+
 def lane_kv_offsets(lanes: int, allocated_context: int, *, paged: bool = False) -> list[int]:
     """Row offset of every lane's KV region in the flat cache: ``u * C`` for the active lanes, 0 for idle rows (their
     ids then point into lane 0's region, always in range)."""
@@ -2158,10 +2187,14 @@ class Qwen38TTNNQSALaneConstants:
 
         if parent.paging is None:
             raise ValueError("a QSA lane constants view needs a paged parent")
-        if parent.lanes != MAX_LANES:
-            raise ValueError(f"a QSA lane constants view needs a {MAX_LANES}-lane parent, got {parent.lanes}")
-        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < MAX_LANES:
-            raise ValueError(f"a QSA lane constants view takes 1 <= lanes < {MAX_LANES}, got {lanes!r}")
+        if parent.lanes > MAX_LANES:
+            raise ValueError(
+                f"a QSA lane constants view needs a parent of at most {MAX_LANES} lanes, got {parent.lanes}"
+            )
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < MAX_LANES or lanes > parent.lanes:
+            raise ValueError(
+                f"a QSA lane constants view takes 1 <= lanes <= {parent.lanes} (parent lanes) and < {MAX_LANES}, got {lanes!r}"
+            )
         built = None
         try:
             built = cls.build(
@@ -2791,6 +2824,20 @@ class Qwen38TTNNQSAGenericState:
     compressed_index_cache: Any
     kv_staging: Any
     raw_key_ring: Any
+    # PAGED chain (opt-in): ``packed_kv_cache`` / ``compressed_index_cache`` are the SHARED pools of
+    # :class:`Qwen38TTNNQSAPagedPools` and ``page_table`` the chain's ``[1,1,32,max_blocks]`` int32 table; the
+    # release leaves all three.
+    paging: Qwen38LanePaging | None = None
+    page_table: Any = None
+
+
+@dataclass(frozen=True)
+class Qwen38TTNNQSAPagedPools:
+    """One layer's shared paged pools: ``kv`` ``[1,1,num_pages*page_size,512]`` BF16 ROW_MAJOR and ``index``
+    ``[num_pages,1,page_size/4,128]`` BF16 TILE, zero-initialised."""
+
+    kv: Any
+    index: Any
 
 
 @dataclass(frozen=True)
@@ -2821,6 +2868,13 @@ class Qwen38TTNNQSALaneState:
     # Lanes of the tensors this state holds.  0 = the state owns ``lanes`` lanes; > ``lanes`` = a bucket view over a
     # parent state of ``storage_lanes`` lanes (lanes 0..lanes-1 used; the tensors belong to the parent).
     storage_lanes: int = 0
+    # True: ``packed_kv_cache`` / ``compressed_index_cache`` are the external shared pools (:class:`Qwen38TTNNQSAPagedPools`:
+    # kv ``[1,1,NB*page_size,512]``, index ``[NB,1,page_size/4,128]``), owned by the caller and never released with the
+    # state; ``compressed_index_cache_flat`` is None and the index ops address the pool through the lane page table.
+    pools_shared: bool = False
+    # True: a width view (:meth:`Qwen38TTNNQSA.lane_state_view`) whose per-lane fixed tensors (staging, raw-key ring) are
+    # lane-prefix aliases of ``lanes`` lanes; the caches are the parent's (flat: aliases too, pooled: the pools unchanged).
+    lane_alias: bool = False
 
     @property
     def stored_lanes(self) -> int:
@@ -2838,7 +2892,7 @@ class Qwen38TTNNQSALaneState:
         raw-key ring are lane-prefix aliases shaped for ``lanes`` lanes, where a bucket view keeps the parent's
         tensors at their stored shapes."""
 
-        return self.is_view and not self.pool_rows
+        return self.lane_alias or (self.is_view and not self.pool_rows)
 
 
 # --------------------------------------------------------------------------- lane verify (B lanes x R rows, one tile)
@@ -2854,7 +2908,7 @@ class Qwen38TTNNQSALaneState:
 
 
 def qsa_lane_verify_constant_rows(
-    lanes: int, rows: int, allocated_context: int, storage_lanes: int | None = None
+    lanes: int, rows: int, allocated_context: int, storage_lanes: int | None = None, *, paged: bool = False
 ) -> dict[str, torch.Tensor]:
     """Host images of the lane verify constants (UINT32 rows as int64, the bf16 select tiles as float).
 
@@ -2871,6 +2925,10 @@ def qsa_lane_verify_constant_rows(
     ``storage_lanes`` (default ``lanes``): the lanes of the flat KV cache the rows address.  An MTP lane width view
     runs ``lanes`` lanes on the parent's ``storage_lanes``-lane flat cache, whose scratch rows start after the
     parent's last lane (``scratch_row = storage_lanes * C``); every other constant depends on ``lanes`` alone.
+
+    ``paged`` (shared pools, lane-local ids): the lane offsets of ``block_offsets_lanes`` / ``arange_slots_rows`` and
+    ``scratch_row`` are 0 (:func:`lane_kv_offsets` ``paged=True``); the row page table translates the ids and an
+    inactive lane's writes go through its zero table row to block 0.
     """
 
     lanes = require_lane_count(lanes, label="QSA lane verify lanes")
@@ -2889,7 +2947,9 @@ def qsa_lane_verify_constant_rows(
     draft_of = [row % rows if row < real else rows - 1 for row in range(CHUNK_ROWS)]
     block_lane_of = [row // 2 if row < 2 * lanes else 0 for row in range(CHUNK_ROWS)]
     block_offset = [COMPRESS_RATIO * (row % 2) if row < 2 * lanes else 0 for row in range(CHUNK_ROWS)]
-    offsets = torch.tensor([capacity * lane for lane in lane_of], dtype=torch.int64).reshape(1, 1, CHUNK_ROWS, 1)
+    offsets = torch.tensor([0 if paged else capacity * lane for lane in lane_of], dtype=torch.int64).reshape(
+        1, 1, CHUNK_ROWS, 1
+    )
     expand = torch.zeros(lanes * CHUNK_ROWS, CHUNK_ROWS)
     indicator = torch.zeros(lanes, CHUNK_ROWS, CHUNK_ROWS)
     pick_pooled = torch.zeros(CHUNK_ROWS, lanes * CHUNK_ROWS)
@@ -2907,7 +2967,7 @@ def qsa_lane_verify_constant_rows(
         "draft_of_row": row(draft_of),
         "block_lane_of_row": row(block_lane_of),
         "block_offset_row": row(block_offset),
-        "scratch_row": torch.full((1, 1, 1, CHUNK_ROWS), stored * capacity, dtype=torch.int64),
+        "scratch_row": torch.full((1, 1, 1, CHUNK_ROWS), 0 if paged else stored * capacity, dtype=torch.int64),
         "arange_per_lane": torch.arange(CACHE_WRITE_ROWS, dtype=torch.int64).repeat(lanes).reshape(1, 1, 1, -1),
         "block_offsets_lanes": qsa_row_constants()["block_offsets"].reshape(1, 1, 1, TOKEN_BUDGET) + offsets,
         "arange_slots_rows": torch.arange(SPARSE_INDEX_CAPACITY, dtype=torch.int64).reshape(1, 1, 1, -1) + offsets,
@@ -2918,12 +2978,33 @@ def qsa_lane_verify_constant_rows(
     }
 
 
+def verify_row_page_table_host(lane_rows_host, rows_per_lane: int, lanes: int) -> torch.Tensor:
+    """The verify's per-row page table image: ``lane_rows_host`` int32 ``[32, W]`` (row u = lane u's block ids, 0 =
+    padding) -> int32 ``[1, 1, 32, W]`` whose row r holds lane ``r // rows_per_lane``'s ids; the pad rows (r >=
+    lanes * rows_per_lane) hold lane 0's row (the verify constants' ``lane_of_row``)."""
+
+    lanes = require_lane_count(lanes, label="QSA lane verify lanes")
+    table = torch.as_tensor(lane_rows_host).to(torch.int32)
+    if table.dim() == 4:
+        table = table.reshape(table.shape[2], table.shape[3])
+    if table.dim() != 2 or table.shape[0] != CHUNK_ROWS:
+        raise ValueError(f"the lane page table must be [{CHUNK_ROWS}, W], got {tuple(table.shape)}")
+    if not 1 <= rows_per_lane <= VERIFY_MAX_ROWS or lanes * rows_per_lane > CHUNK_ROWS:
+        raise ValueError(f"QSA lane verify admits 1..{VERIFY_MAX_ROWS} rows per lane and B x R <= {CHUNK_ROWS}")
+    real = lanes * rows_per_lane
+    source = [row // rows_per_lane if row < real else 0 for row in range(CHUNK_ROWS)]
+    return table[source].reshape(1, 1, CHUNK_ROWS, table.shape[1]).contiguous()
+
+
 @dataclass(frozen=True)
 class Qwen38TTNNQSALaneVerifyConstants:
     """Replicated constants of the lane verify for one ``(lanes, rows, allocated_context)`` (see
     :func:`qsa_lane_verify_constant_rows`); ``lanes_of_rows`` is the host tuple the wide indexer's row windows take.
     UINT32 ROW_MAJOR rows and templates; BF16 TILE selects; ``block_offsets_lanes`` is named as the plain lanes'
-    template so :meth:`Qwen38TTNNQSA._materialize_rows_lanes` reads it unchanged (per row here, per lane there)."""
+    template so :meth:`Qwen38TTNNQSA._materialize_rows_lanes` reads it unchanged (per row here, per lane there).
+    PAGED (``paged``, built with ``paging``): the lane offsets are zero (lane-local ids) and ``row_page_table`` (INT32
+    ROW_MAJOR ``[1,1,32,max_blocks]``, host-written in place by :meth:`write_row_page_table`, fixed address) holds
+    lane ``r // R``'s block ids in row r (:func:`verify_row_page_table_host`)."""
 
     lanes: int
     rows: int
@@ -2944,6 +3025,9 @@ class Qwen38TTNNQSALaneVerifyConstants:
     select_compute_config: Any
     # Lanes of the flat KV cache the rows address (0 = ``lanes``): the scratch rows start at ``storage_lanes * C``.
     storage_lanes: int = 0
+    paged: bool = False
+    page_size: int = 0
+    row_page_table: Any = None
 
     @classmethod
     def build(
@@ -2955,9 +3039,12 @@ class Qwen38TTNNQSALaneVerifyConstants:
         rows: int,
         allocated_context: int,
         storage_lanes: int | None = None,
+        paging: Qwen38LanePaging | None = None,
     ) -> "Qwen38TTNNQSALaneVerifyConstants":
         mesh_contract.validate_mesh(mesh_device)
-        host = qsa_lane_verify_constant_rows(lanes, rows, allocated_context, storage_lanes)
+        if paging is not None:
+            paging.validate(allocated_context)
+        host = qsa_lane_verify_constant_rows(lanes, rows, allocated_context, storage_lanes, paged=paging is not None)
         uploaded: list[Any] = []
 
         def upload_uint32(name: str):
@@ -2980,6 +3067,18 @@ class Qwen38TTNNQSALaneVerifyConstants:
             return tensor
 
         try:
+            row_page_table = None
+            if paging is not None:
+                row_page_table = ttnn.from_torch(
+                    torch.zeros(1, 1, CHUNK_ROWS, paging.max_blocks, dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh_device),
+                )
+                uploaded.append(row_page_table)
+                mesh_contract.validate_tensor(row_page_table, placement=TensorPlacement.REPLICATED)
             return cls(
                 lanes=lanes,
                 rows=rows,
@@ -3016,13 +3115,38 @@ class Qwen38TTNNQSALaneVerifyConstants:
                     packer_l1_acc=False,
                 ),
                 storage_lanes=0 if storage_lanes is None or storage_lanes == lanes else int(storage_lanes),
+                paged=paging is not None,
+                page_size=0 if paging is None else paging.page_size,
+                row_page_table=row_page_table,
             )
         except BaseException:
             _deallocate(*uploaded)
             raise
 
+    def write_row_page_table(self, mesh_device, lane_rows_host, keep: list | None = None) -> None:
+        """Host upload of the row page table, in place (outside any trace): ``lane_rows_host`` int32 ``[32, W]`` (row u
+        = lane u's block ids, 0 = padding) expanded by :func:`verify_row_page_table_host`.  ``keep`` collects the host
+        tensor of the upload (it must outlive a replay enqueued without blocking)."""
+
+        if self.row_page_table is None:
+            raise ValueError("the QSA lane verify constants are not paged")
+        host = verify_row_page_table_host(lane_rows_host, self.rows, self.lanes)
+        width = tuple(self.row_page_table.shape)[3]
+        if host.shape[3] != width:
+            raise ValueError(f"the lane page table is {host.shape[3]} wide, the row page table {width}")
+        host_table = ttnn.from_torch(
+            host,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host_table, self.row_page_table)
+        if keep is not None:
+            keep.append(host_table)
+
     def deallocate(self) -> None:
         _deallocate(
+            self.row_page_table,
             self.lane_of_row,
             self.draft_of_row,
             self.block_lane_of_row,
@@ -3123,6 +3247,9 @@ def derive_qsa_lane_verify_inputs(
         raise ValueError("QSA lane verify needs the 32-row chunk constants of the position constants' blocks")
     if lanes.allocated_context != lane_verify.allocated_context:
         raise ValueError("QSA lane and lane verify constants were built for different contexts")
+    paged = lanes.page_table is not None
+    if paged != lane_verify.paged:
+        raise ValueError("QSA lane verify: the lane constants and the verify constants must both be paged or both flat")
     dram = ttnn.DRAM_MEMORY_CONFIG
     u32 = ttnn.uint32
     count, blocks = lanes.lanes, chunk.allocated_compressed_blocks
@@ -3136,21 +3263,50 @@ def derive_qsa_lane_verify_inputs(
         # Per lane: the flat-cache rows of the current block (redirected to the scratch rows when inactive), the
         # next block, the current block's row lookup and the two compressed block indices.
         kv_block_start = ttnn.bitwise_and(position_row, constants.high27_mask, memory_config=dram)
-        own_rows = ttnn.add(kv_block_start, lanes.kv_offsets_row, memory_config=dram)
-        active_rows = ttnn.multiply(own_rows, active_row, memory_config=dram)
-        scratch_rows = ttnn.multiply(lane_verify.scratch_row, inactive_row, memory_config=dram)
-        row_start = ttnn.add(active_rows, scratch_rows, memory_config=dram)
-        row_start_next = ttnn.add(row_start, CACHE_WRITE_ROWS, memory_config=dram)
-        kv_row_start_lanes = tuple(
-            keep(ttnn.slice(row_start, (0, 0, 0, lane), (1, 1, 1, lane + 1), memory_config=dram))
-            for lane in range(count)
-        )
-        kv_row_start_next_lanes = tuple(
-            keep(ttnn.slice(row_start_next, (0, 0, 0, lane), (1, 1, 1, lane + 1), memory_config=dram))
-            for lane in (() if single_row else range(count))
-        )
-        starts = ttnn.slice(row_start, (0, 0, 0, 0), (1, 1, 1, count), memory_config=dram)
+        temporaries = [kv_block_start]
+        if paged:
+            # Shared pools: lane u's physical start of its current and of the next block through the lane page table
+            # (an inactive lane's start is 0 -> block 0); a 32-row block never crosses a page (page_size >= 128).
+            from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
+
+            def page_starts(block_start):
+                return tuple(
+                    keep(start)
+                    for start in qsa_block.paged_lane_row_starts_composed(
+                        block_start, lanes.page_table, lanes.page_size, count, active_row=active_row
+                    )
+                )
+
+            kv_row_start_lanes = page_starts(kv_block_start)
+            if single_row:
+                kv_row_start_next_lanes = ()
+            else:
+                next_block_start = ttnn.add(kv_block_start, CACHE_WRITE_ROWS, memory_config=dram)
+                temporaries.append(next_block_start)
+                kv_row_start_next_lanes = page_starts(next_block_start)
+            if count == 1:
+                starts = kv_row_start_lanes[0]
+            else:
+                starts = ttnn.concat(list(kv_row_start_lanes), dim=3, memory_config=dram)
+                temporaries.append(starts)
+        else:
+            own_rows = ttnn.add(kv_block_start, lanes.kv_offsets_row, memory_config=dram)
+            active_rows = ttnn.multiply(own_rows, active_row, memory_config=dram)
+            scratch_rows = ttnn.multiply(lane_verify.scratch_row, inactive_row, memory_config=dram)
+            row_start = ttnn.add(active_rows, scratch_rows, memory_config=dram)
+            row_start_next = ttnn.add(row_start, CACHE_WRITE_ROWS, memory_config=dram)
+            kv_row_start_lanes = tuple(
+                keep(ttnn.slice(row_start, (0, 0, 0, lane), (1, 1, 1, lane + 1), memory_config=dram))
+                for lane in range(count)
+            )
+            kv_row_start_next_lanes = tuple(
+                keep(ttnn.slice(row_start_next, (0, 0, 0, lane), (1, 1, 1, lane + 1), memory_config=dram))
+                for lane in (() if single_row else range(count))
+            )
+            starts = ttnn.slice(row_start, (0, 0, 0, 0), (1, 1, 1, count), memory_config=dram)
+            temporaries += [own_rows, active_rows, scratch_rows, row_start_next, starts]
         repeated = ttnn.repeat_interleave(starts, repeats=CACHE_WRITE_ROWS, dim=3, memory_config=dram)
+        temporaries.append(repeated)
         kv_read_row = keep(ttnn.add(repeated, lane_verify.arange_per_lane, memory_config=dram))
         kv_read_indices = ttnn.reshape(kv_read_row, (1, 1, count * CACHE_WRITE_ROWS))
         block_index = ttnn.bitwise_right_shift(position_row, 2, memory_config=dram)
@@ -3160,7 +3316,7 @@ def derive_qsa_lane_verify_inputs(
             first = ttnn.slice(source, (0, 0, 0, 0), (1, 1, 1, count), memory_config=dram)
             block_index_i32.append(keep(ttnn.reshape(ttnn.typecast(first, ttnn.int32, memory_config=dram), (count,))))
             _deallocate(first)
-        _deallocate(kv_block_start, own_rows, active_rows, scratch_rows, row_start_next, starts, repeated, block_next)
+        _deallocate(*temporaries, block_next)
 
         # Per lane one-hots over the 32 rows (the lane derive's form): column u of ``arange32_tile op remainder`` kept
         # by the lane indicator, then the row sum; the pool one-hot goes on as the matmul row of the stack.
@@ -3944,29 +4100,66 @@ class Qwen38TTNNQSA:
         self.release_state(state)
         return self.allocate_state()
 
-    def allocate_generic_state(self) -> Qwen38TTNNQSAGenericState:
-        """Allocate the fixed-address caches, staging tile and raw-key ring of the generic body."""
+    def allocate_paged_pools(self, paging: Qwen38LanePaging) -> Qwen38TTNNQSAPagedPools:
+        """Allocate this layer's shared KV and index pools (zeros) for ``paging``."""
 
+        validate_index_paging(paging, self.allocated_context)
+        kv = self._allocate_pair_grouped((1, 1, paging.pool_rows, 2 * HEAD_DIM), layout=ttnn.ROW_MAJOR_LAYOUT)
+        try:
+            index = self._allocate_replicated_tile_zeros(
+                (paging.num_pages, 1, paging.page_size // COMPRESS_RATIO, INDEX_HEAD_DIM)
+            )
+        except BaseException:
+            _deallocate(kv)
+            raise
+        return Qwen38TTNNQSAPagedPools(kv=kv, index=index)
+
+    def allocate_generic_state(
+        self,
+        paging: Qwen38LanePaging | None = None,
+        pools: Qwen38TTNNQSAPagedPools | None = None,
+        page_table: Any = None,
+    ) -> Qwen38TTNNQSAGenericState:
+        """Allocate the fixed-address caches, staging tile and raw-key ring of the generic body.
+
+        With ``paging`` the caches are the shared ``pools`` (not owned) and ``page_table`` the chain's table."""
+
+        if paging is None:
+            if pools is not None or page_table is not None:
+                raise ValueError("QSA generic pools and page table require paging")
+            packed_kv = self._allocate_pair_grouped(
+                (1, 1, self.allocated_context, 2 * HEAD_DIM),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            compressed = self._allocate_replicated_tile_zeros(
+                (1, 1, self.allocated_compressed_blocks + ttnn.TILE_SIZE, INDEX_HEAD_DIM)
+            )
+        else:
+            if pools is None or page_table is None:
+                raise ValueError("QSA paged generic state requires pools and page_table")
+            validate_index_paging(paging, self.allocated_context)
+            packed_kv = pools.kv
+            compressed = pools.index
         epoch = self._next_epoch
         self._next_epoch += 1
         self._live_generic_epochs.add(epoch)
         return Qwen38TTNNQSAGenericState(
             layer_index=self.layer_index,
             epoch=epoch,
-            packed_kv_cache=self._allocate_pair_grouped(
-                (1, 1, self.allocated_context, 2 * HEAD_DIM),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            ),
-            compressed_index_cache=self._allocate_replicated_tile_zeros(
-                (1, 1, self.allocated_compressed_blocks + ttnn.TILE_SIZE, INDEX_HEAD_DIM)
-            ),
+            packed_kv_cache=packed_kv,
+            compressed_index_cache=compressed,
             kv_staging=self._allocate_pair_grouped((1, 1, CACHE_WRITE_ROWS, 2 * HEAD_DIM), layout=ttnn.TILE_LAYOUT),
             raw_key_ring=self._allocate_replicated_tile_zeros((1, 1, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
+            paging=paging,
+            page_table=page_table,
         )
 
     def release_generic_state(self, state: Qwen38TTNNQSAGenericState) -> None:
         self._validate_generic_state(state)
-        _deallocate(state.packed_kv_cache, state.compressed_index_cache, state.kv_staging, state.raw_key_ring)
+        if state.paging is None:
+            _deallocate(state.packed_kv_cache, state.compressed_index_cache, state.kv_staging, state.raw_key_ring)
+        else:
+            _deallocate(state.kv_staging, state.raw_key_ring)
         self._live_generic_epochs.remove(state.epoch)
 
     def reset_generic_state_inplace(self, state: Qwen38TTNNQSAGenericState) -> None:
@@ -3988,13 +4181,22 @@ class Qwen38TTNNQSA:
             raise ValueError(f"QSA generic state belongs to layer {state.layer_index}, expected {self.layer_index}")
         if state.epoch not in self._live_generic_epochs:
             raise ValueError(f"QSA generic state epoch {state.epoch} was not allocated by this module")
+        if state.paging is None:
+            kv_shape = (1, 1, self.allocated_context, 2 * HEAD_DIM)
+            index_shape = (1, 1, self.allocated_compressed_blocks + ttnn.TILE_SIZE, INDEX_HEAD_DIM)
+        else:
+            validate_index_paging(state.paging, self.allocated_context)
+            kv_shape = (1, 1, state.paging.pool_rows, 2 * HEAD_DIM)
+            index_shape = (
+                state.paging.num_pages,
+                1,
+                state.paging.page_size // COMPRESS_RATIO,
+                INDEX_HEAD_DIM,
+            )
+            _require_shape(state.page_table, (1, 1, MAX_LANES, state.paging.max_blocks), "QSA generic page table")
         expected = (
-            ("packed QSA cache", state.packed_kv_cache, (1, 1, self.allocated_context, 2 * HEAD_DIM)),
-            (
-                "compressed index cache",
-                state.compressed_index_cache,
-                (1, 1, self.allocated_compressed_blocks + ttnn.TILE_SIZE, INDEX_HEAD_DIM),
-            ),
+            ("packed QSA cache", state.packed_kv_cache, kv_shape),
+            ("compressed index cache", state.compressed_index_cache, index_shape),
             ("QSA KV staging", state.kv_staging, (1, 1, CACHE_WRITE_ROWS, 2 * HEAD_DIM)),
             ("QSA raw-key ring", state.raw_key_ring, (1, 1, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
         )
@@ -4992,6 +5194,109 @@ class Qwen38TTNNQSA:
             selection = next_state.last_selection
         return Qwen38TTNNQSAResult(output, next_state, selection)
 
+    @staticmethod
+    def _generic_paged(state) -> bool:
+        """True for a PAGED generic chain state (the one-row decode through the chain's page table); False for the
+        flat generic state and for the lane states."""
+
+        return isinstance(state, Qwen38TTNNQSAGenericState) and state.paging is not None
+
+    def _paged_kwargs(self, state) -> dict:
+        """The ``page_table`` / ``page_size`` keywords of the paged one-row decode ops (empty when flat)."""
+
+        if not self._generic_paged(state):
+            return {}
+        return {"page_table": state.page_table, "page_size": state.paging.page_size}
+
+    def _paged_table_kwargs(self, state) -> dict:
+        """The ``page_table`` keyword of ``paged_update_cache`` on the paged index pool (empty when flat): the chain
+        table's row 0 is the user, as the op's batch-0 stick."""
+
+        return {"page_table": state.page_table} if self._generic_paged(state) else {}
+
+    def _paged_selection_ids(self, sparse_indices, state):
+        """The paged one-row decode's selection row: logical token ids -> pool rows through the chain table
+        (sentinels kept); the flat state's row is returned as is."""
+
+        if not self._generic_paged(state):
+            return sparse_indices
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
+
+        physical = qsa_block.paged_rows_composed(sparse_indices, state.page_table, state.paging.page_size)
+        _deallocate(sparse_indices)
+        _require_shape(physical, (1, 1, 1, SPARSE_INDEX_CAPACITY), "paged generic QSA sparse indices")
+        return physical
+
+    def _kv_write_row_start(self, state, position):
+        """``(row, owned)``: the ``update_padded_kv_cache`` start row of the one-row decode's 32-row block and the
+        tensors to release after the write.  Flat: ``P & ~31`` itself.  Paged: the pool row of logical row ``P & ~31``
+        (the chain table's row 0 page lookup, composed on device)."""
+
+        if not self._generic_paged(state):
+            return position.kv_block_start, ()
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
+
+        owned = qsa_block.paged_lane_row_starts_composed(
+            position.kv_block_start, state.page_table, state.paging.page_size, 1
+        )
+        return owned[0], owned
+
+    def _physical_block_row_start(self, state, block_start):
+        """``(row, owned)``: ``block_start`` (uint32 ROW_MAJOR ``[1,1,1,1]``, a logical 32-aligned row) as the pool row
+        through the chain table's row 0, and the tensors to release.  Flat: ``block_start`` itself.  A 32-row block
+        never crosses a page (page_size >= 128), so ``row + 0..31`` are its 32 pool rows."""
+
+        if not self._generic_paged(state):
+            return block_start, ()
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
+
+        owned = qsa_block.paged_lane_row_starts_composed(block_start, state.page_table, state.paging.page_size, 1)
+        return owned[0], owned
+
+    def _paged_indexer_kwargs(self, state) -> dict:
+        """The ``indexer_score_dsa`` keywords of the paged index pool: the logical k is the flat cache's
+        ``blocks + 32`` rows of the user in row 0 of the chain table (empty when flat)."""
+
+        if not self._generic_paged(state):
+            return {}
+        return {
+            "page_table": state.page_table,
+            "paged_block_rows": state.paging.page_size // COMPRESS_RATIO,
+            "paged_user_rows": self.allocated_compressed_blocks + ttnn.TILE_SIZE,
+            "paged_wide": False,
+            "cache_batch_idx": 0,
+        }
+
+    def _paged_selection_rows(self, sparse_indices, state):
+        """The paged prefill's selection rows [1, 1, rows, 2080]: logical token ids -> pool rows through the chain
+        table, one 32-row slice at a time against the table's 32 rows (every row of the table is the user's row;
+        sentinels kept); the flat state's rows are returned as is."""
+
+        if not self._generic_paged(state):
+            return sparse_indices
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
+
+        rows = _shape(sparse_indices)[2]
+        page_size = state.paging.page_size
+        if rows == CHUNK_ROWS:
+            physical = qsa_block.paged_rows_composed(sparse_indices, state.page_table, page_size)
+        else:
+            parts = []
+            for start in range(0, rows, CHUNK_ROWS):
+                piece = ttnn.slice(
+                    sparse_indices,
+                    (0, 0, start, 0),
+                    (1, 1, start + CHUNK_ROWS, SPARSE_INDEX_CAPACITY),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                parts.append(qsa_block.paged_rows_composed(piece, state.page_table, page_size))
+                _deallocate(piece)
+            physical = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            _deallocate(*parts)
+        _deallocate(sparse_indices)
+        _require_shape(physical, (1, 1, rows, SPARSE_INDEX_CAPACITY), "paged QSA chunk sparse indices")
+        return physical
+
     def _write_compressed_index_generic(
         self,
         state: Qwen38TTNNQSAGenericState,
@@ -5040,6 +5345,7 @@ class Qwen38TTNNQSA:
             state.compressed_index_cache,
             rotated_sharded,
             update_idxs_tensor=position.block_index_i32,
+            **self._paged_table_kwargs(state),
         )
         if _tensor_key(result) != _tensor_key(state.compressed_index_cache):
             raise RuntimeError("compressed QSA index update was not in place")
@@ -5073,13 +5379,15 @@ class Qwen38TTNNQSA:
         projections=None,
         *,
         rows: int = 1,
+        paged_kwargs: dict | None = None,
     ):
         """The index linears, then the fused index tail (ttnn/fused/qsa_block.index_tail) in place of the chain after
         them in :meth:`_index_projection` and :meth:`_write_compressed_index_generic`.  With ``projections`` (the
         merged shard of :meth:`_project_merged`, the one-row served path) the linears do not run: the tail reads the
         index query and raw key windows of that shard, which its owner releases.  ``rows`` = the row tile's valid rows:
         1 for the decode step, B for the lanes (``state`` a lane state, ``position`` the lane inputs, the separate
-        linears)."""
+        linears).  ``paged_kwargs`` replaces the generic chain's page keywords (the lanes' table and page size when
+        the lane state holds the shared Index pool)."""
 
         if projections is None:
             index_q_ws = ttnn.linear(
@@ -5114,6 +5422,7 @@ class Qwen38TTNNQSA:
             state.compressed_index_cache,
             index_q_first=index_q_first,
             index_k_first=index_k_first,
+            **{**self._paged_kwargs(state), **(paged_kwargs or {})},
         )
         if projections is None:
             _deallocate(index_q_ws, raw_key_ws)
@@ -5136,6 +5445,7 @@ class Qwen38TTNNQSA:
             chunk_start_idx=self.indexer_chunk_start,
             compute_kernel_config=self.indexer_compute_config,
             seq_shard_axes=[STAGING_AXIS],
+            **self._paged_indexer_kwargs(state),
         )
         pages = self.allocated_compressed_blocks // SCORE_GATHER_PAGE
         if self._trim_score_pages and self._trim_score_pages.admits(local_scores, self.allocated_compressed_blocks):
@@ -5182,14 +5492,24 @@ class Qwen38TTNNQSA:
         return masked
 
     def _materialize_row_fused(
-        self, masked_scores, position, *, rows: int = 1, block_offsets=None, page_table=None, page_size: int = 0
+        self,
+        masked_scores,
+        position,
+        *,
+        rows: int = 1,
+        block_offsets=None,
+        page_table=None,
+        page_size: int = 0,
+        single_user: bool = False,
     ):
         """The top-k, then the fused selection row (ttnn/fused/qsa_block.selection_row) in place of the integer chain
         of :meth:`_materialize_row_generic`.  ``rows`` valid rows; ``block_offsets`` the offsets row(s) the expanded
         ids take (the module's one row by default; the lanes pass their per-lane rows, row u = offsets + u * C).
-        ``page_table`` / ``page_size``: the PAGED selection row (the lanes' page pool, lane-local ids)."""
+        ``page_table`` / ``page_size``: the PAGED selection row (the lanes' page pool, lane-local ids);
+        ``single_user``: the paged one-row decode (row 0 of the chain table), whose search length is read as the flat
+        one-row call's."""
 
-        if os.environ.get("QWEN38_QSA_LIVE", "1") == "1" and rows == 1 and page_table is None:
+        if os.environ.get("QWEN38_QSA_LIVE", "1") == "1" and rows == 1 and (page_table is None or single_user):
             # QWEN38_QSA_LIVE: search (P & ~31) + 32 columns, read on device from kv_block_start each replay; that is at
             # least the live block count (P + 1) >> 2, and the columns past it hold masked finite scores
             block_ids = ttnn.experimental.topk_large_indices(
@@ -5418,6 +5738,7 @@ class Qwen38TTNNQSA:
             chunk_start_idx=self.indexer_chunk_start,
             compute_kernel_config=self.indexer_compute_config,
             seq_shard_axes=[STAGING_AXIS],
+            **self._paged_indexer_kwargs(state),
         )
         # query_tile shares index_query's buffer; the caller releases index_query.
         score_row = ttnn.slice(
@@ -5452,7 +5773,7 @@ class Qwen38TTNNQSA:
             raise RuntimeError(f"masked QSA block scores must be BF16 ROW_MAJOR, got {tensor_metadata(masked)}")
         return masked
 
-    def _materialize_row_generic(self, masked_scores, position: Qwen38TTNNQSAPositionInputs):
+    def _materialize_row_generic(self, masked_scores, position: Qwen38TTNNQSAPositionInputs, state=None):
         # Fixed k; the valid blocks form the sorted prefix because every masked
         # score is below any ReLU score.  Slots >= lo are then overwritten by
         # the position-derived row of tail ids and sentinels.
@@ -5479,6 +5800,7 @@ class Qwen38TTNNQSA:
         _require_shape(sparse_indices, (1, 1, 1, SPARSE_INDEX_CAPACITY), "generic QSA sparse indices")
         if sparse_indices.dtype != ttnn.uint32 or sparse_indices.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(f"sparse QSA indices must be UINT32 ROW_MAJOR, got {tensor_metadata(sparse_indices)}")
+        sparse_indices = self._paged_selection_ids(sparse_indices, state)
         self.mesh_contract.validate_tensor(sparse_indices, placement=TensorPlacement.REPLICATED)
         return sparse_indices
 
@@ -5507,18 +5829,19 @@ class Qwen38TTNNQSA:
         _retag_tensor(stage_row_major, reference=state.packed_kv_cache, shard_dim=1)
         _require_shape(stage_row_major, (1, 1, CACHE_WRITE_ROWS, 2 * HEAD_DIM), "filled QSA KV staging")
         self.mesh_contract.validate_tensor(stage_row_major, placement=TensorPlacement.KV_PAIR_GROUPED, shard_dim=1)
+        row_start, owned_starts = self._kv_write_row_start(state, position)
         result = ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             state.packed_kv_cache,
             stage_row_major,
             self.slot_zero,
-            position.kv_block_start,
+            row_start,
             0,  # layer_idx inside this one-layer cache
             1,  # num_layers
             STAGING_AXIS,
         )
         if _tensor_key(result) != _tensor_key(state.packed_kv_cache):
             raise RuntimeError("row-major QSA KV update was not in place")
-        _deallocate(stage_row_major)
+        _deallocate(stage_row_major, *owned_starts)
 
     def _project_output(self, local_attention, full_hidden):
         # Same o_proj boundary as forward_decode, whose text is pinned verbatim
@@ -5600,7 +5923,7 @@ class Qwen38TTNNQSA:
         self._write_compressed_index_generic(state, raw_key, position, block_start_cos, block_start_sin)
         masked_scores = self._score_blocks_generic(index_query, state, position)
         _deallocate(index_query)
-        sparse_indices = self._materialize_row_generic(masked_scores, position)
+        sparse_indices = self._materialize_row_generic(masked_scores, position, state)
 
         query, gate, key, value = self._main_projection(full_hidden, cos, sin)
         self._write_packed_kv_generic(state, key, value, position)
@@ -5645,12 +5968,16 @@ class Qwen38TTNNQSA:
             masked_scores = self._score_blocks_generic(index_query, state, position)
         _deallocate(index_query)
         if self._selection_row_fused is not None:
-            sparse_indices = self._materialize_row_fused(masked_scores, position)
+            sparse_indices = self._materialize_row_fused(
+                masked_scores, position, **self._paged_kwargs(state), single_user=self._generic_paged(state)
+            )
         else:
-            sparse_indices = self._materialize_row_generic(masked_scores, position)
+            sparse_indices = self._materialize_row_generic(masked_scores, position, state)
 
         if self._main_tail_fused is not None:
-            sparse_query, qg_ws = self._main_tail_step(full_hidden, cos, sin, state, position, projections=merged)
+            sparse_query, qg_ws = self._main_tail_step(
+                full_hidden, cos, sin, state, position, projections=merged, **self._paged_kwargs(state)
+            )
             local_attention = self._sparse_value_attention_fused(
                 sparse_query,
                 qg_ws,
@@ -5985,6 +6312,20 @@ class Qwen38TTNNQSA:
             # rows the per-block loop writes; the view shares the cache's buffer, so the op returns its own tensor id
             # over the same address).
             cache = state.compressed_index_cache
+            if self._generic_paged(state):
+                # the tiles land at the user's logical tile rows from P >> 7 through the chain table
+                from models.demos.blackhole.qwen38_flash_next.ttnn.fused.index_page_fill import index_page_fill
+
+                index_page_fill(
+                    rotated,
+                    cache,
+                    state.page_table,
+                    chunk.kv_block_start,
+                    lane=0,
+                    block_rows=state.paging.page_size // COMPRESS_RATIO,
+                )
+                _deallocate(rotated)
+                return
             blocks_view = ttnn.experimental.view(
                 cache, (_shape(cache)[2] // ttnn.TILE_SIZE, 1, ttnn.TILE_SIZE, INDEX_HEAD_DIM)
             )
@@ -6015,6 +6356,7 @@ class Qwen38TTNNQSA:
                 state.compressed_index_cache,
                 row_sharded,
                 update_idxs_tensor=chunk.block_index_i32[block],
+                **self._paged_table_kwargs(state),
             )
             if _tensor_key(result) != _tensor_key(state.compressed_index_cache):
                 raise RuntimeError("compressed QSA chunk index update was not in place")
@@ -6052,6 +6394,7 @@ class Qwen38TTNNQSA:
                 chunk_start_idx=self.indexer_chunk_start,
                 compute_kernel_config=self.indexer_compute_config,
                 seq_shard_axes=[STAGING_AXIS],
+                **self._paged_indexer_kwargs(state),
             )
             if rows != CHUNK_ROWS:
                 _deallocate(query_tile)
@@ -6177,6 +6520,7 @@ class Qwen38TTNNQSA:
                     chunk_start_idx=self.indexer_chunk_start,
                     compute_kernel_config=self.indexer_compute_config,
                     seq_shard_axes=[STAGING_AXIS],
+                    **self._paged_indexer_kwargs(state),
                 )
                 _deallocate(query_tile)
                 score_tiles.append(
@@ -6264,6 +6608,7 @@ class Qwen38TTNNQSA:
         sparse_indices = ttnn.bitwise_or(kept, chunk.row_fill, memory_config=dram)
         _deallocate(kept)
         _require_shape(sparse_indices, (1, 1, rows, SPARSE_INDEX_CAPACITY), "QSA slab sparse indices")
+        sparse_indices = self._paged_selection_rows(sparse_indices, state)
         if sparse_indices.dtype != ttnn.uint32 or sparse_indices.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(f"sparse QSA indices must be UINT32 ROW_MAJOR, got {tensor_metadata(sparse_indices)}")
         self.mesh_contract.validate_tensor(sparse_indices, placement=TensorPlacement.REPLICATED)
@@ -6275,6 +6620,7 @@ class Qwen38TTNNQSA:
         chunk: Qwen38TTNNQSAChunkInputs,
         constants: Qwen38TTNNQSAChunkConstants,
         live_rows: int | None = None,
+        state=None,
     ):
         rows = chunk.rows
         if (
@@ -6305,6 +6651,7 @@ class Qwen38TTNNQSA:
                 chunk.row_keep_bits,
                 chunk.row_fill,
                 live_rows=live_rows,
+                **self._paged_kwargs(state),
             )
             _deallocate(block_ids)
             _require_shape(sparse_indices, (1, 1, rows, SPARSE_INDEX_CAPACITY), "fused QSA verify sparse indices")
@@ -6325,6 +6672,7 @@ class Qwen38TTNNQSA:
         sparse_indices = ttnn.bitwise_or(kept, chunk.row_fill, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _deallocate(kept)
         _require_shape(sparse_indices, (1, 1, rows, SPARSE_INDEX_CAPACITY), "QSA chunk sparse indices")
+        sparse_indices = self._paged_selection_rows(sparse_indices, state)
         if sparse_indices.dtype != ttnn.uint32 or sparse_indices.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(f"sparse QSA indices must be UINT32 ROW_MAJOR, got {tensor_metadata(sparse_indices)}")
         self.mesh_contract.validate_tensor(sparse_indices, placement=TensorPlacement.REPLICATED)
@@ -6435,6 +6783,21 @@ class Qwen38TTNNQSA:
         _retag_tensor(slab_row_major, reference=state.packed_kv_cache, shard_dim=1)
         _require_shape(slab_row_major, (1, 1, rows, 2 * HEAD_DIM), "row-major QSA chunk KV slab")
         self.mesh_contract.validate_tensor(slab_row_major, placement=TensorPlacement.KV_PAIR_GROUPED, shard_dim=1)
+        if self._generic_paged(state):
+            # P (= kv_block_start: P % 32 == 0 in prefill) is read on device; the rows land in the user's pages
+            from models.demos.blackhole.qwen38_flash_next.ttnn.fused.kv_page_scatter import kv_page_scatter
+
+            kv_page_scatter(
+                slab_row_major,
+                state.packed_kv_cache,
+                state.page_table,
+                lane=0,
+                rows=rows,
+                page_size=state.paging.page_size,
+                position=chunk.kv_block_start,
+            )
+            _deallocate(slab_row_major)
+            return
         result = ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             state.packed_kv_cache,
             slab_row_major,
@@ -6467,10 +6830,14 @@ class Qwen38TTNNQSA:
         if self._slab_attention_fused is None or not is_slab_rows(rows):
             return False
         cache = state.packed_kv_cache
+        # paged: the logical cache length is the page table's width x page size (the pool's rows are NB * page size)
+        logical_rows = (
+            _shape(state.page_table)[3] * state.paging.page_size if self._generic_paged(state) else int(cache.shape[2])
+        )
         return sparse_sdpa_tiled.admits_shapes(
             QUERY_HEADS_PER_DEVICE,
             rows,
-            int(cache.shape[2]),
+            logical_rows,
             int(cache.shape[3]),
             HEAD_DIM,
             BLOCK_TOPK,
@@ -6495,6 +6862,7 @@ class Qwen38TTNNQSA:
             positions_row,
             scale=HEAD_DIM**-0.5,
             config=self._slab_attention_config(rows, state),
+            **self._paged_kwargs(state),
         )
         _deallocate(query_rows)
         _retag_tensor(attention, reference=gate, shard_dim=1)
@@ -6782,7 +7150,7 @@ class Qwen38TTNNQSA:
         else:
             masked_scores = self._score_blocks_chunk(index_query, state, chunk)
             _deallocate(index_query)
-            sparse_indices = self._materialize_rows_chunk(masked_scores, chunk, constants)
+            sparse_indices = self._materialize_rows_chunk(masked_scores, chunk, constants, state=state)
 
         query, gate, key, value = self._main_projection_rows(full_hidden, hidden_tiles, cos, sin, constants)
         if hidden_tiles is not None:
@@ -7076,7 +7444,8 @@ class Qwen38TTNNQSA:
         are rewritten or never gathered), the raw-key ring the open block's raw keys out of the raw history
         (:func:`verify_handoff_ring_select_rows`).  The caches need nothing: the verify path wrote them by position.
         The cache read is the verify body's embedding lookup; every op here is shape-fixed, so one warm covers
-        every P."""
+        every P.  On paged pools the block start goes through the chain table's row 0 on device (the table has no host
+        copy), the same lookup the verify body's KV write uses."""
 
         self._validate_generic_state(state)
         self._validate_verify_state(verify_state)
@@ -7084,14 +7453,37 @@ class Qwen38TTNNQSA:
             raise ValueError(f"QSA verify hand-off needs a non-negative int position, got {position!r}")
         replicate = replicate_tensor_2d_mesh_mapper(self.mesh_device)
         block_start = position - position % CACHE_WRITE_ROWS
-        read_indices = ttnn.from_torch(
-            (torch.arange(CACHE_WRITE_ROWS, dtype=torch.int32) + block_start).reshape(1, 1, CACHE_WRITE_ROWS),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate,
-        )
+        if self._generic_paged(state):
+            logical_start = ttnn.from_torch(
+                torch.full((1, 1, 1, 1), block_start, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate,
+            )
+            physical_start, owned_start = self._physical_block_row_start(state, logical_start)
+            lane_rows = ttnn.from_torch(
+                torch.arange(CACHE_WRITE_ROWS, dtype=torch.int32).reshape(1, 1, 1, CACHE_WRITE_ROWS),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate,
+            )
+            read_row = ttnn.add(lane_rows, physical_start, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            read_indices = ttnn.reshape(read_row, (1, 1, CACHE_WRITE_ROWS))
+            _deallocate(logical_start, lane_rows, *owned_start)
+        else:
+            read_row = None
+            read_indices = ttnn.from_torch(
+                (torch.arange(CACHE_WRITE_ROWS, dtype=torch.int32) + block_start).reshape(1, 1, CACHE_WRITE_ROWS),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate,
+            )
         looked_up = ttnn.embedding(
             read_indices,
             state.packed_kv_cache,
@@ -7107,7 +7499,7 @@ class Qwen38TTNNQSA:
         staged = ttnn.copy(resident, state.kv_staging)
         if staged is not None and _tensor_key(staged) != _tensor_key(state.kv_staging):
             raise RuntimeError("QSA KV staging verify hand-off was not in place")
-        _deallocate(resident, read_indices)
+        _deallocate(resident, read_indices if read_row is None else read_row)
         ring_select = ttnn.from_torch(
             verify_handoff_ring_select_rows(position),
             dtype=ttnn.bfloat16,
@@ -7160,7 +7552,9 @@ class Qwen38TTNNQSA:
         self._validate_generic_state(state)
         self._validate_verify_state(verify_state)
         dram = ttnn.DRAM_MEMORY_CONFIG
-        read_row = ttnn.add(constants.chunk.arange32_lanes, kv_block_start, memory_config=dram)
+        physical_start, owned_start = self._physical_block_row_start(state, kv_block_start)
+        read_row = ttnn.add(constants.chunk.arange32_lanes, physical_start, memory_config=dram)
+        _deallocate(*owned_start)
         read_indices = ttnn.reshape(read_row, (1, 1, CACHE_WRITE_ROWS))
         looked_up = ttnn.embedding(
             read_indices, state.packed_kv_cache, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=dram
@@ -7286,7 +7680,10 @@ class Qwen38TTNNQSA:
             row_sharded = ttnn.to_memory_config(row, self.compressed_row_memory_config)
             _deallocate(picked)
             result = ttnn.experimental.paged_update_cache(
-                state.compressed_index_cache, row_sharded, update_idxs_tensor=block_index
+                state.compressed_index_cache,
+                row_sharded,
+                update_idxs_tensor=block_index,
+                **self._paged_table_kwargs(state),
             )
             if _tensor_key(result) != _tensor_key(state.compressed_index_cache):
                 raise RuntimeError("compressed QSA verify index update was not in place")
@@ -7374,6 +7771,7 @@ class Qwen38TTNNQSA:
             k_first=k_first,
             v_first=v_first,
             live_rows=live_rows,
+            **self._paged_kwargs(state),
         )
         if merged is None:
             _deallocate(k_ws, v_ws)
@@ -7422,13 +7820,22 @@ class Qwen38TTNNQSA:
         # The current block's resident rows, read out of the cache at P & ~31 .. + 31 (the embedding lookup of
         # the RoPE tables), keep rows below P % 32; new row j lands at row P % 32 + j (exact 0/1 select
         # matmul); the whole tile is untilized once and rewritten at P & ~31.
+        read_indices = verify.kv_read_indices
+        read_row = None
+        if self._generic_paged(state):
+            # the lookup rows are the pool rows of the logical block: arange32 + the block's physical start
+            physical_start, owned_start = self._physical_block_row_start(state, verify.chunk.kv_block_start)
+            read_row = ttnn.add(verify.chunk.arange32_lanes, physical_start, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            read_indices = ttnn.reshape(read_row, (1, 1, CACHE_WRITE_ROWS))
+            _deallocate(*owned_start)
         looked_up = ttnn.embedding(
-            verify.kv_read_indices,
+            read_indices,
             state.packed_kv_cache,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        _deallocate(read_row)
         resident = ttnn.unsqueeze_to_4D(looked_up) if len(looked_up.shape) == 3 else looked_up
         _retag_tensor(resident, reference=state.packed_kv_cache, shard_dim=1)
         _require_shape(resident, (1, 1, CACHE_WRITE_ROWS, 2 * HEAD_DIM), "resident QSA KV block rows")
@@ -7471,18 +7878,19 @@ class Qwen38TTNNQSA:
         _deallocate(staging_tiled)
         _retag_tensor(staging_row_major, reference=state.packed_kv_cache, shard_dim=1)
         self.mesh_contract.validate_tensor(staging_row_major, placement=TensorPlacement.KV_PAIR_GROUPED, shard_dim=1)
+        row_start, owned_start = self._physical_block_row_start(state, kv_block_start)
         result = ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             state.packed_kv_cache,
             staging_row_major,
             self.slot_zero,
-            kv_block_start,
+            row_start,
             0,  # layer_idx inside this one-layer cache
             1,  # num_layers
             STAGING_AXIS,
         )
         if _tensor_key(result) != _tensor_key(state.packed_kv_cache):
             raise RuntimeError(f"row-major QSA verify {label} block update was not in place")
-        _deallocate(staging_row_major)
+        _deallocate(staging_row_major, *owned_start)
 
     def forward_verify_generic(
         self,
@@ -7540,7 +7948,9 @@ class Qwen38TTNNQSA:
         )
         masked_scores = self._score_blocks_chunk(index_query, state, verify.chunk, live_rows=live_rows)
         _deallocate(index_query)
-        sparse_indices = self._materialize_rows_chunk(masked_scores, verify.chunk, constants, live_rows=live_rows)
+        sparse_indices = self._materialize_rows_chunk(
+            masked_scores, verify.chunk, constants, live_rows=live_rows, state=state
+        )
 
         if self._rows_fused is not None and verify.position is not None:
             sparse_query, gate, qg_ws, qg_first = self._main_tail_rows_step(
@@ -7566,14 +7976,17 @@ class Qwen38TTNNQSA:
     # and the chunk body above are untouched.
 
     def allocate_lane_state(
-        self, lanes: int, *, kv_scratch_rows: int = 0, pool_rows: int = 0
+        self, lanes: int, *, kv_scratch_rows: int = 0, pool_rows: int = 0, pools: Qwen38TTNNQSAPagedPools | None = None
     ) -> Qwen38TTNNQSALaneState:
         """Allocate the fixed-address caches, staging tiles and raw-key rings of ``lanes`` decode lanes.
 
         ``kv_scratch_rows`` (a multiple of 32) appends that many rows past the last lane's KV region: the MTP lanes
         verify's redirect target for an inactive lane's block writes (the plain lane body never addresses them).
         ``pool_rows`` (a multiple of 32, with no scratch rows): the PAGED plain body's page pool replaces the flat
-        ``[1,1,B*C,512]`` cache."""
+        ``[1,1,B*C,512]`` cache.
+        ``pools``: the EXTERNAL shared pools of the plain lane body (no scratch rows, no ``pool_rows``): the state's
+        K/V and compressed index caches are ``pools.kv`` / ``pools.index`` (not owned, never released with the state,
+        no flat index view); the staging tiles and the raw-key ring stay per lane."""
 
         lanes = require_lane_count(lanes, label="QSA lane count")
         if isinstance(kv_scratch_rows, bool) or type(kv_scratch_rows) is not int or kv_scratch_rows < 0:
@@ -7586,26 +7999,51 @@ class Qwen38TTNNQSA:
             raise ValueError(f"QSA lane pool rows must be a non-negative multiple of {CACHE_WRITE_ROWS}: {pool_rows!r}")
         if pool_rows and kv_scratch_rows:
             raise ValueError("a paged QSA lane state has no KV scratch rows (page 0 is the scratch)")
-        kv_rows = pool_rows if pool_rows else lanes * self.allocated_context + kv_scratch_rows
+        if pools is not None and (kv_scratch_rows or pool_rows):
+            raise ValueError("QSA lane pools replace the state's caches: no KV scratch rows or pool rows with them")
         rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
+        if pools is not None:
+            self._require_pool_shapes(pools)
+            kv_cache, compressed, flat = pools.kv, pools.index, None
+            pool_rows = _shape(pools.kv)[2]
+        else:
+            kv_rows = pool_rows if pool_rows else lanes * self.allocated_context + kv_scratch_rows
+            kv_cache = self._allocate_pair_grouped((1, 1, kv_rows, 2 * HEAD_DIM), layout=ttnn.ROW_MAJOR_LAYOUT)
+            compressed = self._allocate_replicated_tile_zeros((lanes, 1, rows, INDEX_HEAD_DIM))
+            flat = ttnn.experimental.view(compressed, (1, 1, lanes * rows, INDEX_HEAD_DIM))
+            _retag_tensor(flat, reference=compressed, shard_dim=None)
         epoch = self._next_epoch
         self._next_epoch += 1
         self._live_generic_epochs.add(epoch)
-        compressed = self._allocate_replicated_tile_zeros((lanes, 1, rows, INDEX_HEAD_DIM))
-        flat = ttnn.experimental.view(compressed, (1, 1, lanes * rows, INDEX_HEAD_DIM))
-        _retag_tensor(flat, reference=compressed, shard_dim=None)
         return Qwen38TTNNQSALaneState(
             layer_index=self.layer_index,
             epoch=epoch,
             lanes=lanes,
-            packed_kv_cache=self._allocate_pair_grouped((1, 1, kv_rows, 2 * HEAD_DIM), layout=ttnn.ROW_MAJOR_LAYOUT),
+            packed_kv_cache=kv_cache,
             compressed_index_cache=compressed,
             compressed_index_cache_flat=flat,
             kv_staging=self._allocate_pair_grouped((1, lanes, CACHE_WRITE_ROWS, 2 * HEAD_DIM), layout=ttnn.TILE_LAYOUT),
             raw_key_ring=self._allocate_replicated_tile_zeros((1, lanes, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
             kv_scratch_rows=kv_scratch_rows,
             pool_rows=pool_rows,
+            pools_shared=pools is not None,
         )
+
+    @staticmethod
+    def _require_pool_shapes(pools: Qwen38TTNNQSAPagedPools) -> None:
+        """The shared pools' shapes: index ``[NB, 1, page_size/4, 128]`` and K/V ``[1, 1, NB*page_size, 512]``."""
+
+        index_shape = _shape(pools.index)
+        if len(index_shape) != 4 or index_shape[1] != 1 or index_shape[3] != INDEX_HEAD_DIM:
+            raise ValueError(f"QSA index pool must be [NB, 1, page_size/4, {INDEX_HEAD_DIM}], got {index_shape}")
+        num_pages, page_size = index_shape[0], index_shape[2] * COMPRESS_RATIO
+        if page_size % CACHE_WRITE_ROWS:
+            raise ValueError(f"QSA index pool page size must be a multiple of {CACHE_WRITE_ROWS}, got {page_size}")
+        if _shape(pools.kv) != (1, 1, num_pages * page_size, 2 * HEAD_DIM):
+            raise ValueError(
+                f"QSA K/V pool must be {(1, 1, num_pages * page_size, 2 * HEAD_DIM)} for the index pool "
+                f"{index_shape}, got {_shape(pools.kv)}"
+            )
 
     def lane_state_view(self, state: Qwen38TTNNQSALaneState, lanes: int, alias) -> Qwen38TTNNQSALaneState:
         """The first ``lanes`` lanes of a flat MTP lane state (KV scratch rows, not paged) as a width view:
@@ -7615,10 +8053,23 @@ class Qwen38TTNNQSA:
         ``mtp_lanes.lane_prefix_view`` with the widths bound).  The view refuses every lifecycle op."""
 
         self._validate_lane_state(state)
-        if state.is_view or state.pool_rows or state.kv_scratch_rows <= 0:
+        if state.is_view or (not state.pools_shared and (state.pool_rows or state.kv_scratch_rows <= 0)):
             raise ValueError("an MTP lane width view takes the flat parent state with KV scratch rows")
         if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < state.lanes:
             raise ValueError(f"an MTP lane width view takes 1 <= lanes < {state.lanes}, got {lanes!r}")
+        if state.pools_shared:
+            # the shared pools stay as they are (the page table addresses them); only the per-lane tensors are aliased
+            view = replace(
+                state,
+                lanes=lanes,
+                storage_lanes=state.lanes,
+                compressed_index_cache_flat=None,
+                kv_staging=alias(state.kv_staging, lane_dim=1),
+                raw_key_ring=alias(state.raw_key_ring, lane_dim=1),
+                lane_alias=True,
+            )
+            self._validate_lane_state(view)
+            return view
         rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
         compressed = alias(state.compressed_index_cache, lane_dim=0)
         flat = ttnn.experimental.view(compressed, (1, 1, lanes * rows, INDEX_HEAD_DIM))
@@ -7631,6 +8082,7 @@ class Qwen38TTNNQSA:
             compressed_index_cache_flat=flat,
             kv_staging=alias(state.kv_staging, lane_dim=1),
             raw_key_ring=alias(state.raw_key_ring, lane_dim=1),
+            lane_alias=True,
         )
         self._validate_lane_state(view)
         return view
@@ -7651,7 +8103,10 @@ class Qwen38TTNNQSA:
     def release_lane_state(self, state: Qwen38TTNNQSALaneState) -> None:
         self._refuse_lane_view(state, "release_lane_state")
         self._validate_lane_state(state)
-        _deallocate(state.packed_kv_cache, state.compressed_index_cache, state.kv_staging, state.raw_key_ring)
+        if state.pools_shared:
+            _deallocate(state.kv_staging, state.raw_key_ring)
+        else:
+            _deallocate(state.packed_kv_cache, state.compressed_index_cache, state.kv_staging, state.raw_key_ring)
         self._live_generic_epochs.remove(state.epoch)
 
     def reset_lane_state_inplace(self, state: Qwen38TTNNQSALaneState) -> None:
@@ -7716,6 +8171,22 @@ class Qwen38TTNNQSA:
             raise RuntimeError(f"QSA lane KV scratch rows must be whole blocks, got {state.kv_scratch_rows}")
         if state.pool_rows < 0 or state.pool_rows % CACHE_WRITE_ROWS or (state.pool_rows and state.kv_scratch_rows):
             raise RuntimeError(f"QSA lane pool rows must be whole blocks without scratch rows, got {state.pool_rows}")
+        if state.pools_shared:
+            if not state.pool_rows or state.compressed_index_cache_flat is not None:
+                raise RuntimeError("a QSA lane state on shared pools is paged and has no flat index view")
+            self._require_pool_shapes(Qwen38TTNNQSAPagedPools(state.packed_kv_cache, state.compressed_index_cache))
+            if _shape(state.packed_kv_cache)[2] != state.pool_rows:
+                raise RuntimeError(f"QSA lane pool rows {state.pool_rows} differ from the shared K/V pool")
+            index_entries = (("shared index pool", state.compressed_index_cache, _shape(state.compressed_index_cache)),)
+        else:
+            index_entries = (
+                ("compressed lane index cache", state.compressed_index_cache, (cache_lanes, 1, rows, INDEX_HEAD_DIM)),
+                (
+                    "flat compressed lane index cache",
+                    state.compressed_index_cache_flat,
+                    (1, 1, cache_lanes * rows, INDEX_HEAD_DIM),
+                ),
+            )
         expected = (
             (
                 "packed QSA lane cache",
@@ -7727,12 +8198,7 @@ class Qwen38TTNNQSA:
                     2 * HEAD_DIM,
                 ),
             ),
-            ("compressed lane index cache", state.compressed_index_cache, (cache_lanes, 1, rows, INDEX_HEAD_DIM)),
-            (
-                "flat compressed lane index cache",
-                state.compressed_index_cache_flat,
-                (1, 1, cache_lanes * rows, INDEX_HEAD_DIM),
-            ),
+            *index_entries,
             ("QSA lane KV staging", state.kv_staging, (1, cache_lanes, CACHE_WRITE_ROWS, 2 * HEAD_DIM)),
             ("QSA lane raw-key ring", state.raw_key_ring, (1, cache_lanes, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
         )
@@ -7748,7 +8214,8 @@ class Qwen38TTNNQSA:
         for tensor in (state.packed_kv_cache, state.kv_staging):
             self.mesh_contract.validate_tensor(tensor, placement=TensorPlacement.KV_PAIR_GROUPED, shard_dim=1)
         for tensor in (state.compressed_index_cache, state.compressed_index_cache_flat, state.raw_key_ring):
-            self.mesh_contract.validate_tensor(tensor, placement=TensorPlacement.REPLICATED)
+            if tensor is not None:
+                self.mesh_contract.validate_tensor(tensor, placement=TensorPlacement.REPLICATED)
 
     def _validate_fused_lane_inputs(self, inputs, lanes: int) -> None:
         """The five position inputs the fused lane body reads (a full :class:`Qwen38TTNNQSALaneInputs` carries them
@@ -7834,6 +8301,59 @@ class Qwen38TTNNQSA:
                 raise RuntimeError(
                     f"QSA lane input {name} must be {dtype} {layout} {list(shape)}, got {tensor_metadata(tensor)}"
                 )
+
+    @staticmethod
+    def _lane_index_paged(state: Qwen38TTNNQSALaneState, lane_constants: Qwen38TTNNQSALaneConstants) -> bool:
+        """True when the lane state holds the shared Index pool (the index ops then go through the lane page table)."""
+
+        if not state.pools_shared:
+            return False
+        if lane_constants.paging is None or lane_constants.page_table is None:
+            raise ValueError("a QSA lane state on shared pools needs paged lane constants")
+        return True
+
+    def _lane_update_page_table(self, state: Qwen38TTNNQSALaneState, lane_constants, count: int):
+        """``(table, owned)`` for the lane index ``paged_update_cache``: ``None`` on the per-lane cache, else the
+        ``[count, max_blocks]`` int32 ROW_MAJOR table whose row u is lane u's (the op wants one table row per user of
+        its ``[1, count, rows, 128]`` input).  The reshape of the ``[1,1,32,max_blocks]`` lane table is a view, so only
+        the slice below 32 rows is a new tensor (``owned``); the caller releases that one and never the view."""
+
+        if not self._lane_index_paged(state, lane_constants):
+            return None, None
+        full = lane_constants.page_table
+        width = int(full.shape[3])
+        if count == MAX_LANES:
+            sliced, owned = full, None
+        else:
+            sliced = owned = ttnn.slice(full, (0, 0, 0, 0), (1, 1, count, width), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(sliced, ttnn.Shape((count, width))), owned
+
+    def _lane_index_tail_kwargs(self, state: Qwen38TTNNQSALaneState, lane_constants) -> dict:
+        """The ``index_tail`` page keywords of the lane decode (empty on the per-lane index cache): row u of the
+        lane table is lane u's."""
+
+        if not self._lane_index_paged(state, lane_constants):
+            return {}
+        return {"page_table": lane_constants.page_table, "page_size": lane_constants.paging.page_size}
+
+    def _lane_indexer_kwargs(self, state: Qwen38TTNNQSALaneState, lane_constants, *, count: int, wide: bool) -> dict:
+        """The ``indexer_score_dsa`` page keywords over the shared Index pool (empty on the per-lane cache).  The
+        logical k of the wide form is the flat view's ``[1, 1, 32 * (blocks + 32), 128]`` (the table's 32 rows are the
+        users) and ``kv_len`` bounds it to the first ``count`` users; the per-lane form takes ``cache_batch_idx``
+        from its caller."""
+
+        if not self._lane_index_paged(state, lane_constants):
+            return {}
+        rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
+        kwargs = {
+            "page_table": lane_constants.page_table,
+            "paged_block_rows": lane_constants.paging.page_size // COMPRESS_RATIO,
+            "paged_user_rows": rows,
+            "paged_wide": wide,
+        }
+        if wide:
+            kwargs["kv_len"] = count * rows
+        return kwargs
 
     def _write_compressed_index_lanes(
         self,
@@ -7921,12 +8441,16 @@ class Qwen38TTNNQSA:
         _require_shape(users_tiled, (1, count, 1, INDEX_HEAD_DIM), "compressed lane rows as users")
         users_sharded = ttnn.to_memory_config(users_tiled, lane_constants.compressed_rows_memory_config)
         _deallocate(users_tiled)
+        table, owned_table = self._lane_update_page_table(state, lane_constants, count)
         result = ttnn.experimental.paged_update_cache(
-            state.compressed_index_cache, users_sharded, update_idxs_tensor=lanes.block_index_i32
+            state.compressed_index_cache,
+            users_sharded,
+            update_idxs_tensor=lanes.block_index_i32,
+            **({} if table is None else {"page_table": table}),
         )
         if _tensor_key(result) != _tensor_key(state.compressed_index_cache):
             raise RuntimeError("compressed QSA lane index update was not in place")
-        _deallocate(users_sharded)
+        _deallocate(users_sharded, owned_table)
 
     def _score_blocks_lanes(
         self,
@@ -7946,11 +8470,12 @@ class Qwen38TTNNQSA:
         if lane_constants.indexer_form == "wide":
             local_scores = ttnn.experimental.indexer_score_dsa(
                 index_query,
-                state.compressed_index_cache_flat,
+                state.compressed_index_cache if state.pools_shared else state.compressed_index_cache_flat,
                 self.index_gate,
                 chunk_start_idx=count * rows - ttnn.TILE_SIZE,
                 compute_kernel_config=self.indexer_compute_config,
                 seq_shard_axes=[STAGING_AXIS],
+                **self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True),
             )
             for lane in range(count):
                 lane_rows.append(
@@ -7972,6 +8497,7 @@ class Qwen38TTNNQSA:
                     cache_batch_idx=lane,
                     compute_kernel_config=self.indexer_compute_config,
                     seq_shard_axes=[STAGING_AXIS],
+                    **self._lane_indexer_kwargs(state, lane_constants, count=count, wide=False),
                 )
                 lane_rows.append(
                     ttnn.slice(
@@ -8049,12 +8575,17 @@ class Qwen38TTNNQSA:
         _require_shape(sparse_indices, (1, 1, MAX_LANES, SPARSE_INDEX_CAPACITY), "QSA lane sparse indices")
         if sparse_indices.dtype != ttnn.uint32 or sparse_indices.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(f"sparse QSA indices must be UINT32 ROW_MAJOR, got {tensor_metadata(sparse_indices)}")
-        # PAGED: lane-local ids -> pool rows (sentinels kept); the MTP lane verify's constants have no page table
-        if getattr(lane_constants, "page_table", None) is not None:
+        # PAGED: lane-local ids -> pool rows (sentinels kept).  The lane constants' table has lane u's ids in row u; the
+        # lane verify constants carry the per-row table (row r = lane_of(r)'s), the draft (one row per lane) the lanes'.
+        page_table = getattr(lane_constants, "row_page_table", None)
+        if page_table is None:
+            page_table = getattr(lane_constants, "page_table", None)
+        page_size = getattr(lane_constants, "page_size", 0)
+        if page_table is not None:
             from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
 
             local = sparse_indices
-            sparse_indices = qsa_block.paged_rows_composed(local, lane_constants.page_table, lane_constants.page_size)
+            sparse_indices = qsa_block.paged_rows_composed(local, page_table, page_size)
             _deallocate(local)
             _require_shape(sparse_indices, (1, 1, MAX_LANES, SPARSE_INDEX_CAPACITY), "paged QSA lane sparse indices")
         self.mesh_contract.validate_tensor(sparse_indices, placement=TensorPlacement.REPLICATED)
@@ -8384,6 +8915,8 @@ class Qwen38TTNNQSA:
         _retag_tensor(rotated, reference=state.compressed_index_cache, shard_dim=None)
         self.mesh_contract.validate_tensor(rotated, placement=TensorPlacement.REPLICATED)
         _require_shape(rotated, (1, 1, CHUNK_ROWS, INDEX_HEAD_DIM), "rotated QSA lane verify index keys")
+        table, owned_table = self._lane_update_page_table(state, lane_constants, count)
+        table_kwargs = {} if table is None else {"page_table": table}
         for block, block_index in enumerate(inputs.block_index_i32):
             picked = ttnn.matmul(
                 lane_verify.pick_users[block], rotated, memory_config=dram, compute_kernel_config=self.compute_config
@@ -8397,12 +8930,12 @@ class Qwen38TTNNQSA:
             users_sharded = ttnn.to_memory_config(users, lane_constants.compressed_rows_memory_config)
             _deallocate(picked)
             result = ttnn.experimental.paged_update_cache(
-                state.compressed_index_cache, users_sharded, update_idxs_tensor=block_index
+                state.compressed_index_cache, users_sharded, update_idxs_tensor=block_index, **table_kwargs
             )
             if _tensor_key(result) != _tensor_key(state.compressed_index_cache):
                 raise RuntimeError("compressed QSA lane verify index update was not in place")
             _deallocate(users_sharded)
-        _deallocate(rotated)
+        _deallocate(rotated, owned_table)
 
     def _score_blocks_lanes_verify(
         self,
@@ -8410,20 +8943,29 @@ class Qwen38TTNNQSA:
         state: Qwen38TTNNQSALaneState,
         inputs: Qwen38TTNNQSALaneVerifyInputs,
         lane_verify: Qwen38TTNNQSALaneVerifyConstants,
+        lane_constants: Qwen38TTNNQSALaneConstants | None = None,
     ):
-        """The wide indexer once over the lane-major query tile and the flat compressed cache, row r windowed to
+        """The wide indexer once over the lane-major query tile and the flat compressed cache (on shared pools: the
+        Index pool through the lane page table, the table's users bounded to the first ``count``), row r windowed to
         lane_of(r)'s columns (the fused row windows, or the chain's slices), the score all-reduce and the per-row mask.
         """
 
         count, blocks = state.lanes, self.allocated_compressed_blocks
         rows = blocks + ttnn.TILE_SIZE
+        if state.pools_shared:
+            page_kwargs = self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True)
+            cache = state.compressed_index_cache
+        else:
+            page_kwargs = {}
+            cache = state.compressed_index_cache_flat
         local_scores = ttnn.experimental.indexer_score_dsa(
             index_query,
-            state.compressed_index_cache_flat,
+            cache,
             self.index_gate,
             chunk_start_idx=count * rows - ttnn.TILE_SIZE,
             compute_kernel_config=self.indexer_compute_config,
             seq_shard_axes=[STAGING_AXIS],
+            **page_kwargs,
         )
         score_rows = self._lane_score_rows_of(local_scores, lane_verify.lanes_of_rows, count, rows, blocks)
         _deallocate(local_scores)
@@ -8531,7 +9073,16 @@ class Qwen38TTNNQSA:
                 f"QSA lane verify: state {state.lanes}, verify state {lanes}, lane constants {lane_constants.lanes} "
                 f"and lane verify constants {lane_verify.lanes} lanes must agree"
             )
-        if inputs.lanes != lanes or state.kv_scratch_rows < 2 * CACHE_WRITE_ROWS:
+        if state.pools_shared:
+            # the pools have no scratch rows: inactive lanes write block 0 through the zero rows of the tables
+            if not lane_verify.paged or lane_verify.row_page_table is None:
+                raise ValueError("a QSA lane state on shared pools needs paged lane verify constants")
+            self._lane_index_paged(state, lane_constants)
+            if inputs.lanes != lanes:
+                raise ValueError(f"QSA lane verify inputs are for {inputs.lanes} lanes, the state has {lanes}")
+        elif lane_verify.paged:
+            raise ValueError("paged QSA lane verify constants need a lane state on shared pools")
+        elif inputs.lanes != lanes or state.kv_scratch_rows < 2 * CACHE_WRITE_ROWS:
             raise ValueError(
                 f"QSA lane verify inputs are for {inputs.lanes} lanes and the flat cache has {state.kv_scratch_rows} "
                 f"scratch rows; the redirect needs {2 * CACHE_WRITE_ROWS}"
@@ -8549,7 +9100,7 @@ class Qwen38TTNNQSA:
         self._write_compressed_index_lanes_verify(
             state, verify_state, raw_key, block_start_cos, block_start_sin, inputs, lane_constants, lane_verify
         )
-        masked_scores = self._score_blocks_lanes_verify(index_query, state, inputs, lane_verify)
+        masked_scores = self._score_blocks_lanes_verify(index_query, state, inputs, lane_verify, lane_constants)
         _deallocate(index_query)
         sparse_indices = self._materialize_rows_lanes(masked_scores, inputs, constants, lane_verify)
 
@@ -8647,10 +9198,16 @@ class Qwen38TTNNQSA:
         lane_rows = []
         if lane_constants.indexer_form == "wide":
             # A bucket view scores the first ``count`` users of the parent's flat cache: kv_len bounds the keys.
-            view_kwargs = {"kv_len": count * rows} if state.is_view and not state.lane_prefix else {}
+            if state.pools_shared:
+                # The pool's logical k is the table's 32 users; kv_len bounds it to the first ``count``.
+                view_kwargs = self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True)
+                cache = state.compressed_index_cache
+            else:
+                view_kwargs = {"kv_len": count * rows} if state.is_view and not state.lane_prefix else {}
+                cache = state.compressed_index_cache_flat
             local_scores = ttnn.experimental.indexer_score_dsa(
                 query_tile,
-                state.compressed_index_cache_flat,
+                cache,
                 self.index_gate,
                 chunk_start_idx=count * rows - ttnn.TILE_SIZE,
                 compute_kernel_config=self.indexer_compute_config,
@@ -8673,6 +9230,7 @@ class Qwen38TTNNQSA:
                     cache_batch_idx=lane,
                     compute_kernel_config=self.indexer_compute_config,
                     seq_shard_axes=[STAGING_AXIS],
+                    **self._lane_indexer_kwargs(state, lane_constants, count=count, wide=False),
                 )
                 lane_rows.append(
                     ttnn.slice(
@@ -8745,7 +9303,15 @@ class Qwen38TTNNQSA:
         )
         full_hidden = self._all_gather_hidden_lanes_fused(hidden_lanes, count)
         index_query = self._index_tail_step(
-            full_hidden, cos_lanes, sin_lanes, block_cos_lanes, block_sin_lanes, state, lanes, rows=count
+            full_hidden,
+            cos_lanes,
+            sin_lanes,
+            block_cos_lanes,
+            block_sin_lanes,
+            state,
+            lanes,
+            rows=count,
+            paged_kwargs=self._lane_index_tail_kwargs(state, lane_constants),
         )
         masked_scores = self._score_blocks_lanes_fused(index_query, state, lanes, lane_constants)
         _deallocate(index_query)

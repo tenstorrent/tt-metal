@@ -35,6 +35,7 @@ from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prom
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
     PROMPT_FILE,
+    allocate_demo_pages,
     device_params,
     greedy_sampling_params,
 )
@@ -76,12 +77,12 @@ def request_specs(kind: str, count: int, seed: int) -> list[dict]:
     return [{"prompt_len": p, "max_new": n, "arrival": a} for p, n, a in zip(lengths, news, arrivals)]
 
 
-def reference_tokens(vm, prompt_ids: list[int], max_new: int) -> tuple[list[int], float]:
+def reference_tokens(vm, prompt_ids: list[int], max_new: int, page_table: torch.Tensor) -> tuple[list[int], float]:
     """B=1: greedy prefill token t0, then ``max_new - 1`` greedy decode steps; returns (tokens, mean decode s)."""
 
     out, _ = vm.prefill_forward(
         tokens=torch.tensor([prompt_ids], dtype=torch.int32),
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         enable_trace=True,
         prompt_lens=[len(prompt_ids)],
@@ -96,7 +97,7 @@ def reference_tokens(vm, prompt_ids: list[int], max_new: int) -> tuple[list[int]
         out = vm.decode_forward(
             tokens=torch.tensor([[tokens[-1]]], dtype=torch.int32),
             start_pos=[len(prompt_ids) + step - 1],
-            page_table=None,
+            page_table=page_table,
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
@@ -174,13 +175,14 @@ def test_continuous_batch_matches_single_user(
         vm = Qwen38ForCausalLM.initialize_vllm_model(
             SimpleNamespace(_name_or_path=str(checkpoint)), mesh_device, max_batch_size=1, max_seq_len=max_seq_len
         )
+        page_table = allocate_demo_pages(vm, max_seq_len)  # opens the chain, under the warm hook
     model_ready_s = time.perf_counter() - started
     logger.info(f"model ready in {model_ready_s:.1f} s (lane prepare {decoder.timing.get('allocate_s', 0):.1f} s)")
 
     try:
         references, ref_s = [], time.perf_counter()
         for i, (prompt, spec) in enumerate(zip(prompts, specs)):
-            tokens, _ = reference_tokens(vm, prompt, spec["max_new"])
+            tokens, _ = reference_tokens(vm, prompt, spec["max_new"], page_table)
             references.append(tokens)
             logger.info(f"reference {i} (P={len(prompt)}, n={spec['max_new']}): {tokens[:8]}")
         logger.info(f"references took {time.perf_counter() - ref_s:.1f} s")

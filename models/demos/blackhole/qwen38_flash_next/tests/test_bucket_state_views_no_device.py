@@ -348,7 +348,7 @@ def test_build_view_rejects_bad_arguments(fake_build):
     with pytest.raises(ValueError):  # allow-pytest.raises: no-device Python-level check, no device error text to triage
         build_view("mesh", _Contract(), _constants(MAX_LANES, None, paging=False), lanes=VIEW)
     with pytest.raises(ValueError):  # allow-pytest.raises: no-device Python-level check, no device error text to triage
-        build_view("mesh", _Contract(), _constants(VIEW, _Tensor((1,))), lanes=4)
+        build_view("mesh", _Contract(), _constants(VIEW, _Tensor((1,))), lanes=VIEW + 1)
     for lanes in (0, MAX_LANES, True):
         with pytest.raises(  # allow-pytest.raises: no-device Python-level check, no device error text to triage
             ValueError

@@ -24,11 +24,12 @@ def test_on_by_default():
     assert qsa_block.mt_row_enabled({qsa_block.MT_ROW_ENV: "1"})
 
 
-def test_admits_only_the_single_lane_unpaged_decode():
+def test_admits_only_the_single_lane_decode():
     assert qsa_block.mt_row_admits(1, False, None)
     for rows in (2, 8, 32):
         assert not qsa_block.mt_row_admits(rows, False, None)
-    assert not qsa_block.mt_row_admits(1, True, None)
+    assert qsa_block.mt_row_admits(1, True, None)
+    assert not qsa_block.mt_row_admits(8, True, None)
     assert not qsa_block.mt_row_admits(1, False, object())
 
 

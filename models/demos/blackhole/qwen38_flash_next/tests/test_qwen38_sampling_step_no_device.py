@@ -52,11 +52,11 @@ class FakeChain:
         self.log.append(f"write:{token_id}")
         self.row = token_id
 
-    def execute_head(self, residue: int) -> None:
+    def execute_head(self, residue: int, sampled: bool = False) -> None:
         self.log.append(f"head:{residue}")
         self.inputs.append(self.row)
 
-    def execute_tail(self, residue: int) -> None:
+    def execute_tail(self, residue: int, sampled: bool = False) -> None:
         self.log.append(f"tail:{residue}")
         self.tails += 1
         self.row = int(torch.argmax(self.logits().to(torch.float32)))
@@ -86,7 +86,7 @@ class FakeSampling:
         self.chain.log.append("read_row")
         return Qwen38CandidateRow.emulate(self.chain.logits())
 
-    def read_full_logits(self, residue: int) -> torch.Tensor:
+    def read_full_logits(self, residue: int, *, sampled: bool = False) -> torch.Tensor:
         self.full_reads += 1
         self.chain.log.append(f"full_gather:{residue}")
         return self.chain.logits().to(torch.float32)
@@ -409,7 +409,7 @@ class FakeDeviceChain(FakeChain):
         self.sampler_holder = sampler_holder
         self.row_history: list[torch.Tensor] = []  # the candidate row TAIL(t) computed, for the host replay
 
-    def execute_tail(self, residue: int) -> None:
+    def execute_tail(self, residue: int, sampled: bool = False) -> None:
         self.log.append(f"tail:{residue}")
         self.tails += 1
         logits = self.logits()
@@ -613,7 +613,7 @@ class FakeFusedChain(FakeDeviceChain):
     def logits(self) -> torch.Tensor:
         return _ramp_logits()
 
-    def execute_tail(self, residue: int) -> None:
+    def execute_tail(self, residue: int, sampled: bool = False) -> None:
         self.log.append(f"tail:{residue}")
         self.tails += 1
         host_row = Qwen38CandidateRow.emulate(self.logits()).to_host_row()
@@ -743,13 +743,13 @@ def test_device_sampler_epilogue_runs_after_the_row_and_the_host_branch_is_uncha
     capture = inspect.getsource(step.Qwen38SamplingChainExtension.capture_epilogue)
     warm = inspect.getsource(step.Qwen38SamplingChainExtension.warm)
     assert (
-        "self._epilogue(trace_output.logits, token_row_io)" in capture
+        "trace_output.logits, token_row_io, greedy_only=greedy_only" in capture
         and "self._epilogue(logits, token_row_io)" in warm
     )
     loop = inspect.getsource(step.generate_sampled_on_device)
     assert "sampler.write_uniform(request.next_uniform())" in loop and loop.index(
-        "chain.execute_head(residue)"
-    ) < loop.index("sampler.write_uniform") < loop.index("chain.execute_tail(residue)")
+        "chain.execute_head(residue, sampled=sampled)"
+    ) < loop.index("sampler.write_uniform") < loop.index("chain.execute_tail(residue, sampled=sampled)")
     assert (
         "read_candidate_row"
         not in loop.split("def reference_token")[1].split("produced = 0")[1].split("verify_each_step")[0]

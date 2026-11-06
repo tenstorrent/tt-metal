@@ -36,10 +36,11 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import (
     position_generator,
     sample_from_row,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import paged_table_width
 
 LANES = 8
-BLOCK = 64
-TABLE_WIDTH = 512  # ceil(32768 / 64): the lane table's width at block size 64
+BLOCK = 128
+TABLE_WIDTH = 264  # roundup8(ceil((32768 + 128) / 128)): the shared table's width at block size 128
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +62,7 @@ class FakeDecoder:
     parking rule, a replay whose 'device' answer is a function of the lane's own token and position."""
 
     instances: list["FakeDecoder"] = []
+    pack_default = False  # the ``pack_enabled`` the next instance starts with (the knob, after the block-size filter)
 
     def __init__(self, lanes, paging=None, indexer_form=None, **kwargs) -> None:
         self.lanes, self.paging, self.indexer_form = lanes, paging, indexer_form
@@ -69,6 +71,9 @@ class FakeDecoder:
         self.contexts = [None] * lanes
         self.ls = None
         self.warm_logits_gather = False
+        self.shared_pools = kwargs.get("shared_pools", False)
+        self.pack_enabled = type(self).pack_default
+        self.pack_buckets = (128, 256, 512, 1024) if self.pack_enabled else ()
         self.page_table_dirty = False
         self.log: list = []
         self.uploads: list[list[list[int]]] = []
@@ -186,16 +191,19 @@ def _fake_dram(monkeypatch, free_gib: int = 128) -> None:
 
 
 class Rig:
-    def __init__(self, monkeypatch, *, lanes=LANES, block_size=BLOCK, num_blocks=2048, context=ALLOCATED_CONTEXT):
+    def __init__(
+        self, monkeypatch, *, lanes=LANES, block_size=BLOCK, num_blocks=2048, context=ALLOCATED_CONTEXT, free_gib=128
+    ):
         FakeDecoder.instances.clear()
         self.chain = FakeChain()
         self.chain.mesh = "mesh"
         self.order: list[str] = []
         monkeypatch.setattr(vllm_module, "Qwen38PlainLaneDecoder", FakeDecoder)
-        _fake_dram(monkeypatch)
+        _fake_dram(monkeypatch, free_gib)
 
-        def opener(warm_hook):
+        def opener(warm_hook, paging=None):
             self.order.append("open")
+            self.opened_paging = paging
             warm_hook(self.chain)
             self.order.append("opened")
             return self.chain
@@ -204,7 +212,7 @@ class Rig:
         self.lanes, self.block_size, self.num_blocks = lanes, block_size, num_blocks
         self.model.allocate_kv_cache((num_blocks, 1, block_size, 128), None, 12)
         self.decoder = FakeDecoder.instances[-1]
-        self.width = -(-context // block_size)
+        self.width = paged_table_width(context, block_size)
 
     def table_row(self, blocks) -> list[int]:
         return list(blocks) + [0] * (self.width - len(blocks))
@@ -278,12 +286,14 @@ def _three(rig: Rig):
 # -- mode selection and construction ------------------------------------------------------------------------------------
 
 
-def test_max_num_seqs_one_is_the_single_slot_path_and_opens_the_chain(construction) -> None:
-    model = _initialize(construction, max_batch_size=1)
-    assert model.batch_mode is False and model.lanes == 1 and model.chain is construction.chain
-    assert model.decoder is None and "open" in [call[0] for call in construction.calls]
+def test_max_num_seqs_one_is_the_single_slot_path_and_opens_the_chain_in_allocate_kv_cache(construction) -> None:
+    model = _initialize(construction, max_batch_size=1, allocate=False)
+    assert model.batch_mode is False and model.lanes == 1 and model.chain is None and model.decoder is None
+    assert "open" not in [call[0] for call in construction.calls]
+    model.allocate_kv_cache(base.KV_CACHE_SHAPE, None, 12)
+    assert model.chain is construction.chain and model.decoder is None
     opened = [call for call in construction.calls if call[0] == "open"][0][2]
-    assert "warm_hook" not in opened  # the single-slot open is called exactly as before
+    assert "warm_hook" not in opened and opened["paging"].num_pages == base.NUM_BLOCKS
 
 
 @pytest.mark.parametrize("batch", (2, 8, 32))
@@ -319,10 +329,12 @@ def test_the_deferred_open_runs_prepare_as_the_warm_hook_then_captures(construct
     chain = construction.chain
     chain.mesh = "mesh"
     order: list[str] = []
+    opened: dict = {}
 
     def open_chain(constructed, **kwargs):
         assert constructed == "construction" and kwargs["chunked_prefill"] and kwargs["sampling"]
         order.append("open")
+        opened["paging"] = kwargs["paging"]  # the pools are allocated before the warm hook runs
         kwargs["warm_hook"](chain)
         order.append("opened")
         return chain
@@ -330,20 +342,21 @@ def test_the_deferred_open_runs_prepare_as_the_warm_hook_then_captures(construct
     monkeypatch.setattr(vllm_module, "Qwen38TracedChain", base.SimpleNamespace(open=open_chain))
     model = _initialize(construction, max_batch_size=8)
     assert order == [] and FakeDecoder.instances == []
-    assert model.allocate_kv_cache((4096, 1, 64, 128), None, 12) is None
+    assert model.allocate_kv_cache((4096, 1, 128, 128), None, 12) is None
     (decoder,) = FakeDecoder.instances
     assert order == ["open", "opened"] and decoder.log == ["prepare", "capture"]
     assert model.chain is chain and model.decoder is decoder
     assert decoder.lanes == 8 and decoder.indexer_form == "wide" and decoder.warm_logits_gather is True
-    assert (decoder.paging.page_size, decoder.paging.num_pages, decoder.paging.max_blocks) == (64, 4096, 512)
-    assert (model.block_size, model.num_blocks) == (64, 4096)
+    assert (decoder.paging.page_size, decoder.paging.num_pages, decoder.paging.max_blocks) == (128, 4096, 264)
+    assert opened["paging"] == decoder.paging and decoder.shared_pools and decoder.pack_enabled is False
+    assert (model.block_size, model.num_blocks) == (128, 4096)
     assert model.dram["chain_only"]["free_bytes"] == 128 * 2**30 == model.dram["after_capture"]["free_bytes"]
     with expect_error(RuntimeError, "runs once"):
-        model.allocate_kv_cache((4096, 1, 64, 128), None, 12)
+        model.allocate_kv_cache((4096, 1, 128, 128), None, 12)
 
 
-@pytest.mark.parametrize("block_size", (0, 16, 31, 48, 100, 8192))
-def test_block_sizes_that_are_not_a_power_of_two_of_at_least_32_are_refused(
+@pytest.mark.parametrize("block_size", (0, 16, 31, 32, 48, 64, 100, 192, 8192))
+def test_block_sizes_that_are_not_a_power_of_two_of_at_least_128_are_refused(
     monkeypatch, block_size, expect_error
 ) -> None:
     with expect_error(ValueError, "power of two"):
@@ -351,26 +364,16 @@ def test_block_sizes_that_are_not_a_power_of_two_of_at_least_32_are_refused(
     assert FakeDecoder.instances == []  # refused before the decoder (and so the chain) exists
 
 
-@pytest.mark.parametrize("block_size, width", ((32, 1024), (64, 512), (128, 256), (1024, 32)))
+@pytest.mark.parametrize("block_size, width", ((128, 264), (256, 136), (1024, 40), (4096, 16)))
 def test_the_page_table_width_follows_the_block_size(monkeypatch, block_size, width) -> None:
     rig = Rig(monkeypatch, block_size=block_size)
     assert rig.decoder.paging.page_size == block_size and rig.decoder.paging.max_blocks == width
+    assert rig.decoder.shared_pools and rig.decoder.paging == rig.opened_paging
 
 
-@pytest.mark.parametrize(
-    "context, block_size, width",
-    ((8192, 64, 128), (8192, 1024, 8), (8192, 4096, 8), (65536, 64, 1024), (32768, 96, None)),
-)
-def test_batch_max_blocks_rounds_up_to_a_multiple_of_8(context, block_size, width) -> None:
-    if width is None:
-        assert vllm_module.batch_max_blocks(context, block_size) % 8 == 0
-    else:
-        assert vllm_module.batch_max_blocks(context, block_size) == width
-
-
-def test_a_pool_the_free_dram_cannot_hold_is_refused_naming_the_knob(monkeypatch, expect_error) -> None:
-    with expect_error(ValueError, "QWEN38_MAX_TOKENS_ALL_USERS"):
-        Rig(monkeypatch, num_blocks=2_000_000)  # 2M blocks x 64 rows x 12 KiB: far past 128 GiB
+def test_lanes_the_free_dram_cannot_hold_are_refused_naming_the_knob(monkeypatch, expect_error) -> None:
+    with expect_error(ValueError, "lane states need"):
+        Rig(monkeypatch, free_gib=1)  # ~1.05 GB of lane states plus the margin: past 1 GiB (the pools are already out)
     assert FakeDecoder.instances[-1].log == []  # prepare did not run
 
 
@@ -397,6 +400,48 @@ def test_prefill_runs_each_row_on_the_b1_chain_and_imports_into_the_slots_lane(r
     assert len(rig.chain.chunks) == 3  # every prompt had >= 16 rows before its last token: the chunk driver
 
 
+def test_each_row_prefill_writes_the_chain_table_after_the_reset_and_before_its_chunks(rig: Rig) -> None:
+    _three(rig)
+    log = rig.chain.log
+    resets = [i for i, entry in enumerate(log) if entry.startswith("reset:")]
+    tables = [i for i, entry in enumerate(log) if entry.startswith("table:")]
+    chunks = [i for i, entry in enumerate(log) if entry.startswith("chunk_prefill:")]
+    assert len(resets) == len(tables) == len(chunks) == 3
+    assert all(r < t < c for r, t, c in zip(resets, tables, chunks))
+    assert [log[i] for i in tables] == ["table:(5,)", "table:(9, 3)", "table:(20, 11, 7)"]
+
+
+def test_the_batch_prefill_does_not_take_the_pack_when_the_decoder_has_it_disabled(rig: Rig, monkeypatch) -> None:
+    assert rig.decoder.shared_pools and rig.decoder.pack_enabled is False
+    monkeypatch.setattr(
+        rig.model, "_prefill_batch_grouped", lambda *a, **k: pytest.fail("the grouped path ran with the pack off")
+    )
+    rig.prefill([_prompt(20, 5), _prompt(21, 50)], [0, 1], [[1], [2]], greedy_batch_sampling_params(2))
+
+
+def test_the_batch_prefill_takes_the_pack_when_the_decoder_has_it_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(FakeDecoder, "pack_default", True)
+    rig = Rig(monkeypatch)
+    assert rig.decoder.shared_pools and rig.decoder.pack_enabled is True
+    taken = []
+
+    def grouped(prompts, pages, policies, slots):
+        taken.append((len(prompts), list(slots)))
+        return torch.zeros(len(prompts), 1, dtype=torch.int32)
+
+    monkeypatch.setattr(rig.model, "_prefill_batch_grouped", grouped)
+    rig.prefill([_prompt(20, 5), _prompt(21, 50)], [0, 1], [[1], [2]], greedy_batch_sampling_params(2))
+    assert taken == [(2, [0, 1])]
+
+
+def test_release_persistent_capture_releases_the_lanes_before_it_closes_the_chain(rig: Rig) -> None:
+    order: list[str] = []
+    rig.decoder.release = lambda: order.append("decoder")
+    rig.chain.close = lambda: order.append("chain")
+    rig.model.release_persistent_capture()
+    assert order == ["decoder", "chain"]
+
+
 def test_prefill_into_permuted_empty_slots_uses_the_slots_lane(rig: Rig) -> None:
     rig.model.lane_of_slot = [3, 2, 1, 0, 4, 5, 6, 7]  # slot -> lane
     rig.prefill([_prompt(50, 10), _prompt(60, 20)], [1, 3], [[4], [6]], greedy_batch_sampling_params(2))
@@ -414,7 +459,8 @@ def test_prefill_returns_host_logits_without_sampling_params_and_zero_rope_delta
 @pytest.mark.parametrize(
     "overrides, message",
     (
-        ({"start_pos": torch.tensor([3, 0], dtype=torch.int32)}, "position 0"),
+        ({"start_pos": torch.tensor([-1, 0], dtype=torch.int32)}, "prefill start"),
+        ({"start_pos": torch.tensor([20, 0], dtype=torch.int32)}, "prefill start"),
         ({"empty_slots": [1, 1]}, "distinct"),
         ({"empty_slots": [0, 8]}, "distinct slots"),
         ({"empty_slots": [0]}, "one entry per row"),
@@ -458,7 +504,7 @@ def test_a_page_row_longer_than_the_lane_table_is_refused(rig: Rig, expect_error
 
 def test_prefill_needs_enough_blocks_for_the_prompt(rig: Rig, expect_error) -> None:
     with expect_error(ValueError, "needs 3 blocks"):
-        rig.prefill([_prompt(130, 5)], [0], [[1, 2]])
+        rig.prefill([_prompt(260, 5)], [0], [[1, 2]])
 
 
 def test_prefill_into_a_slot_whose_lane_is_still_live_releases_it(rig: Rig) -> None:
@@ -630,9 +676,9 @@ def test_a_start_position_that_is_not_the_lanes_mirror_is_refused_before_the_rep
 
 
 def test_a_decode_row_without_its_block_is_refused(rig: Rig, expect_error) -> None:
-    rig.prefill([_prompt(64, 5)], [0], [[1]], greedy_batch_sampling_params(1))  # exactly one block full
+    rig.prefill([_prompt(128, 5)], [0], [[1]], greedy_batch_sampling_params(1))  # exactly one block full
     with expect_error(ValueError, "needs 2 blocks"):
-        rig.decode([(7, 64, [1])] + [None] * 7)  # the step writes position 64: block index 1 is missing
+        rig.decode([(7, 128, [1])] + [None] * 7)  # the step writes position 64: block index 1 is missing
     assert rig.decoder.steps == []
 
 
@@ -902,7 +948,9 @@ def test_single_slot_mode_ignores_the_batch_hooks_and_keeps_its_refusals(expect_
         model.warmup_model_decode(
             enable_trace=True, kv_cache=None, max_batch_size=2, num_blocks=512, can_sample_on_device=False
         )
-    assert model.allocate_kv_cache((512, 1, 64, 128), None, 12) is None and model.decoder is None
+    with expect_error(RuntimeError, "chain is already open"):  # the single slot never builds a lane pool
+        model.allocate_kv_cache((512, 1, 128, 128), None, 12)
+    assert model.decoder is None
 
 
 # -- the token budget ---------------------------------------------------------------------------------------------------
@@ -926,12 +974,15 @@ def test_token_budget_in_batch_mode_is_capped_by_the_dram_budget(monkeypatch) ->
     monkeypatch.setattr(vllm_module, "LANE_FIXED_PER_LANE_32K", 50 * 2**20)
     monkeypatch.setattr(vllm_module, "POOL_MARGIN_BYTES", 2**30)
     per_token = vllm_module.KV_BYTES_PER_TOKEN
-    assert per_token == 12288
-    free = 4 * 2**30 - 2**30 - 8 * 50 * 2**20 - 2**30
+    assert per_token == 12 * (1024 + 64) == 13056  # K/V row 1024 B + index row (256 B per 4 tokens) per layer
+    # the chain holds no flat caches: the free bytes at any context add them back, 32768 x 13 KiB over the base
+    assert vllm_module.paged_chain_free_bytes(32768) == 4 * 2**30 + 32768 * vllm_module.CONTEXT_BYTES_PER_TOKEN
+    assert vllm_module.paged_chain_free_bytes(65536) == vllm_module.paged_chain_free_bytes(32768)
+    free = 4 * 2**30 + 32768 * 13 * 1024 - 2**30 - 8 * 50 * 2**20 - 2**30
     assert _budget(max_num_seqs=8) == min(MAX_MODEL_LEN * 8, free // per_token)
     assert _budget(max_num_seqs=2) == MAX_MODEL_LEN * 2  # the whole contexts fit
     assert _budget(max_num_seqs=8) < MAX_MODEL_LEN * 8
-    # a bigger context takes its per-token and per-lane context bytes out of the budget
+    # a bigger context takes its per-lane context bytes out of the budget
     smaller = _budget(max_num_seqs=8, max_model_len=65_472) // 8
     assert smaller < _budget(max_num_seqs=8) // 8 or _budget(max_num_seqs=8, max_model_len=65_472) == 0
 

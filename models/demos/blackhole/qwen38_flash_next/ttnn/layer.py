@@ -671,13 +671,14 @@ class Qwen38TTNNDecoderLayer:
             actions.append(("PLE state", state.ple.deallocate))
         _run_cleanup_actions("decoder-layer state", actions)
 
-    def allocate_generic_state(self) -> Qwen38TTNNDecoderLayerGenericState:
-        """Allocate the fixed-address state of the position-generic body."""
+    def allocate_generic_state(self, paging=None, pools=None, page_table=None) -> Qwen38TTNNDecoderLayerGenericState:
+        """Allocate the fixed-address state of the position-generic body (``paging`` / ``pools`` / ``page_table``:
+        the shared paged caches of an attention layer, see ``Qwen38TTNNQSA.allocate_generic_state``)."""
 
         if isinstance(self.attention, Qwen38TTNNGDN):
             attention = self.attention.allocate_state()
         else:
-            attention = self.attention.allocate_generic_state()
+            attention = self.attention.allocate_generic_state(paging, pools, page_table)
         ple = None
         try:
             ple = None if self.ple is None else self.ple.allocate_state()
@@ -1732,17 +1733,23 @@ class Qwen38TTNNDecoderLayer:
             raise ValueError(f"lane MoE must be a rows-{lanes} instance over this layer's weights")
         return lanes
 
-    def allocate_lane_state(self, lanes: int, *, pool_rows: int = 0) -> Qwen38TTNNDecoderLayerLaneState:
+    def allocate_lane_state(
+        self, lanes: int, *, pool_rows: int = 0, pools: qsa_module.Qwen38TTNNQSAPagedPools | None = None
+    ) -> Qwen38TTNNDecoderLayerLaneState:
         """Allocate this layer's B-lane buffers before any capture: the lane attention state, the PLE lanes state,
         the rows-B MoE and (a QSA layer below 32 lanes) the persistent attention rows.  ``pool_rows``: a QSA layer's
-        PAGED KV pool rows (0: the flat per-lane cache)."""
+        PAGED KV pool rows (0: the flat per-lane cache).  ``pools``: a QSA layer's EXTERNAL shared pools (the lane caches
+        are the pools; no ``pool_rows``)."""
 
         lanes = require_lane_count(lanes, label="decoder-layer lanes")
-        attention = (
-            self.attention.allocate_lane_state(lanes, pool_rows=pool_rows)
-            if pool_rows and isinstance(self.attention, Qwen38TTNNQSA)
-            else self.attention.allocate_lane_state(lanes)
-        )
+        if pools is not None and pool_rows:
+            raise ValueError("lane pools replace the pool rows: pass one of them")
+        if isinstance(self.attention, Qwen38TTNNQSA) and pools is not None:
+            attention = self.attention.allocate_lane_state(lanes, pools=pools)
+        elif pool_rows and isinstance(self.attention, Qwen38TTNNQSA):
+            attention = self.attention.allocate_lane_state(lanes, pool_rows=pool_rows)
+        else:
+            attention = self.attention.allocate_lane_state(lanes)
         ple = None
         moe = None
         attention_rows = None
