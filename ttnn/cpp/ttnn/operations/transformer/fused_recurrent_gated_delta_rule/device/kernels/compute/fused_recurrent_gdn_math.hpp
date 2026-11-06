@@ -35,7 +35,7 @@
 // Every pass waits for its inputs and never pops them; decode_token pops the CBs internal to the token (ecol32,
 // ebc16, r16, u16) and, with pop_inputs, the per-token inputs and S_cur (never ones32).
 //
-// The SFPU helpers are K1's fused_recurrent_gdn_sfpu.hpp (namespace gdn_decode_sfpu); nothing else touches the SFPU.
+// The SFPU work is fused_recurrent_gdn_sfpu.hpp (namespace gdn_decode_sfpu): compositions of compute-API ops only.
 
 #pragma once
 
@@ -228,14 +228,14 @@ void vector_pass(uint32_t cb_r16, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t c
         copy_tile(cb_r16, j, 0);
         copy_tile(cb_v16, j, 1);
         copy_tile(cb_ebc16, 0, 2);
-        gdn_decode_sfpu::mul_col_bcast_band0(0, 2, 0);
-        gdn_decode_sfpu::sub_dst<4>(1, 0);
-        gdn_decode_sfpu::mul_col_bcast_band0(1, 2, 1);
-        gdn_decode_sfpu::zero_rows_from_1(1);
-        gdn_decode_sfpu::move_row2_to_row0(0);
-        gdn_decode_sfpu::copy_dst<4>(3, 1);
-        gdn_decode_sfpu::mul_col_bcast_band0(3, 2, 2);
-        gdn_decode_sfpu::add_dst<4>(0, 3);
+        gdn_decode_sfpu::mul_band0_by(0, 2, 0);  // e r_k (row 0), e r_q (row 2)
+        gdn_decode_sfpu::sub_rows4(1, 0);        // v - e r_k
+        gdn_decode_sfpu::mul_band0_by(1, 2, 1);  // u = beta (v - e r_k)
+        gdn_decode_sfpu::zero_rows_from_1(1);    // the padding rows of u16 exactly zero
+        gdn_decode_sfpu::move_row2_to_row0(0);   // e r_q to the output row
+        gdn_decode_sfpu::copy_rows4(3, 1);
+        gdn_decode_sfpu::mul_band0_by(3, 2, 2);  // c u
+        gdn_decode_sfpu::add_rows4(0, 3);        // o = e r_q + c u
         tile_regs_commit();
         tile_regs_wait();
         pack_init(cb_u16);
@@ -274,14 +274,14 @@ void read_vector_pass(
         copy_init(cb_v16);  // 16x32 tiles
         copy_tile(cb_v16, j, 1);
         copy_tile(cb_ebc16, 0, 2);
-        gdn_decode_sfpu::mul_col_bcast_band0(0, 2, 0);
-        gdn_decode_sfpu::sub_dst<4>(1, 0);
-        gdn_decode_sfpu::mul_col_bcast_band0(1, 2, 1);
-        gdn_decode_sfpu::zero_rows_from_1(1);
-        gdn_decode_sfpu::move_row2_to_row0(0);
-        gdn_decode_sfpu::copy_dst<4>(3, 1);
-        gdn_decode_sfpu::mul_col_bcast_band0(3, 2, 2);
-        gdn_decode_sfpu::add_dst<4>(0, 3);
+        gdn_decode_sfpu::mul_band0_by(0, 2, 0);  // e r_k (row 0), e r_q (row 2)
+        gdn_decode_sfpu::sub_rows4(1, 0);        // v - e r_k
+        gdn_decode_sfpu::mul_band0_by(1, 2, 1);  // u = beta (v - e r_k)
+        gdn_decode_sfpu::zero_rows_from_1(1);    // the padding rows of u16 exactly zero
+        gdn_decode_sfpu::move_row2_to_row0(0);   // e r_q to the output row
+        gdn_decode_sfpu::copy_rows4(3, 1);
+        gdn_decode_sfpu::mul_band0_by(3, 2, 2);  // c u
+        gdn_decode_sfpu::add_rows4(0, 3);        // o = e r_q + c u
         tile_regs_commit();
         tile_regs_wait();
         pack_init(cb_u16);
@@ -294,14 +294,14 @@ void read_vector_pass(
 }
 
 // Update pass: S_next[i, j] <- e * S_cur[i, j] + kT16[i] x u16[j], groups of up to kUpdateGroup (= 4) S tiles per
-// acquire: ecol32 is copied into slot 0 and its [0, 0] parked in an SFPU register (load_scalar), the exact seeds are
-// copied from the utd S_cur into slots 0..3, each is decayed by the parked e (mul_loaded_scalar<32>, bit-identical to
-// the column broadcast of a uniform column), then the rank-1 products accumulate onto the seeded slots. With
-// emit_state every slot is also packed to state_out. s_cur and s_next are state CBs; the pass touches their utd ids
-// only (the mm views are never pushed or popped).
-// The outputs are reserved, packed (indices relative to the reservation; the (i, j) order is sequential) and pushed
-// per acquire group, so a writer can stream the state tiles while the pass runs. Waits kT16 (Kt), u16 (Vt), S_cur
-// (Kt*Vt), ecol32 (1); pushes S_next (Kt*Vt in total) and, with emit_state, state_out (Kt*Vt in total).
+// acquire: ecol32 is copied into slot 0 and its [0, 0] parked in an SFPU register (sfpu_bcast_scalar_load), the exact
+// seeds are copied from the utd S_cur into slots 0..3, each is decayed by the parked e (sfpu_mul_bcast_scalar,
+// bit-identical to the column broadcast of a uniform column), then the rank-1 products accumulate onto the seeded
+// slots. With emit_state every slot is also packed to state_out. s_cur and s_next are state CBs; the pass touches their
+// utd ids only (the mm views are never pushed or popped). The outputs are reserved, packed (indices relative to the
+// reservation; the (i, j) order is sequential) and pushed per acquire group, so a writer can stream the state tiles
+// while the pass runs. Waits kT16 (Kt), u16 (Vt), S_cur (Kt*Vt), ecol32 (1); pushes S_next (Kt*Vt in total) and, with
+// emit_state, state_out (Kt*Vt in total).
 template <uint32_t Kt, uint32_t Vt>
 void update_pass(
     uint32_t cb_kT16,
@@ -332,12 +332,13 @@ void update_pass(
             tile_regs_acquire();
             copy_init(cb_s_cur);  // 32x32 utd tiles: ecol32 and S_cur alike
             copy_tile(cb_ecol32, 0, 0);
-            gdn_decode_sfpu::load_scalar(0);  // e -> SFPU register; slot 0 is free again
+            ckernel::sfpu_bcast_scalar_init();
+            ckernel::sfpu_bcast_scalar_load(0);  // e parked in the SFPU; slot 0 is free again
             for (uint32_t jj = 0; jj < nn; jj++) {
                 copy_tile(cb_s_cur, i * Vt + j0 + jj, jj);
             }
             for (uint32_t jj = 0; jj < nn; jj++) {
-                gdn_decode_sfpu::mul_loaded_scalar<32>(jj);
+                ckernel::sfpu_mul_bcast_scalar(jj);  // the decay, bit-identical to a uniform column broadcast
             }
             matmul_init(cb_kT16, cb_u16, 0);
             for (uint32_t jj = 0; jj < nn; jj++) {

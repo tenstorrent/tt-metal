@@ -725,7 +725,9 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathConstantsPass) {
                 b_rows &= bits == std::bit_cast<uint32_t>(x.beta);
             } else if (col == 0 && r < 12) {
                 c_rows &= bits == std::bit_cast<uint32_t>(c_dev);
-            } else {
+            } else if (r >= 12) {
+                // rows 12..15 are zero; the other columns of rows 0..11 carry the sources' columns (the band copies
+                // of build_ebc16), which no consumer reads: the band broadcast takes column 0 and masks the rest
                 rest_zero &= bits == 0u;
             }
         }
@@ -744,7 +746,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathConstantsPass) {
     EXPECT_TRUE(e_rows) << "ebc16 rows 0-3 of column 0 are not e";
     EXPECT_TRUE(b_rows) << "ebc16 rows 4-7 of column 0 are not beta";
     EXPECT_TRUE(c_rows) << "ebc16 rows 8-11 of column 0 are not one value c";
-    EXPECT_TRUE(rest_zero) << "ebc16 has non-zero bits outside column 0 rows 0-11";
+    EXPECT_TRUE(rest_zero) << "ebc16 rows 12-15 are not zero";
     EXPECT_LT(c_err_scaled, 2e-3);
     EXPECT_TRUE(reps_identical(res.out_words[0], reps)) << "constants pass is not bit-identical across repetitions";
     log_info(
