@@ -8,7 +8,9 @@ MoEBlock's forward runs them (each in a call's own L1 arena, freed after).
 A case is a model (the block tests' MODELS: GLM-5.3, Kimi-K3, DeepSeek V4.1-Flash) on a mesh at a chunk, with the
 expected device times of the experts + combine. A routing is how the tokens spread over the experts:
   * uniform: random router weights, a near-zero bias;
-  * zipf: a router bias falling as rank^-1.2 over a random order of the experts (a few experts take most tokens).
+  * zipf: a router bias falling as rank^-1.2 over a random order of the experts (a few experts take most tokens);
+  * hotchip: a flatter bias (rank^-0.8) with the top ranks all on one chip's experts: on DeepSeek V4.1-Flash 8x4 5120
+    the hottest chip gets ~3.7x the mean chip's rows (zipf: ~2.4x), on the sigmoid-routed models ~7x (zipf: ~3.5x).
 
 Weights: seeded random, one chip's experts repeated on every chip (all distinct experts would take the host ~40-120 GB:
 a row sent to the right local expert on the wrong chip is not caught by the combine's check; it is in the block's
@@ -37,7 +39,7 @@ SNAP = 2.0**-14
 CALLS = 10  # (determinism calls; perf: op_checks.PERF_RUNS)
 SAMPLE = 64  # tokens a chip checked against torch
 PCC = 0.99
-ROUTINGS = ("uniform", "zipf")
+ROUTINGS = ("uniform", "zipf", "hotchip")
 
 
 # ---------------------------------------------------------------------------------------------------- test configs
@@ -85,15 +87,23 @@ PARAMS = pytest.mark.parametrize(ARGS, _params(ROUTINGS), indirect=INDIRECT)
 CASE_PARAMS = pytest.mark.parametrize(ARGS, _params((None,)), indirect=INDIRECT)
 
 
-def _bias(E, routing, seed):
-    """The router's bias for a routing (the pick is on score + bias; the gate weights are the scores alone)."""
+def _bias(E, routing, seed, chips):
+    """The router's bias for a routing (the pick is on score + bias; the gate weights are the scores alone). Chip c
+    holds experts [c E/chips, (c + 1) E/chips)."""
     g = torch.Generator().manual_seed(seed)
     if routing == "uniform":
         return torch.randn(E, generator=g) * 0.01
-    assert routing == "zipf", routing
     rank = torch.empty(E)
-    rank[torch.randperm(E, generator=g)] = torch.arange(1, E + 1, dtype=torch.float32)
-    return 0.5 * rank**-1.2
+    if routing == "zipf":
+        rank[torch.randperm(E, generator=g)] = torch.arange(1, E + 1, dtype=torch.float32)
+        return 0.5 * rank**-1.2
+    assert routing == "hotchip", routing
+    epc = E // chips
+    hot = int(torch.randint(chips, (1,), generator=g))
+    order = torch.randperm(E, generator=g)
+    order = torch.cat([hot * epc + torch.randperm(epc, generator=g), order[(order // epc) != hot]])
+    rank[order] = torch.arange(1, E + 1, dtype=torch.float32)
+    return 0.5 * rank**-0.8
 
 
 def _q4(w):
@@ -194,7 +204,7 @@ class BlockStages:
         arena lives only while the ops run, as in MoEBlock's forward (any other op's static CBs clash with it)."""
         blk = self.block
         if routing not in self.head_w:
-            bias = _bias(self.E, routing, self.case.seed + ROUTINGS.index(routing))
+            bias = _bias(self.E, routing, self.case.seed + ROUTINGS.index(routing), self.N)
             self.head_w[routing] = mb.prepare_fused_head_weights(
                 *self.hw.head, ttnn.from_torch(bias, dtype=ttnn.float32), resources=self.res, dtypes=self.dtypes,
                 accumulators=blk.accumulators,
