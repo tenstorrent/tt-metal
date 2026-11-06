@@ -311,8 +311,8 @@ void FabricFirmwareInitializer::init(
         return;
     }
 
-    // Mock: compile only, to warm the erisc kernel cache. Everything past the compile is device
-    // I/O that MockChip discards.
+    // Mock: compile and finalize only, to warm the erisc kernel cache and catch a router that overflows its kernel
+    // config buffer, as configure_fabric would on silicon. Everything past that is device I/O that MockChip discards.
     if (descriptor_->is_mock_device()) {
         const auto fabric_manager = descriptor_->fabric_manager();
         if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
@@ -565,6 +565,9 @@ void FabricFirmwareInitializer::compile_fabric_only() {
     fabric_programs_.resize(devices_.size());
     for (size_t i = 0; i < devices_.size(); ++i) {
         fabric_programs_[i] = compile_fabric(devices_[i]);
+        if (fabric_programs_[i]) {
+            fabric_programs_[i]->impl().finalize_offsets(devices_[i]);
+        }
     }
 }
 

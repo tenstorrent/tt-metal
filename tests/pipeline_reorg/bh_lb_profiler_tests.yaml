@@ -20,6 +20,15 @@
   team: runtime
   budget_type: profiler
 
+- name: BH streaming profiler torus routers fit (mock Galaxy)
+  cmd: pytest tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_torus_routers_fit
+  skus:
+    bh_loudbox:
+      timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler
+
 - name: BH LoudBox streaming profiler fabric overhead
   cmd: pytest tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_fabric_overhead tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_fabric_sync_check tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_fabric_eth_zones
   skus:

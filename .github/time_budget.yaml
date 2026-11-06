@@ -280,7 +280,7 @@ runtime:
     bh_p150b_civ2: 360
     bh_loudbox: 25
     wh_galaxy: 15
-    bh_galaxy: 27  # +10: streaming profiler torus router check
+    bh_galaxy: 17
   profiler:
     wh_llmbox: 60
     wh_galaxy: 50
@@ -288,7 +288,7 @@ runtime:
     wh_n300_civ2: 52
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
-    bh_loudbox: 20
+    bh_loudbox: 25  # +5: streaming profiler torus router fit check (mock Galaxy)
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
