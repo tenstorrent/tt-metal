@@ -55,6 +55,7 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         args.w.tensor_spec(),
         args.w_router.tensor_spec(),
         args.actual_start.has_value(),
+        args.metadata.has_value(),
         attrs.loop,
         attrs.all_loops);
 }
@@ -102,6 +103,29 @@ void FusedHeadDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         args.actual_start.has_value() == args.actual_end.has_value(),
         "fused_head: a padded chunk takes both actual_start and actual_end");
+    TT_FATAL(
+        !(args.metadata.has_value() && args.actual_start.has_value()),
+        "fused_head: a padded forward as actual_start / actual_end or as metadata, not both");
+    TT_FATAL(
+        attrs.config.shape.fwd_chunks == 1 || !args.actual_start.has_value(),
+        "fused_head: a forward of {} chunks takes the forward's metadata words (one chunk's actual_start / actual_end "
+        "cannot describe it)",
+        attrs.config.shape.fwd_chunks);
+    if (args.metadata) {
+        check_dram(*args.metadata, "metadata");
+        const uint32_t fw = attrs.config.shape.fwd_chunks, words = fw == 1 ? 3 : 2 + 3 * fw;
+        TT_FATAL(
+            args.metadata->dtype() == DataType::UINT32 && args.metadata->logical_volume() >= words &&
+                !args.metadata->is_sharded(),
+            "fused_head: the forward's metadata is {} uint32 words (DRAM interleaved), got {} of {} elements",
+            words,
+            args.metadata->dtype(),
+            args.metadata->logical_volume());
+        TT_FATAL(
+            args.metadata->buffer()->aligned_page_size() * args.metadata->buffer()->num_pages() >= 4 * words &&
+                args.metadata->buffer()->num_pages() == 1,
+            "fused_head: the forward's metadata words must be one page");
+    }
     for (const auto* v : {&args.actual_start, &args.actual_end}) {
         if (*v) {
             check_dram(**v, "actual_start / actual_end");
@@ -163,7 +187,8 @@ HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& a)
     set(SRC_TABLE, &a.table);
     set(SRC_PLAN, &a.plan);
     set(SRC_ARENA, &attrs.arena);
-    set(SRC_START, a.actual_start ? &*a.actual_start : nullptr);
+    set(SRC_START, a.actual_start ? &*a.actual_start : (a.metadata ? &*a.metadata : nullptr));
+    b.meta = a.metadata.has_value();
     set(SRC_END, a.actual_end ? &*a.actual_end : nullptr);
     for (size_t i = 0; i < attrs.words.size(); ++i) {
         b.addresses[SRC_WORD0 + i] = attrs.words[i];

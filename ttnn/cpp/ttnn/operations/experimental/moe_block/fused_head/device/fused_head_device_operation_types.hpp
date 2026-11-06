@@ -72,6 +72,10 @@ struct FusedHeadInputs {
     // replicated), read on device each call; the chunk in main's rotated layout over the SP rows. Padding tokens are
     // not routed (no route words, not planned). Absent: every row is real.
     std::optional<Tensor> actual_start, actual_end;
+    // Or the forward's metadata words (common/prefill/prefill_chunk.py: at forward_chunks 1 (slot, start, end), above
+    // {num_chunks, 0} + forward_chunks (slot, start, end) records; one uint32 DRAM tensor, replicated), read on device
+    // every call: MoEBlockConfig.forward_chunks chunks packed in the forward, each its own real rows.
+    std::optional<Tensor> metadata;
 };
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

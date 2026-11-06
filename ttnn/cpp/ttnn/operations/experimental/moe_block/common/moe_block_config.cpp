@@ -110,6 +110,11 @@ void MoEBlockConfig::check() const {
         plan_tokens(),
         splits(),
         loops());
+    TT_FATAL(
+        forward_chunks >= 1 && forward_chunks <= 8 && chunk_tokens % forward_chunks == 0,
+        "moe_block: a forward of {} tokens as {} chunks (1 .. 8, whole chunks)",
+        chunk_tokens,
+        forward_chunks);
     (void)snap_bits();
 }
 

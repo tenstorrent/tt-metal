@@ -132,6 +132,7 @@ void bind_config(nb::module_& mod) {
         .def_rw("token_loops", &MoEBlockConfig::token_loops)
         .def_rw("chunk_splits", &MoEBlockConfig::chunk_splits)
         .def_rw("pad_tokens", &MoEBlockConfig::pad_tokens)
+        .def_rw("forward_chunks", &MoEBlockConfig::forward_chunks)
         .def_prop_ro("plan_tokens", &MoEBlockConfig::plan_tokens)
         .def_prop_ro("loop_tokens", &MoEBlockConfig::loop_tokens)
         .def_prop_ro("split_tokens", &MoEBlockConfig::split_tokens)

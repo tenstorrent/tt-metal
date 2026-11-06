@@ -166,6 +166,12 @@ void bind_fused_head(nb::module_& mod) {
             loop: this call's loop over the chunk when it runs as MoEBlockConfig.chunk_splits x token_loops head
                 calls (split x token_loops + its loop in the split; x: that call's rows of every chip). A split's
                 last loop plans every loop's tokens of the split.
+            metadata: a padded forward as the forward's metadata words (common/prefill/prefill_chunk.py: at
+                MoEBlockConfig.forward_chunks 1 (slot, start, end), above {num_chunks, 0} then forward_chunks
+                (slot, start, end) records, unused ones (INVALID, 0, 0)), one uint32 DRAM tensor of one page,
+                replicated, read on device every call - in place of actual_start / actual_end; a packed forward
+                (forward_chunks > 1) takes it. Each SP row holds every chunk's rows back to back, each chunk in main's
+                rotated layout; padding rows are not routed.
             all_loops: run every token loop of the split in this one call (loop: the split's first, split x
                 token_loops; x: every loop's rows of every chip, one loop's after the other's; se: every loop's) -
                 one program a chip whose kernels loop over the token slices.
@@ -190,7 +196,8 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("actual_start") = nb::none(),
         nb::arg("actual_end") = nb::none(),
         nb::arg("loop") = 0,
-        nb::arg("all_loops") = false);
+        nb::arg("all_loops") = false,
+        nb::arg("metadata") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

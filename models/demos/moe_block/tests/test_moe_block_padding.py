@@ -95,7 +95,17 @@ def mesh():
 # loops2: the chunk as two token loops (the planner's head on each sub-chunk)
 @pytest.fixture(scope="module", params=[(0, 0), (2, 0), (0, 2)], ids=["router_once", "router_iters", "loops2"])
 def setup(mesh, request):
-    router_iters, loops = request.param
+    yield from _setup(mesh, *request.param)
+
+
+# a packed forward (MoEBlockConfig.forward_chunks 2: two chunks of CHUNK / 2, each its own span): the planner's head,
+# and two token loops
+@pytest.fixture(scope="module", params=[(0, 0), (0, 2)], ids=["packed2", "packed2_loops2"])
+def packed(mesh, request):
+    yield from _setup(mesh, *request.param, forward_chunks=2)
+
+
+def _setup(mesh, router_iters, loops, forward_chunks=1):
     if loops and (-(-CHUNK // R // (32 * C)) * 32 * C // loops) % (32 * C):
         pytest.skip(f"chunk {CHUNK} as {loops} token loops: a sub-chunk's rows a mesh row not a multiple of {32 * C}")
     mb = ttnn.experimental.moe_block
@@ -112,6 +122,7 @@ def setup(mesh, request):
     cfg.combine_snap = SNAP
     cfg.head_router_iterations = router_iters
     cfg.token_loops = loops
+    cfg.forward_chunks = forward_chunks
     res = mb.MoEBlockResources(mesh, dims, cfg, dtypes)
     block = MoEBlock(mesh, res, dtypes=dtypes)  # (the planner's accumulators)
     g = torch.Generator().manual_seed(3)
@@ -143,7 +154,7 @@ def setup(mesh, request):
     block.mb = cap
     yield dict(
         mesh=mesh, mb=mb, block=block, weights=weights, base=base, pad_row=pad_row, cap=cap, EPC=EPC, N=N,
-        distinct=distinct, router_iters=router_iters, loops=block.loops,
+        distinct=distinct, router_iters=router_iters, loops=block.loops, F=forward_chunks,
     )  # fmt: skip
     experts.close()
     res.release()
@@ -307,11 +318,11 @@ def _span_kw(block, span):
     return dict(actual_start=start, actual_end=end)
 
 
-def _forward(s, rows, span=None):
+def _forward(s, rows, span=None, **kw):
     mesh, block = s["mesh"], s["block"]
     _clobber(s)
     x = _x(mesh, rows)
-    y = block(x, s["weights"], **_span_kw(block, span))
+    y = block(x, s["weights"], **_span_kw(block, span), **kw)
     ttnn.synchronize_device(mesh)
     y_own = _owner_rows(s["cap"].y_own, s["loops"], None, s["block"].pad_rows)
     out = dict(y_own=y_own, out=_residual(mesh, y), counts=_counts(s), picks=_picks(s), words=_rows_words(s))
@@ -503,9 +514,102 @@ def test_padding_perf(setup):
         for n, u in zip(names, us):
             BASELINES.check(f"chunk {CHUNK} {what}: {n}", u, 0.05)
 
+    if os.environ.get("MOE_PAD_REAL"):  # (real-token counts to measure: "32,256,..." - each with its span (0, V))
+        run("100% real, span", s["base"], (0, CHUNK))
+        for V in (int(v) for v in os.environ["MOE_PAD_REAL"].split(",")):
+            run(f"{V} real + identical padding, span (0, {V})", _padded(s, real_mask(0, V)), (0, V))
+        return
     V = CHUNK * 2 // 5
     run("100% real, no span", s["base"], None)
     run(f"{V} real + identical padding, no span", _padded(s, real_mask(0, V)), None)
     run(f"{V} real + identical padding, span (0, {V})", _padded(s, real_mask(0, V)), (0, V))
     run(f"{V} real + identical padding, rotated span {ROTATED[0]}", _padded(s, real_mask(*ROTATED[0])), ROTATED[0])
     run(f"100% real, span (0, {CHUNK})", s["base"], (0, CHUNK))
+
+
+# ---------------------------------------------------------------------------------------------------- packed forwards
+PACKED = [  # (slot, actual_start, actual_end) a chunk of CHUNK / 2: full, partial, empty, rotated, different slots
+    [(0, 0, CHUNK // 2), (1, 0, CHUNK // 2)],
+    [(0, 0, CHUNK // 2), (1, 0, 300)],
+    [(0, 0, 500), (1, 0, 0)],
+    [(0, 0, 700), (1, 0, 900)],
+    [(0, 0, 1), (1, 0, 37)],
+    [(0, 1000, 1000 + CHUNK // 2), (1, 700, 1700)],
+    [(0, 1613, 1614), (1, 5000, 5999)],
+    [(3, 2 * CHUNK + 640, 2 * CHUNK + 1100), (0, 0, 0)],
+]
+
+
+def packed_mask(chunks, F=2):
+    """[CHUNK] in the block's row order: SP row r's rows r tpc .. hold chunk k's B = tpc / F rows at k B .., each chunk
+    in main's rotated layout - its real rows a prefix of its block"""
+    tpc = CHUNK // R
+    B = tpc // F
+    m = torch.zeros(CHUNK, dtype=torch.bool)
+    for r in range(R):
+        for k, (_, start, end) in enumerate(chunks):
+            m[r * tpc + k * B : r * tpc + k * B + main_row_real(start, end, R, B, r)] = True
+    return m
+
+
+def _check_packed(s, ref, o, chunks):
+    m = packed_mask(chunks, s["F"])
+    assert _same(o["y_own"][m], ref["y_own"][m]), f"{chunks}: the real tokens' y_own differs"
+    assert _same(o["out"][m], ref["out"][m]), f"{chunks}: the real tokens' block output differs"
+    pad = o["y_own"][~m]
+    assert int(pad.abs().sum()) == 0 and not torch.isnan(pad).any(), f"{chunks}: padding rows' routed output"
+    hist = torch.bincount(o["picks"][m].reshape(-1), minlength=E)
+    assert torch.equal(o["counts"], hist), f"{chunks}: the counts are not the real tokens' picks"
+
+
+def test_packed(packed):
+    """A packed forward of two chunks, as host chunks and as the forward's metadata words: the real tokens' outputs
+    bit-identical to the all-real forward's, the padding's combined rows zero, the counts the real tokens' picks."""
+    s = packed
+    ref = _forward(s, s["base"])
+    for chunks in PACKED:
+        o = _forward(s, _padded(s, packed_mask(chunks)), chunks=chunks)
+        _check_packed(s, ref, o, chunks)
+        logger.info(f"MOE_PAD packed {chunks}: {int(packed_mask(chunks).sum())} real rows ok")
+    from models.demos.moe_block.tt.moe_block import forward_words
+
+    words = s["block"]._meta_tensor(forward_words(PACKED[3], 2))
+    o = _forward(s, _padded(s, packed_mask(PACKED[3])), metadata=words)
+    _check_packed(s, ref, o, PACKED[3])
+    logger.info("MOE_PAD packed metadata words: ok")
+
+
+def test_packed_traced(packed):
+    """One capture with the forward's metadata words, replayed with other words (device writes) and rows."""
+    from models.demos.moe_block.tt.moe_block import forward_words
+
+    s = packed
+    mesh, block = s["mesh"], s["block"]
+    ref = _forward(s, s["base"])
+    x = _x(mesh, _padded(s, packed_mask(PACKED[0])))
+    words = block._meta_tensor(forward_words(PACKED[0], 2))
+    ttnn.deallocate(block(x, s["weights"], metadata=words))
+    ttnn.synchronize_device(mesh)
+    tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+    y = block(x, s["weights"], metadata=words)
+    ttnn.end_trace_capture(mesh, tid, cq_id=0)
+    try:
+        for chunks in PACKED[1:]:
+            _clobber(s)
+            ttnn.copy_host_to_device_tensor(_x(mesh, _padded(s, packed_mask(chunks)), host=True), x)
+            host = ttnn.from_torch(torch.tensor([[[forward_words(chunks, 2)]]], dtype=torch.int64), dtype=ttnn.uint32,
+                                   layout=ttnn.ROW_MAJOR_LAYOUT)  # fmt: skip
+            ttnn.copy_host_to_device_tensor(host, words)
+            ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+            o = dict(
+                y_own=_owner_rows(s["cap"].y_own, s["loops"], None, block.pad_rows),
+                out=_residual(mesh, y),
+                counts=_counts(s),
+                picks=_picks(s),
+            )
+            _check_packed(s, ref, o, chunks)
+        logger.info(f"MOE_PAD packed traced: {len(PACKED) - 1} replays ok")
+    finally:
+        ttnn.release_trace(mesh, tid)
+        ttnn.deallocate(y)
+        ttnn.deallocate(x)

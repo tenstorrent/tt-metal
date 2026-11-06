@@ -169,11 +169,19 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     invalidate_l1_cache();
     // (token loops, an earlier loop: no token planned - the exchange runs empty, the chips' barrier between loops;
     // the last loop plans every loop's tokens)
-#if defined(RT_VALID)
-    // (my real tokens of every token loop: 0 .. SV - 1; the rest are padding, unplanned)
-    const uint32_t SV = idle ? 0 : rt_valid_owned(vl1);
-#else
     const uint32_t SV = idle ? 0 : S;
+#if defined(RT_VALID)
+    // (a padded forward: my owned token t - loop t / [8]'s, row [11] + (t / [8]) [9] + t % [8] of my SP row - is
+    // planned only when its row is real; the rest are padding, unplanned)
+    RtRows rr{};
+    if (!idle) {
+        rr = rt_rows(vl1);
+    }
+    const uint32_t ro0 = get_common_arg_val<uint32_t>(11), rs = get_common_arg_val<uint32_t>(8);
+    const uint32_t rsub = get_common_arg_val<uint32_t>(9);
+    auto real_tok = [&](uint32_t t) __attribute__((always_inline)) { return rr.real(ro0 + (t / rs) * rsub + t % rs); };
+#else
+    auto real_tok = [](uint32_t) __attribute__((always_inline)) { return true; };
 #endif
     // (1) my home tokens (t % A owned by me): my entries per global expert
     auto row = [&](uint32_t t) __attribute__((always_inline)) {
@@ -182,6 +190,9 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     uint32_t n_my = 0;
     for (uint32_t aa = q; aa < A; aa += M) {
         for (uint32_t t = aa; t < SV; t += A) {
+            if (!real_tok(t)) {
+                continue;
+            }
             const uint32_t* r2 = row(t);
             for (uint32_t kk = 0; kk < K / 2; ++kk) {
                 const uint32_t v = r2[kk];
@@ -253,6 +264,9 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
         uint32_t* sw = reinterpret_cast<uint32_t*>(B + O_STG);
         for (uint32_t aa = q; aa < A; aa += M) {
             for (uint32_t t = aa; t < SV; t += A) {
+                if (!real_tok(t)) {
+                    continue;
+                }
                 const uint32_t* r2 = row(t);
                 for (uint32_t kk = 0; kk < K / 2; ++kk) {  // (token | expert << 11 | weight's 15 low bits << 17)
                     const uint32_t v = r2[kk], w = r2[K / 2 + kk], g0 = v & 0xFFFF, g1 = v >> 16;
@@ -309,6 +323,9 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
                 want[s] = 0;
             }
             for (uint32_t t = aa; t < SV; t += A) {
+                if (!real_tok(t)) {
+                    continue;
+                }
                 const uint32_t* r2 = row(t);
                 for (uint32_t kk = 0; kk < K / 2; ++kk) {
                     const uint32_t v = r2[kk], s0 = (v & 0xFFFF) / EPC, s1 = (v >> 16) / EPC;

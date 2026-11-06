@@ -56,6 +56,9 @@ struct HeadShape {
     // the caller's tokens an SP row (chunk_tokens / SP: without the padding rows, MoEBlockConfig.pad_tokens) - main's
     // closed form of an SP row's real rows; 0: splits x loops x rows
     uint32_t row_tokens = 0;
+    // the chunks packed in a forward (MoEBlockConfig.forward_chunks): an SP row holds each chunk's row_tokens /
+    // fwd_chunks rows back to back
+    uint32_t fwd_chunks = 1;
 
     int rs_dim() const { return latent ? -1 : -2; }
     uint32_t N() const { return R * G; }

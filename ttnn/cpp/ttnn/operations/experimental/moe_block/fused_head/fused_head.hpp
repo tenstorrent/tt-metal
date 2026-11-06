@@ -135,7 +135,9 @@ const FusedHeadSetup& setup_fused_head(
 // call runs when the chunk is run as MoEBlockConfig.token_loops sub-chunks (x: the sub-chunk's rows; a padded chunk's
 // real rows offset by it). all_loops: the call runs every token loop of its split at once (loop: the split's first,
 // split x token_loops; x: every loop's rows, one loop's after the other's; se: every loop's) - one program whose
-// kernels loop.
+// kernels loop. metadata: a padded forward as the forward's metadata words (common/prefill/prefill_chunk.py: at
+// MoEBlockConfig.forward_chunks 1 (slot, start, end), above {num_chunks, 0} + forward_chunks records), one uint32
+// DRAM tensor read on device every call - in place of actual_start / actual_end; required for a packed forward.
 FusedHeadOutputs fused_head(
     const Tensor& x,
     const FusedHeadWeights& weights,
@@ -148,6 +150,7 @@ FusedHeadOutputs fused_head(
     const std::optional<Tensor>& actual_start = std::nullopt,
     const std::optional<Tensor>& actual_end = std::nullopt,
     uint32_t loop = 0,
-    bool all_loops = false);
+    bool all_loops = false,
+    const std::optional<Tensor>& metadata = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

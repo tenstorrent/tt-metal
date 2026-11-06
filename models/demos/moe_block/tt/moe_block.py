@@ -102,6 +102,7 @@ class MoEBlock:
             )
         )
         self.chunk_words = None  # (a padded chunk's scalars given as ints: two persistent device words, rewritten)
+        self.meta_words = None  # (a forward given as host chunks: its metadata words, a persistent device tensor)
         # (token loops: the head and the tail each one call whose kernels loop over the loops' rows; False: a call a
         # loop - the reference the one-call form is checked against)
         self.one_call_loops = True
@@ -221,7 +222,8 @@ class MoEBlock:
         weights: MoEBlockWeights,
         actual_start: Union[int, ttnn.Tensor, None] = None,
         actual_end: Union[int, ttnn.Tensor, None] = None,
-        metadata: Optional[tuple] = None,
+        metadata: Union[tuple, ttnn.Tensor, None] = None,
+        chunks: Optional[list] = None,
     ) -> ttnn.Tensor:
         """x: this chip's [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM. Returns the residual's layout (fused_tail's).
 
@@ -232,33 +234,78 @@ class MoEBlock:
         rotated layout over the SP rows (moe_padding_config; chunk-aligned start: the natural order, the first
         end - start tokens real). Padding tokens are not routed, dispatched, computed by the routed experts or combined;
         their rows of the output are the shared expert's only (the dense parts still compute them; discard them).
-        None: every row is real."""
-        if metadata is not None:
-            assert actual_start is None and actual_end is None, "MoEBlock: metadata or actual_start / actual_end"
-            actual_start, actual_end = metadata[1], metadata[2]
-        assert (actual_start is None) == (actual_end is None), "MoEBlock: a padded chunk takes actual_start and _end"
-        if isinstance(actual_start, int) or isinstance(actual_end, int):
-            assert isinstance(actual_start, int) and isinstance(actual_end, int), "MoEBlock: two ints or two tensors"
-            actual_start, actual_end = self.chunk_scalars(actual_start, actual_end)
+        None: every row is real.
+
+        A packed forward (MoEBlockConfig.forward_chunks F, common/prefill/prefill_chunk.py): x holds F chunks, each SP
+        row every chunk's rows back to back, each chunk in main's rotated layout with its own span. Its padding comes
+        as metadata = the forward's metadata words (one uint32 device tensor: at F = 1 (slot, start, end), above
+        {num_chunks, 0} + F records - tt-d-gen's PrefillBatchMetadata as the device holds it), read on device every
+        call; or chunks = the forward's PrefillChunks (anything with slot_id / actual_start / actual_end, or
+        (slot, start, end) tuples; empty ones at the tail), written to the block's persistent words (eager only)."""
+        span = self._span(actual_start, actual_end, metadata, chunks)
         if self.pad_rows:  # (padding rows: each chip's rows padded up to whole 32 x TP rows; their output dropped)
-            if actual_start is None:
+            if not span:
                 if self.full_words is None:  # (made at the first call: eager - a trace captures them as they are)
-                    self.full_words = self._words(0, self.resources.config.chunk_tokens)
-                actual_start, actual_end = self.full_words
+                    F = max(1, int(self.resources.config.forward_chunks))
+                    if F == 1:
+                        words = self._words(0, self.resources.config.chunk_tokens)
+                        self.full_words = dict(actual_start=words[0], actual_end=words[1])
+                    else:
+                        c = self.resources.config.chunk_tokens // F
+                        self.full_words = dict(metadata=self._meta_tensor(forward_words([(0, 0, c)] * F, F)))
+                span = self.full_words
             rows = int(x.shape[-2])
             xp = ttnn.pad(x, [(0, 0), (0, 0), (0, self.pad_rows), (0, 0)], 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            yp = self._forward_splits(xp, weights, actual_start, actual_end)
+            yp = self._forward_splits(xp, weights, span)
             ttnn.deallocate(xp)
             y = ttnn.slice(yp, [0, 0, 0, 0], [1, 1, rows, int(yp.shape[-1])], [1, 1, 1, 1],
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
             ttnn.deallocate(yp)
             return y
-        return self._forward_splits(x, weights, actual_start, actual_end)
+        return self._forward_splits(x, weights, span)
 
-    def _forward_splits(self, x, weights, actual_start, actual_end) -> ttnn.Tensor:
+    def _span(self, actual_start, actual_end, metadata, chunks) -> dict:
+        """the head's padded-forward kwargs: {} (every row real), actual_start / actual_end, or metadata (words)"""
+        F = max(1, int(self.resources.config.forward_chunks))
+        given = [actual_start is not None or actual_end is not None, metadata is not None, chunks is not None]
+        assert sum(given) <= 1, "MoEBlock: actual_start / actual_end, metadata or chunks - one of them"
+        if chunks is not None:
+            words = forward_words(chunks, F)
+            if self.meta_words is None:
+                self.meta_words = self._meta_tensor(words)
+            else:
+                host = ttnn.from_torch(torch.tensor([[[words]]], dtype=torch.int64), dtype=ttnn.uint32,
+                                       layout=ttnn.ROW_MAJOR_LAYOUT)  # fmt: skip
+                ttnn.copy_host_to_device_tensor(host, self.meta_words)
+            return dict(metadata=self.meta_words)
+        if isinstance(metadata, ttnn.Tensor):
+            return dict(metadata=metadata)
+        if metadata is not None:  # (main's (slot_id, actual_start, actual_end) tensors)
+            actual_start, actual_end = metadata[1], metadata[2]
+        assert (actual_start is None) == (actual_end is None), "MoEBlock: a padded chunk takes actual_start and _end"
+        if actual_start is None:
+            return {}
+        assert F == 1, f"MoEBlock: a forward of {F} chunks takes metadata or chunks, not one chunk's span"
+        if isinstance(actual_start, int) or isinstance(actual_end, int):
+            assert isinstance(actual_start, int) and isinstance(actual_end, int), "MoEBlock: two ints or two tensors"
+            actual_start, actual_end = self.chunk_scalars(actual_start, actual_end)
+        return dict(actual_start=actual_start, actual_end=actual_end)
+
+    def _meta_tensor(self, words) -> ttnn.Tensor:
+        """the forward's metadata words as a one-page uint32 device tensor (replicated, DRAM)"""
+        return ttnn.from_torch(
+            torch.tensor([[[words]]], dtype=torch.int64),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def _forward_splits(self, x, weights, span) -> ttnn.Tensor:
         """The chunk as the block's splits (one without)."""
         if self.splits == 1:
-            return self._forward(x, weights, actual_start, actual_end)
+            return self._forward(x, weights, span)
         # (splits: the whole block a piece of each chip's rows - every piece reads the experts' weights again)
         rows, width = int(x.shape[-2]), int(x.shape[-1])
         r = rows // self.splits
@@ -266,14 +313,14 @@ class MoEBlock:
         for j in range(self.splits):
             xj = ttnn.slice(x, [0, 0, j * r, 0], [1, 1, (j + 1) * r, width], [1, 1, 1, 1],
                             memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
-            outs.append(self._forward(xj, weights, actual_start, actual_end, split=j))
+            outs.append(self._forward(xj, weights, span, split=j))
             ttnn.deallocate(xj)
         y = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for t in outs:
             ttnn.deallocate(t)
         return y
 
-    def _forward(self, x, weights, actual_start, actual_end, split: int = 0) -> ttnn.Tensor:
+    def _forward(self, x, weights, span, split: int = 0) -> ttnn.Tensor:
         """One split (the whole chunk without splits): the head and the tail k times (token loops: each chip's rows
         i r .. (i + 1) r a call), the dispatch, the routed experts and the combine once - the head's last call planned
         every loop's tokens."""
@@ -281,7 +328,7 @@ class MoEBlock:
         rows, width = int(x.shape[-2]), int(x.shape[-1])
         r = rows // k
         if k > 1 and self.one_call_loops:
-            return self._forward_one_call(x, weights, actual_start, actual_end, split)
+            return self._forward_one_call(x, weights, span, split)
         xs = [
             x
             if k == 1
@@ -309,8 +356,7 @@ class MoEBlock:
                 x_full=x_fulls[i],
                 l1_free=self.l1_free,
                 arena=arena,
-                actual_start=actual_start,
-                actual_end=actual_end,
+                **span,
                 **({"loop": split * k + i} if k * self.splits > 1 else {}),
             )
             if x_fulls[i] is not None:
@@ -351,7 +397,7 @@ class MoEBlock:
             ttnn.deallocate(t)
         return y
 
-    def _forward_one_call(self, x, weights, actual_start, actual_end, split: int) -> ttnn.Tensor:
+    def _forward_one_call(self, x, weights, span, split: int) -> ttnn.Tensor:
         """One split with token loops: the head and the tail each once over every loop's rows (their kernels loop),
         the dispatch, the routed experts and the combine once."""
         mb, k = self.mb, self.loops
@@ -370,25 +416,13 @@ class MoEBlock:
             x_full=x_full,
             l1_free=self.l1_free,
             arena=arena,
-            actual_start=actual_start,
-            actual_end=actual_end,
+            **span,
             loop=split * k,
             all_loops=True,
         )
         if x_full is not None:
             ttnn.deallocate(x_full)
         self.last_head = head
-        if self.exchange_spec is None:
-            self.exchange_spec = (
-                False
-                if self.one_arena
-                else mb.routed_experts_combine_arena_spec(
-                    self.resources, rows_cap=int(head.table.shape[-2]) * 32, **self.expert_kw
-                )
-            )
-        if self.exchange_spec:
-            ttnn.deallocate(arena)
-            arena = ttnn.allocate_tensor_on_device(self.exchange_spec, self.mesh_device)
         dispatched = mb.sparse_dispatch_2d(head.xbuf, head.route, self.resources, arena=arena)
         y_own = mb.routed_experts_combine(
             dispatched,
@@ -407,6 +441,24 @@ class MoEBlock:
         ttnn.deallocate(arena)
         # (the tail once over every loop's owner rows - the combine's and the shared expert's, loop after loop)
         return mb.fused_tail(y_own, head.se, resources=self.resources, w_up=weights.w_up, all_loops=True)
+
+
+INVALID_SLOT = 0xFFFFFFFF
+
+
+def forward_words(chunks, forward_chunks: int) -> list:
+    """The forward's metadata words (common/prefill/prefill_chunk.py forward_metadata_words) for chunks - PrefillChunk
+    likes (slot_id, actual_start, actual_end) or (slot, start, end) tuples, the empty ones (start == end) at the tail -
+    as uint32: at one chunk a forward (slot, start, end), above {num_chunks, 0} + forward_chunks records."""
+    cs = [(c.slot_id, c.actual_start, c.actual_end) if hasattr(c, "actual_start") else tuple(c) for c in chunks]
+    assert 1 <= len(cs) <= forward_chunks, f"MoEBlock: {len(cs)} chunks for a forward of {forward_chunks}"
+    cs += [(0, 0, 0)] * (forward_chunks - len(cs))
+    if forward_chunks == 1:
+        return [cs[0][0] & 0xFFFFFFFF, cs[0][1], cs[0][2]]
+    real = [c for c in cs if c[2] != c[1]]
+    assert cs[: len(real)] == real, f"MoEBlock: empty chunks go after every non-empty one: {cs}"
+    words = [len(real), 0] + [w & 0xFFFFFFFF for c in real for w in c]
+    return words + [INVALID_SLOT, 0, 0] * (forward_chunks - len(real))
 
 
 def _short(ex) -> str:

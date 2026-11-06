@@ -1318,6 +1318,15 @@ private:
         }
     }
     void planner_defines(KernelDescriptor& k, uint32_t ct0) const;
+    // a padded forward (router_addr.hpp RT_VALID): its chunks a forward (RT_FWD) and whether it comes as the
+    // forward's metadata words (RT_META) rather than one chunk's actual_start / actual_end
+    void valid_defines(KernelDescriptor& k) const {
+        define(k, "RT_VALID");
+        define(k, "RT_FWD", iv(h.cfg.shape.fwd_chunks));
+        if (bufs.meta) {
+            define(k, "RT_META");
+        }
+    }
     // token loops in one program with every planner instance on the planner-only cores: the router kernels compile no
     // planner (ra_plan_dual.hpp RA_PLAN_NONE)
     void router_planner_none(KernelDescriptor& k) const {
@@ -2699,7 +2708,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         nk.compile_time_args = n_ct;
         mine(n_rt, nk);
         if (padded) {
-            define(nk, "RT_VALID");
+            valid_defines(nk);
         }
         set_common(nk, common_v);
         routing_accessors(nk);
@@ -2742,7 +2751,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         router_planner_none(bk);
         mine(b_rt, bk);
         if (padded) {
-            define(bk, "RT_VALID");
+            valid_defines(bk);
         }
         set_common(bk, common_v);
         routing_accessors(bk);
@@ -2763,7 +2772,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
             k.compile_time_args = ra_ct;
             planner_defines(k, 0);
             if (padded) {
-                define(k, "RT_VALID");
+                valid_defines(k);
             }
             for (uint32_t i = 0; i < xs.size(); ++i) {
                 const int32_t q = h.inst_at(u32(h.rcores.size()) + i, second ? 1 : 0);

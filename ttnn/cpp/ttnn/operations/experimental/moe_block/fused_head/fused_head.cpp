@@ -58,6 +58,7 @@ HeadShape head_shape_of(
     s.loops = config.loops();
     s.splits = config.splits();
     s.row_tokens = config.chunk_tokens / topology.R;  // (the caller's SP row: its real rows' closed form)
+    s.fwd_chunks = std::max<uint32_t>(1, config.forward_chunks);
     s.H = dims.emb_dim;
     s.I = dims.shared_expert_hidden_dim.value_or(0) / topology.C;
     s.G = topology.C;
@@ -339,10 +340,11 @@ FusedHeadOutputs fused_head(
     const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
     uint32_t loop,
-    bool all_loops) {
+    bool all_loops,
+    const std::optional<Tensor>& metadata) {
     using namespace fused_head_entry_detail;
     TT_FATAL(
-        resources.config().pad_tokens == 0 || actual_start.has_value(),
+        resources.config().pad_tokens == 0 || actual_start.has_value() || metadata.has_value(),
         "fused_head: a chunk with padding rows (MoEBlockConfig.pad_tokens) takes actual_start / actual_end");
     const uint32_t loops = resources.config().loops();
     TT_FATAL(
@@ -358,20 +360,22 @@ FusedHeadOutputs fused_head(
         "fused_head: every token loop in one call starts at a split's first loop, got loop {} of {}",
         loop,
         loops);
+    const bool padded = actual_start.has_value() || metadata.has_value();
     FusedHeadParams params{
         .config = setup.config,
         .plan_key = resources.plan_key(),
         .model = setup.model,
         .words = setup.words,
         .arena = arena ? *arena : default_arena(resources, setup),
-        .patches = all_loops ? (actual_start ? setup.patches_all_padded[loop / loops] : setup.patches_all[loop / loops])
-                             : (actual_start ? setup.patches_padded[loop] : setup.patches[loop]),
+        .patches = all_loops ? (padded ? setup.patches_all_padded[loop / loops] : setup.patches_all[loop / loops])
+                             : (padded ? setup.patches_padded[loop] : setup.patches[loop]),
         .loops = loops,
         .loop = loop,
         .all_loops = all_loops};
     auto in = call_inputs(setup, x, weights, x_full);
     in.y = all_loops ? *setup.y_all : setup.y_loops[loop % loops];
     in.actual_start = actual_start;
+    in.metadata = metadata;
     in.actual_end = actual_end;
     FusedHeadOutputs out{
         .se = in.y,

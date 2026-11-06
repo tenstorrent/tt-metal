@@ -108,6 +108,11 @@ struct MoEBlockConfig {
     // a padded chunk (not routed), the fused head always takes the chunk's actual_start / actual_end (MoEBlock gives
     // (0, chunk) for an unpadded one) and MoEBlock drops their rows of the output.
     uint32_t pad_tokens = 0;
+    // The chunks packed in a forward (common/prefill/prefill_chunk.py: forward_tokens_budget / chunk_size):
+    // chunk_tokens is the forward's tokens; each SP row holds every chunk's chunk_tokens / (forward_chunks x SP) rows
+    // back to back, each chunk in main's rotated layout with its own actual_start / actual_end (the forward's metadata
+    // words).
+    uint32_t forward_chunks = 1;
     uint32_t loops() const { return token_loops == 0 ? 1u : token_loops; }
     uint32_t splits() const { return chunk_splits == 0 ? 1u : chunk_splits; }
     // the tokens the ops run: the chunk and its padding rows

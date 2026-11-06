@@ -117,6 +117,8 @@ struct HeadBuffers {
     // token loops in one program (merged, k > 1): the call runs every loop of its split - x (and x_full) and y hold
     // them all, loop l's at l x stride a bank (B) further; the loop words' address (mb_loop.hpp)
     bool merged = false;
+    // a padded forward given as the forward's metadata words (fused_head's metadata=, at SRC_START; SRC_END absent)
+    bool meta = false;
     uint32_t x_stride = 0, xf_stride = 0, y_stride = 0, loop_words = 0;
     tt::tt_metal::Buffer* operator[](HeadSrc s) const { return buffers[s]; }
 };

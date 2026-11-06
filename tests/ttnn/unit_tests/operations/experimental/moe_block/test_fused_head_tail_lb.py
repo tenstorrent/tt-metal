@@ -517,7 +517,6 @@ def test_fused_tail_perf(mesh_device, device_params, case):
     BASELINES.check(f"fused_tail {case.id}", us, case.margin)
 
 
-
 # ---------------------------------------------------------------------------------------------------- token loops
 @pytest.mark.timeout(1800)
 @PARAMS

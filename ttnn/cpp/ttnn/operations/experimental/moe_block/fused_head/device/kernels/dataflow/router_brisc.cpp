@@ -26,7 +26,7 @@ MB_LOOP_BODY {
     // writes them only after word 80, by when they are read - early, read once the rows are written, long after)
     const uint32_t vl1 = rt_valid_slot(get_arg_val<uint32_t>(6));
     rt_valid_issue(vl1);
-    uint32_t sv = 0;  // (my real tokens, read below)
+    RtRows rr{};  // (my SP row's real rows, read below)
 #endif
     constexpr uint32_t t0 = 0;
     const uint32_t o_addr = get_arg_val<uint32_t>(t0), page = get_arg_val<uint32_t>(t0 + 1);
@@ -63,12 +63,15 @@ MB_LOOP_BODY {
         const uint32_t tok0 = get_arg_val<uint32_t>(t0 + 8);
 #endif
 #ifdef RT_VALID
-        {  // (padding tokens - t >= sv - get no route: not dispatched)
+        {  // (padding tokens - their rows not real - get no route: not dispatched)
             invalidate_l1_cache();
             volatile tt_l1_ptr uint32_t* o = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rl1);
-            for (uint32_t c = sv > tok0 ? sv - tok0 : 0; c < 32; ++c) {
-                for (uint32_t i = 0; i < RT_RW; ++i) {
-                    o[RT_RW * c + i] = 0;
+            const uint32_t row0 = get_common_arg_val<uint32_t>(7) + tok0;  // (token c's row in my SP row: row0 + c)
+            for (uint32_t c = 0; c < 32; ++c) {
+                if (!rr.real(row0 + c)) {
+                    for (uint32_t i = 0; i < RT_RW; ++i) {
+                        o[RT_RW * c + i] = 0;
+                    }
                 }
             }
         }
@@ -105,7 +108,7 @@ MB_LOOP_BODY {
             if (it == 0) {
                 noc_async_read_barrier();
                 invalidate_l1_cache();
-                sv = rt_valid_local(vl1);  // (my real tokens: the route words of the rest are zeroed below)
+                rr = rt_rows(vl1);  // (my SP row's real rows: the route words of the rest are zeroed below)
             }
 #endif
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 80) = 1;  // (every share of the rows written)
