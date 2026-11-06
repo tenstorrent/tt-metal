@@ -147,6 +147,14 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         attrs.compute_kernel_config.math_fidelity != tt::tt_metal::MathFidelity::LoFi,
         "{}: LoFi is unsupported because B enters the hop as I @ B, exact only from HiFi2 on",
         operation_name);
+    // Compute forms a K-tile column of the next state in one DST pass.
+    const uint32_t dst_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
+    TT_FATAL(
+        key_tiles <= dst_tiles,
+        "{}: K = {} tiles exceeds the {} DST tiles a column is formed in",
+        operation_name,
+        key_tiles,
+        dst_tiles);
 }
 
 RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::compute_output_specs(

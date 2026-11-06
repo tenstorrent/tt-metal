@@ -4,8 +4,8 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
 constexpr uint32_t cb_e = get_compile_time_arg_val(0);
@@ -50,18 +50,13 @@ void kernel_main() {
             noc_async_read_page(page + kt, packed, get_write_ptr(cb_b) + (r * kt + c) * eb_tile);
         }
     }
-    // The identity tile while the reads are in flight: BF16 1.0 on the diagonal, which lies in the top-left and
-    // bottom-right 16x16 faces.
+    // The BF16 identity tile while the reads are in flight.
     cb_reserve_back(cb_identity, 1);
     auto* identity = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_identity));
     for (uint32_t i = 0; i < tt::constants::TILE_HW; ++i) {
         identity[i] = 0;
     }
-    constexpr uint16_t one_bf16 = 0x3F80;
-    for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
-        identity[row * tt::constants::FACE_WIDTH + row] = one_bf16;
-        identity[3 * tt::constants::FACE_HW + row * tt::constants::FACE_WIDTH + row] = one_bf16;
-    }
+    kda::write_identity_diagonal(identity);
     cb_push_back(cb_identity, 1);
     noc_async_read_barrier();
     const uint32_t actual_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_chron))[0];
