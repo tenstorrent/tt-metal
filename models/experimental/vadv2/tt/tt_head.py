@@ -839,34 +839,40 @@ class TtVADHead:
             raise NotImplementedError
         return bbox, pts_reshape
 
-    def get_bboxes(self, preds_dicts, img_metas, rescale=False):
-        """The head's device outputs to each sample's detections and map elements on the host.
-
-        Selection and decoding run on device; only the valid entries are read back.
-        """
+    def detect(self, preds_dicts):
+        """The coders on the head's device outputs: the top detections and map elements, decoded
+        and with their validity, as fixed-size device tensors."""
         det = self.det_coder(
             preds_dicts["all_cls_scores"], preds_dicts["all_bbox_preds"], preds_dicts["all_traj_preds"]
         )
         map_det = self.map_coder(
             preds_dicts["map_all_cls_scores"], preds_dicts["map_all_bbox_preds"], preds_dicts["map_all_pts_preds"]
         )
-        scores, labels, _, boxes, trajs, valid = det
+        return det, map_det
+
+    def compact(self, detected):
+        """detect()'s tensors to one sample's valid detections and map elements on the host."""
+        (scores, labels, _, boxes, trajs, valid), (map_scores, map_labels, _, map_boxes, map_pts, map_valid) = detected
         preds = compact_detections(scores, labels, boxes, trajs, valid, self.fut_mode)
-        map_scores, map_labels, _, map_boxes, map_pts, map_valid = map_det
         map_preds = compact_map(map_scores, map_labels, map_boxes, map_pts, map_valid)
         bboxes = LiDARInstance3DBoxes(preds["bboxes"], preds["bboxes"].shape[-1])
         return [
-            [
-                bboxes,
-                preds["scores"],
-                preds["labels"],
-                preds["trajs"],
-                map_preds["map_bboxes"],
-                map_preds["map_scores"],
-                map_preds["map_labels"],
-                map_preds["map_pts"],
-            ]
+            bboxes,
+            preds["scores"],
+            preds["labels"],
+            preds["trajs"],
+            map_preds["map_bboxes"],
+            map_preds["map_scores"],
+            map_preds["map_labels"],
+            map_preds["map_pts"],
         ]
+
+    def get_bboxes(self, preds_dicts, img_metas, rescale=False):
+        """The head's device outputs to each sample's detections and map elements on the host.
+
+        Selection and decoding run on device; only the valid entries are read back.
+        """
+        return [self.compact(self.detect(preds_dicts))]
 
     def select_and_pad_pred_map(
         self,
