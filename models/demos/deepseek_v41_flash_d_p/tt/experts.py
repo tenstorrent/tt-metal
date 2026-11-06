@@ -188,6 +188,16 @@ def _read_pool() -> ThreadPoolExecutor:
     return _READ_POOL
 
 
+_LOAD_ORDER: list[int] = []  # the layers a model loads, in order (set_load_order): which layer's cache to read ahead
+
+
+def set_load_order(layers) -> None:
+    """The layers the model is about to load, in order: after each layer's routed experts are uploaded, the next
+    one's bank-major weight cache is read into the pinned staging in the background (EXPERTS_PREFETCH), overlapping
+    that layer's dense weight load."""
+    _LOAD_ORDER[:] = [int(i) for i in layers]
+
+
 def expert_cache_dir(spec) -> Path:
     """The routed experts' weight cache of a run (EXPERTS_WEIGHT_CACHE): the spec's tt_cache (art, the mesh, -scaled,
     the cache version) / experts-<checkpoint revision>."""
@@ -238,8 +248,12 @@ class _CacheMarker:
         self.stats = rec.get("stats")
 
     def _files(self):
+        """The fork's .tensorbin dumps of this layer (their bank-major twins, <stem>.bm.bin, are written atomically
+        and checked against their own header: not the marker's)."""
         stem = Path(self.prefix)
-        return sorted(stem.parent.glob(f"{stem.name}.flat.*")) if stem.parent.is_dir() else []
+        if not stem.parent.is_dir():
+            return []
+        return sorted(f for f in stem.parent.glob(f"{stem.name}.flat.*") if f.name.endswith(".tensorbin"))
 
     def write(self, stats):
         rec = {"files": {f.name: f.stat().st_size for f in self._files()}, "stats": stats}
@@ -336,6 +350,7 @@ class TtExperts:
         self._host_s = None
         self._load_flat(lambda: self._host_weights(ck, gtab), gtab, prefix)
         hit = self._host_s is None
+        pre = self._prefetch_next(ck, prefix)
         if prefix is not None:
             if hit:
                 self.bfp4_stats = marker.stats
@@ -352,7 +367,25 @@ class TtExperts:
         logger.info(
             f"EXPERTS_LOAD layer={self.layer} impl={self.impl} cache={'hit' if hit else 'miss' if prefix else 'off'} "
             f"total={time.time() - t0:.1f} s host_weights={0.0 if hit else self._host_s:.1f} s"
+            f"{f' prefetch=L{pre:02d}' if pre is not None else ''}"
         )
+
+    def _prefetch_next(self, ck, prefix):
+        """Start reading the next layer's routed-expert cache (set_load_order; its bank-major twins) into the pinned
+        staging, so its FlatRoutedExpert only waits for what is left of the read. The next layer's files: its own
+        cache prefix (expert_cache_prefix: a hash of its stored experts) with this layer's file suffixes (the layout
+        key is the plan's, the same for every layer of the model). Returns the layer started, or None."""
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import prefetch_cached
+
+        if prefix is None or self.layer not in _LOAD_ORDER or settings.get("EXPERTS_PREFETCH") != "on":
+            return None
+        i = _LOAD_ORDER.index(self.layer)
+        if i + 1 >= len(_LOAD_ORDER):
+            return None
+        nxt_layer = _LOAD_ORDER[i + 1]
+        nxt = expert_cache_prefix(self.cache_dir, ck, nxt_layer, self.impl, self.mesh, self.E)
+        files = [nxt + f[len(prefix) :] for f in self.fe.cache_files.values() if f is not None]
+        return nxt_layer if prefetch_cached(self.mesh, files) else None
 
     def _host_weights(self, ck, gtab):
         """The weights FlatRoutedExpert lays out: [device r cols + c][le] = (W1, W3, W2) as stored, bf16 (exact), each

@@ -350,6 +350,15 @@ TABLE = {
         "and packing. off = build from the checkpoint every time (the miss path, no files). 8x4 layer 0, bfp4: see "
         "BREADCRUMBS FIX.4 for miss / hit times; 7.6 GB of disk per layer (bfp4), 13.6 GB (bfp8)",
     ),
+    "EXPERTS_PREFETCH": Setting(
+        "on",
+        ("on", "off"),
+        "Load time only (upload/README.md): after a layer's routed experts are uploaded, the next layer's weight cache "
+        "(set_load_order) is read into the fork's pinned host staging in the background (flat_expert.prefetch_cached: "
+        "its bank-major twins, FLAT_CACHE_BANK_MAJOR), so the read overlaps that layer's dense weight load. No effect "
+        "without the twins (convert_cache.py, or written on a cache miss). off = each layer reads its own files when "
+        "it loads them. Device bytes identical either way",
+    ),
     "EXPERTS_PRECISION": Setting(
         "glm",
         ("full", "glm"),

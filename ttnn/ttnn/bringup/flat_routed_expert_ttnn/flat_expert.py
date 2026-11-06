@@ -25,6 +25,7 @@ from loguru import logger
 
 import ttnn
 from ttnn.bringup.combine_rf import persist_l1
+from ttnn.bringup.flat_routed_expert_ttnn import bank_major
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import BF8_TILE, noc_hops
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import crs_single as _crs_single
 from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import flat_layout
@@ -348,6 +349,8 @@ def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None, replic
     if cache_file is not None:
         Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
         ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(cache_file), host)
+        if _bank_major_on():  # (its bank-major twin too: what _load_cached_set loads)
+            bank_major.write_twin_from_host(cache_file, host)
     return host.to(device, mc)
 
 
@@ -426,6 +429,41 @@ def _load_cached(cache_file, device):
     if cache_file is None or not Path(cache_file).is_file():
         return None
     return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(cache_file), device=device)
+
+
+def _bank_major_on() -> bool:
+    """FLAT_CACHE_BANK_MAJOR (default 1): write and load the weight cache's bank-major twins (bank_major.py)."""
+    return os.environ.get("FLAT_CACHE_BANK_MAJOR", "1") != "0"
+
+
+def _load_cached_set(files, device):
+    """Every laid-out weight tensor of a layer from the weight cache ({name: tensor or None}). When each file has its
+    bank-major twin (<stem>.bm.bin) and FLAT_CACHE_BANK_MAJOR is on, from the twins: parallel preads into the mesh's
+    persistent pinned host staging (bank_major.stager; read ahead by prefetch_cached), then one device pull per chip.
+    The result is a HEIGHT_SHARDED [1, banks x rows, 32] tensor whose every DRAM bank holds the same bytes as the
+    WIDTH_SHARDED .tensorbin tensor's (the op reads its weights by buffer address and dtype only). Else the
+    .tensorbin path (mmap + to_device: the serial pin of the file pages, then the issue-queue copy of 576 B tiles)."""
+    if any(f is None for f in files.values()):
+        return dict.fromkeys(files)
+    if _bank_major_on():
+        twins = {n: bank_major.bm_path(f) for n, f in files.items()}
+        if all(bank_major.is_complete(p) for p in twins.values()):
+            st = bank_major.stager(device)
+            return {n: st.upload(p) for n, p in twins.items()}
+    return {n: _load_cached(f, device) for n, f in files.items()}
+
+
+def prefetch_cached(device, files) -> bool:
+    """Start reading another layer's bank-major twins into a free staging slot of ``device``'s stager (the next
+    FlatRoutedExpert's load then only waits for it). ``files``: that layer's .tensorbin paths. False when not all
+    twins exist (nothing started)."""
+    if not _bank_major_on() or not files:
+        return False
+    twins = [bank_major.bm_path(f) for f in files]
+    if not all(bank_major.is_complete(p) for p in twins):
+        return False
+    bank_major.stager(device).prefetch(twins)
+    return True
 
 
 def _kd_of(pcd, it):
@@ -2029,7 +2067,8 @@ class FlatRoutedExpert:
             shapes = flat_weight_shapes(H, I, E, lay)
             cached = {n: _fake_bank_sharded(*shapes[n], banks, fmts[n][0], device, n_dev) for n in names}
         else:
-            cached = {n: _load_cached(files[n], device) for n in names}
+            cached = _load_cached_set(files, device)
+        self.cache_files = files  # ({name: .tensorbin path or None}: another layer's names share the suffix)
         if any(t is None for t in cached.values()):
             weights = weights() if callable(weights) else weights
             assert len(weights) == n_dev and all(len(w_) == E for w_ in weights)

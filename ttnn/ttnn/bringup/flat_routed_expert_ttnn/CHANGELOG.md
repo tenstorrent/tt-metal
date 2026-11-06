@@ -547,3 +547,21 @@ shapes, mesh, row-major y).
 - `copy_tile_to_dst_init_short(cb)` -> `copy_init(cb)` (and `init_sfpu(icb, ocb)` / `copy_tile_init(cb)` ->
   `compute_kernel_hw_startup(icb, ocb); copy_init(icb)`): the new base removed the deprecated shims; same calls
   underneath, no behaviour change.
+
+### Bank-major weight cache + pinned staging upload (2026-11-06, deepseek_v41_flash_d_p load time)
+- Why: a cache hit (load_tensor_flatbuffer(path, device)) spent ~4.4 s a layer on 7.6 GB (bfp4, 8x4 Galaxy): the
+  WIDTH_SHARDED weight tensor's bank pages are 576 B host ranges, so tt-metal's pinned (device pull) write path refuses
+  it (dispatch.cpp batch_large_enough) after enqueue_write_tensor has pinned the mmapped file shard by shard (serial
+  page fault-in, cold from disk at ~2.6 GB/s), and the data then goes through the issue queue tile by tile.
+- New `bank_major.py`: the same bytes per DRAM bank as a HEIGHT_SHARDED [1, banks x rows, 32] tensor (one contiguous
+  host range per bank); `<stem>.bm.bin` twins of the cache files (raw shards, page-aligned); `PinnedStager`: persistent
+  host staging tensors (allocate_tensor_on_host, pinned once by PinnedMemoryCache), 8-thread preads, a background read
+  ahead (`prefetch_cached`). The op reads its weights by address and dtype only, so its programs are unchanged.
+- flat_expert.py: `_load_cached_set` loads the twins when all exist (FLAT_CACHE_BANK_MAJOR=1, default), else the
+  .tensorbin path; `_bank_sharded` writes the twin on a miss; `FlatRoutedExpert.cache_files`.
+- Needs TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES >= FLAT_CACHE_STAGING_DEPTH (2) x 8 GiB for every chip to be pinned
+  (default 4 GiB: the rest take the issue-queue copy, still bank-contiguous).
+- Test: /scratch/dnijemcevic/rebase/upload/test_upload_bench.py (device bytes bit-identical per DRAM bank to the
+  .tensorbin path; GB/s of each path).
+- Needed by: deepseek_v41_flash_d_p (tt/experts.py EXPERTS_PREFETCH)
+- Files: bank_major.py, flat_expert.py

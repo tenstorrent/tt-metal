@@ -79,7 +79,7 @@ from .cores import from_torch, init_caps, max_grid, sub_cores, sub_cores_tiled
 from .engram import TtEngramRows
 from .engram_add import build_engram_add
 from .engram_kv import build_engram_kv
-from .experts import build_experts
+from .experts import build_experts, set_load_order
 from .indexer import TtCandidateIndexer, TtReindexer, build_indexer, topk_local
 from .kv import TtWindowKv, attn_in_weights, rope_freqs
 from .layout import (
@@ -997,6 +997,7 @@ class TtDS41Model:
         )  # (OWN_ROWS: the chip's own whole rows, a local norm)
         self.head_w = ck.weight("head.weight", torch.float32) if lm_head else None
         self.blocks = {}
+        set_load_order(self.layers)  # (EXPERTS_PREFETCH: layer i+1's routed-expert cache read while layer i loads)
         for i in self.layers:
             self.blocks[i] = TtDS41Block(self, i)
         # DEEP_LAYERS=tail (FIX.17): the layers above the last KV / candidate source (21-39: window attention over
