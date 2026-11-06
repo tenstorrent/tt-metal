@@ -54,7 +54,7 @@ Plus three non-fork carried code drops from Marko's branch that are not on main:
 
 **Used only behind non-default switches (brief):**
 - `moe_grouped_topk` (tt/router.py:142): only `MOE_IMPL=flat` (+`ROUTER_IMPL=fused`); with the block MoE the router is
-  Marko's fused router inside the head.
+  Marko's fused router inside the head. (Retired 2026-11-06: tt/router.py:fused_gate calls the stock op.)
 - `nlp_create_qkv_heads` (`nlp_create_q_heads_split`, tt/attention.py:1252, 1312; tt/indexer.py:371, 387): only with
   `ROPE_CHAINS=off` / `ATTN_GLUE` paths; the shipped RoPE chain reads heads in place.
 - `sparse_sdpa` kv_format BF16 (tt/attention.py:1402, `WINDOW_KV_FORMAT=bf16_tiles`) and ROW_BFP8 (1373,
@@ -64,7 +64,7 @@ Plus three non-fork carried code drops from Marko's branch that are not on main:
 - `tail_send.py` (prepare_program / run_prepared, combine_rf route): only `DECODER_SKIP=replay128`.
 - `moe_block/tt/tail_engine.py`: latent (Kimi-K3) models only.
 - Not called by DS41 at all, but compiled into the same bring-up library, so they must still build after the rebase:
-  dispatch, combine, offset_cumsum, unified_routed_expert_ffn, moe_ag, moe_grouped_topk, nlp_create_qkv_heads,
+  dispatch, combine, offset_cumsum, unified_routed_expert_ffn, moe_ag, moe_grouped_topk (retired 2026-11-06), nlp_create_qkv_heads,
   prepare_chunk_recurrence. `dispatch` and `combine` call `tt::tt_fabric::get_forwarding_link_indices` (changed
   signature on main, see 3.1): build-required fixes.
 
@@ -139,7 +139,7 @@ commits is a separate decision from the main rebase (owner: take his 30 newer co
     via P.17; main: #61985 program-local resource allocation refactor, #61773, #61952, #60969).
   - `experimental/deepseek_prefill/moe_grouped_topk` (stock op; branch: Milos's fp32_selection, `9e82dd309fd`,
     `66e17107625`, `c5f88a66638`; main: #60550 `e5e853c3cd1` low-bit sorting comparison fix in the same compute
-    headers). Not shipped by DS41 (the fork is used by the flat path and GLM-5.3).
+    headers). Not shipped by DS41 (used by GLM-5.3, and since 2026-11-06 by the DS41 flat path, the fork retired).
   - `experimental/deepseek_prefill/hybrid_routed_expert_ffn` combine_fabric2d (branch: P.17 drop; main: #62312 cmb v2,
     #62473). Not called by DS41.
   - `ttnn/ttnn/__init__.py`, `ttnn/ttnn/types.py`, `ttnn/sources.cmake` (main: #58175 MX dtypes, #60803, #60348).

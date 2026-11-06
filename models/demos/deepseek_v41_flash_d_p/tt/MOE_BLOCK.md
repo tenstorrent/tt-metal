@@ -14,7 +14,7 @@ The block graph's step names do not change (reference/ds41_ref.py:block_steps). 
 | step | flat | block (default) |
 |---|---|---|
 | ffn_norm | gathers whole rows `[S/SP, H]` (unchanged) | the same |
-| router | tt/router.py: whole-row logits (HiFi2, fp32 DEST), fused moe_grouped_topk (ROUTER_IMPL) | no work (`Keep()`) |
+| router | tt/router.py: whole-row logits (HiFi2, fp32 DEST), fused stock moe_grouped_topk (ROUTER_IMPL) | no work (`Keep()`) |
 | experts | tt/experts.py: column gather, flat op + weighted combine, partial `[S/SP, H]` | **the whole MoE layer**: one `TtMoEBlockLayer` call (tt/moe_block_adapter.py) -> `[S/SP, H/TP]` bf16 |
 | shared_expert | tt/shared_expert.py: flat op, bfp8, LoFi | no work (`Keep()`) |
 | moe_add | add + reduce-scatter over TP -> `[S/SP, H/TP]` | hands the experts step's output on |
@@ -58,7 +58,7 @@ What differs from the ops head:
   gathers x itself, so ffn_norm's all-gather goes (0.59 vs 1.02 ms a chunk). Same values (the gather is a move).
 - Router: Marko's fused router with a new score option (`RouterSpec.score` / `RouterStream(score=)`, default
   `sigmoid`: his models unchanged): `sqrtsoftplus` = `softplus_tile` built with `INP_FLOAT32` (the fp32 polynomial,
-  as stock `ttnn.softplus` on fp32 and our `ROUTER_SOFTPLUS=fp32` fork option) then `sqrt_tile`, fp32 in DEST. Its
+  as stock `ttnn.softplus` on fp32 and the retired fork's fp32_activation) then `sqrt_tile`, fp32 in DEST. Its
   bitonic top-K now sorts K's power of two (K 6: the top 8, rows take the first 6; K 4 / 8 / 16 / 32 unchanged).
 - Combine order: the head's planner (routing_a2a's) writes no order table, so D7's fixed order is not available.
   The combine snaps each term to 2^-19 instead (Marko's `combine_snap`: exact fp32 sums in any order while sums stay
@@ -146,7 +146,7 @@ Other changes to Marko's code (defaults keep his behaviour): the exchange's fuse
 
 ## Settings with no effect under MOE_IMPL=block
 
-ROUTER_IMPL, ROUTER_SOFTPLUS (the block uses stock `ttnn.softplus` on fp32), COMBINE_ACC (fp32 accumulators),
+ROUTER_IMPL, COMBINE_ACC (fp32 accumulators),
 COMBINE_PLANNER, EXPERTS_SUM, EXPERTS_XG_PINNED, CCL_IMPL for the MoE collectives (the block's own: stock
 reduce_scatter for the logits, fabric_reduce_scatter for the shared rows, all_to_all_async_generic for the tail).
 MATMUL_FIDELITY does not reach the router (HiFi4 in the block).

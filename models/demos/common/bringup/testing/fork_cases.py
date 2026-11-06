@@ -10,6 +10,8 @@
 - Test cases: each fork ``ttnn/ttnn/bringup/<fork>/tests/cases.py`` defines ``CASES``, a list of dicts, each with at
   least ``model`` and ``sig``: the model that made the call, and the captured signature the case reproduces.
 - Uncovered: a call this model makes that no case of its fork carries (same model, same sig).
+- Retired: a call to a retired fork (RETIRED_OPS in ttnn/ttnn/bringup/__init__.py) in a capture made before the
+  retirement: listed apart (``retired``), neither covered nor uncovered; a call to any other unbound op stops.
 - ``--run-tests``: runs the tests of every fork the model uses through ``fork_tests.py`` (each case's mesh on the cards
   of this box that form it), every model's cases included (the top-level tests/test_*.py; a fork's own unit suite in
   tests/unit/ is not run). F198: a fork without a case file counts as failed and the others still run; every test is
@@ -57,6 +59,20 @@ def op_to_fork() -> dict[str, str]:
                 for name, (folder, _fn) in ast.literal_eval(node.value).items():
                     out[f"ttnn.bringup.{name}"] = folder
     return out
+
+
+def retired_ops() -> dict[str, str]:
+    """ttnn.bringup.<op> -> what replaced it: the retired forks (RETIRED_OPS in ttnn/ttnn/bringup/__init__.py). A
+    capture made before the retirement may still list their calls; check() reports them apart, never as unknown."""
+    import ast
+
+    init = FORKS / "__init__.py"
+    if not init.exists():
+        return {}
+    for node in ast.parse(init.read_text()).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "RETIRED_OPS" for t in node.targets):
+            return {f"ttnn.bringup.{k}": v for k, v in ast.literal_eval(node.value).items()}
+    return {}
 
 
 CALIB = 2.0  # as per step (component_checks.COMPONENT_DEFAULTS component_calib) and end to end (e2e.calib)
@@ -125,8 +141,10 @@ def check(capture: Path | list[Path], model: str) -> tuple[dict, dict[str, list[
             if (c["op"], c["sig"]) not in seen:
                 seen.add((c["op"], c["sig"]))
                 calls.append(c)
-    owner = op_to_fork()
+    owner, gone = op_to_fork(), retired_ops()
     by_fork: dict[str, list[dict]] = {}
+    retired = [c for c in calls if c["op"] not in owner and c["op"] in gone]  # (a capture older than the retirement)
+    calls = [c for c in calls if c not in retired]
     for c in calls:
         fork = owner.get(c["op"])
         if fork is None:
@@ -144,7 +162,11 @@ def check(capture: Path | list[Path], model: str) -> tuple[dict, dict[str, list[
         "fork_calls": len(calls),
         "fork_calls_uncovered": sum(len(v) for v in missing.values()),
     }
-    return {"stats": stats, "forks": sorted(by_fork)}, missing
+    return {
+        "stats": stats,
+        "forks": sorted(by_fork),
+        "retired": [dict(c, replaced_by=gone[c["op"]]) for c in retired],
+    }, missing
 
 
 def run_tests(forks: list[str], runner=None, grouper=None) -> dict[str, dict]:
@@ -196,6 +218,8 @@ def main(argv=None) -> int:
     res, missing = check([Path(c) for c in a.capture], model)
     stats = res["stats"]
     print(f"{model}: {stats['fork_calls']} distinct call(s) to {stats['forks_used']} fork(s): {res['forks']}")
+    for c in res["retired"]:
+        print(f"  retired fork, not checked: sig {c['sig']} (x{c['count']}): {c['op']} -> {c['replaced_by']}")
     for fork, gap in missing.items():
         print(f"  {fork}: {len(gap)} call(s) with no case for {model}:")
         for c in gap:

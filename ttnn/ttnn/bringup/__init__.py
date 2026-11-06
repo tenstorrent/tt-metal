@@ -26,6 +26,16 @@ PYTHON_OPS = {
     "pair_pool": ("pair_pool_ttnn", "pair_pool"),
 }
 
+# Retired forks (INDEX.md, "Retired forks"): python name -> what replaced it. The fork's folder and binding are gone; a
+# model's committed fork-call capture (bringup/results/fork_calls.json) may still list calls to it until that model is
+# captured again, and models/demos/common/bringup/testing/fork_cases.py reports such calls as retired instead of
+# stopping on an op no fork binds.
+RETIRED_OPS = {
+    # deepseek_v41_flash_d_p's sqrtsoftplus router (fp32_selection + fp32_activation): upstream #60550 made the stock op
+    # select in fp32 with its own fp32-accurate sqrt(softplus) (owner decision 2026-11-06)
+    "moe_grouped_topk": "ttnn.experimental.deepseek_prefill.moe_grouped_topk (upstream #60550; retired 2026-11-06)",
+}
+
 
 def _stable_arg_reprs():
     """Value reprs for the non-tensor handles that fork ops take, so the fork-call capture
@@ -53,6 +63,8 @@ _stable_arg_reprs()
 
 
 def __getattr__(name):
+    if name in RETIRED_OPS:
+        raise AttributeError(f"ttnn.bringup.{name} is a retired fork: use {RETIRED_OPS[name]}")
     if name not in PYTHON_OPS:
         raise AttributeError(f"module 'ttnn.bringup' has no attribute {name!r}")
     import importlib

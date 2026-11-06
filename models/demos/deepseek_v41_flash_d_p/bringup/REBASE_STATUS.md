@@ -21,7 +21,8 @@ pushing because one item matches a stop rule (a failure I cannot fix at its caus
    rounds correctly and the old build rounded wrongly (float64 check); it spreads through the window and sparse top-k.
    Both builds are bit-deterministic. err_final_hidden 0.14481 (old 0.14476), top1/top5 1.0, logits tail pcc better.
 4. **Speed**: warm chunk 226.0 ms (old 245.2), full prefill 56k 2503 ms (old 2891), device ms/chunk 165.0 (old 162.6).
-5. Pending decisions from the sync: fork moe_grouped_topk vs upstream #60550; prepare_chunk_recurrence unsynced
+5. Pending decisions from the sync: fork moe_grouped_topk vs upstream #60550 (decided 2026-11-06: fork retired, the
+   stock op); prepare_chunk_recurrence unsynced
    (#63309; DS41 does not use it); re-check the stock combine_fabric2d and stock moe_grouped_topk merges (GLM-5.3 /
    Kimi paths, not run here); knowledge staleness edits uncommitted until you read
    /scratch/dnijemcevic/rebase/staleness_report.md.

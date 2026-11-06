@@ -21,17 +21,21 @@ row's whole token rows, replicated over axis 1, so every chip of a row computes 
     dense  = scatter(zeros fp32 RM, ti, tw)   [S/SP, 384] fp32 ROW_MAJOR (K-4: no fp32 TILE scatter): the component
                                               boundary and dense-routing consumers
 
-ROUTER_IMPL=fused (P.22, the default; tt/settings.py): everything after the gate matmul is ONE
-ttnn.bringup.moe_grouped_topk(n_groups=1, score_func="sqrtsoftplus", fp32_selection=True, fp32_activation=True)
-(the fork of Marko Staletovic's fused gate, GLM-5.3's router; fp32_activation compiles sqrt(softplus) with the fp32
-SFPU polynomials, as ttnn.softplus does for fp32: the source op's bf16-grade softplus is ~8e-4 relative off on [-3, 9],
-0 below -5, and swapped up to 11 of 2048 rows' experts at layer 24, setting ROUTER_SOFTPLUS, DS41-105):
-sqrt(softplus) on the SFPU, the recentred fp32 bias added on the
-SFPU for the selection only, top 6 on full fp32 keys, the unbiased scores gathered and normalized x route_scale /
-(sum + 1e-20) in the fp32 DEST (K-23). Outputs: weights bf16 TILE (the reference's own dtype, model.py Gate
-`weights.type_as(x)`; the experts take bf16 weights either way, tt/weighted_combine.py:routing), ids uint16 TILE.
-The op takes a full-shape bias: [max_rows, E] fp32 built at load. The dense routing (hybrid / component boundary only)
-is the scatter of those weights (bf16 values in fp32). ROUTER_IMPL=ops = the chain above (P.21).
+ROUTER_IMPL=fused (P.22, the default; tt/settings.py): everything after the gate matmul is ONE stock
+ttnn.experimental.deepseek_prefill.moe_grouped_topk(n_groups=1, score_func="sqrtsoftplus", stable_sort=False,
+fp32_selection=True) (fused_gate below; Marko Staletovic's fused gate, GLM-5.3's router). Since upstream #60550
+(e5e853c3cd1) the stock op always selects in fp32: sqrt(softplus) and the recentred fp32 bias in one SFPU pass (on
+Blackhole its own fp32-accurate sqrt(softplus) routine, not the bf16 softplus polynomial that swapped up to 11 of 2048
+rows' experts at layer 24, DS41-105), the bias for the selection only, fp32 sort keys. stable_sort=False: the plain
+network compares the full fp32 keys; stable_sort=True would take the rank-tag engine, which compares 17 mantissa bits
+(near ties closer than ~2^-17 relative go to the lower id). fp32_selection=True (this branch's stock option): the
+weights, the unbiased scores gathered and normalized x route_scale / (sum + 1e-20), in fp32 on the SFPU (K-23).
+Retired 2026-11-06: the bring-up fork ttnn.bringup.moe_grouped_topk (fp32_selection + fp32_activation) that did the
+same before #60550. Outputs: weights bf16 TILE (the reference's own dtype, model.py Gate `weights.type_as(x)`; the
+experts take bf16 weights either way, tt/weighted_combine.py:routing), ids uint16 TILE. The op takes a full-shape bias:
+[max_rows, E] fp32 built at load. The dense routing (hybrid / component boundary only) is the scatter of those weights
+(bf16 values in fp32). ROUTER_IMPL=ops = the chain above (P.21). Accuracy test (2x2):
+tests/test_router_stock_topk.py.
 
 Constants (weight, bias, the scatter's zeros for max_rows) are built once at load and sliced on the device per chunk.
 Adapted from models/demos/xing40_a4b_d_p/tt/router.py:TtRouter (and mimo_v2_6_d_p/tt/router.py's ttnn.topk path).
@@ -63,6 +67,26 @@ def _replicate(mesh, t: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT) -> ttnn.Te
     )
 
 
+def fused_gate(logits, bias, top_k: int, route_scale: float, memory_config=DRAM):
+    """ROUTER_IMPL=fused: the stock fused gate on [.., rows, E] fp32 logits and the full-shape fp32 bias (module
+    docstring). Returns (weights bf16, ids uint16), [.., rows, top_k] TILE. Also called by
+    tests/test_router_stock_topk.py, so the test runs the model's exact call."""
+    return ttnn.experimental.deepseek_prefill.moe_grouped_topk(
+        logits,
+        bias,
+        n_groups=1,
+        summed_experts_per_group=1,
+        topk_groups=1,
+        n_activated_experts=int(top_k),
+        route_scale=float(route_scale),
+        epsilon=1e-20,
+        stable_sort=False,
+        score_func="sqrtsoftplus",
+        fp32_selection=True,
+        memory_config=memory_config,
+    )
+
+
 class TtRouter:
     def __init__(
         self,
@@ -84,7 +108,6 @@ class TtRouter:
         self.w = _replicate(mesh, weight.T.reshape(1, 1, H, E), ttnn.bfloat16)
         b = bias.float().reshape(1, 1, 1, E)
         self.fused = settings.get("ROUTER_IMPL") == "fused"
-        self.fp32_activation = settings.get("ROUTER_SOFTPLUS") == "fp32"
         if self.fused:  # (P.22) the fused gate takes a bias of the scores' shape: [max_rows, E], sliced per row count
             self.bias = _replicate(mesh, (b - b.mean()).expand(1, 1, self.max_rows, E), ttnn.float32)
             self._bias_rows = {self.max_rows: self.bias}
@@ -139,21 +162,7 @@ class TtRouter:
         bias = self._bias_rows.get(s)
         if bias is None:  # (a row count other than the chunk's: sliced once and kept)
             bias = self._bias_rows[s] = self._rows(self.bias, s)
-        wts, idx = ttnn.bringup.moe_grouped_topk(
-            logits,
-            bias,
-            n_groups=1,
-            summed_experts_per_group=1,
-            topk_groups=1,
-            n_activated_experts=self.top_k,
-            route_scale=self.route_scale,
-            epsilon=1e-20,
-            stable_sort=True,
-            score_func="sqrtsoftplus",
-            fp32_selection=True,
-            fp32_activation=self.fp32_activation,
-            memory_config=DRAM,
-        )
+        wts, idx = fused_gate(logits, bias, self.top_k, self.route_scale)
         dealloc(logits)
         if not self.dense:
             return None, idx, wts
