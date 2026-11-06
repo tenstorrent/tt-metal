@@ -1826,7 +1826,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                     "decode_forward_begin takes no spec_sampling['mask']: pass the mask to decode_forward_finish"
                 )
         gdn_kw = {}
-        blocks = getattr(self.model[0], "_spec_blocks", None)
+        models = getattr(self, "model", None)  # absent on the adapter tests' fakes
+        blocks = getattr(models[0], "_spec_blocks", None) if models else None
         if blocks is not None:
             gdn_kw["gdn_windows"] = self._gdn_windows(kwargs, int(tokens.shape[0]))
         if narrow:
