@@ -2140,7 +2140,6 @@ class ttMLA:
         )
         return self._finish_sparse_chunked_attn(
             tt_q=tt_q,
-            tt_kvpe=tt_kvpe,
             kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
             indices=plan.compact_indices,
             kvpe_cache=kvpe_cache,
