@@ -31,6 +31,13 @@ ROT_GLU = os.environ.get("BONSAI_ROT_GLU", "1") == "1"
 PREFILL = os.environ.get("BONSAI_TERNARY_PREFILL") == "1"
 
 
+def _take_pf():
+    """Under the weight stream, the next GDN step's pending input prefetch: the down projection's writer runs it."""
+    from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+    return stream_decode.STATE.take_pending() if stream_decode.active() else None
+
+
 class TernaryMLP:
     def __init__(self, device, packed: dict, rotations: dict, prefill_rotations: dict = None):
         def lin(stem):
@@ -80,7 +87,7 @@ class TernaryMLP:
         if nrot is not None and self.gateup is not None:
             # the layer's norm + rotation inside the gate/up op (x is the un-normalised residual stream)
             h = self.gateup.rotated(nrot, x, lead=lead, out_l1=True)
-            y = self.down.rotated(self.rot_hidden, h, lead=lead, residual=prerot.take_residual())
+            y = self.down.rotated(self.rot_hidden, h, lead=lead, residual=prerot.take_residual(), host_pf=_take_pf())
             ttnn.deallocate(h)
             return y
         xr = prerot.take(x)
@@ -91,7 +98,9 @@ class TernaryMLP:
             h = self.gateup(xr, lead=lead, out_l1=fuse)
             ttnn.deallocate(xr)
             if fuse:  # the hidden rotation inside the down projection's op (decode_linear3 rotated())
-                y = self.down.rotated(self.rot_hidden, h, lead=lead, residual=prerot.take_residual())
+                y = self.down.rotated(
+                    self.rot_hidden, h, lead=lead, residual=prerot.take_residual(), host_pf=_take_pf()
+                )
                 ttnn.deallocate(h)
                 return y
             hr = self.rot_hidden(h)

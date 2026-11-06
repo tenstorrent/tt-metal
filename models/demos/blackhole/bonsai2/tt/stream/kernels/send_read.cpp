@@ -19,15 +19,31 @@ void kernel_main() {
     // staging page k of the CB's fifo is at base + (k % STAGE) * SLOT (the fifo wraps; a page never straddles)
     const uint32_t base = get_write_ptr(cb);
     uint32_t head = 0, inflight = 0, pushed = 0;
+#ifdef STREAM_STATS
+    // cycles: waiting for staging room (the ring side slow), waiting for DRAM (at runtime arg STATS_ARG's address)
+    uint64_t t_room = 0, t_dram = 0;
+#endif
     for (uint32_t i = 0; i < nslots; ++i) {
         if (inflight == INFLIGHT) {
+#ifdef STREAM_STATS
+            const uint64_t t0 = get_timestamp();
             noc_async_read_barrier_with_trid(head + 1);
+            t_dram += get_timestamp() - t0;
+#else
+            noc_async_read_barrier_with_trid(head + 1);
+#endif
             cb_push_back(cb, 1);
             ++pushed;
             head = (head + 1) % INFLIGHT;
             --inflight;
         }
+#ifdef STREAM_STATS
+        const uint64_t t1 = get_timestamp();
         cb_reserve_back(cb, inflight + 1);
+        t_room += get_timestamp() - t1;
+#else
+        cb_reserve_back(cb, inflight + 1);
+#endif
         const uint32_t slot = (i % INFLIGHT);
         noc_async_read_set_trid(slot + 1);
 #ifndef SEND_NO_READ
@@ -47,4 +63,9 @@ void kernel_main() {
         --inflight;
     }
     noc_async_read_set_trid(0);
+#ifdef STREAM_STATS
+    volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(STATS_ADDR);
+    st[0] = (uint32_t)t_room;
+    st[1] = (uint32_t)t_dram;
+#endif
 }

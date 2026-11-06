@@ -10,9 +10,11 @@ ops run on the receivers."""
 
 import os
 
+import torch
+
 import ttnn
 from models.demos.blackhole.bonsai2.tt import core_ranges
-from models.demos.blackhole.bonsai2.tt.stream.stream import Plan, Stream
+from models.demos.blackhole.bonsai2.tt.stream.stream import PPS, Plan, Stream, receiver_count
 
 STATE = None
 
@@ -35,9 +37,7 @@ class StreamDecode:
 
         device = model.mesh_device
         self.model, self.on = model, False
-        self.st = st = Stream(device)
-        n = len(st.rx_order)
-        core_ranges.set_layout(st.rx_order, st.defines())
+        n = receiver_count(device)
         w = ttnn.to_torch(model.norm.weight).float().reshape(-1)
         self.final_nrot = NormRotation(device, model._ternary_signs[5120], w, model.norm.eps)
         order = []
@@ -51,16 +51,89 @@ class StreamDecode:
             order += [(m.gateup, layer._bonsai_ff_nrot.B), (m.down, m.rot_hidden.B)]
         self.head = model.ternary_lm_head.lin
         order.append((self.head, self.final_nrot.B))
-        self.plan = Plan(st)
+        loads = [0] * n
+        pages = []
         for lin, B in order:
             lin.cores, lin.spread, lin.streamed = n - B, True, True
-            self.plan.add(lin.stream_pages(device))
+            p = lin.stream_pages(device)
+            pages.append(p)
+            for i, a in p.items():
+                loads[i] += -(-a.shape[0] // PPS)
+        self.st = st = Stream(device, loads=loads)  # receivers grouped so the senders' totals balance
+        core_ranges.set_layout(st.rx_order, st.defines())
+        self.plan = Plan(st)
+        self.takes = [self.plan.add(p) for p in pages]
         self.plan.build()
+        if os.environ.get("STREAM_BENCH") == "1":
+            self.bench()
+        # GDN step input prefetch (gdn_step/kernels/step_prefetch.hpp): one persistent L1 buffer on the step cores,
+        # filled for the next GDN layer by an earlier op (the previous down projection, or prefetch_op)
+        from models.demos.blackhole.bonsai2.tt.gdn_step.kernels_layout import PF_BYTES
+
+        self.gdns = [
+            (layer.attention.ternary, layer.attention) for layer in model.layers if not layer.is_full_attention
+        ]
+        self.gdn_index = {id(t): i for i, (t, _) in enumerate(self.gdns)}
+        nv = self.gdns[0][0].step.nv if self.gdns else 0
+        if nv:
+            mc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    core_ranges.rects(st.rx_order[:nv]), [1, PF_BYTES // 4], ttnn.ShardOrientation.ROW_MAJOR
+                ),
+            )
+            self.pf = ttnn.from_torch(
+                torch.zeros(nv, PF_BYTES // 4, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=mc,
+            )
+        self.pending, self.ready = None, None
         from models.demos.blackhole.bonsai2.tt.ternary.argmax import prealloc
 
         prealloc(device)  # the decode argmax's result buffer, before any decode trace
+        # the decode embedding's output: persistent, L1, zero (embed() writes row 0 only)
+        D = model.embd.weights.shape[-1]
+        self.embed_out = ttnn.from_torch(
+            torch.zeros(1, 1, D),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         print(f"BONSAI_STREAM slots per sender {self.plan.slots} segments {len(self.plan.w)}", flush=True)
         self.deactivate()
+
+    def bench(self):
+        """STREAM_BENCH=1: the step's stream with drain-only consumers (one per linear), traced: the stream's own pace
+        on this plan, without the decode ops."""
+        import time
+
+        from models.demos.blackhole.bonsai2.tt.stream.stream import drain
+
+        device = self.st.device
+
+        def step():
+            self.st.launch(self.plan)
+            for t in self.takes:
+                drain(self.st, t)
+
+        step()
+        ttnn.synchronize_device(device)
+        tid = ttnn.begin_trace_capture(device, cq_id=0)
+        step()
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(3):
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        ms = (time.perf_counter() - t0) / 3 * 1e3
+        ttnn.release_trace(device, tid)
+        nbytes = sum(self.plan.slots) * self.st.slot
+        print(f"STREAM_BENCH drain-only step {ms:.2f} ms, {nbytes / ms / 1e6:.0f} GB/s", flush=True)
 
     def activate(self):
         if os.environ.get("STREAM_OPLOG") == "1" and not getattr(self, "_oplog", False):
@@ -84,8 +157,33 @@ class StreamDecode:
         """The decode cores as rectangles (for stock ops' sub_core_grids)."""
         return core_ranges.rects(self.st.rx_order)
 
+    def _spec(self, i):
+        t, g = self.gdns[i]
+        return t.step.prefetch_spec(self.pf, g.fused_conv_state, g.recurrent_state, t.wab)
+
+    def step_pf(self, t):
+        """The prefetch buffer for GDN step t, filled now (prefetch_op) unless an earlier op did."""
+        i = self.gdn_index[id(t)]
+        if self.ready != i:
+            t.step.prefetch_op(self._spec(i))
+            self.ready = i
+        return self.pf
+
+    def after_step(self, t):
+        """GDN step t has read the buffer: the next GDN layer's prefetch is pending for the next host op."""
+        i = self.gdn_index[id(t)] + 1
+        self.ready, self.pending = None, ((i, self._spec(i)) if i < len(self.gdns) else None)
+
+    def take_pending(self):
+        if self.pending is None:
+            return None
+        i, spec = self.pending
+        self.pending, self.ready = None, i
+        return spec
+
     def launch(self):
         self.st.launch(self.plan)
+        self.pending, self.ready = None, None
 
 
 def embed(table, ids):
@@ -95,7 +193,7 @@ def embed(table, ids):
 
     D = table.shape[-1]
     device = table.device()
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    out = STATE.embed_out
     core = STATE.st.rx_order[0]
     crs = _crs([core])
     rt = ttnn.RuntimeArgs()
@@ -104,7 +202,7 @@ def embed(table, ids):
     ct = [D]
     for t in (ids, table, out):
         ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-    size = 64 + D * 2 + 2048
+    size = 64 + D * 2
     prog = ttnn.ProgramDescriptor(
         kernels=[
             ttnn.KernelDescriptor(

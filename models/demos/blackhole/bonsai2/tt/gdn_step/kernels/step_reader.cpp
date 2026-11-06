@@ -12,6 +12,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "../../ternary/kernels/core_span.hpp"
+#ifdef STEP_L1
+#include "step_prefetch.hpp"  // STEP_L1: the small inputs from this core's prefetch buffer (common arg STEP_PF_ARG)
+#endif
 #ifndef STEP_FIRST
 #define STEP_FIRST 0  // the first core (row-major logical index): core STEP_FIRST + j owns value head j
 #endif
@@ -149,10 +152,17 @@ void kernel_main() {
         for (uint32_t t = 0; t < NBK; ++t) {
             noc_async_read(ab.get_noc_addr(t), get_write_ptr(cb_xnt) + t * TB, TB);
         }
+#ifdef STEP_L1
+        const uint32_t pf = get_common_arg_val<uint32_t>(STEP_PF_ARG);
+        (void)ws;
+        noc_async_read(get_noc_addr(pf + step_pf::WAB), get_write_ptr(cb_wab), 2 * NBK * TB);
+        noc_async_read(get_noc_addr(pf + step_pf::ONES), get_write_ptr(cb_ones), TB);
+#else
         for (uint32_t t = 0; t < 2 * NBK; ++t) {
             noc_async_read(ws.get_noc_addr(j * 2 * NBK + t), get_write_ptr(cb_wab) + t * TB, TB);
         }
         noc_async_read(cs.get_noc_addr(NV * NCH + HT + 1), get_write_ptr(cb_ones), TB);
+#endif
     }
 #else
     const uint32_t ca = j, cbb = NV + j;  // a and b columns of the fused [a | b] projection
@@ -199,9 +209,15 @@ void kernel_main() {
     for (uint32_t c = 0; c < NCH; ++c) {
         zero_rows_from(X + c * TB, 128);
         const uint32_t t = chunk_tile(c);
+#ifdef STEP_L1
+        const uint64_t s = get_noc_addr(get_common_arg_val<uint32_t>(STEP_PF_ARG) + step_pf::CONV + c * 256);
+        noc_async_read(s, X + c * TB, 128);              // face 0 rows 0-3 (row 3 is overwritten below)
+        noc_async_read(s + 128, X + c * TB + 512, 128);  // face 1 rows 0-3
+#else
         const uint64_t s = conv.get_noc_addr(t);
         noc_async_read(s, X + c * TB, 128);              // face 0 rows 0-3 (row 3 is overwritten below)
         noc_async_read(s + 512, X + c * TB + 512, 128);  // face 1 rows 0-3
+#endif
         const uint64_t x = qkv.get_noc_addr(t);
         noc_async_read(x, SC + c * 128, 64);
         noc_async_read(x + 512, SC + c * 128 + 64, 64);
@@ -210,11 +226,21 @@ void kernel_main() {
     const uint32_t T = get_write_ptr(cb_t);
     for (uint32_t c = 0; c < NCH; ++c) {  // taps: rows 0-3 only (the rest of the tile is zero)
         zero_rows_from(T + c * TB, 128);
+#ifdef STEP_L1
+        const uint64_t s = get_noc_addr(get_common_arg_val<uint32_t>(STEP_PF_ARG) + step_pf::TAPS + c * 256);
+        noc_async_read(s, T + c * TB, 128);
+        noc_async_read(s + 128, T + c * TB + 512, 128);
+#else
         const uint64_t s = cs.get_noc_addr(j * NCH + c);
         noc_async_read(s, T + c * TB, 128);
         noc_async_read(s + 512, T + c * TB + 512, 128);
+#endif
     }
+#ifdef STEP_L1
+    noc_async_read(get_noc_addr(get_common_arg_val<uint32_t>(STEP_PF_ARG) + step_pf::E), get_write_ptr(cb_e), TB);
+#else
     noc_async_read(cs.get_noc_addr(NV * NCH + HT), get_write_ptr(cb_e), TB);
+#endif
 #endif
 #if DO_GATES
     // ONES (unless read first), the state, the norm weight
@@ -223,15 +249,28 @@ void kernel_main() {
     noc_async_read(cs.get_noc_addr(NV * NCH + HT + 1), get_write_ptr(cb_ones), TB);
 #endif
     const uint32_t S = get_write_ptr(cb_s);
+#ifdef STEP_L1
+    const uint32_t pfs = get_common_arg_val<uint32_t>(STEP_PF_ARG);
+    noc_async_read(get_noc_addr(pfs + step_pf::S), S, HT * HT * TB);
+#else
     for (uint32_t t = 0; t < HT * HT; ++t) {
+#ifndef STEP_NO_STATE_IO  // timing experiment only: no state traffic (wrong results)
         noc_async_read(st.get_noc_addr(j * HT * HT + t), S + t * TB, TB);
+#endif
     }
+#endif
     const uint32_t W = get_write_ptr(cb_w);
     for (uint32_t i = 0; i < HT; ++i) {  // norm weight: row 0 only (64-B reads: rows 0-1, row 1 is zero)
         zero_rows_from(W + i * TB, 64);
+#ifdef STEP_L1
+        const uint64_t s = get_noc_addr(pfs + step_pf::W + i * 128);
+        noc_async_read(s, W + i * TB, 64);
+        noc_async_read(s + 64, W + i * TB + 512, 64);
+#else
         const uint64_t s = cs.get_noc_addr(NV * NCH + i);
         noc_async_read(s, W + i * TB, 64);
         noc_async_read(s + 512, W + i * TB + 512, 64);
+#endif
     }
 
 #endif
@@ -315,7 +354,9 @@ void kernel_main() {
         cb_wait_front(cb_snew, HT * HT);
         const uint32_t sn = get_read_ptr(cb_snew);
         for (uint32_t t = 0; t < HT * HT; ++t) {
+#ifndef STEP_NO_STATE_IO
             noc_async_write(sn + t * TB, st.get_noc_addr(j * HT * HT + t), TB);
+#endif
         }
         cb_wait_front(cb_out, HT);
         const uint32_t o = get_read_ptr(cb_out);

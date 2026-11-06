@@ -70,7 +70,8 @@ def test_bonsai_perf(mesh_device, device_params):
     print(f"BONSAI_PROMPT_TOKENS={P}", flush=True)
     print(f"GATE_CONFIG stage={STAGE} profiling={int(profiling)} trace={int(not profiling)}", flush=True)
 
-    if profiling:
+    traced_prof = profiling and os.environ.get("BONSAI_PROF_TRACED") == "1" and STAGE == "decode"
+    if profiling and not traced_prof:
         layers = int(os.environ.get("BONSAI_OPT_PROFILE_LAYERS", "0") or 0)
         model, page_table = build_model(device, n_layers=layers or None)
         if STAGE == "prefill":
@@ -93,7 +94,8 @@ def test_bonsai_perf(mesh_device, device_params):
         signpost("DECODE_END")
         return
 
-    model, page_table = build_model(device)
+    layers = int(os.environ.get("BONSAI_OPT_PROFILE_LAYERS", "0") or 0) if traced_prof else 0
+    model, page_table = build_model(device, n_layers=layers or None)
     vocab = model.args.vocab_size
     model.capture_prefill_trace_chunked(device, page_table, chunk_size=CHUNK, warmup_masked_buckets=False)
     logits = prefill_traced(model, prompt, page_table)  # untimed: compiles the last-token norm and LM head
@@ -124,7 +126,8 @@ def test_bonsai_perf(mesh_device, device_params):
     token, pos, tokens, step_ms = first, P, [first], []
     split = os.environ.get("BONSAI_TIME_SPLIT") == "1"
     fwd_ms = []
-    for call in range(DECODE_CALLS):
+    calls = 4 if traced_prof else DECODE_CALLS  # BONSAI_PROF_TRACED=1: the device profiler on the traced decode
+    for call in range(calls):
         t = time.perf_counter()
         out = decode_step(generator, token, pos, page_table, trace=True, read=False)
         if split:  # the traced forward alone, then the argmax (BONSAI_TIME_SPLIT=1)
@@ -136,10 +139,20 @@ def test_bonsai_perf(mesh_device, device_params):
             step_ms.append((time.perf_counter() - t) * 1000.0)
         tokens.append(token)
         pos += 1
+    from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+    if stream_decode.active() and "STREAM_STATS" in os.environ.get("STREAM_DEFINES", ""):
+        ttnn.synchronize_device(device)
+        print("STREAM_STATS us (kernel, credit wait, data wait, slots, room wait, dram wait):", flush=True)
+        for row in stream_decode.STATE.st.stats():
+            print("STREAM_STATS", row, flush=True)
     if split:
         print(
             f"TIME_SPLIT forward_ms={statistics.fmean(fwd_ms):.4f} total_ms={statistics.fmean(step_ms):.4f}", flush=True
         )
+    if traced_prof:
+        ttnn.synchronize_device(device)
+        ttnn.ReadDeviceProfiler(device)
     per_token_ms = statistics.fmean(step_ms)
     from transformers import AutoTokenizer
 

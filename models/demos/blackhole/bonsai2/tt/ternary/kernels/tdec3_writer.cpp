@@ -4,6 +4,9 @@
 // then writes this core's output tiles.
 #include "tdec_stream.hpp"
 #include "core_span.hpp"
+#ifdef STEP_PREFETCH
+#include "../../gdn_step/kernels/step_prefetch.hpp"
+#endif
 #ifndef OUT_PER_NT
 #define OUT_PER_NT 1
 #endif
@@ -44,6 +47,32 @@ void kernel_main() {
 
     // No weight reads until this core's x' and scales have landed (NCRISC pushes c_2 after both): with every core's
     // stream in flight (~8 MB queued at the banks) the small reads waited 17 us behind them.
+#ifdef STEP_PREFETCH
+    // the next GDN step's inputs into its cores' L1 (gdn_step/kernels/step_prefetch.hpp): this RISC is otherwise idle
+    // until the outputs. Common args from PF_ARG: pf, nv, group, qt, wab, consts, conv state, recurrent state;
+    // compile-time accessor args from PF_CT.
+    {
+        constexpr auto pw = TensorAccessorArgs<PF_CT>();
+        constexpr auto pc = TensorAccessorArgs<pw.next_compile_time_args_offset()>();
+        constexpr auto pv = TensorAccessorArgs<pc.next_compile_time_args_offset()>();
+        constexpr auto ps = TensorAccessorArgs<pv.next_compile_time_args_offset()>();
+        const uint32_t nv = get_common_arg_val<uint32_t>(PF_ARG + 1);
+        const uint32_t j = core_index(get_common_arg_val<uint32_t>(4));
+        if (j < nv) {
+            step_pf::prefetch(
+                get_common_arg_val<uint32_t>(PF_ARG),
+                j,
+                nv,
+                get_common_arg_val<uint32_t>(PF_ARG + 2),
+                get_common_arg_val<uint32_t>(PF_ARG + 3),
+                TensorAccessor(pw, get_common_arg_val<uint32_t>(PF_ARG + 4), 2048),
+                TensorAccessor(pc, get_common_arg_val<uint32_t>(PF_ARG + 5), 2048),
+                TensorAccessor(pv, get_common_arg_val<uint32_t>(PF_ARG + 6), 2048),
+                TensorAccessor(ps, get_common_arg_val<uint32_t>(PF_ARG + 7), 2048));
+            noc_async_read_barrier();
+        }
+    }
+#endif
 #if defined(GCB_STREAM) || defined(W_STREAM)
     // the weights arrive another way (prefetcher / weight-stream ring, read by NCRISC); this RISC only writes
 #elif defined(X_PAGED) || defined(X_HUB)

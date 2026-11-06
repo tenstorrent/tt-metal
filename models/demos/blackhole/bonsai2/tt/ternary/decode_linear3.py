@@ -204,10 +204,12 @@ class TernaryDecodeLinear3:
         stage=None,
         x_local=False,
         stream=None,
+        host_pf=None,
     ):
         """stage: this linear's weights already copied into L1 by stage_kernels(stage) in an earlier op.
         stream: its weights from the weight stream's ring (bonsai2/tt/stream); streamed linears take it by
         themselves while the stream is active.
+        host_pf: a GDN step's input prefetch (GDNStep.prefetch_spec) for this op's writer to run first.
         split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
         x_rot: [C, K] bf16 ROW_MAJOR, C copies of the rotated activation (one per DRAM bank: page c is in bank
         c mod 8) -> [32, N] bf16 TILE, row 0 = y.
@@ -269,6 +271,7 @@ class TernaryDecodeLinear3:
                 ttnn.bfloat16,
                 ttnn.TILE_LAYOUT,
                 device,
+                ttnn.L1_MEMORY_CONFIG if out_l1 else ttnn.DRAM_MEMORY_CONFIG,
             )
             if split or qg_heads
             else None
@@ -360,6 +363,17 @@ class TernaryDecodeLinear3:
         if split or qg_heads:
             assert split % TILE == 0, split
             wr_ct += ttnn.TensorAccessorArgs(out2).get_compile_time_args()
+        pf_tensors = []
+        if host_pf is not None:  # the next GDN step's input prefetch on this op's writer (tdec3_writer.cpp)
+            assert COMMON_ARGS
+            pf_common, pf_ct, pf_tensors, _ = host_pf
+            dm_defines = list(dm_defines) + [
+                ("STEP_PREFETCH", "1"),
+                ("PF_CT", str(len(wr_ct))),
+                ("PF_ARG", str(len(wr_c))),
+            ]
+            wr_ct = wr_ct + pf_ct
+            wr_c = wr_c + pf_common
         rkern, rcbs, rins, rsems = [], [], [], []
         if rot is not None:
             rotation, rx, ru, rsig = rot
@@ -371,6 +385,9 @@ class TernaryDecodeLinear3:
             rkern, rcbs, rins, rsems = rotation.fused_parts(
                 rx, ru, rsig, cores, grid.x, (hub.x, hub.y), xl1.buffer_address(), spare=spare
             )
+        # records per weight CB: two for the DRAM streams (a record starts at a half: no read wraps); one from the
+        # weight-stream ring (its reader fills both CBs, a record per CB at a time; leaves L1 to the ring)
+        wrec = int(os.environ.get("STREAM_WREC", "1")) if stream is not None else 2
         program = ttnn.ProgramDescriptor(
             kernels=rkern
             + [
@@ -419,11 +436,11 @@ class TernaryDecodeLinear3:
             cbs=rcbs
             + [
                 cb(0, ttnn.bfloat16, 64, Kt, tiny),
-                cb(1, ttnn.bfloat8_b, 256, 2 * ppr * 16),
+                cb(1, ttnn.bfloat8_b, 256, wrec * ppr * 16),
                 cb(2, ttnn.float32, 2048, max_n * -(-KB // 32))
                 if self.group16
                 else cb(2, ttnn.float32, 128 if self.scale_fp32 else 64, max_n * KB, tiny),
-                cb(6, ttnn.bfloat8_b, 256, 2 * ppr * 16),
+                cb(6, ttnn.bfloat8_b, 256, wrec * ppr * 16),
             ]
             + ([cb(3, ttnn.bfloat16, 2048, max_n)] if residual is not None else [])
             + [
@@ -434,6 +451,7 @@ class TernaryDecodeLinear3:
             (rins + [xl1] if rot is not None else [x_rot])
             + ([] if self.inline_scales else [self.s])
             + ([residual] if residual is not None else [])
+            + list(pf_tensors)
             + [self.w, out]
             + ([out2] if out2 is not None else []),
             program,
@@ -518,6 +536,7 @@ class TernaryDecodeLinear3:
         split=0,
         stage=None,
         qg_heads=0,
+        host_pf=None,
     ):
         """This linear on rotation(x) (rotation(x, u=u, sig=sig)) in one op: the rotation runs on the cores after this
         linear's and hands x' over through core 0 (no rotation op, no x' round trip; the weight stream starts at
@@ -531,4 +550,5 @@ class TernaryDecodeLinear3:
             split=split,
             stage=stage,
             qg_heads=qg_heads,
+            host_pf=host_pf,
         )

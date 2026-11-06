@@ -66,10 +66,43 @@ class GDNStep:
         self.device = device
         self.compute_defines = ()  # e.g. (("STEP_ZONES", "1"),): profiler zones per phase
         self.reader_defines = ()
+        if os.environ.get("STEP_ZONES") == "1":
+            self.compute_defines = self.reader_defines = (("STEP_ZONES", "1"),)
         self.first_core = 0  # the step's cores: first_core .. first_core + nv - 1 (row-major)
 
-    def __call__(self, qkv, ab, z, conv_state, rec_state, xnt=None, wab=None, extra=None):
-        """extra: (kernels, tensors) to run in this op on cores the step does not use (first_core; e.g. the out
+    def prefetch_spec(self, pf, conv_state, rec_state, wab):
+        """(common args, compile-time args) of this layer's input prefetch into pf (kernels/step_prefetch.hpp)."""
+        grid = self.device.compute_with_storage_grid_size()
+        common = [pf.buffer_address(), self.nv, self.group, self.qkv_tiles]
+        common += [t.buffer_address() for t in (wab, self.consts, conv_state, rec_state)]
+        ct = []
+        for t in (wab, self.consts, conv_state, rec_state):
+            ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        return common, ct, [wab, self.consts, conv_state, rec_state, pf], grid.x
+
+    def prefetch_op(self, spec):
+        """The prefetch as an op of its own on the step's cores (kernels/step_prefetch_op.cpp)."""
+        common, ct, tensors, grid_x = spec
+        crs = row_major_range_crs(self.first_core, self.first_core + self.nv, grid_x)
+        prog = ttnn.ProgramDescriptor(
+            kernels=[
+                ttnn.KernelDescriptor(
+                    kernel_source=KERNELS + "step_prefetch_op.cpp",
+                    core_ranges=crs,
+                    compile_time_args=ct,
+                    common_runtime_args=common + [grid_x],
+                    defines=[("STEP_FIRST", str(self.first_core))],
+                    config=ttnn.ReaderConfigDescriptor(),
+                )
+            ],
+            semaphores=[],
+            cbs=[],
+        )
+        return ttnn.generic_op(tensors, prog)
+
+    def __call__(self, qkv, ab, z, conv_state, rec_state, xnt=None, wab=None, extra=None, pf=None):
+        """pf: this layer's small inputs were prefetched into pf (prefetch_spec); the step reads only L1.
+        extra: (kernels, tensors) to run in this op on cores the step does not use (first_core; e.g. the out
         projection's weight staging, TernaryDecodeLinear3.stage_kernels).
         xnt / wab (ab_dot): compute a and b in the op from the normalised input's tiled blocks
         (rotate.NormRotation) and this layer's per-head [a | b] weight blocks (pack_ab_heads) instead of reading
@@ -95,6 +128,10 @@ class GDNStep:
             leaders += [lc.x, lc.y]
         addrs = [t.buffer_address() for t in (qkv, z, ab, conv_state, rec_state, self.consts)]
         rd_c = addrs + [grid.x] + leaders + ([wab.buffer_address()] if ab_dot else [])
+        l1_def = []
+        if pf is not None:
+            l1_def = [("STEP_L1", "1"), ("STEP_PF_ARG", str(len(rd_c)))]
+            rd_c = rd_c + [pf.buffer_address()]
         wr_c = [rec_state.buffer_address(), out.buffer_address(), grid.x]
         cp_c = self.consts_scalar + [grid.x] + [_f32_bits(v) for v in self.dt_bias] + [_f32_bits(v) for v in self.a_neg]
         rd_ct = [nv, self.qkv_tiles, ht, self.group]
@@ -143,8 +180,8 @@ class GDNStep:
             if ab_dot
             else []
         )
-        first = [("STEP_FIRST", str(f0))]
-        rd_def = ([("STEP_AB_DOT", "1")] if ab_dot else []) + list(self.reader_defines) + first
+        first = [("STEP_FIRST", str(f0))] + ([("STEP_NO_STATE_IO", "1")] if os.environ.get("STEP_NO_STATE_IO") else [])
+        rd_def = ([("STEP_AB_DOT", "1")] if ab_dot else []) + list(self.reader_defines) + first + l1_def
         if SPLIT:
             # the reader kernel on both RISCs (step_reader.cpp STEP_SPLIT): BRISC takes the conv inputs and the writes
             rd_def.append(("STEP_SPLIT", "1"))

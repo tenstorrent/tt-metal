@@ -31,12 +31,13 @@ KERNELS = "models/demos/blackhole/bonsai2/tt/stream/kernels/"
 SLOT = 16384
 PAGE = 4096
 PPS = SLOT // PAGE  # 4-KB pages per slot
-RING_SLOTS = 16
-STAGE = 12
-BATCH = 4
+RING_SLOTS = int(os.environ.get("STREAM_RING_SLOTS", "16"))  # 256 KB (40 slots: 20.99 ms, 16: 20.33)
+STAGE = int(os.environ.get("STREAM_STAGE", "12"))
+BATCH = int(os.environ.get("STREAM_BATCH", "4"))
 NBANKS = 8
 PER_BANK = 2
 SCHED_CHUNK = 256
+BALANCE = float(os.environ.get("STREAM_BALANCE", "1.02"))  # a sender's load cap: mean x BALANCE
 SEG_SLOTS = int(
     os.environ.get("STREAM_SEG_SLOTS", "256")
 )  # slots per sender per segment (8 MB per bank: DRAM is fragmented)
@@ -62,8 +63,16 @@ def _dm(reader: bool):
     return d
 
 
+def receiver_count(device):
+    """Receivers of a Stream on this device (before building it)."""
+    grid = device.compute_with_storage_grid_size()
+    ns = NBANKS * PER_BANK
+    return (grid.x * grid.y - ns) // ns * ns
+
+
 class Stream:
-    def __init__(self, device, slot=SLOT, ring_slots=RING_SLOTS):
+    def __init__(self, device, slot=SLOT, ring_slots=RING_SLOTS, loads=None):
+        """loads: slots per receiver index for the whole step (Plan's work), to balance the senders' totals."""
         self.device, self.slot, self.S = device, slot, ring_slots
         grid = device.compute_with_storage_grid_size()
         opt = ttnn.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
@@ -111,7 +120,7 @@ class Stream:
             order += [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in blk]
         left = [ttnn.CoreCoord(x, y) for x in sorted(scols) for y in range(grid.y) if (x, y) not in sset]
         order += sorted(left, key=lambda c: (c.x // 2, c.y, c.x))
-        per = len(order) // NS  # receivers per sender (equal: the busiest sender sets the pace)
+        per = len(order) // NS  # receivers per sender
         self.rx_order = order[: per * NS]
         self.idle = order[per * NS :]
         # receiver i to sender i % NS: every prefix of the receivers (a linear uses its first n) spreads evenly over the
@@ -120,10 +129,16 @@ class Stream:
             self.groups = [self.rx_order[b::NS] for b in range(NS)]
         else:  # nearest sender with room, receivers taken in row-major order (compact clusters around each sender)
             self.groups = [[] for _ in range(NS)]
+            idx = {(c.x, c.y): i for i, c in enumerate(self.rx_order)}
+            load = [0] * NS
+            cap = None if loads is None else sum(loads) / NS * BALANCE
             for c in sorted(self.rx_order, key=lambda c: (c.y, c.x)):
                 near = sorted(range(NS), key=lambda b: abs(self.senders[b].x - c.x) + abs(self.senders[b].y - c.y))
-                b = next(b for b in near if len(self.groups[b]) < per)
+                w = 0 if loads is None else loads[idx[(c.x, c.y)]]
+                fits = [b for b in near if len(self.groups[b]) < per and (cap is None or load[b] + w <= cap)]
+                b = fits[0] if fits else min((b for b in near if len(self.groups[b]) < per), key=lambda b: load[b])
                 self.groups[b].append(c)
+                load[b] += w
         self.per = per
         self.sender_crs = _crs(self.senders)
         self.receiver_crs = _crs(self.rx_order + self.idle)
@@ -182,7 +197,18 @@ class Stream:
         )
         self.ring = sharded(shard_order, ring_slots * slot // 4)
         self.rcount = sharded(shard_order, 16)  # filled at +0, consumed at +32
-        self.scount = sharded(self.senders, 2 * 4 * per)  # freed[r] at 16 r, sent[r] at 16 (per + r)
+        # freed[r] at 16 r, sent[r] at 16 (per + r), then STREAM_STATS words (writer at 32 per, reader at 32 per + 32)
+        self.scount = sharded(self.senders, 2 * 4 * per + 16)
+
+    def stats(self):
+        """STREAM_STATS: per sender (us): kernel, credit wait, data wait, slots, staging-room wait, DRAM wait."""
+        a = ttnn.to_torch(self.scount).reshape(len(self.senders), -1).to(torch.int64) & 0xFFFFFFFF
+        base = 8 * self.per
+        us = lambda v: round(float(v) / 1350.0, 1)
+        return [
+            (us(r[base]), us(r[base + 1]), us(r[base + 2]), int(r[base + 3]), us(r[base + 8]), us(r[base + 9]))
+            for r in a
+        ]
 
     def deactivate(self):
         """Back to the default sub-device manager (e.g. for prefill, whose ops use the whole grid)."""
@@ -248,7 +274,7 @@ class Stream:
                     core_ranges=crs,
                     compile_time_args=[self.slot, STAGE, STAGE - BATCH],
                     runtime_args=rd,
-                    defines=_DEFS,
+                    defines=_DEFS + [("STATS_ADDR", str(self.scount.buffer_address() + 32 * self.per + 32))],
                     config=_dm(True),
                 ),
                 ttnn.KernelDescriptor(

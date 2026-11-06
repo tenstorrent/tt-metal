@@ -31,6 +31,11 @@ void kernel_main() {
     const uint32_t sbuf = get_write_ptr(cb_s);
     volatile tt_l1_ptr uint32_t* sv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sbuf);
     uint32_t pending = 0, popped = 0;
+#ifdef STREAM_STATS
+    // cycles: whole kernel, waiting for a receiver's credit, waiting for the staging data (at sent array + 16 R)
+    const uint64_t t_start = get_timestamp();
+    uint64_t t_credit = 0, t_data = 0;
+#endif
     const uint32_t base = get_read_ptr(cb);  // staging page k at base + (k % STAGE) * SLOT
     for (uint32_t i = 0; i < nslots; ++i) {
         if (i % CH == 0) {
@@ -40,11 +45,21 @@ void kernel_main() {
         const uint32_t r = sv[i % CH];
         const uint32_t s = sent[4 * r];
 #ifndef SEND_NO_CREDIT
+#ifdef STREAM_STATS
+        const uint64_t tc = get_timestamp();
+#endif
         while (s - freed[4 * r] >= S) {
             invalidate_l1_cache();
         }
+#ifdef STREAM_STATS
+        const uint64_t td = get_timestamp();
+        t_credit += td - tc;
+#endif
 #endif
         cb_wait_front(cb, pending + 1);
+#ifdef STREAM_STATS
+        t_data += get_timestamp() - td;
+#endif
 #ifdef SEND_2NOC
         const uint8_t wn = i & 1;  // dynamic NOC mode: alternate slots between the NOCs
 #else
@@ -82,4 +97,11 @@ void kernel_main() {
         cb_pop_front(cb, pending);
     }
     noc_async_atomic_barrier();
+#ifdef STREAM_STATS
+    volatile tt_l1_ptr uint32_t* st = sent + 4 * R;
+    st[0] = (uint32_t)(get_timestamp() - t_start);
+    st[1] = (uint32_t)t_credit;
+    st[2] = (uint32_t)t_data;
+    st[3] = nslots;
+#endif
 }

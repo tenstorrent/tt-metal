@@ -171,7 +171,10 @@ class TernaryGDN:
             xnt = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([nrot.B * 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, x.device(), ttnn.L1_MEMORY_CONFIG
             )
-            qkv, z = self.qkvz.rotated(nrot, x, lead=lead, u=xnt, split=self.split)
+            from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+            # weight stream: qkv / z in L1 (the step reads them; DRAM reads queue behind the stream)
+            qkv, z = self.qkvz.rotated(nrot, x, lead=lead, u=xnt, split=self.split, out_l1=stream_decode.active())
         else:
             xr = prerot.take(x)
             if xr is None:
@@ -180,9 +183,17 @@ class TernaryGDN:
             ttnn.deallocate(xr)
             xnt = prerot.take_xnt(x) if getattr(self, "wab", None) is not None else None
         stage, extra = self._stage_out(x.device())
+        from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
         if xnt is not None and os.environ.get("BONSAI_STEP_AB", "1") == "1":
-            # a / b inside the step: dot products of the norm op's tiled blocks with this head's weight blocks
-            o = self.step(qkv, None, z, gdn.fused_conv_state, gdn.recurrent_state, xnt=xnt, wab=self.wab, extra=extra)
+            # a / b inside the step: dot products of the norm op's tiled blocks with this head's weight blocks; under
+            # the weight stream its small inputs come prefetched in L1 (stream/decode.py step_pf)
+            pf = stream_decode.STATE.step_pf(self) if stream_decode.active() else None
+            o = self.step(
+                qkv, None, z, gdn.fused_conv_state, gdn.recurrent_state, xnt=xnt, wab=self.wab, extra=extra, pf=pf
+            )
+            if pf is not None:
+                stream_decode.STATE.after_step(self)
             for t in (qkv, z):
                 ttnn.deallocate(t)
         else:
