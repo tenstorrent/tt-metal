@@ -35,10 +35,10 @@ def make_input(dist, m, k):
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole only")
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
 @pytest.mark.parametrize("dist", ["randn", "outliers", "colscale"])
-@pytest.mark.parametrize(
-    "m, k, n",
-    [(128, 4096, 6144), (128, 2304, 4096), (128, 3072, 9216), (128, 1024, 4096)],
-)
+# One small shape is enough: the property under test (out_subblock_w doesn't change the result) holds per output tile.
+# per_core_N = 12 exercises out_subblock_w 2, 3 and 4, and K = 512 gives 16 in0 blocks to accumulate over.
+# The model QKV shapes (e.g. 128x4096x6144) took ~90 s per case under ttsim and pushed the sim CI job past its timeout.
+@pytest.mark.parametrize("m, k, n", [(128, 512, 3072)])
 def test_matmul_2d_config_bitexact(device, m, k, n, dist, fp32_dest_acc_en):
     torch.manual_seed(0)
     per_core_n = math.ceil(n / 32 / 8)
