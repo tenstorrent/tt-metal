@@ -3535,6 +3535,7 @@
   "attempt": 2,
   "attempts": 0,
   "duration_s": 0.0,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,
@@ -3549,6 +3550,47 @@
   "role": "perf",
   "stamp": null,
   "started": "2026-11-06T19:28:29",
+  "status": "PASS",
+  "units": null,
+  "waiting": null
+ },
+ "P.38": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "446c8e0becaa7b6d93f8901bdf15b6b63572b8d5",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "dcb033c874cea5d21a17080d74e83e95d53bff57",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "abff7875-436e-41f6-890f-9c73a56ca787"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-11-06T20:34:40"
+   }
+  ],
+  "last_run": "2026-11-06T20:34:40",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.38.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": null,
+  "started": "2026-11-06T20:34:40",
   "status": "PASS",
   "units": null,
   "waiting": null

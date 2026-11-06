@@ -158,6 +158,13 @@ def ckv_bfp4() -> bool:
     return settings.get("CKV_FORMAT") == "bfp4_rows"
 
 
+def history_only() -> bool:
+    """The attention table holds the compressed history alone (no window region of its own): CKV_FORMAT=bfp4_rows,
+    or CKV_FORMAT=bf16 with WINDOW_KV_FORMAT=bf16_tiles (P.38: each layer's window is its per-chip bf16 region, read by
+    the sdpa fork as kv_window next to the bf16 table, KV_WINDOW)."""
+    return ckv_bfp4() or settings.get("WINDOW_KV_FORMAT") == "bf16_tiles"
+
+
 BFP4_ROW_BYTES = 320  # 512 values: the 32 shared exponents twice + 256 bytes of nibbles (ttnn.bringup.ckv_bfp4)
 
 
@@ -180,7 +187,10 @@ class AttnTable:
     written by ttnn.bringup.ckv_bfp4 (``append_tiles``: the compressor's gathered bf16 tiles, rounded to nearest even;
     it returns the rounded bf16 rows for the served cache), and ``win`` the window region [1, 1, 128 + S, 512] bf16
     (base 0): sparse_sdpa's ROW_BFP4 reads the two, the index list [window ids | top-k ids] as built, not compacted.
-    WINDOW_KV_FORMAT=bfp8_blocks: no ``win``; the layers' window region is tt/attention.WindowTables.window_blocks."""
+    WINDOW_KV_FORMAT=bfp8_blocks: no ``win``; the layers' window region is tt/attention.WindowTables.window_blocks.
+    CKV_FORMAT=bf16 with WINDOW_KV_FORMAT=bf16_tiles (P.38, ``history_only``): ``buf`` is the bf16 history alone,
+    [1, 1, hist, 512] (base 0), the window each layer's per-chip bf16 region (or, where a chip owns < 128 rows,
+    tt/attention.WindowTables.window_rows), read by the sdpa fork as BF16 + kv_window (lists not compacted)."""
 
     def __init__(self, mesh, tables, hist: int, width: int):
         g = tables.geo
@@ -207,7 +217,8 @@ class AttnTable:
                     memory_config=DRAM,
                 )
         else:
-            self.base, self.rows = hist, hist + WINDOW + g.chunk
+            # (P.38, history_only: CKV_FORMAT=bf16 + WINDOW_KV_FORMAT=bf16_tiles: no window region in the table)
+            self.base, self.rows = (0, hist) if history_only() else (hist, hist + WINDOW + g.chunk)
             self.buf = ttnn.zeros(
                 [1, 1, self.rows, width],
                 dtype=ttnn.bfloat16,

@@ -230,11 +230,21 @@ class WindowTables:
         self.region_index, self._chip_iota, self.send = None, None, None
         # the window path of this geometry: WINDOW_KV_FORMAT, except that a chip with fewer than 128 own rows (the
         # decoder tail's 32 on 8x4, DECODER_SKIP=replay128, P.31) cannot take its carry from one neighbour: bfp8_tiles
-        # then runs as bfp8_blocks (the same bfloat8_b window rows, the region replicated)
+        # then runs as bfp8_blocks (the same bfloat8_b window rows, the region replicated), bf16_tiles as bf16 (P.38: the
+        # replicated bf16 rows; a compressed layer reads them from ``window_rows`` as the sdpa fork's kv_window, its
+        # KV source's table being history only, tt/compressor.history_only)
         fmt = settings.get("WINDOW_KV_FORMAT")
+        self.window_rows = None
         if fmt in ("bfp8_tiles", "bf16_tiles") and g.q_rows < WINDOW:
-            assert fmt == "bfp8_tiles", f"WINDOW_KV_FORMAT={fmt} needs {WINDOW} rows a chip ({g.q_rows}: chunk {chunk})"
-            fmt = "bfp8_blocks"
+            if fmt == "bf16_tiles":
+                self.window_rows = ttnn.zeros(  # (load time, DS41-146)
+                    [1, 1, WINDOW + chunk, 512],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=mesh,
+                    memory_config=DRAM,
+                )
+            fmt = "bfp8_blocks" if fmt == "bfp8_tiles" else "bf16"
         self.fmt = fmt
         self.region_on, self.blocks_on = fmt in ("bfp8_tiles", "bf16_tiles"), fmt == "bfp8_blocks"
         if self.region_on:
@@ -351,6 +361,16 @@ class WindowTables:
                 memory_config=DRAM,
             )
         return self._blocks
+
+    def put_window_rows(self, carry: ttnn.Tensor, kv_rm: ttnn.Tensor) -> ttnn.Tensor:
+        """WINDOW_KV_FORMAT=bf16_tiles where a chip owns < 128 rows (P.38): [carry 128 | chunk S] bf16 ROW_MAJOR rows
+        (replicated, not consumed) into ``window_rows``, which is returned (a compressed layer's kv_window)."""
+        w = self.window_rows
+        assert carry.shape[-2] == WINDOW and kv_rm.shape[-2] == self.geo.chunk, (carry.shape, kv_rm.shape)
+        for rows, row0 in ((carry, 0), (kv_rm, WINDOW)):
+            n = rows.shape[-2]
+            ttnn.bringup.slice_write(rows, w, [0, 0, row0, 0], [1, 1, row0 + n, 512], [1, 1, 1, 1], max_grid=max_grid())
+        return w
 
     def region_pages(self) -> int:
         """WINDOW_KV_FORMAT=bfp8_tiles: pages (32-row blocks) of a chip's window region [carry 128 | q_rows]."""
@@ -1751,6 +1771,22 @@ class TtWindowAttention:
                 attention_sink=self.sink,
                 max_grid=max_grid(),
             )
+        if window is not None and table.dtype == ttnn.bfloat16:  # CKV_FORMAT=bf16 + WINDOW_KV_FORMAT=bf16_tiles (P.38):
+            # the bf16 history table + the bf16 window rows (the per-chip region, or WindowTables.window_rows), the
+            # sdpa fork's BF16 kv_window (KV_WINDOW: [window | top-k] lists, each with its own sentinel tail)
+            return ttnn.bringup.sparse_sdpa(
+                q_rm,
+                table,
+                index,
+                self.d,
+                kv_format=ttnn.bringup.SparseKVFormat.BF16,
+                scale=1.0,
+                k_chunk_size=SDPA_K_CHUNK,
+                compute_kernel_config=self.ckc,
+                attention_sink=self.sink,
+                kv_window=window,
+                max_grid=max_grid(),
+            )
         if window is not None:  # CKV_FORMAT=bfp4_rows: bfloat4_b row records + the window, bf16 rows or bfloat8_b
             # blocks (WINDOW_KV_FORMAT) (sdpa fork ROW_BFP4)
             return ttnn.bringup.sparse_sdpa(
@@ -1766,8 +1802,9 @@ class TtWindowAttention:
                 kv_window=window,
                 max_grid=max_grid(),
             )
-        if table is self.region:  # WINDOW_KV_FORMAT=bf16_tiles (P.26): the bf16 region rows; the fork for max_grid
-            # (rule 18: the source's program with every fork option off, its cores inside the cap)
+        if table is self.region or self.tables.window_rows is not None:  # WINDOW_KV_FORMAT=bf16_tiles (P.26): the bf16
+            # region rows (P.38: or, where a chip owns < 128 rows, the replicated bf16 row table); the fork for
+            # max_grid (rule 18: the source's program with every fork option off, its cores inside the cap)
             return ttnn.bringup.sparse_sdpa(
                 q_rm,
                 table,

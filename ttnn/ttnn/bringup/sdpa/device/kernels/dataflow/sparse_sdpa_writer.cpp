@@ -92,6 +92,14 @@ void kernel_main() {
         sink_args_rb.next_compile_time_args_offset(),
         sink_args_rb.next_common_runtime_args_offset()>();
     const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::END));
+#elif defined(SPARSE_SDPA_KV_WINDOW)
+    // KV_WINDOW (fork option): kv = bf16 rows (chunks >= 1), kv_window = the bf16 rows of chunk 0
+    constexpr auto sink_args_kw =
+        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    constexpr auto kvw_args = TensorAccessorArgs<
+        sink_args_kw.next_compile_time_args_offset(),
+        sink_args_kw.next_common_runtime_args_offset()>();
+    const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::END));
 #endif
 
     // --- persistent compute-input tiles (built once; the reader is busier with the K gather) ---
@@ -171,7 +179,7 @@ void kernel_main() {
                 if constexpr (scaled_kv) {
                     scale_dst_l1 = request[sparse_sdpa::gather_request::SCALE_DST_L1];
                 }
-#ifdef SPARSE_SDPA_ROW_BFP4
+#ifdef SPARSE_SDPA_SPLIT_WINDOW
                 kind = request[sparse_sdpa::gather_request::KIND];
 #endif
             }
@@ -191,6 +199,14 @@ void kernel_main() {
                 sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
                     noc, kvw, dst_l1, idx_ptr, base, 0, split, k_row_bytes, 0);
 #endif
+            }
+#elif defined(SPARSE_SDPA_KV_WINDOW)
+            if (kind == sparse_sdpa::gather_request::KIND_WINDOW) {
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                    noc, kvw, dst_l1, idx_ptr, base, 0, split, k_row_bytes, 0);
+            } else {
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset);
             }
 #else
             if constexpr (scaled_kv) {

@@ -356,7 +356,7 @@ void kernel_main() {
             cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::ACTIVE_CHUNKS);
         const uint32_t num_valid_keys =
             ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::VALID_KEYS);
-#ifdef SPARSE_SDPA_ROW_BFP4
+#ifdef SPARSE_SDPA_SPLIT_WINDOW
         const uint32_t window_valid = ckernel::read_tile_value(
             cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::WINDOW_VALID);
 #endif
@@ -481,7 +481,7 @@ void kernel_main() {
 
             const bool is_first = (chunk == 0);
             const bool is_last = (chunk == num_active_chunks - 1);
-#ifdef SPARSE_SDPA_ROW_BFP4
+#ifdef SPARSE_SDPA_SPLIT_WINDOW
             // the window chunk has its own sentinel tail; the top-k chunks' tail ends the list
             const bool has_mask = is_last || (chunk == 0 && window_valid < Skt * tt::constants::TILE_WIDTH);
 #else
@@ -505,7 +505,7 @@ void kernel_main() {
             // -inf. Key tiles [full_start, Skt) are fully masked (cb_neginf); a mid-tile boundary masks the
             // straddling tile part_t via cb_mask_part.
             const uint32_t k_chunk = Skt * tt::constants::TILE_WIDTH;
-#ifdef SPARSE_SDPA_ROW_BFP4
+#ifdef SPARSE_SDPA_SPLIT_WINDOW
             const uint32_t valid_last = chunk == 0 ? window_valid : num_valid_keys - (num_active_chunks - 1) * k_chunk;
 #else
             const uint32_t valid_last = num_valid_keys - (num_active_chunks - 1) * k_chunk;
@@ -824,9 +824,9 @@ void kernel_main() {
                             /*skip_pack_configure=*/true);
                     }
 #endif
-                    pack_to_unpack_sync();                // flush PV's HELD out_cur packs (push_back deferred to
-                                                          // after the group loop) so SALAD's L1-accumulate (!is_first)
-                                                          // reads them; normalize reads post-push_back, so covered
+                    pack_to_unpack_sync();  // flush PV's HELD out_cur packs (push_back deferred to
+                                            // after the group loop) so SALAD's L1-accumulate (!is_first)
+                                            // reads them; normalize reads post-push_back, so covered
 #ifdef SPARSE_SDPA_FP32_SCORES
                     // cb_qk_im is Float32: restore the bf16 unpack (srcA and srcB; PV read the probs into srcB) and
                     // pack state from bf16 CBs (the SALAD correction and the normalize expect it)

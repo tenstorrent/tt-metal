@@ -657,8 +657,13 @@ TABLE = {
         "(torch intra-op 16 / 8 threads). Default 8: the cold gather (owner 2026-10-28); also the bfp8 pack's threads",
     ),
     "CKV_FORMAT": Setting(
-        "bfp4_rows",
+        "bf16",
         ("bf16", "bfp4_rows"),
+        "P.38 (OWNER 2026-11-06, PD migration first cut: decode's cache formats still open, both KV caches 16-bit end to "
+        "end for now; the owner returns to 4-bit later): default bf16, above the reference's fp4 (owner's call, "
+        "temporary); with WINDOW_KV_FORMAT=bf16_tiles the table is the bf16 history alone (tt/compressor.history_only), "
+        "read by the sdpa fork as BF16 + kv_window (fork option KV_WINDOW, the per-chip bf16 window region beside it). "
+        "Before P.38: "
         "the compressed KV attention table (tt/compressor.AttnTable, read by sparse_sdpa; needs STATIC_TABLES=on). OWNER "
         "DECISION 2026-10-28 (F208, FIX.8; developed on the 2x2; default bfp4_rows after the 2x2 ladder, owner: a win): "
         "the reference stores the compressed KV in 4 bits (fp4 e2m1 + e4m3 per 16, ds41_ref.py:797-799). bfp4_rows = the "
@@ -673,9 +678,15 @@ TABLE = {
         "bf16 = bf16 rows, stock sparse_sdpa",
     ),
     "WINDOW_KV_FORMAT": Setting(
-        "bfp8_tiles",
+        "bf16_tiles",
         ("bf16", "bfp8_blocks", "bfp8_tiles", "bf16_tiles"),
-        "the window KV sparse_sdpa reads (DS41-150, OWNER DECISION 2026-10-29 13:00; developed on the 2x2): the reference "
+        "the window KV sparse_sdpa reads. P.38 (OWNER 2026-11-06, PD migration first cut: both KV caches 16-bit for now, "
+        "the owner returns to 8 / 4 bits later): default bf16_tiles, computed and read in bf16 with no rounding step, "
+        "above the reference's e4m3 (owner's call, temporary); works with CKV_FORMAT=bf16 (the sdpa fork's BF16 + "
+        "kv_window) and bfp4_rows (ROW_BFP4 + bf16 kv_window); where a chip owns < 128 rows (the decoder tail, P.31) it "
+        "runs as bf16 (replicated bf16 rows; compressed layers read them as kv_window, WindowTables.window_rows). "
+        "Old default: bfp8_tiles (with CKV_FORMAT=bfp4_rows). (DS41-150, OWNER DECISION 2026-10-29 13:00; developed on "
+        "the 2x2): the reference "
         "stores it as e4m3 with a power-of-two scale per 32 (ds41_ref.py _window_kv). bfp8_blocks = the [carry 128 | "
         "chunk S] window region as bfloat8_b blocks of 32 consecutive rows a page (ttnn.bringup.ckv_bfp4 dtype=bfloat8_b "
         "blocks=True: SFPU round to nearest even), read by the sdpa fork as kv_window (compressed layers, CKV_FORMAT="

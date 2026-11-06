@@ -9,7 +9,8 @@ scale 1 with the softmax scale folded into q, an attention sink):
   bfloat4_b values are exact in bf16, and the chunks line up), for top-k parts of 0 / 1 / 31 / 32 / 200 / 512 keys;
 - a partial window (1 / 17 / 32 / 100 keys, masked within chunk 0 while top-k chunks follow): vs float32 on the same
   values, as close as the BF16 path with the compacted list the model uses today;
-- deterministic (A, B, A x5); refused without kv_window, and kv_window refused with another format;
+- deterministic (A, B, A x5); refused without kv_window, and a record kv_window refused with a BF16 kv (a bf16 one is
+  KV_WINDOW, test_sparse_sdpa_kv_window_bf16.py);
 - a bfloat8_b window (kv_window as 576 B records) equals the bf16 window holding the same values, bit for bit, full and
   partial windows (lowbit, DS41-150); kv_format ROW_BFP8 (a window-only layer: kv = the records, TOPK == k_chunk)
   equals the BF16 path on the same values; both deterministic; their refusals."""
@@ -185,8 +186,10 @@ def test_refusals(device, expect_error):
     tw = _dev(win.view(1, 1, -1, K_DIM), device, ttnn.bfloat16)
     with expect_error(RuntimeError, "kv_window"):
         ttnn.bringup.sparse_sdpa(tq, tr, ti, K_DIM, kv_format=ttnn.bringup.SparseKVFormat.ROW_BFP4, scale=1.0)
+    # (a BF16 kv takes a bf16 kv_window since P.38, KV_WINDOW: test_sparse_sdpa_kv_window_bf16.py; a record window not)
+    w8 = _dev(torch.zeros(1, 1, 256, 576, dtype=torch.uint8), device, ttnn.uint8)
     with expect_error(RuntimeError, "kv_window"):
-        ttnn.bringup.sparse_sdpa(tq, tw, ti, K_DIM, kv_format=ttnn.bringup.SparseKVFormat.BF16, scale=1.0, kv_window=tw)
+        ttnn.bringup.sparse_sdpa(tq, tw, ti, K_DIM, kv_format=ttnn.bringup.SparseKVFormat.BF16, scale=1.0, kv_window=w8)
 
 
 # ---------------------------------------------------------------------------------------- the bfloat8_b window

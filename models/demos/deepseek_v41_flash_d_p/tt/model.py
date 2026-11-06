@@ -1127,7 +1127,11 @@ class TtDS41Model:
         from .tail_send import TailSend
 
         t0 = time.time()
-        assert settings.get("CKV_FORMAT") == "bfp4_rows", "DECODER_SKIP=replay128: the shared table is history only"
+        from .compressor import history_only
+
+        assert (
+            history_only()
+        ), "DECODER_SKIP=replay128: the shared table is history only (CKV_FORMAT / WINDOW_KV_FORMAT)"
         if settings.get("MOE_BLOCK_SRC") == "carried":
             from .moe_block_adapter import reserve_l1
 

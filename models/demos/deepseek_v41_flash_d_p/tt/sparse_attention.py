@@ -280,8 +280,9 @@ class TtSparseAttention(TtWindowAttention):
         if mine is not topk:
             dealloc(mine)
         # every window full: the top-k's own sentinel tail ends the list; CKV_FORMAT=bfp4_rows: ROW_BFP4 takes the
-        # window's and the top-k's sentinel tails apart (no compaction)
-        if cls == WINDOW or table.bfp4:
+        # window's and the top-k's sentinel tails apart (no compaction), as the fork's BF16 kv_window (P.38: a
+        # history-only bf16 table, the window a tensor of its own)
+        if cls == WINDOW or table.bfp4 or table.base == 0:
             return src
         out = ttnn.gather(src, -1, self.sparse.perm[cls])
         dealloc(src)
@@ -298,7 +299,9 @@ class TtSparseAttention(TtWindowAttention):
         cos, sin = self._rope_rows(start, g.chunk)
         # WINDOW_KV_FORMAT=bfp8_tiles (P.18): this layer's per-chip region [carry | own rows] (tt/attention)
         if self.region is not None:
-            assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_tiles reads the window as kv_window: CKV_FORMAT=bfp4_rows"
+            # (bfp8_tiles: CKV_FORMAT=bfp4_rows; bf16_tiles: either, P.38: a bf16 region beside a bf16 history)
+            assert table.bfp4 or self.region.dtype == ttnn.bfloat16, "WINDOW_KV_FORMAT=bfp8_tiles: CKV_FORMAT=bfp4_rows"
+            assert table.base == 0, "the window region beside a history-only table (tt/compressor.history_only)"
             self._window_region(kv, start, end, cache)
             window = self.region
         # WINDOW_KV_FORMAT=bfp8_blocks: [carry | chunk] into the shared window blocks (tt/attention.WindowTables)
@@ -311,6 +314,9 @@ class TtSparseAttention(TtWindowAttention):
             if self.win8:
                 assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_blocks reads the window as kv_window: CKV_FORMAT=bfp4_rows"
                 window = self.tables.window_blocks()
+            elif self.tables.window_rows is not None:  # bf16_tiles where a chip owns < 128 rows (P.38): the rows as
+                # the fork's kv_window (bf16 rows; with a bf16 or a bfp4_rows history)
+                window = self.tables.put_window_rows(carry, kv_rm)
             else:
                 table.put_window(carry, kv_rm)
                 window = table.win

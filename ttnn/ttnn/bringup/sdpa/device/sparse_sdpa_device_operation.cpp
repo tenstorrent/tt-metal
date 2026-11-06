@@ -84,14 +84,18 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     } else {
         TT_FATAL(B == 1, "kv batch must be 1 unless cache_batch_idx is set (got {})", B);
     }
-    // ROW_BFP4 (fork option): the bf16 window rows of the first k_chunk; any other format takes none.
+    // ROW_BFP4 (fork option): the bf16 window rows of the first k_chunk (needed); BF16 may take a bf16 kv_window
+    // (fork option KV_WINDOW: [window k_chunk | top-k] lists, chunk 0 from kv_window); any other format takes none.
     TT_FATAL(
-        attrs.has_row_bfp4() == t.kv_window.has_value(),
-        "sparse_sdpa: kv_window is given exactly with kv_format ROW_BFP4");
+        attrs.has_row_bfp4()
+            ? t.kv_window.has_value()
+            : (!t.kv_window.has_value() || attrs.kv_format == transformer::bringup::SparseKVFormat::BF16),
+        "sparse_sdpa: kv_window is given with kv_format ROW_BFP4 (required) or BF16 (optional) only");
     if (t.kv_window.has_value()) {
         const auto& w = t.kv_window.value();
         TT_FATAL(w.device() == q.device(), "sparse_sdpa: kv_window must be on q's device");
         const bool rec8 = w.dtype() == DataType::UINT8;  // bfloat8_b row records (fork option)
+        TT_FATAL(attrs.has_row_bfp4() || !rec8, "sparse_sdpa: a BF16 kv takes a bf16 kv_window (KV_WINDOW)");
         TT_FATAL(
             w.dtype() == DataType::BFLOAT16 || rec8, "sparse_sdpa: kv_window must be bf16 or uint8 bfloat8_b records");
         TT_FATAL(w.layout() == Layout::ROW_MAJOR, "sparse_sdpa: kv_window must be ROW_MAJOR");
@@ -136,6 +140,15 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     switch (attrs.kv_format) {
         case transformer::bringup::SparseKVFormat::BF16:
             TT_FATAL(kv.dtype() == DataType::BFLOAT16, "BF16 sparse KV format requires bfloat16 storage");
+            if (t.kv_window.has_value()) {  // KV_WINDOW (fork option)
+                TT_FATAL(q.dtype() == DataType::BFLOAT16, "BF16 sparse KV format with a kv_window requires a bf16 q");
+                TT_FATAL(
+                    !attrs.has_block_cyclic(), "BF16 sparse KV format with a kv_window does not support block_cyclic");
+                TT_FATAL(
+                    t.indices.logical_shape()[3] > attrs.k_chunk_size,
+                    "BF16 sparse KV format with a kv_window needs TOPK > k_chunk_size (the first k_chunk is the "
+                    "window)");
+            }
             break;
         case transformer::bringup::SparseKVFormat::FP8_E4M3:
             TT_FATAL(kv_is_fp8, "FP8_E4M3 sparse KV format requires fp8_e4m3 storage");

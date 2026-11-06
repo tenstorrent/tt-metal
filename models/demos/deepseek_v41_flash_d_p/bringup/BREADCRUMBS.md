@@ -3303,3 +3303,37 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   carried). Short turn (gate unit, replay128 on main): final hidden rel 0.14151 (limit 0.24219), top-1 / top-5 hit.
 - P.37 attempt 2 (F113 stock-call check):
 - stock ttnn.all_gather instead of ttnn.bringup.combine_rf.<module>: main's fused head contract takes x_full (the mesh row's x, bf8 xq when GEMM_INPUTS=bfp8) gathered over the TP axis in DRAM only when its planner picks the x-in-DRAM fallback (blk.x_dram); this is the source block's own call (models/demos/moe_block_main/tt/moe_block.py MoEBlock forward, unchanged since 494262dfccb apart from gathering xq), and combine_rf's fabric all-gather is a Python ProgramDescriptor builder sized for the carried block's token-split path, not a drop-in for a [1, 1, rows, H] DRAM gather. No code change in attempt 2; the measure results of attempt 1 stand.
+
+## P.38 perf (8x4, 2026-11-06): both KV caches bf16 for now (CKV_FORMAT=bf16, WINDOW_KV_FORMAT=bf16_tiles defaults)
+- Owner 2026-11-06 (PD migration first cut). Defaults changed in tt/settings.py; old path selectable:
+  `DS41_CKV_FORMAT=bfp4_rows DS41_WINDOW_KV_FORMAT=bfp8_tiles`. INDEX_K_FORMAT stays bfp4. Contract unchanged (served
+  caches were already bf16, DS41-143); `state.formats()` unchanged (all bf16).
+- Chosen: bf16_tiles kept (per-chip region + neighbour send, P.18 / P.26), compressed layers read the bf16 history table
+  plus the bf16 region through a new sdpa fork option, `ttnn.bringup.sparse_sdpa(kv_format=BF16, kv_window=region)`
+  (KV_WINDOW: chunk 0 from kv_window, top-k chunks from kv, [window | top-k] lists with two sentinel tails, as ROW_BFP4;
+  DS41-212). The table is history only (tt/compressor.history_only: base 0, [1, 1, hist, 512] bf16; no window region),
+  so no region -> table copy per layer and no list compaction. Stock sparse_sdpa cannot take two tensors.
+- Decoder tail (replay128, 32 rows a chip < 128): bf16_tiles now falls back to `bf16` (WindowTables, P.31 style):
+  window-only layers the replicated bf16 row table through the fork (BF16, max_grid; the stock op takes no core cap),
+  compressed layers `WindowTables.window_rows` (load-time [128 + S, 512] bf16) as kv_window (with a bf16 or a bfp4_rows
+  history). Before, bf16_tiles asserted there. model.build_tail asserts history_only() instead of CKV_FORMAT=bfp4_rows.
+- Rule 18: the fork call takes max_grid (11 x 10 = 110 cores on the Galaxy); slice_write of window_rows max_grid.
+  OV-23: no Python-built op added (the sdpa fork is a C++ device op; WindowSend stays prepared). OV-3: nothing padded.
+  OV-25: only the new fork tests run (test_sparse_sdpa_kv_window_bf16.py 10 passed; row_bfp4 test_refusals 1 passed).
+- Memory: the bf16 table row is 1024 B vs 320 B (bfp4_rows), 3.2x; the plan budgets the table in bf16 (plan.md
+  "sparse-attention table" 1.00 GiB a chip at 1M on 4x4), so it fits as planned. Region per layer 294912 B a chip
+  (P.26) vs 166464 B (bfp8_tiles).
+- Measured (`orchestrator measure --task P.38`, change on, ab/P.38/new; vs P.37's run of the old path, ab/P.37/new):
+  quick: every layer / state within its limit, host_transfers_per_layer 0. compress_kv err L02 0.027 (old 0.115),
+  L08 0.056 (0.136), L14 0.127 (0.176), L20 0.098 (0.156); layers L00-L38 5-15 % lower (L20 0.124 vs 0.135, L38 0.117
+  vs 0.124); L39 0.825 vs 0.741 (limit 1.533; the end-of-model outlier, chaotic); window_kv L01-L19 lower, L21-L29
+  slightly higher (0.100 vs 0.094 at L21, downstream of the changed history; limits 0.155+). p51200: chunk wall
+  203.7 vs 194.0 ms, device 183.57 vs 177.27 ms, attention section 50.01 vs 44.12 ms (bf16 rows: 3.2x the history
+  bytes, 2x the window bytes), compressor 1.90 vs 1.77; profiled host dispatch 186 vs 156 ms (1300 vs 1254 calls:
+  bf16_tiles' to_rm + slice_write a layer instead of one ckv_bfp4). Gate units passed here: test_short_turn (wall
+  158.2 ms, device 146.16), test_contract, test_kv_layout, test_adapter_acks; test_ladder / test_profile left to the
+  orchestrator.
+- Not changed: tests/bringup/test_logit_kl.py asserts the shipped WINDOW_KV_FORMAT is bfp8_tiles (owner 2026-11-01);
+  it now fails that assert (diagnostic test, not in this gate; the owner's 2026-11-06 default supersedes it).
+- Re-run: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_kv_window_bf16.py`;
+  `python -m models.demos.common.bringup.orchestrator measure --task P.38 --spec <spec>`.

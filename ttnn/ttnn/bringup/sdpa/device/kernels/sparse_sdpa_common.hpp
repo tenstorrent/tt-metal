@@ -82,7 +82,7 @@ constexpr uint32_t SPLIT = 1;
 constexpr uint32_t IS_LAST = 2;
 constexpr uint32_t DST_L1 = 3;
 constexpr uint32_t SCALE_DST_L1 = 4;
-constexpr uint32_t KIND = 5;         // ROW_BFP4: KIND_WINDOW (bf16 rows of kv_window) or KIND_BFP4 (row records)
+constexpr uint32_t KIND = 5;  // ROW_BFP4 / KV_WINDOW: KIND_WINDOW (kv_window) or KIND_BFP4 (kv: records or bf16 rows)
 constexpr uint32_t WORD_COUNT = 6;
 constexpr uint32_t PAGE_BYTES = align_cb_page(WORD_COUNT * sizeof(uint32_t));
 constexpr uint32_t KIND_WINDOW = 0;
@@ -93,7 +93,7 @@ constexpr uint32_t KIND_BFP4 = 1;
 namespace control_message {
 constexpr uint32_t ACTIVE_CHUNKS = 0;
 constexpr uint32_t VALID_KEYS = 1;
-constexpr uint32_t WINDOW_VALID = 2;  // ROW_BFP4: valid keys of chunk 0 (the window)
+constexpr uint32_t WINDOW_VALID = 2;  // ROW_BFP4 / KV_WINDOW: valid keys of chunk 0 (the window)
 constexpr uint32_t WORD_COUNT = 3;
 constexpr uint32_t PAGE_BYTES = align_cb_page(WORD_COUNT * sizeof(uint32_t));
 }  // namespace control_message
@@ -202,6 +202,12 @@ enum : uint32_t {
 };
 }  // namespace compute_ct_arg
 
+// The index list is [window k_chunk | top-k], each part with its own sentinel tail, chunk 0 read from kv_window:
+// ROW_BFP4 (bfloat4_b records after the window) and KV_WINDOW (BF16 kv rows after a bf16 window; fork option).
+#if defined(SPARSE_SDPA_ROW_BFP4) || defined(SPARSE_SDPA_KV_WINDOW)
+#define SPARSE_SDPA_SPLIT_WINDOW 1
+#endif
+
 // SPARSE_SDPA_ROW_BFP4 (fork option): extra compile-time args after the END of each block (reader / writer:
 // staging row CB, tile CB, staging row stride; compute: the tile CB), then the tensor accessors.
 // SPARSE_SDPA_WINDOW_BFP8 (with it): the window's bfloat8_b staging row CB and tile CB follow (COUNT_BFP8).
@@ -214,6 +220,10 @@ constexpr uint32_t ROW_BFP4_COMMON_COUNT = 1;  // the window's address, after ea
 #elif defined(SPARSE_SDPA_ROW_BFP4)
 constexpr uint32_t ROW_BFP4_CT_COUNT = row_bfp4_ct_arg::COUNT;
 constexpr uint32_t ROW_BFP4_COMMON_COUNT = 1;  // the kv_window address, after each kernel's fixed common args
+#elif defined(SPARSE_SDPA_KV_WINDOW)
+// BF16 kv + a bf16 kv_window (fork option): no extra compile-time args, the window's address after the common args
+constexpr uint32_t ROW_BFP4_CT_COUNT = 0;
+constexpr uint32_t ROW_BFP4_COMMON_COUNT = 1;
 #else
 constexpr uint32_t ROW_BFP4_CT_COUNT = 0;
 constexpr uint32_t ROW_BFP4_COMMON_COUNT = 0;
