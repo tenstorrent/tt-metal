@@ -35,6 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
     const Operand& buffer_A          = params.buffer_A;
 #endif
+    static constexpr bool is_perf = LOOP_FACTOR > 1;
     LLK_ASSERT(BLOCK_RT_DIM * BLOCK_CT_DIM == TILE_CNT, "BLOCK_RT_DIM * BLOCK_CT_DIM must be equal to TILE_CNT");
 
     {
@@ -56,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 std::uint32_t read_offset = 0;
                 for (std::uint32_t i = 0; i < BLOCK_RT_DIM; ++i)
                 {
-                    const std::uint32_t tile_row_addr = USE_PERF_BUFFERS ? L1_ADDRESS(PERF_INPUT_A + (i % 8) * 0x1000) : L1_ADDRESS(buffer_A[read_offset]);
+                    const std::uint32_t tile_row_addr = is_perf ? L1_ADDRESS(PERF_INPUT_A + (i % 8) * 0x1000) : L1_ADDRESS(buffer_A[read_offset]);
                     for (std::uint32_t j = 0; j < BLOCK_CT_DIM; ++j)
                     {
                         _llk_unpack_tilize_wrapper_(
@@ -185,6 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res = params.buffer_Res;
 #endif
     static constexpr bool UNTILIZE = false;
+    static constexpr bool is_perf  = LOOP_FACTOR > 1;
     LLK_ASSERT(
         NUM_BLOCKS > 0 && NUM_BLOCKS * NUM_TILES_IN_BLOCK >= TILE_CNT && (NUM_BLOCKS - 1) * NUM_TILES_IN_BLOCK < TILE_CNT,
         "Block configuration must cover TILE_CNT with one partial-or-full final block");
@@ -230,7 +232,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
                         std::uint32_t output_address;
-                        if constexpr (USE_PERF_BUFFERS)
+                        if constexpr (is_perf)
                         {
                             output_address = PERF_ADDRESS(PERF_OUTPUT, tile);
                         }

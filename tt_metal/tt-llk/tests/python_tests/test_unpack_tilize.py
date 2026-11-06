@@ -29,7 +29,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
-    USE_PERF_BUFFERS,
     generate_input_dim,
 )
 from helpers.utils import passed_test, result_tensor
@@ -187,7 +186,6 @@ def unpack_tilize(
             TILE_COUNT(tile_cnt_A),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            USE_PERF_BUFFERS(is_perf),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),

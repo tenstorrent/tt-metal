@@ -86,16 +86,6 @@ class RuntimeParameter(ABC):
 
 
 @dataclass
-class USE_PERF_BUFFERS(TemplateParameter):
-    use_perf_buffers: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr bool USE_PERF_BUFFERS = {str(self.use_perf_buffers).lower()};"
-        )
-
-
-@dataclass
 class THROTTLE_LEVEL(TemplateParameter):
     throttle_level: int = 0
 
