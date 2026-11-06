@@ -13,9 +13,11 @@
 #include "ttnn/operations/embedding/device/kernels/embeddings_fused_split.hpp"
 
 void kernel_main() {
+    // RUNTIME ARGS
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t blocks_per_batch = get_arg(args::blocks_per_batch);
 
+    // COMPILE TIME ARGS
     constexpr uint32_t num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr uint32_t batch = get_arg(args::batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);

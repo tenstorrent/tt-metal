@@ -205,8 +205,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedRuntimeRowsProgramFactor
     // -----------------------------------------------------------------------
     // Tensor parameters
     //
-    // The hash drops the index length and the table rows, so the index page size (a row-major width)
-    // rides a runtime word, while the table keeps its fixed width as a static page size.
+    // The index length and the table rows vary per call: the index page size (a row-major width) is a
+    // runtime arg, while the table keeps its fixed width as a static page size.
     // -----------------------------------------------------------------------
     const TensorSpecRelaxations index_relaxations{.dynamic_tensor_shape = true};
     const TensorSpecRelaxations table_relaxations{.dynamic_tensor_shape = true, .match_page_size = true};
@@ -354,7 +354,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedRuntimeRowsProgramFactor
     });
 
     // -----------------------------------------------------------------------
-    // Run args
+    // Runtime args
     // -----------------------------------------------------------------------
     auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/false);
 
@@ -384,8 +384,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedRuntimeRowsProgramFactor
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// A hit re-binds the three tensors and rewrites the common block count the three kernels derive
-// their per-core ranges from (the hash leaves the index length out).
+// A hit re-binds the three tensors and rewrites the common block count.
 tt::tt_metal::experimental::ProgramRunArgs EmbeddingsFusedRuntimeRowsProgramFactory::override_runtime_arguments(
     const EmbeddingParams& /*operation_attributes*/,
     const EmbeddingInputs& tensor_args,

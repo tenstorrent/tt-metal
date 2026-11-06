@@ -15,10 +15,11 @@
 #include "ttnn/operations/data_movement/untilize/device/kernels/untilize_row_split.hpp"
 
 void kernel_main() {
+    // RUNTIME ARGS
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t num_tile_rows = get_arg(args::num_tile_rows);
 
-    // compile-time args
+    // COMPILE TIME ARGS
     constexpr auto num_cores = get_arg(args::num_cores);
     constexpr auto tile_height = get_arg(args::tile_height);
     constexpr auto num_tiles_per_input_block = get_arg(args::num_tiles_per_input_block);
