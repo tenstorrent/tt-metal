@@ -8,7 +8,8 @@
 Synthetic Q/K/V (pad rows repeat a real row of their tile, as in the model), the device VSAPrepass mask, and the op
 without pooled K/V (exact step only) at `logical_n` = rung, against the torch block-sparse reference fed the same mask.
 The ragged geometry runs in a rung whose shards end in a 32-row straggler, and also without `block_counts`, which
-must miss the bar: that proves the counts reach the kernel. The `logical_n_ab` case runs the op at `logical_n` = rung
+must miss the bar: that proves the counts reach the kernel. The `check` case also rewrites the pre-pass in place for
+another request, eagerly and under one traced capture. The `logical_n_ab` case runs the op at `logical_n` = rung
 and at the geometry's real length and compares output and traced time.
 
 `test_vsa_attention`: MiniMaxH3Attention on the VSA path: pre-pass, coarse branch, gate and fine attention. The torch
@@ -335,6 +336,20 @@ def test_vsa_fine_attention(
     assert bool((kept_candidates == other_k).all()), "each scored row keeps exactly the request's k candidates"
     prepass.update(geometry, traced=True)
     assert torch.equal(routed_mask(prepass, (tq, tk, tv)), first), "updating back in place must restore the routing"
+
+    # One capture of the pre-pass, replayed for this request and then for the other one written in place.
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    traced = prepass(tq, tk, tv, coarse=False)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    assert torch.equal(ttnn.to_torch(traced["block_mask"], mesh_composer=composer), first), "traced replay differs"
+    prepass.update(other, traced=True)
+    for src, dst in zip(other_qkv, (tq, tk, tv)):
+        ttnn.copy(src, dst)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    replayed = ttnn.to_torch(traced["block_mask"], mesh_composer=composer)
+    assert torch.equal(replayed, other_mask), "a replay with the other request written in place must route as eager"
+    ttnn.release_trace(mesh_device, trace_id)
 
 
 def _logical_n_ab(mesh_device, op, run, geometry, compared_rows: torch.Tensor) -> None:
