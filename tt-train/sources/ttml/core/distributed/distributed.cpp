@@ -202,34 +202,4 @@ void synchronize_gradients(
         parameters, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
 }
 
-ttnn::Tensor average_gradients(
-    uint32_t count,
-    const std::function<ttnn::Tensor(uint32_t)>& gradient,
-    std::optional<ttnn::DataType> reduce_dtype,
-    bool sum_over_devices) {
-    TT_FATAL(count > 0U, "average_gradients needs at least one gradient");
-    TT_FATAL(
-        !reduce_dtype.has_value() || *reduce_dtype == ttnn::DataType::BFLOAT16 ||
-            *reduce_dtype == ttnn::DataType::FLOAT32,
-        "reduce_dtype must be BFLOAT16 or FLOAT32, got {}",
-        *reduce_dtype);
-    const float inv_count = 1.0F / static_cast<float>(count);
-    ttnn::Tensor sum = gradient(0U);
-    const auto dtype = sum.dtype();
-    // In fp32 when asked for, or when the first gradient already is fp32, every operand is cast to fp32 for the exact
-    // fp32 sum (see core::as_fp32). Otherwise the sum runs in the first gradient's dtype.
-    const bool in_fp32 = reduce_dtype == ttnn::DataType::FLOAT32 || dtype == ttnn::DataType::FLOAT32;
-    if (in_fp32) {
-        sum = core::as_fp32(sum);
-    }
-    for (uint32_t i = 1U; i < count; ++i) {
-        sum = ttnn::add(sum, in_fp32 ? core::as_fp32(gradient(i)) : gradient(i));
-    }
-    sum = ttnn::multiply(sum, inv_count);
-    if (sum_over_devices) {
-        sum = ttml::ttnn_fixed::distributed::all_reduce(sum);
-    }
-    return sum.dtype() == dtype ? sum : ttnn::typecast(sum, dtype);
-}
-
 }  // namespace ttml::core::distributed
