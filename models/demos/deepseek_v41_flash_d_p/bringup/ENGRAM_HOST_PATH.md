@@ -143,8 +143,8 @@ byte-equal in every run. Logs: `/localdev/dnijemcevic/bringup/engram_2026-10-28/
   12.9, 8x1 15.3, **8x8 8.9**, 16x1 11.2, 16x8 8.8. The fp32 dequant depends on torch's threads: 1 / 4 / 8 / 16 ->
   322 / 85 / 53 / 42 ms (stage 4's lookup-table dequant removes it).
 
-In the model (`tt/engram.py`, settings `ENGRAM_TABLE=mmap|random|resident`, `ENGRAM_GATHER_THREADS`; defaults today's
-mmap / 1 until the owner picks): `tests/test_engram_table_modes.py` (CPU) checks the rows byte for byte in every mode
+In the model (`tt/engram.py`, settings `ENGRAM_TABLE=mmap|resident`, `ENGRAM_GATHER_THREADS`; owner 2026-11-06: `mmap` is
+the mapping with `MADV_RANDOM` (the former `random`; the read-ahead mapping is gone), default `resident`, tests `mmap`): `tests/test_engram_table_modes.py` (CPU) checks the rows byte for byte in every mode
 (resident with `DS41_TEST_ENGRAM_RESIDENT=1`); the engram_rows component tests of layers 1 and 14 pass on the 2x2 with
 `random` / 8 threads (rel 0, bit-identical repeats).
 

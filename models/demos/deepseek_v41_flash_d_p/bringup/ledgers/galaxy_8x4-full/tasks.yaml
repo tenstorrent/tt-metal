@@ -2773,9 +2773,9 @@ tasks:
   - P.29
   - FIX.22
   gate:
-    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
-      BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
-      --run-all models/demos/common/bringup/tests/test_positions.py
+    cmd: DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit

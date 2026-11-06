@@ -15,9 +15,9 @@ is host state per slot, returned to the caller.
 
 This runs in the device model's ``begin_chunk(tokens, start)`` (agent rule 5: a host input), never inside a layer.
 
-Where the table is read from (ENGRAM_TABLE; bringup/ENGRAM_HOST_PATH.md): mmap = the checkpoint mapping with the
-kernel's read-ahead (a random 256-byte row faults in up to read_ahead_kb: ~7 s a 5120-token chunk cold on the QB);
-random = the same mapping with MADV_RANDOM over the table's bytes (one 4 KB page a row); resident = the table held in
+Where the table is read from (ENGRAM_TABLE; bringup/ENGRAM_HOST_PATH.md): mmap = the checkpoint mapping with
+MADV_RANDOM over the table's bytes (one 4 KB page a row; the kernel's read-ahead would fault in up to read_ahead_kb a
+random 256-byte row: ~7 s a 5120-token chunk cold on the QB, so the mapping never reads ahead); resident = the table held in
 anonymous memory from build on (4 KB pages unless ENGRAM_HUGEPAGES=on; the file pages it read dropped from the page cache;
 with ENGRAM_BUILD=background built on one thread while the weights load, the first chunk waits for it): with
 ENGRAM_ROWS=bfp8 already as bfloat8_b (272 B a row, exponents next to the magnitudes; tt/engram_bfp8.py), the chunk's
@@ -219,7 +219,7 @@ class TtEngramRows:
         self.weight, self.scale, self._packed = table.weight, table.scale, None
         self._staged = None  # ENGRAM_ASYNC: the bfp8 staging host tensor (_staging)
         ck = getattr(table, "ckpt", None)
-        if self.mode == "random":
+        if self.mode == "mmap":
             madvise_random(ck, layer)
         elif self.mode == "resident" and self.format == "bfp8":
 

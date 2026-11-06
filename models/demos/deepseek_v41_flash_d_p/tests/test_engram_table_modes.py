@@ -21,7 +21,7 @@ from models.demos.deepseek_v41_flash_d_p.tt.engram import TtEngramRows, engram_h
 from models.demos.deepseek_v41_flash_d_p.tt.engram_bfp8 import pack_into, pack_rows, tile_bytes, tile_rows
 
 LAYER, TOKENS = 1, 5120
-MODES = ["mmap", "random"] + (["resident"] if os.environ.get("DS41_TEST_ENGRAM_RESIDENT") == "1" else [])
+MODES = ["mmap"] + (["resident"] if os.environ.get("DS41_TEST_ENGRAM_RESIDENT") == "1" else [])
 
 
 @pytest.fixture(scope="module")
