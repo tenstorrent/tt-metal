@@ -1043,6 +1043,7 @@ _GRID_MAIN_ROWS = (
     ("LoFi", True, False, "B4", "F32", "F32", 4, 2, 3, 0, False, 1),
     ("LoFi", True, False, "B4", "F32", "F32", 4, 2, 5, 0, False, 1),
     ("LoFi", True, False, "B4", "F32", "F32", 5, 1, 3, 0, False, 1),
+    ("LoFi", True, False, "B4", "F32", "F32", 7, 1, 3, 0, False, 1),
     ("LoFi", True, False, "B4", "F32", "F32", 8, 1, 3, 0, False, 1),
     ("LoFi", True, True, "B8x", "B8x", "B8x", 4, 1, 3, 0, False, 1),
     ("LoFi", True, True, "B8", "B2", "F16b", 2, 1, 1, 0, False, 1),
@@ -1053,6 +1054,7 @@ _GRID_MAIN_ROWS = (
     ("LoFi", True, False, "B8", "B4", "F32", 2, 3, 3, 0, True, 2),
     ("LoFi", True, False, "B8", "B4", "F32", 3, 2, 3, 0, False, 1),
     ("LoFi", True, False, "B8", "B4", "F32", 4, 2, 3, 0, False, 1),
+    ("LoFi", True, False, "B8", "B4", "F32", 6, 1, 3, 0, False, 1),
     ("LoFi", True, False, "B8", "B4", "F32", 7, 1, 3, 0, False, 1),
     ("LoFi", True, True, "B8", "B8", "F16b", 2, 1, 1, 0, False, 1),
     ("LoFi", True, False, "B8", "B8", "F32", 1, 7, 2, 0, False, 1),
@@ -1317,6 +1319,7 @@ _GRID_MAIN_ROWS = (
     ("LoFi", True, True, "F32", "F32", "F32", 2, 1, 2, 0, False, 1),
     ("LoFi", True, False, "F32", "F32", "F32", 2, 1, 5, 0, False, 1),
     ("LoFi", True, False, "F32", "F32", "F32", 2, 2, 4, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "F32", 4, 1, 3, 0, False, 1),
     ("LoFi", True, False, "F32", "F32", "F32", 4, 1, 4, 0, False, 1),
     # END generated
     ("HiFi2", True, True, "I8", "I8", "I32", 1, 1, 1, 0, False, 1),
