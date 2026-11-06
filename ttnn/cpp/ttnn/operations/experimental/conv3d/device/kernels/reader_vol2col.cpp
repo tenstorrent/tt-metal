@@ -316,9 +316,6 @@ void shift_retained_w_columns(
 // to free that slot.  After the loop, drain by barriering on each in-flight trid.  This
 // bounds NoC outstanding reads to N_TRIDS and replaces the single trailing barrier with
 // per-trid waits so later reads continue while earlier ones drain.
-// The tag is the sticky NOC_PACKET_TAG register of this NoC's read cmd buf (set_read_tag
-// below).  It is written once per iteration and applies to whatever read follows: the row
-// read inside the helpers or the zero-fill loopback reads inside noc.async_write_zeros.
 //
 // Per-call fast path: when this gather call has fewer than `kGatherFastPathReadCutoff`
 // reads it issues untagged + single trailing barrier (the original behavior).  In that
