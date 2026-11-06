@@ -17,22 +17,20 @@ Two precisions:
 
 - `fp32` (default, `<grid>-seed<seed>-fp32`): the reference model cast to fp32, with attention
   computed `CHUNK_SIZE` query rows at a time (`chunked_attention`). The device tests compare against
-  these. Upstream's eager attention holds several 12 x L x L tensors at once: ~510 GB measured in
-  bf16, roughly twice that in fp32, more than the host has; chunks need ~25 GB. The norms keep the
-  bf16 model's eps (2^-7): upstream `nn.RMSNorm(eps=None)` takes eps from the input dtype, so fp32
-  would otherwise change the model, not only the precision.
+  these. Upstream's eager attention holds several 12 x L x L tensors at once, more than the host
+  has. The norms keep the bf16 model's eps (2^-7): upstream `nn.RMSNorm(eps=None)` takes eps from
+  the input dtype, so fp32 would otherwise change the model, not only the precision.
 - `bf16` (`<grid>-seed<seed>`): the reference as it runs, bf16 with upstream eager attention. Its
   own rounding (bf16 attention probabilities and residual stream) is large where activations are
-  large: at full size, layer 18 has PCC 0.983 against fp32, while the device has 0.99998. After
-  the projector it is worse: on a 64x64 image the bf16 model's output has PCC 0.848 against fp32.
+  large: in deeper layers it is larger than the device's error, and after the projector it is worse.
 
 Pixels are `random_patches(config, grid, seed)`. The loop is `MoonViT3dEncoder.forward` with every
 block's output kept: each block gets the arguments `forward` gives it (`reference_rope`).
-`test_goldens.py` checks the loop against `encoder(...)` and the model, and `chunked_attention` against upstream
-`eager_attention`, on small inputs. A run resumes from the last saved block (a finished folder only redoes the final norm and the
-model output). `meta.json` records
-hashes of the checkpoint index, the reference code and `chunked_attention`; `load` refuses a folder
-made from different ones.
+`test_goldens.py` checks the loop against `encoder(...)` and the model, and `chunked_attention`
+against upstream `eager_attention`, on small inputs. A run resumes from the last saved block (a
+finished folder only redoes the final norm and the model output). `meta.json` records hashes of the
+checkpoint index, the reference code and `chunked_attention`; `load` refuses a folder made from
+different ones.
 
     python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid 256x256 [--dtype bf16] [--blocks 1]
 """
@@ -56,6 +54,7 @@ import torch
 from models.experimental.kimi_k3_moonvit_v2.reference import modeling_kimi_k3 as upstream
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
 from models.experimental.kimi_k3_moonvit_v2.tests.common import REAL_MARK, random_patches, reference_rope
+from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
 
 GOLDEN_DIR_ENV = "MOONVIT_GOLDEN_DIR"
 REFERENCE_DIR = Path(__file__).resolve().parents[1] / "reference"
@@ -71,8 +70,9 @@ REFERENCE_FILES = (
 )
 DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
 CHUNK_SIZE = 2048
-# The bf16 model's RMSNorm eps (`nn.RMSNorm(eps=None)` on bf16 input), kept when running in fp32.
-NORM_EPS = torch.finfo(torch.bfloat16).eps
+# The bf16 model's RMSNorm eps (`nn.RMSNorm(eps=None)` on bf16 input), kept when running in fp32. The
+# device uses the same value (`MoonViTConfig.norm_eps`).
+NORM_EPS = MoonViTConfig().norm_eps
 
 
 def golden_dir() -> Path | None:
@@ -221,7 +221,6 @@ def load(h: int, w: int, seed: int, name: str, dtype: str = "fp32") -> torch.Ten
 
 def generate(h: int, w: int, seed: int, dtype: str, blocks: int | None) -> None:
     from models.experimental.kimi_k3_moonvit_v2.tests.conftest import build_reference
-    from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
 
     checkpoint = checkpoint_path()
     if checkpoint is None:
@@ -248,7 +247,7 @@ def generate(h: int, w: int, seed: int, dtype: str, blocks: int | None) -> None:
         print(f"[goldens] {name}: {seconds:.1f} s, peak RSS so far {peak_gb:.1f} GB", flush=True)
 
     t = time.time()
-    reference = build_reference(REAL_MARK, None)
+    reference = build_reference(REAL_MARK)
     if dtype == "fp32":
         reference = to_fp32(reference)
     config = MoonViTConfig.from_hf_config(checkpoint)

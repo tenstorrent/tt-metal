@@ -169,7 +169,7 @@ def test_preprocessor_defaults(config, media_proc_cfg):
 
 def test_prepare_host_inputs_from_image(config):
     pixel_values, grid_thws = image_prep.image_to_patches(random_image(35, 35), config)
-    pos_emb_weight = torch.randn(config.init_pos_emb_height, config.init_pos_emb_width, config.hidden_size)
+    pos_emb_weight = torch.randn(64, 64, config.hidden_size)  # the checkpoint's 64x64 position table
     inputs = host_prep.prepare_host_inputs(config, pos_emb_weight, pixel_values, grid_thws)
     n = inputs["logical_n"]
     assert n == 16

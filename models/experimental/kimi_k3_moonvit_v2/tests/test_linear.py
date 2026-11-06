@@ -49,7 +49,7 @@ def check_linear(mesh_device, torch_linear, rows: MeshRows) -> None:
 
     x = random_tensor(rows.n, torch_linear.in_features)
     with torch.no_grad():
-        golden = torch_linear(rows.take(x))
+        golden = torch_linear(rows.real_rows(x))
 
     out = tt(rows.shard(x, mesh_device))
     assert_quality(golden, rows.gather(out, mesh_device), relative_rmse=0.003)
@@ -82,7 +82,7 @@ def check_patch_embed_linear(mesh_device, sp_axis, config, reference, grid) -> N
     pixels = pixels.to(torch.bfloat16)
     rows = MeshRows(pixels.shape[0], config.max_patches, sp_axis)
     with torch.no_grad():
-        golden = reference.vision_tower.patch_embed.proj(rows.take(pixels)).flatten(1)
+        golden = reference.vision_tower.patch_embed.proj(rows.real_rows(pixels)).flatten(1)
 
     out = tt.proj(rows.shard(host_prep.patch_rows(config, pixels), mesh_device))
     assert_quality(golden, rows.gather(out, mesh_device), relative_rmse=0.004)

@@ -37,7 +37,7 @@ def check_projector(mesh_device, sp_axis, config, reference, grid) -> None:
     rows = MeshRows(h * w // config.merge_area, config.max_patches // config.merge_area, sp_axis)
     x = random_tensor(rows.n, config.merge_area, config.hidden_size)
     with torch.no_grad():
-        (golden,) = reference.mm_projector([rows.take(x)])
+        (golden,) = reference.mm_projector([rows.real_rows(x)])
 
     out = tt(rows.shard(x.reshape(rows.n, config.merged_dim), mesh_device))
     assert_quality(golden, rows.gather(out, mesh_device), relative_rmse=0.01)

@@ -15,15 +15,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
-from models.experimental.kimi_k3_moonvit_v2.tt.model_config import RING_SIZE, MoonViTConfig
 from models.common.utility_functions import comp_pcc
+from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tt.ccl import ParallelFactor, TT_CCL
+from models.experimental.kimi_k3_moonvit_v2.tt.device_input import sp_mesh_mapper
+from models.experimental.kimi_k3_moonvit_v2.tt.model_config import RING_SIZE, MoonViTConfig
 
-# Depth of the shallow model that the full-model tests run (`shallow_reference`, `shallow_config`).
-TEST_LAYERS = 2
-
-# Weights. A test that builds `reference` or `shallow_reference` carries one or both of these marks,
+# Weights. A test that builds `reference` carries one or both of these marks,
 # and conftest.py runs it once per mark: SYNTHETIC with random weights, REAL with the checkpoint at
 # $KIMI_K3_HF_MODEL. `-m synthetic` or `-m real` selects by weights.
 SYNTHETIC_MARK = "synthetic"
@@ -87,10 +85,10 @@ def padding_layout_grid(size: str) -> list[tuple[int, int, int]]:
     return [(1, h, w)]
 
 
-# Full-length attention and block tests: the ring runs the production padded length (`max_patches`)
-# on a PADDING_LAYOUT_SIZES image with real rows on every chip. The CPU golden at that length is too slow for
-# every query row, so it computes SAMPLED_ROWS_PER_CHIP query rows of each chip, each against every key
-# (`goldens.use_sampled_attention`), and each chip's rows are checked on their own.
+# Attention and block tests with real rows on every chip: the ring runs the production padded length
+# (`max_patches`) on a PADDING_LAYOUT_SIZES image with real rows on every chip. The CPU golden at that
+# length is too slow for every query row, so it computes SAMPLED_ROWS_PER_CHIP query rows of each chip,
+# each against every key (`goldens.use_sampled_attention`), and each chip's rows are checked on their own.
 REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS = pytest.mark.parametrize("size", ["full", "max_side", "partial"])
 SAMPLED_ROWS_PER_CHIP = 256
 
@@ -115,6 +113,11 @@ def sampled_rows(n: int, rows: int, per_chip: int = SAMPLED_ROWS_PER_CHIP, seed:
     return chips
 
 
+def _label(label: str) -> str:
+    """`label`, or the running test's id when it is empty."""
+    return label or os.environ.get("PYTEST_CURRENT_TEST", "quality").split(" ")[0]
+
+
 def assert_quality_per_chip(
     golden: torch.Tensor,
     actual: torch.Tensor,
@@ -126,13 +129,24 @@ def assert_quality_per_chip(
     """`assert_quality` on each chip's rows (`chips`, as `sampled_rows` gives them) of `golden` and
     `actual`, both window order. Every chip is checked and logged before any failure is raised, so a
     wrong chip cannot hide behind three right ones."""
-    label = label or os.environ.get("PYTEST_CURRENT_TEST", "quality").split(" ")[0]
-    failed = []
+    label = _label(label)
+    parts = []
     for chip, rows in enumerate(chips):
         assert len(rows), f"{label}: chip {chip} holds no real rows"
-        q = quality(golden[rows], actual[rows])
-        logger.info(f"{label} chip {chip} ({len(rows)} rows): {format_quality(q)}")
-        failed += [f"chip {chip} {failure}" for failure in quality_failures(q, pcc, relative_rmse)]
+        parts.append((f"chip {chip} ({len(rows)} rows)", golden[rows], actual[rows]))
+    assert_quality_parts(parts, pcc, relative_rmse, label)
+
+
+def assert_quality_parts(
+    parts: list[tuple[str, torch.Tensor, torch.Tensor]], pcc: float, relative_rmse: float | None, label: str
+) -> None:
+    """`quality` of each `(name, golden, actual)` in `parts`. Every part is checked and logged before
+    any failure is raised."""
+    failed = []
+    for name, golden, actual in parts:
+        q = quality(golden, actual)
+        logger.info(f"{label} {name}: {format_quality(q)}")
+        failed += [f"{name} {failure}" for failure in quality_failures(q, pcc, relative_rmse)]
     assert not failed, f"{label}: {failed}"
 
 
@@ -142,35 +156,37 @@ def assert_quality_per_chip(
 # route the ring's wraparound link there.
 LOUDBOX_SHAPE = (2, RING_SIZE)
 RING_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}
-RING4 = pytest.param((1, RING_SIZE), 1, 2, RING_FABRIC, id="ring1x4")
-# One P150 standing in for one chip of that ring: it runs that chip's quarter of the padded sequence
-# (`device_config`, `MeshRows`), never the whole of it.
-P150_CHIP = pytest.param((1, 1), None, 1, {}, id="p150")
+RING_NUM_LINKS = 2
+# Traced tests (`Trace`) set aside this much DRAM for the captured commands.
+TRACE_REGION_SIZE = 100_000_000
 
 
-def mesh_params(*params):
+def mesh_params(shape: tuple[int, int], sp_axis: int | None, num_links: int, device_params: dict, id: str):
+    """Run a test on one mesh: parametrizes `mesh_device`, `sp_axis`, `num_links` and `device_params`."""
     return pytest.mark.parametrize(
         ("mesh_device", "sp_axis", "num_links", "device_params"),
-        list(params),
+        [pytest.param(shape, sp_axis, num_links, device_params, id=id)],
         indirect=["mesh_device", "device_params"],
     )
 
 
-# Attention needs the ring, so only tests with attention in them use it. Parts that work on each row
-# alone run on one P150.
-RING = mesh_params(RING4)
-P150 = mesh_params(P150_CHIP)
+def ring_params(**device_params):
+    """The ring, with `device_params` added to its fabric config."""
+    return mesh_params((1, RING_SIZE), 1, RING_NUM_LINKS, {**RING_FABRIC, **device_params}, "ring1x4")
 
-# Traced tests (`Trace`): the ring with DRAM set aside for the captured commands.
-TRACE_REGION_SIZE = 100_000_000
-RING_TRACE = mesh_params(
-    pytest.param((1, RING_SIZE), 1, 2, {**RING_FABRIC, "trace_region_size": TRACE_REGION_SIZE}, id="ring1x4")
-)
+
+# Attention needs the ring, so only tests with attention in them use it. Parts that work on each row
+# alone run on one P150, standing in for one chip of the ring: it runs that chip's quarter of the
+# padded sequence (`device_config`, `MeshRows`), never the whole of it.
+RING = ring_params()
+RING_TRACE = ring_params(trace_region_size=TRACE_REGION_SIZE)
+P150 = mesh_params((1, 1), None, 1, {}, "p150")
+
 # Untimed replays, then timed ones (`Trace.time_replays`).
 TRACE_WARMUP = 2
 TRACE_ITERATIONS = 10
 
-# ttsim (TT_METAL_SIMULATOR) simulates one chip at about 1/100 of silicon speed, too slow for the
+# ttsim (TT_METAL_SIMULATOR) simulates one chip far slower than silicon, too slow for the
 # full padded length (16,384 rows per chip). Sim tests opt in with `@SIMULATOR`; on ttsim, conftest.py
 # skips every other device test. Each row-wise part has one: one chip, random weights, SIMULATOR_GRID
 # in a config padded to SIMULATOR_ROWS (`simulator_config`), so the chip runs its quarter, 128 rows.
@@ -270,8 +286,8 @@ def assert_quality(
     Thresholds follow tt_dit's `assert_quality` (PCC plus relative RMSE); CCC and the largest element
     differences are logged, not asserted. Each test's relative RMSE limit is about twice the largest
     value measured on Blackhole over its cases (random and checkpoint weights, both meshes), rounded
-    up. Tests whose forward is not written yet have none (`relative_rmse=None` logs it only)."""
-    label = label or os.environ.get("PYTEST_CURRENT_TEST", "quality").split(" ")[0]
+    up. `relative_rmse=None` logs it without asserting it."""
+    label = _label(label)
     q = quality(golden, actual)
     logger.info(f"{label}: {format_quality(q)}")
     failures = quality_failures(q, pcc, relative_rmse)
@@ -320,12 +336,7 @@ def sp_shard(
     if x.shape[-2] > rows:
         raise ValueError(f"{x.shape[-2]} rows do not fit the padded length {rows}")
     padded = torch.nn.functional.pad(x, (0, 0, 0, rows - x.shape[-2]))[None]
-    if sp_axis is None:
-        mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    else:
-        dims = [None, None]
-        dims[sp_axis] = 2
-        mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+    mapper = sp_mesh_mapper(mesh_device, sp_axis)
     return ttnn.from_torch(padded, device=mesh_device, dtype=dtype, layout=layout, mesh_mapper=mapper)
 
 
@@ -342,6 +353,18 @@ def sp_gather(x: ttnn.Tensor, mesh_device, sp_axis: int | None, logical_n: int) 
         composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
     out = ttnn.to_torch(x, mesh_composer=composer)[0, :, :logical_n]
     return out[0] if out.shape[0] == 1 else out
+
+
+def logical_length_tensor(mesh_device, n: int) -> ttnn.Tensor:
+    """The unpadded patch count as the `logical_n` the ring attention reads: [1, 1, 1, 1] uint32, row
+    major, replicated. The model writes it into a `DeviceInput` instead, so a trace can replay it."""
+    return ttnn.from_torch(
+        torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -373,26 +396,26 @@ class MeshRows:
         return min((self.n - 1) // self.share, RING_SIZE - 1) * self.share
 
     @property
-    def real(self) -> slice:
+    def real_slice(self) -> slice:
         """The real rows on the mesh."""
         return slice(self.start, min(self.start + self.share, self.n))
 
-    def take(self, x: torch.Tensor) -> torch.Tensor:
+    def real_rows(self, x: torch.Tensor) -> torch.Tensor:
         """The real rows on the mesh: the rows of a golden to compare with `gather`."""
-        return x[self.real]
+        return x[self.real_slice]
 
-    def held(self, x: torch.Tensor) -> torch.Tensor:
+    def padded_rows(self, x: torch.Tensor) -> torch.Tensor:
         """`x` zero-padded to `rows`, then the `share` rows on the mesh."""
         return host_prep.pad_rows(x, self.rows)[self.start : self.start + self.share]
 
     def shard(self, x: torch.Tensor, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
         """(L, C) or (L, H, C) on the host -> the mesh's rows on device, [1, 1 or H, share/sp, C]."""
-        x = self.held(x)
+        x = self.padded_rows(x)
         return sp_shard(x if x.ndim == 2 else x.transpose(0, 1), mesh_device, self.sp_axis, self.share, dtype, layout)
 
     def gather(self, x: ttnn.Tensor, mesh_device) -> torch.Tensor:
         """The inverse of `shard` with the padding dropped: -> (real rows, C) or (real rows, H, C)."""
-        out = sp_gather(x, mesh_device, self.sp_axis, self.real.stop - self.real.start)
+        out = sp_gather(x, mesh_device, self.sp_axis, self.real_slice.stop - self.real_slice.start)
         return out if out.ndim == 2 else out.transpose(0, 1)
 
 

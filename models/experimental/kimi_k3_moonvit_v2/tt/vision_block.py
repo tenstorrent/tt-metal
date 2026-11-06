@@ -10,7 +10,7 @@ x + attention(norm0(x)), then + mlp(norm1(x)). The norms are RMSNorm without bia
 
 The residual stream (`x`, `h`, the output) is fp32; everything else stays bf16. The norms read it
 and hand bf16 to the matmuls, and `wo` and `fc1` write fp32 for the adds. A bf16 residual would round
-away small updates to large values (it reaches |x| ~ 500), which costs end-to-end accuracy.
+away small updates to large values, which costs end-to-end accuracy.
 """
 
 from __future__ import annotations

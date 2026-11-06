@@ -7,12 +7,12 @@
 `MoonViTConfig` holds the architecture; its defaults are the Kimi-K3 `vision_config`, and
 `from_hf_config` reads the same fields from a checkpoint's `config.json`. `VisionParallel` is the
 mesh layout the TT modules receive, resolved from a sequence-parallel `ParallelFactor` and the
-`TT_CCL` that owns the ring resources (`ccl.py`). This module imports no ttnn at import time, so host prep and the CPU tests can use it.
+`TT_CCL` that owns the ring resources (`ccl.py`). This module imports no ttnn at import time, so host
+prep and the CPU tests can use it.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,9 +25,14 @@ if TYPE_CHECKING:
     from .ccl import ParallelFactor, TT_CCL
 
 
-# The layout the model targets: the padded sequence split over a ring of RING_SIZE chips. One device
-# without the split runs at most one ring chip's share of it (`resolve_parallel`).
+# The processor's `in_patch_limit` (`preprocessor_config.json`).
+IN_PATCH_LIMIT = 65536
+# The layout the model targets: the padded sequence, RING_MAX_PATCHES rows, split over a ring of
+# RING_SIZE chips. The padded length is the processor's patch limit. One device without the split
+# runs at most one ring chip's share of it, ONE_DEVICE_MAX_PATCHES rows (`resolve_parallel`).
 RING_SIZE = 4
+RING_MAX_PATCHES = IN_PATCH_LIMIT
+ONE_DEVICE_MAX_PATCHES = RING_MAX_PATCHES // RING_SIZE
 
 
 @dataclass(frozen=True)
@@ -39,9 +44,6 @@ class MoonViTConfig:
     qkv_hidden_size: int = 1536
     in_channels: int = 3
     patch_size: int = 14
-    init_pos_emb_height: int = 64
-    init_pos_emb_width: int = 64
-    init_pos_emb_time: int = 4
     pos_emb_interpolation_mode: str = "bilinear"
     attn_bias: bool = False
     linear_bias: bool = False
@@ -52,10 +54,10 @@ class MoonViTConfig:
     # Processor (`preprocessor_config.json`): `patch_limit_on_one_side` (also the RoPE table size) and
     # `in_patch_limit`, which only sets the resize (`image_prep.resize_plan`).
     max_side_patches: int = 512
-    in_patch_limit: int = 65536
+    in_patch_limit: int = IN_PATCH_LIMIT
     # Device row count: every image is padded to `max_patches` rows, and ring attention masks the
     # padding. Images whose grid exceeds it are rejected, never shrunk to fit.
-    max_patches: int = 65536
+    max_patches: int = RING_MAX_PATCHES
     # Patch merger (`sd2_tpool`): each 2x2 window of patches becomes one token.
     merge_kernel_size: tuple[int, int] = (2, 2)
     # Projector (`patchmergerv2`): merged token -> language-model width, then RMSNorm.
@@ -90,9 +92,6 @@ class MoonViTConfig:
     def merged_dim(self) -> int:
         """Width of a merged token: the window's patches concatenated."""
         return self.hidden_size * self.merge_area
-
-    def with_layers(self, num_hidden_layers: int) -> MoonViTConfig:
-        return dataclasses.replace(self, num_hidden_layers=num_hidden_layers)
 
     @classmethod
     def from_hf_config(cls, config: dict | str | Path) -> MoonViTConfig:
@@ -137,9 +136,6 @@ class MoonViTConfig:
             num_attention_heads=vc.get("vt_num_attention_heads", d.num_attention_heads),
             qkv_hidden_size=vc.get("qkv_hidden_size", d.qkv_hidden_size),
             patch_size=vc.get("patch_size", d.patch_size),
-            init_pos_emb_height=vc.get("init_pos_emb_height", d.init_pos_emb_height),
-            init_pos_emb_width=vc.get("init_pos_emb_width", d.init_pos_emb_width),
-            init_pos_emb_time=vc.get("init_pos_emb_time", d.init_pos_emb_time),
             pos_emb_interpolation_mode=vc.get("pos_emb_interpolation_mode", d.pos_emb_interpolation_mode),
             attn_bias=vc.get("attn_bias", d.attn_bias),
             linear_bias=vc.get("linear_bias", d.linear_bias),
@@ -189,10 +185,10 @@ def resolve_parallel(
 ) -> VisionParallel:
     sp = sequence_parallel
     if sp is None or sp.factor == 1:
-        share = MoonViTConfig.max_patches // RING_SIZE
-        if config.max_patches > share:
+        if config.max_patches > ONE_DEVICE_MAX_PATCHES:
             raise ValueError(
-                f"max_patches={config.max_patches} on one device: it runs at most one ring chip's share, {share} rows"
+                f"max_patches={config.max_patches} on one device: it runs at most one ring chip's share, "
+                f"{ONE_DEVICE_MAX_PATCHES} rows"
             )
         return VisionParallel(sp_axis=None, sp_factor=1, ccl=ccl)
     if ccl is None:

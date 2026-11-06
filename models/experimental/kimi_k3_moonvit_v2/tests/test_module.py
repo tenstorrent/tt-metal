@@ -60,9 +60,9 @@ def host_inputs(monkeypatch):
 
 
 @SYNTHETIC
-def test_vision_model_loads_reference(host_parameters, shallow_config, shallow_reference):
-    tt = vision_model.TT_MoonViT_Vision_Model(device_config(shallow_config, None), mesh_device=host_parameters)
-    state = shallow_reference.state_dict()
+def test_vision_model_loads_reference(host_parameters, config, reference):
+    tt = vision_model.TT_MoonViT_Vision_Model(device_config(config, None), mesh_device=host_parameters)
+    state = reference.state_dict()
     tt.load_torch_state_dict(state)
     assert tt.is_loaded()
 
@@ -71,12 +71,12 @@ def test_vision_model_loads_reference(host_parameters, shallow_config, shallow_r
     torch.testing.assert_close(block.attention.wqkv.weight.data, state["vision_tower.encoder.blocks.0.wqkv.weight"].T)
     torch.testing.assert_close(block.norm0.weight.data, state["vision_tower.encoder.blocks.0.norm0.weight"][None])
     proj = tower.patch_embed.proj.weight.data
-    assert proj.shape == (shallow_config.padded_patch_dim, shallow_config.hidden_size)
+    assert proj.shape == (config.padded_patch_dim, config.hidden_size)
     torch.testing.assert_close(
-        proj[: shallow_config.patch_dim],
-        state["vision_tower.patch_embed.proj.weight"].reshape(shallow_config.hidden_size, -1).T,
+        proj[: config.patch_dim],
+        state["vision_tower.patch_embed.proj.weight"].reshape(config.hidden_size, -1).T,
     )
-    assert not proj[shallow_config.patch_dim :].any()
+    assert not proj[config.patch_dim :].any()
     assert torch.equal(tower.patch_embed.pos_emb_weight, state["vision_tower.patch_embed.pos_emb.weight"])
     torch.testing.assert_close(tt.mm_projector.fc0.weight.data, state["mm_projector.proj.0.weight"].T)
     torch.testing.assert_close(tt.mm_projector.fc1.weight.data, state["mm_projector.proj.2.weight"].T)
@@ -84,13 +84,29 @@ def test_vision_model_loads_reference(host_parameters, shallow_config, shallow_r
 
 
 @SYNTHETIC
-def test_rejects_missing_and_unexpected_keys(host_parameters, shallow_config, shallow_reference, expect_error):
-    state = shallow_reference.state_dict()
+def test_rejects_missing_and_unexpected_keys(host_parameters, config, reference, expect_error):
+    state = reference.state_dict()
     state.pop("vision_tower.encoder.final_layernorm.weight")
     state["vision_tower.encoder.extra.weight"] = torch.zeros(1)
-    tt = vision_model.TT_MoonViT_Vision_Model(device_config(shallow_config, None), mesh_device=host_parameters)
+    tt = vision_model.TT_MoonViT_Vision_Model(device_config(config, None), mesh_device=host_parameters)
     with expect_error(LoadingError, "final_layernorm"):
         tt.load_torch_state_dict(state)
+
+
+@SYNTHETIC
+def test_rejects_missing_pos_emb(host_parameters, config, reference, expect_error):
+    """The position table is kept on the host, not as a `Parameter`, so it has its own missing-key check."""
+    state = reference.state_dict()
+    state.pop("vision_tower.patch_embed.pos_emb.weight")
+    tt = vision_model.TT_MoonViT_Vision_Model(device_config(config, None), mesh_device=host_parameters)
+    with expect_error(LoadingError, "pos_emb.weight"):
+        tt.load_torch_state_dict(state)
+
+
+def test_prepare_inputs_needs_loaded_weights(host_parameters, config, expect_error):
+    tt = vision_model.TT_MoonViT_Vision_Model(device_config(config, None), mesh_device=host_parameters)
+    with expect_error(RuntimeError, "weights not loaded"):
+        tt.prepare_inputs(*random_patches(config, [(1, 8, 8)]))
 
 
 def test_rename_substate():
@@ -128,11 +144,11 @@ def test_device_input_writes_in_place(host_inputs):
 
 
 @SYNTHETIC
-def test_prepare_inputs_reuses_device_tensors(host_parameters, host_inputs, shallow_config, shallow_reference):
+def test_prepare_inputs_reuses_device_tensors(host_parameters, host_inputs, config, reference):
     """A second image of another size lands in the first image's device tensors."""
-    config = dataclasses.replace(shallow_config, max_patches=1024)
+    config = dataclasses.replace(config, max_patches=1024)
     tt = vision_model.TT_MoonViT_Vision_Model(config, mesh_device=host_parameters)
-    tt.load_torch_state_dict(shallow_reference.state_dict())
+    tt.load_torch_state_dict(reference.state_dict())
 
     first = tt.prepare_inputs(*random_patches(config, [(1, 8, 8)]))
     pixels, grid_thws = random_patches(config, [(1, 6, 20)], seed=1)
@@ -140,7 +156,7 @@ def test_prepare_inputs_reuses_device_tensors(host_parameters, host_inputs, shal
     assert all(second[key] is first[key] for key in ("patches", "pos_emb", "logical_n"))
     assert all(b is a for a, b in zip(first["rope"], second["rope"]))
 
-    pos_emb_weight = shallow_reference.vision_tower.patch_embed.pos_emb.weight
+    pos_emb_weight = reference.vision_tower.patch_embed.pos_emb.weight
     expected = host_prep.prepare_host_inputs(config, pos_emb_weight, pixels, grid_thws)
     for key, actual in (
         ("patches", second["patches"]),

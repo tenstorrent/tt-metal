@@ -24,9 +24,9 @@ import torch
 
 import ttnn
 
-from .host_prep import prepare_host_inputs
 from .ccl import ParallelFactor, TT_CCL, ccl_slot_for_layer
 from .device_input import DeviceInput
+from .host_prep import prepare_host_inputs
 from .model_config import MoonViTConfig, VisionParallel, check_grid, compute_kernel_config, resolve_parallel
 from .module import Module, ModuleList
 from .patch_embed import TT_Patch_Embed
@@ -143,7 +143,10 @@ class TT_MoonViT_Vision_Model(Module):
         Returns `patches` [1, 1, S/sp, padded_patch_dim], `pos_emb` [1, 1, S/sp, hidden], `rope` and
         `logical_n` (the unpadded length, [1, 1, 1, 1] uint32), rows in window order.
         """
-        host = prepare_host_inputs(self.config, self.vision_tower.patch_embed.pos_emb_weight, pixel_values, grid_thws)
+        pos_emb_weight = self.vision_tower.patch_embed.pos_emb_weight
+        if pos_emb_weight is None:
+            raise RuntimeError("weights not loaded; call load_torch_state_dict or load_cached first")
+        host = prepare_host_inputs(self.config, pos_emb_weight, pixel_values, grid_thws)
         return {
             "patches": self.patches.write(host["patches"]),
             "pos_emb": self.pos_emb.write(host["pos_emb"]),
@@ -156,9 +159,8 @@ class TT_MoonViT_Vision_Model(Module):
         keeps the reference's token order, so no reordering is needed. Without sequence parallelism the
         first replica is kept.
 
-        Each chip's shard is converted on its own and joined with `torch.cat`, about 9x faster than
-        `ttnn.to_torch` with a mesh composer (full size: ~0.2 s against ~2 s). Chips that hold only
-        padding are skipped."""
+        Each chip's shard is converted on its own and joined with `torch.cat`, which is faster than
+        `ttnn.to_torch` with a mesh composer. Chips that hold only padding are skipped."""
         sp_axis = self.parallel.sp_axis
         mesh_cols = self.mesh_device.shape[1]
         shards = ttnn.get_device_tensors(ttnn.from_device(out))  # row-major over the mesh
@@ -175,7 +177,9 @@ class TT_MoonViT_Vision_Model(Module):
         self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor
     ) -> ttnn.Tensor:
         x = self.vision_tower(patches, pos_emb, rope, logical_n)
-        return self.mm_projector(x)
+        out = self.mm_projector(x)
+        ttnn.deallocate(x)
+        return out
 
     def run(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor) -> torch.Tensor:
         """Host in, host out: (h*w, 3, 14, 14), [[1, h, w]] -> (h*w/4, text_hidden_size)."""

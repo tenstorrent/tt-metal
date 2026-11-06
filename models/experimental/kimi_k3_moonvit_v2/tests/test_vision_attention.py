@@ -29,14 +29,15 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS,
     padding_layout_grid,
     sampled_rows,
+    logical_length_tensor,
 )
 from models.experimental.kimi_k3_moonvit_v2.tests.goldens import to_fp32, use_sampled_attention
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import check_grid, compute_kernel_config, resolve_parallel
 from models.experimental.kimi_k3_moonvit_v2.tt.rope import TT_Rope
-from models.experimental.kimi_k3_moonvit_v2.tt.vision_attention import TT_Vision_Attention, logical_length_tensor
+from models.experimental.kimi_k3_moonvit_v2.tt.vision_attention import TT_Vision_Attention
 
 # ATTENTION_GRIDS fit in chip 0's 16,384 rows, so chips 1-3 hold only padding there;
-# `test_vision_attention_full_length` puts real rows on every chip.
+# `test_vision_attention_real_rows_from_each_chip` puts real rows on every chip.
 
 
 @RING
@@ -72,7 +73,7 @@ def test_vision_attention(mesh_device, sp_axis, num_links, config, reference, gr
 @REAL
 @SAMPLED_LAYERS
 @REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS
-def test_vision_attention_full_length(mesh_device, sp_axis, num_links, config, reference, size, layer):
+def test_vision_attention_real_rows_from_each_chip(mesh_device, sp_axis, num_links, config, reference, size, layer):
     """The ring at the production padded length (`max_patches`), on an image with real rows on every
     chip. The fp32 golden covers `sampled_rows` of each chip only, each against every key
     (`use_sampled_attention`), and each chip's rows are checked on their own."""
@@ -86,8 +87,7 @@ def test_vision_attention_full_length(mesh_device, sp_axis, num_links, config, r
     h, w = check_grid(grid_thws, config)
     x = random_tensor(h * w, config.hidden_size)
     chips = sampled_rows(h * w, config.max_patches)
-    window_to_raster = host_prep.to_window_order(torch.arange(h * w)[:, None], h, w, config.merge_kernel_size)[:, 0]
-    query_rows = window_to_raster[torch.cat(chips)].sort().values
+    query_rows = host_prep.window_order(h, w, config.merge_kernel_size)[torch.cat(chips)].sort().values
     cu_seqlens, max_seqlen, rope_freqs_cis = reference_rope(reference, grid_thws)
     with torch.no_grad(), use_sampled_attention(query_rows):
         golden = to_fp32(copy.deepcopy(block)).attention_qkvpacked(x.float(), cu_seqlens, max_seqlen, rope_freqs_cis)

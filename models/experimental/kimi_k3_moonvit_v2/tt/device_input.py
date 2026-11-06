@@ -22,6 +22,15 @@ import ttnn
 _TORCH_FLOAT_DTYPES = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
 
 
+def sp_mesh_mapper(mesh_device: ttnn.MeshDevice, sp_axis: int | None):
+    """Splits dim 2 (the sequence) along mesh axis `sp_axis`, or replicates when `sp_axis` is None."""
+    if sp_axis is None:
+        return ttnn.ReplicateTensorToMesh(mesh_device)
+    dims = [None, None]
+    dims[sp_axis] = 2
+    return ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+
+
 class DeviceInput:
     """One fixed-shape input, split along `sp_axis` on dim 2 or replicated when `sp_axis` is None."""
 
@@ -41,23 +50,16 @@ class DeviceInput:
         self.layout = layout
         self.tensor: ttnn.Tensor | None = None
 
-    def _mesh_mapper(self):
-        if self.sp_axis is None:
-            return ttnn.ReplicateTensorToMesh(self.mesh_device)
-        dims = [None, None]
-        dims[self.sp_axis] = 2
-        return ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims)
-
     def write(self, value: torch.Tensor) -> ttnn.Tensor:
         """Fill the tensor with `value` (any shape with `prod(shape)` elements) and return it.
 
         A float `value` is cast to the device dtype in torch first: ttnn's own fp32 -> bf16 conversion
-        is much slower (full-size patches: ~350 ms against ~11 ms for the cast)."""
+        is much slower."""
         value = value.reshape(self.shape)
         torch_dtype = _TORCH_FLOAT_DTYPES.get(self.dtype)
         if torch_dtype is not None and value.is_floating_point():
             value = value.to(torch_dtype)
-        kwargs = dict(dtype=self.dtype, layout=self.layout, mesh_mapper=self._mesh_mapper())
+        kwargs = dict(dtype=self.dtype, layout=self.layout, mesh_mapper=sp_mesh_mapper(self.mesh_device, self.sp_axis))
         if self.tensor is None:
             self.tensor = ttnn.from_torch(
                 value, device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs
