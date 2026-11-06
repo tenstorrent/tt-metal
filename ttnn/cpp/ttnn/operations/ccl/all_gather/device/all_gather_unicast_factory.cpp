@@ -218,6 +218,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // clear of persistent L1 there; its addresses are offsets until the mux publishes the map's base.
     constexpr uint8_t num_buffers_per_channel = 2;  // hardcoded since no observable impact on performance
     tt::tt_fabric::FabricMuxConfig mux_config(
+        *mesh_device,
         /*num_full_size_channels=*/workers_per_dir,
         /*num_header_only_channels=*/0,
         /*num_buffers_full_size_channel=*/num_buffers_per_channel,
@@ -252,7 +253,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                 mux_kernel_desc.runtime_args.emplace_back(
                     mux_core_coord,
                     mux_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                        sender_fabric_node_id, dst_node, link, desc, mux_core_coord));
+                        *mesh_device, sender_fabric_node_id, dst_node, link, desc, mux_core_coord));
             }
         }
         desc.kernels.push_back(std::move(mux_kernel_desc));
