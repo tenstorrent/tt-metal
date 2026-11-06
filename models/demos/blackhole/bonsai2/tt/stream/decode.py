@@ -38,6 +38,8 @@ class StreamDecode:
         device = model.mesh_device
         self.model, self.on = model, False
         n = receiver_count(device)
+        # linears (and their rotations) on the first nl receivers (STREAM_LINEAR_CORES; default all)
+        nl = int(os.environ.get("STREAM_LINEAR_CORES") or n)
         w = ttnn.to_torch(model.norm.weight).float().reshape(-1)
         self.final_nrot = NormRotation(device, model._ternary_signs[5120], w, model.norm.eps)
         order = []
@@ -54,7 +56,7 @@ class StreamDecode:
         loads = [0] * n
         pages = []
         for lin, B in order:
-            lin.cores, lin.spread, lin.streamed = n - B, True, True
+            lin.cores, lin.spread, lin.streamed = nl - B, True, True
             p = lin.stream_pages(device)
             pages.append(p)
             for i, a in p.items():

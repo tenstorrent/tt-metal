@@ -32,6 +32,10 @@ PREFILL_SAMPLES = 3  # perf: timed traced prefills after one untimed one
 NUM_BLOCKS = ((-(-(ISL + max(DECODE_CALLS + 1, GEN)) // BLOCK_SIZE) + 7) // 8) * 8
 MAX_SEQ_LEN = NUM_BLOCKS * BLOCK_SIZE
 DEVICE_PARAMS = {"l1_small_size": 24576, "num_command_queues": 2}  # the demo's single-device params
+if os.environ.get("BONSAI_KCFG_EXTRA_KB"):
+    # a larger kernel-config ring (69 KB by default on Blackhole) than the worker L1 it takes: the next program's
+    # binaries then load while the current one runs (the GDN step's alone are ~100 KB)
+    DEVICE_PARAMS["worker_l1_size"] = 1460864 - int(os.environ["BONSAI_KCFG_EXTRA_KB"]) * 1024
 TEXT_URL = "https://www.gutenberg.org/cache/epub/84/pg84.txt"
 
 MODEL_DIR = Path(__file__).resolve().parents[2]
