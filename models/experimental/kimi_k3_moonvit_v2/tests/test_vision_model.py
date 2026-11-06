@@ -4,9 +4,8 @@
 
 """Device: the full `TT_MoonViT_Vision_Model` (patch embed, all 27 encoder blocks, final norm, patch merger,
 projector) against the reference `KimiK3VisionModel` in fp32 (`goldens.to_fp32`), on small images.
-Not the bf16 reference: its own rounding is larger than the device's error (on 64x64 with the
-checkpoint, PCC 0.848 against fp32). `test_full_size.py` runs it on a full-size image against the
-saved fp32 outputs."""
+Not the bf16 reference: its own rounding is larger than the device's error. `test_full_size.py`
+runs it on a full-size image against the saved fp32 outputs."""
 
 from __future__ import annotations
 

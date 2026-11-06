@@ -37,7 +37,7 @@ def check_vision_mlp(mesh_device, sp_axis, config, reference, layer, grid) -> No
     rows = MeshRows(h * w, config.max_patches, sp_axis)
     x = random_tensor(h * w, config.hidden_size)
     with torch.no_grad():
-        golden = reference.vision_tower.encoder.blocks[layer].mlp(rows.take(x))
+        golden = reference.vision_tower.encoder.blocks[layer].mlp(rows.real_rows(x))
 
     out = tt(rows.shard(x, mesh_device))
     assert_quality(golden, rows.gather(out, mesh_device), relative_rmse=0.005)

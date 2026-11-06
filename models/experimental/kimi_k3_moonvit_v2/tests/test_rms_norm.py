@@ -40,7 +40,7 @@ def check_rms_norm(mesh_device, torch_norm, eps: float, rows: MeshRows) -> None:
 
     x = random_tensor(rows.n, dim)
     with torch.no_grad():
-        golden = torch_norm(rows.take(x))
+        golden = torch_norm(rows.real_rows(x))
 
     out = tt(rows.shard(x, mesh_device))
     assert_quality(golden, rows.gather(out, mesh_device), relative_rmse=0.01)

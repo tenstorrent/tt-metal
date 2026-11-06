@@ -21,7 +21,6 @@ import torch
 
 CHECKPOINT_ENV = "KIMI_K3_HF_MODEL"
 CHECKPOINT_PREFIXES = ("vision_tower.", "mm_projector.")
-BLOCKS_PREFIX = "vision_tower.encoder.blocks."
 
 
 def checkpoint_path() -> Path | None:
@@ -32,17 +31,8 @@ def checkpoint_path() -> Path | None:
     return None
 
 
-def drop_layers(state: dict[str, torch.Tensor], num_layers: int) -> dict[str, torch.Tensor]:
-    """Keep blocks below `num_layers`, so a shallow config loads from a full checkpoint."""
-    return {
-        k: v
-        for k, v in state.items()
-        if not (k.startswith(BLOCKS_PREFIX) and int(k.removeprefix(BLOCKS_PREFIX).split(".")[0]) >= num_layers)
-    }
-
-
-def load_vision_state_dict(path: str | Path, num_layers: int) -> dict[str, torch.Tensor]:
-    """State dict for `KimiK3VisionModel` (checkpoint keys as they are), bf16, blocks below `num_layers`."""
+def load_vision_state_dict(path: str | Path) -> dict[str, torch.Tensor]:
+    """State dict for `KimiK3VisionModel` (checkpoint keys as they are), bf16."""
     from safetensors import safe_open
 
     path = Path(path)
@@ -59,4 +49,4 @@ def load_vision_state_dict(path: str | Path, num_layers: int) -> dict[str, torch
         with safe_open(path / shard, framework="pt") as f:
             for key in keys:
                 state[key] = f.get_tensor(key).to(torch.bfloat16)
-    return drop_layers(state, num_layers)
+    return state

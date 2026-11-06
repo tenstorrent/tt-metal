@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Replicated linear layer without bias support beyond what MoonViT needs (it has none)."""
+"""Replicated linear layer. Bias is supported, though MoonViT has none."""
 
 from __future__ import annotations
 

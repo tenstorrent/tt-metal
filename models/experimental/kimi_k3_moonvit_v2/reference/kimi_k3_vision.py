@@ -32,7 +32,7 @@ from .modeling_kimi_k3 import (
 CONFIG_JSON = Path(__file__).parent / "config.json"
 
 
-def load_vision_config(source: str | Path | None = None, *, num_hidden_layers: int | None = None) -> KimiK3VisionConfig:
+def load_vision_config(source: str | Path | None = None) -> KimiK3VisionConfig:
     """`KimiK3VisionConfig` from a checkpoint folder or `config.json` (default: the copy in this folder).
 
     Attention is upstream's `eager` path; the `flash_attention_2` path needs flash-attn and a GPU.
@@ -41,8 +41,6 @@ def load_vision_config(source: str | Path | None = None, *, num_hidden_layers: i
     if path.is_dir():
         path = path / "config.json"
     vision_config = dict(json.loads(path.read_text())["vision_config"])
-    if num_hidden_layers is not None:
-        vision_config["vt_num_hidden_layers"] = num_hidden_layers
     vision_config.pop("_attn_implementation", None)
     config = KimiK3VisionConfig(**vision_config)
     # Set after construction: transformers 5 drops `_attn_implementation` passed to the constructor,

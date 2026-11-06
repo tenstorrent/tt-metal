@@ -24,6 +24,7 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     padding_layout_grid,
     sampled_rows,
     REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS,
+    SAMPLED_ROWS_PER_CHIP,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import (
     RING_SIZE,
@@ -48,7 +49,7 @@ def test_from_hf_config_defaults_match_reference(tmp_path, vision_config):
     """Keys a config.json leaves out resolve the way the reference model builds."""
     (tmp_path / "config.json").write_text(json.dumps({"vision_config": vision_config}))
     config = MoonViTConfig.from_hf_config(tmp_path)
-    tower = KimiK3VisionModel(load_vision_config(tmp_path, num_hidden_layers=1)).vision_tower
+    tower = KimiK3VisionModel(load_vision_config(tmp_path)).vision_tower
     block = tower.encoder.blocks[0]
     assert config.pos_emb_interpolation_mode == tower.patch_embed.pos_emb.interpolation_mode
     assert config.patch_embed_proj_bias == (tower.patch_embed.proj.bias is not None)
@@ -60,14 +61,14 @@ def test_from_hf_config_defaults_match_reference(tmp_path, vision_config):
 @SYNTHETIC
 @pytest.mark.parametrize("grid", GRIDS.values(), ids=GRIDS.keys())
 @torch.no_grad()
-def test_forward_shape(shallow_config, shallow_reference, grid):
-    pixels, grid_thws = random_patches(shallow_config, grid)
+def test_forward_shape(config, reference, grid):
+    pixels, grid_thws = random_patches(config, grid)
     pixels = pixels.to(torch.bfloat16)
-    n = pixels.shape[0] // shallow_config.merge_area
-    (tower_out,) = shallow_reference.vision_tower(pixels, grid_thws)
-    assert tower_out.shape == (n, shallow_config.merge_area, shallow_config.hidden_size)
-    (out,) = shallow_reference(pixels, grid_thws)
-    assert out.shape == (n, shallow_config.text_hidden_size)
+    n = pixels.shape[0] // config.merge_area
+    (tower_out,) = reference.vision_tower(pixels, grid_thws)
+    assert tower_out.shape == (n, config.merge_area, config.hidden_size)
+    (out,) = reference(pixels, grid_thws)
+    assert out.shape == (n, config.text_hidden_size)
     assert out.dtype == torch.bfloat16
     assert torch.isfinite(out).all()
 
@@ -112,7 +113,7 @@ def test_padding_layout_grids(config, size):
     (grid,) = padding_layout_grid(size)
     h, w = check_grid(torch.tensor([grid]), config)
     chip = MeshRows(h * w, config.max_patches, None)
-    real = chip.real.stop - chip.real.start
+    real = chip.real_slice.stop - chip.real_slice.start
     last_chip = config.max_patches - chip.share
     if size in ("full", "max_side"):
         assert h * w == config.max_patches
@@ -129,14 +130,14 @@ def test_mesh_rows():
     """On the ring every row; on one chip the quarter of the last ring chip with real rows."""
     x = torch.arange(10.0)[:, None]
     ring = MeshRows(10, 16, sp_axis=1)
-    assert torch.equal(ring.take(x), x)
-    assert torch.equal(ring.held(x)[:10], x) and not ring.held(x)[10:].any()
+    assert torch.equal(ring.real_rows(x), x)
+    assert torch.equal(ring.padded_rows(x)[:10], x) and not ring.padded_rows(x)[10:].any()
     chip = MeshRows(10, 16, sp_axis=None)
-    assert (chip.share, chip.start, chip.real) == (4, 8, slice(8, 10))
-    assert torch.equal(chip.take(x), x[8:10])
-    assert torch.equal(chip.held(x), torch.tensor([[8.0], [9.0], [0.0], [0.0]]))
+    assert (chip.share, chip.start, chip.real_slice) == (4, 8, slice(8, 10))
+    assert torch.equal(chip.real_rows(x), x[8:10])
+    assert torch.equal(chip.padded_rows(x), torch.tensor([[8.0], [9.0], [0.0], [0.0]]))
     # An already padded tensor gives the same rows.
-    assert torch.equal(chip.held(torch.nn.functional.pad(x, (0, 0, 0, 6))), chip.held(x))
+    assert torch.equal(chip.padded_rows(torch.nn.functional.pad(x, (0, 0, 0, 6))), chip.padded_rows(x))
     assert MeshRows(16, 16, None).start == 12 and MeshRows(3, 16, None).start == 0
 
 
@@ -147,8 +148,8 @@ def test_one_device_runs_at_most_a_ring_chips_share(config, expect_error):
 
 
 @REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS
-def test_full_length_sampled_rows(config, size):
-    """The full-length grids put real rows on every ring chip, and `sampled_rows` takes
+def test_real_rows_from_each_chip_sampled_rows(config, size):
+    """The REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS sizes put real rows on every ring chip, and `sampled_rows` takes
     SAMPLED_ROWS_PER_CHIP distinct real rows of each chip, its first and last real rows among them (on
     `partial`, the last chip's end inside a tile)."""
     (grid,) = padding_layout_grid(size)
@@ -158,7 +159,7 @@ def test_full_length_sampled_rows(config, size):
     assert len(chips) == RING_SIZE
     for chip, rows in enumerate(chips):
         first, last = chip * share, min((chip + 1) * share, n) - 1
-        assert len(rows) == len(rows.unique()) == 256, chip
+        assert len(rows) == len(rows.unique()) == SAMPLED_ROWS_PER_CHIP, chip
         assert torch.equal(rows, rows.sort().values), chip
         assert rows[0] == first and rows[-1] == last, chip
     if size == "partial":

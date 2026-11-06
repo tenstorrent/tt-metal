@@ -45,7 +45,7 @@ def check_patch_embed(mesh_device, sp_axis, config, reference, grid) -> None:
     rows = MeshRows(h * w, config.max_patches, sp_axis)
     patches = rows.shard(host["patches"], mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
     out = tt(patches, rows.shard(host["pos_emb"], mesh_device, ttnn.float32))
-    assert_quality(rows.take(golden), rows.gather(out, mesh_device), relative_rmse=0.005)
+    assert_quality(rows.real_rows(golden), rows.gather(out, mesh_device), relative_rmse=0.005)
 
 
 @P150

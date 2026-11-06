@@ -22,6 +22,7 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
 )
 from models.experimental.kimi_k3_moonvit_v2.tests.goldens import (
     NORM_EPS,
+    block_file,
     chunked_attention,
     encoder_steps,
     to_fp32,
@@ -31,18 +32,18 @@ from models.experimental.kimi_k3_moonvit_v2.tests.goldens import (
 
 
 @SYNTHETIC
-def test_encoder_steps_match_encoder(shallow_config, shallow_reference):
-    tower = shallow_reference.vision_tower
-    pixels, grid_thws = random_patches(shallow_config, [(1, 8, 12)])
+def test_encoder_steps_match_encoder(config, reference):
+    tower = reference.vision_tower
+    pixels, grid_thws = random_patches(config, [(1, 8, 12)])
     with torch.no_grad():
         x = tower.patch_embed(pixels.to(torch.bfloat16), grid_thws)
         expected = tower.encoder(x, grid_thws)
-        (expected_model,) = shallow_reference(pixels.to(torch.bfloat16), grid_thws)
-        steps = dict(encoder_steps(shallow_reference, x, grid_thws))
+        (expected_model,) = reference(pixels.to(torch.bfloat16), grid_thws)
+        steps = dict(encoder_steps(reference, x, grid_thws))
         # Resuming at block 1 from block 0's output gives the same result.
-        resumed = dict(encoder_steps(shallow_reference, steps["block_00"], grid_thws, start=1))
+        resumed = dict(encoder_steps(reference, steps["block_00"], grid_thws, start=1))
 
-    blocks = [f"block_{i:02d}" for i in range(shallow_config.num_hidden_layers)]
+    blocks = [block_file(i)[:-3] for i in range(config.num_hidden_layers)]
     assert list(steps) == blocks + ["final_layernorm", "mm_projector"]
     assert torch.equal(steps["final_layernorm"], expected)
     assert torch.equal(resumed["final_layernorm"], expected)
@@ -50,13 +51,14 @@ def test_encoder_steps_match_encoder(shallow_config, shallow_reference):
 
 
 @SYNTHETIC
-def test_to_fp32_keeps_explicit_norm_eps(shallow_config, shallow_reference):
+def test_to_fp32_keeps_explicit_norm_eps(config, reference):
     """`to_fp32` gives the encoder norms (`eps=None`) the bf16 eps and leaves the projector's
     `post_norm` eps (set explicitly) alone."""
-    reference = to_fp32(copy.deepcopy(shallow_reference))
+    assert NORM_EPS == torch.finfo(torch.bfloat16).eps  # what upstream's eps=None gives bf16 input
+    reference = to_fp32(copy.deepcopy(reference))
     assert reference.vision_tower.encoder.final_layernorm.eps == NORM_EPS
     assert reference.vision_tower.encoder.blocks[0].norm0.eps == NORM_EPS
-    assert reference.mm_projector.post_norm.eps == shallow_config.projector_norm_eps
+    assert reference.mm_projector.post_norm.eps == config.projector_norm_eps
 
 
 @pytest.mark.parametrize("length", [64, 300])
@@ -70,12 +72,12 @@ def test_chunked_attention_matches_eager(length):
 
 
 @SYNTHETIC
-def test_fp32_chunked_encoder_matches_eager(shallow_config, shallow_reference):
+def test_fp32_chunked_encoder_matches_eager(config, reference):
     """The fp32 golden path (fp32 model, bf16 norm eps, chunked attention) against the same fp32 model
     with upstream eager attention, on an image of several chunks."""
-    reference = to_fp32(copy.deepcopy(shallow_reference))
+    reference = to_fp32(copy.deepcopy(reference))
     tower = reference.vision_tower
-    pixels, grid_thws = random_patches(shallow_config, [(1, 40, 52)])
+    pixels, grid_thws = random_patches(config, [(1, 40, 52)])
     with torch.no_grad():
         x = tower.patch_embed(pixels, grid_thws)
         expected = tower.encoder(x, grid_thws)
@@ -85,15 +87,15 @@ def test_fp32_chunked_encoder_matches_eager(shallow_config, shallow_reference):
 
 
 @SYNTHETIC
-def test_sampled_attention_matches_eager(shallow_config, shallow_reference):
-    """A block run with `use_sampled_attention`, as the full-length device tests build their golden,
-    equals the same fp32 block with upstream eager attention on the sampled rows, over several query
-    chunks; the rows not sampled are left out of the attention."""
-    reference = to_fp32(copy.deepcopy(shallow_reference))
+def test_sampled_attention_matches_eager(config, reference):
+    """A block run with `use_sampled_attention`, as the device tests with real rows on every chip
+    build their golden, equals the same fp32 block with upstream eager attention on the sampled rows,
+    over several query chunks; the rows not sampled are left out of the attention."""
+    reference = to_fp32(copy.deepcopy(reference))
     block = reference.vision_tower.encoder.blocks[0]
     grid_thws = torch.tensor([(1, 40, 52)])
     n = 40 * 52
-    x = random_tensor(n, shallow_config.hidden_size, dtype=torch.float32)
+    x = random_tensor(n, config.hidden_size, dtype=torch.float32)
     cu_seqlens, max_seqlen, rope_freqs_cis = reference_rope(reference, grid_thws)
     rows = torch.cat([torch.arange(0, 300), torch.arange(1000, 1100), torch.arange(n - 50, n)])
     others = torch.ones(n, dtype=torch.bool)

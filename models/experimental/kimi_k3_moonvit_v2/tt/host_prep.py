@@ -107,7 +107,7 @@ def pad_rows(x: torch.Tensor, rows: int) -> torch.Tensor:
     """Zero-pad dim 0 to `rows`."""
     if x.shape[0] > rows:
         raise ValueError(f"{x.shape[0]} rows exceed the padded length {rows}")
-    return torch.nn.functional.pad(x, (0, 0) * (x.ndim - 1) + (0, rows - x.shape[0]))
+    return F.pad(x, (0, 0) * (x.ndim - 1) + (0, rows - x.shape[0]))
 
 
 def rope_tables(config: MoonViTConfig, h: int, w: int) -> tuple[torch.Tensor, torch.Tensor]:

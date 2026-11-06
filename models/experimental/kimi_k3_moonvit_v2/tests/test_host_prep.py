@@ -22,9 +22,9 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import GRIDS, random_pa
 
 
 @pytest.fixture(scope="module")
-def tower(shallow_config):
+def tower():
     torch.manual_seed(0)
-    vt_config = VisionTowerConfig(load_vision_config(num_hidden_layers=shallow_config.num_hidden_layers))
+    vt_config = VisionTowerConfig(load_vision_config())
     return MoonViT3dPretrainedModel(vt_config).eval()
 
 

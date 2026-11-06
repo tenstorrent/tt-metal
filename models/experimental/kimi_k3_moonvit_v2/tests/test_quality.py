@@ -13,7 +13,6 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import assert_quality, quality, random_tensor
 
-# The tightest relative RMSE limit of the device tests (`test_linear.py`).
 RELATIVE_RMSE = 0.003
 
 

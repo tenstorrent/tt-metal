@@ -41,7 +41,7 @@ def check_patch_merger(mesh_device, sp_axis, config, grid) -> None:
     merged = MeshRows(h * w // config.merge_area, config.max_patches // config.merge_area, sp_axis)
     out = tt(rows.shard(host_prep.to_window_order(x, h, w, config.merge_kernel_size), mesh_device))
     # A pure copy: the result must match exactly.
-    golden, actual = merged.take(golden), merged.gather(out, mesh_device)
+    golden, actual = merged.real_rows(golden), merged.gather(out, mesh_device)
     assert_quality(golden, actual)
     assert torch.equal(golden, actual)
 
