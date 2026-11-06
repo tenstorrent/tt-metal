@@ -24,7 +24,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.moe.moe_compute_helpers import gen_expert_mapping
+from models.common.moe.compute_helpers import gen_expert_mapping
 from tt_py_test_utils_common.all_to_all_dispatch import get_mesh_mapper, tt_to_torch_dtype
 
 
