@@ -212,7 +212,7 @@ def test_roll_with_program_cache(device, shape, shifts, dims):
         ttnn_output_torch = ttnn.to_torch(ttnn_output_tensor)
 
         assert_with_pcc(torch_output_tensor, ttnn_output_torch)
-        assert torch.allclose(ttnn_output_torch, ttnn_output_torch)
+        assert torch.allclose(torch_output_tensor, ttnn_output_torch)
 
 
 @pytest.mark.parametrize(

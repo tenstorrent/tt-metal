@@ -18,7 +18,7 @@ from models.experimental.bevformer.tests.common import (
     check_detector_outputs,
     frame_metas,
     random_image_batch,
-    to_conv_layout,
+    to_image_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
@@ -43,7 +43,7 @@ def test_bevformer(device, reset_seeds):
     frames = frame_metas(1, NUM_FRAMES, generator)
 
     tt_model = TTBEVFormer(create_bevformer_parameters(torch_model, img, device), device)
-    tt_img = to_conv_layout(img.flatten(0, 1), device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_img = to_image_layout(img.flatten(0, 1), device)
 
     torch_prev = tt_prev = frame = None
     for i, metas in enumerate(frames):

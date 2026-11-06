@@ -398,16 +398,6 @@ class TtKimiK3Transformer(LightweightModule):
         sealed = ttnn.slice(packed, [0, 1, 0, 0], [1, planes, tokens, width]) if planes > 1 else None
         return live, sealed
 
-    def reset_streams(self, slot: int = 0) -> None:
-        """Zero the KDA carries for a new request. Call outside any captured region."""
-        if self.kda_scratch is None:
-            return
-        if self.kda_states is None:
-            raise RuntimeError(
-                "no KDA state slabs on the model; the runtime hands kv_caches.kda_states over at compile()"
-            )
-        self.kda_states.zero_slot(slot)
-
     def forward(
         self,
         token_ids,
@@ -486,8 +476,9 @@ class TtKimiK3Transformer(LightweightModule):
             f"snapshots, expected {self.inbound_planes - 1}"
         )
 
-        # The KDA layers' slot and bounds, built once per chunk: borrowed from `metadata` when traced,
-        # uploaded from the host ints when eager (and freed below). A rank without KDA layers uploads nothing.
+        # The KDA layers' slot and bounds, built once per chunk: borrowed
+        # from `metadata` when traced, uploaded from the host ints when eager; what was built here is freed
+        # below. A rank without KDA layers builds nothing.
         kda_scalars, owned_scalars = (
             build_kda_scalars(self.mesh_device, metadata, cache_user_id, actual_start, actual_end)
             if self.kda_scratch is not None
