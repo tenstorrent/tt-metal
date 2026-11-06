@@ -90,6 +90,8 @@ _MGD_DIR = os.path.join(_TTML_ROOT, "configs", "mgd")
 _BUNDLED_MGD = {
     ("blackhole", (1, 2)): "bh_1_2_line_line.textproto",
     ("blackhole", (2, 2)): "bh_2_2_line_line.textproto",
+    # A ring in X: the (1, 4) fabric the 4-chip QuietBox runs a reduce-scatter on.
+    ("blackhole", (1, 4)): "bh_1_4_line_ring.textproto",
     # The galaxy fabric is a torus in X; a LINE/LINE descriptor faults with SIGBUS.
     ("blackhole", (8, 4)): "bh_galaxy_8_4_torus_x.textproto",
 }
@@ -226,24 +228,11 @@ def tp_mesh():
     not skipped. The parallelism context is initialised here too, since the qwen3
     model paths resolve their TP size through it.
     """
-    dp_expected, tp_expected = TP_MESH_SHAPE
     with _fresh_device_mesh(TP_MESH_SHAPE, ("dp", "tp"), what="tp") as mesh:
+        # Opening the mesh first closed the previous one, and close_device drops its ParallelismContext, so none is
+        # installed here; initialize_parallelism_context would throw if one were.
         ctx = ttml.autograd.AutoContext.get_instance()
-        if ctx.is_parallelism_context_initialized():
-            # ParallelismContext is a one-shot singleton with no reset hook, so an
-            # earlier module's may still be installed. It is only usable here if it
-            # describes this same shape -- reusing a mismatched one (a dp-enabled GRPO
-            # context, say) silently shards the model for the wrong device count
-            # instead of failing.
-            pctx = ctx.get_parallelism_context()
-            actual = (pctx.get_ddp_size(), pctx.get_tp_size())
-            if actual != (dp_expected, tp_expected):
-                raise RuntimeError(
-                    f"this process already installed a ParallelismContext for DP={actual[0]}, "
-                    f"TP={actual[1]} and it cannot be reset; needed DP={dp_expected}, TP={tp_expected}"
-                )
-        else:
-            ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
+        ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
         yield mesh
 
 
@@ -269,6 +258,13 @@ def fsdp_mesh(fresh_device_mesh):
         yield mesh
 
 
+@pytest.fixture(scope="module")
+def dp_tp_mesh(fresh_device_mesh):
+    """A ``[2, 2]`` mesh with axes ``("dp", "tp")``, per requesting module; it needs the bundled 2x2 descriptor."""
+    with fresh_device_mesh((2, 2), ("dp", "tp"), what="dp x tp", require_mgd=True) as mesh:
+        yield mesh
+
+
 # ---------------------------------------------------------------------------
 # Strict CCL topology
 # ---------------------------------------------------------------------------
@@ -285,3 +281,17 @@ def strict_ccl_topology():
         yield
     finally:
         ttnn.CONFIG.strict_ccl_topology = previous
+
+
+# ---------------------------------------------------------------------------
+# Gradient sync default
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gradient_reduce_default():
+    """Sets the context's gradient sync default (what ``create_optimizer`` stores from ``precision.reduce_dtype``) for
+    one test, and clears it afterwards."""
+    context = ttml.autograd.AutoContext.get_instance()
+    yield context.set_gradient_reduce_dtype
+    context.set_gradient_reduce_dtype(None)

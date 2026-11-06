@@ -6,8 +6,8 @@
 
 After one backward of a tiny model: every label has one placement per mesh axis, ``is_sharded_on_axis`` reports the
 axes the module structure implies, and after ``synchronize_gradients`` each gradient reads Replicate on the reduced
-axis, keeps its Shard elsewhere and holds the mean of the per-device gradients. The ParallelismContext overload is a
-one-shot singleton, so the tests call the explicit-axes overload, which runs the same loop.
+axis, keeps its Shard elsewhere and holds the mean of the per-device gradients. The tests call the explicit-axes
+overload, which runs the same loop as the ParallelismContext one without a context to set up per mesh.
 
 Each mesh fixture is module-scoped and reopens the device, so each mesh has its own class, in fixture order. DP x TP
 and HSDP on a ``[2, 2]`` are in test_sync_gradients_placements_2x2.py.

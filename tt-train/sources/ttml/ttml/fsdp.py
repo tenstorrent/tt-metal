@@ -52,6 +52,7 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase
 from ttml.modules.parameter import Parameter, TensorMetadata, replace_lazy_mapper
+from ttml._mesh import _check_reduce_dtype
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -123,6 +124,7 @@ class FSDPState:
         module: AbstractModuleBase,
         mesh_axis: str,
         reshard_after_forward: bool,
+        reduce_dtype: Optional[ttnn.DataType],
     ) -> None:
         self.module = module
         self.mesh_axis_name = mesh_axis
@@ -130,6 +132,7 @@ class FSDPState:
         mesh = ttml.mesh()
         self.axis_index = mesh.axis_index(mesh_axis)
         self.axis_size = mesh.axis_size(mesh_axis)
+        self.reduce_dtype = reduce_dtype
 
         self.reshard_after_forward = reshard_after_forward
         self.sharded_state = _ShardedState.SHARDED
@@ -210,43 +213,54 @@ class FSDPState:
         """Called after all of the module's internal backward closures have run.
 
         At this point every managed parameter has its ``.grad`` populated at
-        gathered shape. We reduce-scatter each grad into a shard-shaped grad,
-        explicitly deallocate the gathered value and gathered grad, and
-        restore the sharded m_value (in that order, so ``set_grad``'s shape
-        check sees the shard-shaped m_value).
+        gathered shape. We restore the sharded m_value and free the gathered
+        weight first, then reduce-scatter each grad into a shard-shaped grad,
+        free the gathered grad, and install the shard (``set_grad``'s shape
+        check then sees the shard-shaped m_value).
+
+        Without a ``reduce_dtype`` from ``fully_shard``, the sum takes the one
+        ``create_optimizer`` stored from the training config, read here as the
+        DDP sync reads it: this hook first runs in the first backward, after the
+        optimizer exists.
         """
+        reduce_dtype = self.reduce_dtype
+        if reduce_dtype is None:
+            reduce_dtype = ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype()
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
                 continue
-            # Pull a Python-side handle to the gathered grad before we reduce
-            # it; we'll explicitly deallocate it after set_grad to release the
-            # full-size buffer on device immediately.
-            gathered_grad = param_tensor.get_grad()
-            reduced = ttml.core.distributed.reduce_scatter(
-                gathered_grad,
-                shard_dim,
-                self.axis_index,
-            )
-            # Mean-reduction: reduce_scatter sums one shard's contribution
-            # per DP rank; divide by axis_size to get the per-shard average,
-            # matching the implicit averaging a DDP all-reduce would do.
-            reduced = ttnn.multiply(reduced, 1.0 / float(self.axis_size))
-
-            # Swap m_value to the cached shard and free the gathered weight,
-            # then set_grad to the reduced shard. Order matters: set_grad
-            # shape-checks against m_value, so m_value must be shard-shape
-            # before we install a shard-shape grad.
+            # Swap m_value back to the cached shard and free the gathered
+            # weight before the grad's reduce-scatter, the peak of this hook:
+            # nothing reads the weight from here on, and set_value doesn't
+            # check shapes. Freed explicitly, since Python GC may keep the
+            # full-size buffer around for too long.
             gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
             shard = self._cached_shards.get(id(param_tensor))
             if shard is not None:
                 param_tensor.set_value(shard)
-            param_tensor.set_grad(reduced)
-
-            # Explicit deallocate of the now-unreferenced full-size buffers.
-            # Without this, Python GC may keep them around for too long
             ttnn.deallocate(gathered_value)
-            ttnn.deallocate(gathered_grad)
+
+            # The gathered grad is still installed until set_grad below, but
+            # nothing reads it after the reduce-scatter's input is made: the
+            # fp32 cast when the sum runs in fp32 (the scatter half of
+            # core::distributed::synchronize_tensor's fp32 route, written here
+            # because FSDP keeps the shard), the grad itself otherwise.
+            gathered_grad = param_tensor.get_grad()
+            grad_dtype = gathered_grad.dtype
+            to_reduce = gathered_grad
+            if reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
+                to_reduce = ttnn.typecast(gathered_grad, ttnn.DataType.FLOAT32)
+                ttnn.deallocate(gathered_grad)
+            summed = ttml.core.distributed.reduce_scatter(to_reduce, shard_dim, self.axis_index)
+            ttnn.deallocate(to_reduce)
+            # Mean-reduction: reduce_scatter sums one shard's contribution
+            # per DP rank; divide by axis_size to get the per-shard average,
+            # matching the implicit averaging a DDP all-reduce would do. The
+            # multiply writes the grad's own dtype.
+            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=grad_dtype)
+            ttnn.deallocate(summed)
+            param_tensor.set_grad(reduced)
 
         self.sharded_state = _ShardedState.SHARDED
 
@@ -698,6 +712,8 @@ def fully_shard(
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
     replicate: Sequence[str] = (),
+    *,
+    reduce_dtype: Optional[ttnn.DataType] = None,
 ) -> AbstractModuleBase:
     """Wrap ``module`` with torch-style FSDP in place.
 
@@ -728,9 +744,17 @@ def fully_shard(
             ``mesh_axis``. The training loop must average their gradients over
             ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
             ``GRPOTrainer`` already do.
+        reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
+            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype. It
+            needs a transient fp32 copy of each gathered gradient, twice its bf16 size, during backward. ``None``
+            takes the training config's ``precision.reduce_dtype`` that ``create_optimizer`` stores
+            (``AutoContext.get_gradient_reduce_dtype``), read when the backward hook runs, as ``ttml.sync_gradients``
+            does; with no default stored either, it sums in each gradient's own dtype. A value passed here applies to
+            the parameters this call shards and wins over the stored one.
     Returns:
         ``module`` (modified in place).
     """
+    _check_reduce_dtype(reduce_dtype)
     if _is_fsdp_wrapped_module(module):
         raise RuntimeError(f"Module {module.get_name()!r} already wrapped with fully_shard.")
     replicate_res = _compile_replicate_patterns(replicate)
@@ -749,7 +773,9 @@ def fully_shard(
         )
         return module
 
-    state = FSDPState(module, mesh_axis=mesh_axis, reshard_after_forward=reshard_after_forward)
+    state = FSDPState(
+        module, mesh_axis=mesh_axis, reshard_after_forward=reshard_after_forward, reduce_dtype=reduce_dtype
+    )
     module._fsdp_state = state
 
     mesh_shape = mesh.shape

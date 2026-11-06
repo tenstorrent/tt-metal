@@ -14,7 +14,16 @@ using Rank = tt::tt_metal::distributed::multihost::Rank;
 using Tag = tt::tt_metal::distributed::multihost::Tag;
 using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes);
+// Averages `tensor` over the devices of `cluster_axes`. `reduce_dtype` is the dtype the values are summed in: unset or
+// BFLOAT16 sums in the tensor's own dtype (bf16 gradients in tt-train); FLOAT32 sums a narrower tensor in fp32 and
+// writes the mean back in the tensor's dtype, which keeps most of the low bits a bf16 sum rounds away at every hop. The
+// fp32 sum is not exact fp32: the FPU aligns the smaller operand to the larger one with fewer fraction bits (#62595).
+// Large fp32 sums over one axis take a reduce-scatter and an all-gather instead of an all-reduce; the route rule is at
+// kFp32ReduceScatterMinElements in distributed.cpp.
+ttnn::Tensor synchronize_tensor(
+    const ttnn::Tensor& tensor,
+    const ttsl::SmallVector<uint32_t>& cluster_axes,
+    std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
 
 // True when `value` is Shard on mesh axis `axis` of the mesh it is on. A collapsed `{N}, [placement]` label counts as
 // that placement on every axis of size > 1; a host tensor, or a label that is neither per-axis nor a collapsed label
@@ -22,10 +31,16 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
 
 // Averages every parameter's gradient along the mesh axes the parallelism context reduces (context parallel, then
-// data parallel), skipping for each parameter any axis it is sharded on (see is_sharded_on_axis). A no-op when no
-// parallelism context is initialized.
-void synchronize_gradients(const serialization::NamedParameters& parameters);
+// data parallel), skipping for each parameter any axis it is sharded on (see is_sharded_on_axis), summing in
+// `reduce_dtype` as synchronize_tensor does. Unset takes the training config's precision.reduce_dtype
+// (autograd::AutoContext::get_gradient_reduce_dtype); a value passed here wins over it. A no-op when no parallelism
+// context is initialized.
+void synchronize_gradients(
+    const serialization::NamedParameters& parameters, std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
 // The same along `cluster_axes`: a parameter sharded on one of them is not averaged along it.
-void synchronize_gradients(const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes);
+void synchronize_gradients(
+    const serialization::NamedParameters& parameters,
+    const std::vector<uint32_t>& cluster_axes,
+    std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
 
 }  // namespace ttml::core::distributed
