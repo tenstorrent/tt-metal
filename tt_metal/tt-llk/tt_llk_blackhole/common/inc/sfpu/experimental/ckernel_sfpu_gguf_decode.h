@@ -239,15 +239,17 @@ inline void sfpu_gguf_decode_init()
  *
  * @tparam FMT: ckernel::gguf::Format of the page.
  * @param dst_index: As @ref sfpu_gguf_decode_tile; the page in tile dst_index + 1 is any page of the group.
- * @note Call before the first tile of a group that @ref sfpu_gguf_decode_tile decodes at dst_index; nothing else may
- *       write scratch tile dst_index + 2 (entries 0..15) or, Q4_K, tile dst_index + 1 past its page until the group ends.
+ * @param rows: As @ref sfpu_gguf_decode_tile; the same value as the group's tile calls.
+ * @note Call before the first tile of a group that @ref sfpu_gguf_decode_tile decodes at dst_index and rows; nothing
+ *       else may write scratch tile dst_index + 2 (entries 0..15) or, Q4_K, tile dst_index + 1 past its page until the
+ *       group ends.
  */
 template <int FMT>
-inline void sfpu_gguf_decode_group(const std::uint32_t dst_index)
+inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uint32_t rows = 0)
 {
     if constexpr (FMT == gguf::Q4_K || FMT == gguf::Q5_K)
     {
-        sfpu_gguf_decode_start(dst_index, 0);
+        sfpu_gguf_decode_start(dst_index, rows);
         gguf::k4_group<FMT>();
         sfpu_gguf_decode_done();
     }

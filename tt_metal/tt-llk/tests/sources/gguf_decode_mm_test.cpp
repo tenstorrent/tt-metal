@@ -49,6 +49,7 @@ constexpr std::uint32_t IN0_FORMAT  = ckernel::to_underlying(DataFormat::Float16
 constexpr std::uint32_t OUT_FORMAT  = ckernel::to_underlying(DataFormat::Float32);
 
 static_assert(dest_sync == ckernel::DstSync::SyncFull && is_fp32_dest_acc_en, "gguf_decode_mm_test: full sync, 32-bit DEST");
+static_assert(GGUF_PAGE_ROWS % 64 == 0 && (GGUF_PAGE_ROWS == 0 || GGUF_MM), "gguf_decode_mm_test: page rows offset with matmul only");
 
 inline std::uint32_t page_address(const std::uint32_t pages_base, const std::uint32_t nt, const std::uint32_t kt)
 {
@@ -126,17 +127,19 @@ inline void zero_tile(const std::uint32_t dst_index)
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-// group: the first tile of its group decoded at dst_index (sfpu_gguf_decode_group).
+// group: the first tile of its group decoded at dst_index (sfpu_gguf_decode_group). GGUF_PAGE_ROWS (a multiple of
+// 64): the same DEST rows, addressed GGUF_PAGE_ROWS / 64 tiles lower with that row offset.
 template <bool decode>
 inline void decode_tile(const std::uint32_t dst_index, const std::uint32_t kt, const bool group)
 {
     if constexpr (decode)
     {
+        const std::uint32_t base = dst_index - GGUF_PAGE_ROWS / 64;
         if (group)
         {
-            sfpu::sfpu_gguf_decode_group<GGUF_FMT>(dst_index);
+            sfpu::sfpu_gguf_decode_group<GGUF_FMT>(base, GGUF_PAGE_ROWS);
         }
-        sfpu::sfpu_gguf_decode_tile<GGUF_FMT>(dst_index, kt % LAYOUT.group_tiles);
+        sfpu::sfpu_gguf_decode_tile<GGUF_FMT>(base, kt % LAYOUT.group_tiles, GGUF_PAGE_ROWS);
     }
 }
 

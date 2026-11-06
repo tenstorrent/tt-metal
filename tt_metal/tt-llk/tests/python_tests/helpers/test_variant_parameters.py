@@ -1291,7 +1291,8 @@ class ROPE(TemplateParameter):
 @dataclass
 class GGUF_DECODE_MM(TemplateParameter):
     """sources/gguf_decode_mm_test.cpp: format id (0: Float32 in1 tiles, no decode), the weight's K and N tiles,
-    and with matmul the rows of in0 the matmul computes and its faces in L1."""
+    with matmul the rows of in0 the matmul computes and its faces in L1, and the decode's DEST row offset.
+    """
 
     fmt_id: int = 0
     kt: int = 1
@@ -1299,6 +1300,7 @@ class GGUF_DECODE_MM(TemplateParameter):
     matmul: bool = False
     in0_rows: int = 32
     in0_faces: int = 4
+    page_rows: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1308,6 +1310,7 @@ class GGUF_DECODE_MM(TemplateParameter):
             f"constexpr bool GGUF_MM = {str(self.matmul).lower()};",
             f"constexpr std::uint32_t GGUF_IN0_ROWS = {self.in0_rows};",
             f"constexpr std::uint32_t GGUF_IN0_FACES = {self.in0_faces};",
+            f"constexpr std::uint32_t GGUF_PAGE_ROWS = {self.page_rows};",
         ]
         return "\n".join(lines)
 
