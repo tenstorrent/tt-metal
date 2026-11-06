@@ -7,6 +7,7 @@
 // TODO: improve include path
 #include "../utils.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/parameter_dtype.hpp"
 #include "datasets/utils.hpp"
 #include "models/gpt2.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -18,6 +19,8 @@ namespace three_tier_arch {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
+    // Checked before anything is built, so a typo under precision stops the run early.
+    ttml::core::validate_precision_config(training_config);
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.model_type = training_config["model_type"].as<std::string>();
     config.seed = training_config["seed"].as<uint32_t>();

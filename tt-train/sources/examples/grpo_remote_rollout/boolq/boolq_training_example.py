@@ -27,7 +27,7 @@ import ttnn
 from datasets import load_dataset
 from loguru import logger
 from transformers import AutoTokenizer
-from ttml.common.config import DeviceConfig, get_model_config, load_config
+from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.trainers import GRPOTrainer, get_grpo_config
 from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
 from grpo_remote_rollout.utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
@@ -113,10 +113,8 @@ def _ttml_main() -> None:
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
     device_config, raw = _load_device_config()
-    # A typo under training_config.precision stops the run here rather than after the model is built.
-    raw_training_config = raw.get("training_config") or {}
-    ttml.core.validate_precision_config(raw_training_config)
-    precision = raw_training_config.get("precision")
+    # TrainingConfig checks the precision block, so a typo stops the run before anything is built.
+    precision = TrainingConfig(raw).precision
     mesh_device = _open_ttml_device(device_config)
 
     model_id = raw["training_config"]["model_id"]

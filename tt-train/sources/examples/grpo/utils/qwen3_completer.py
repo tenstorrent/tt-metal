@@ -187,8 +187,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                 tt_model = Qwen3(qwen_config)
             self._fully_shard(tt_model, device_config.fsdp_replicate_params)
             ttml.materialize_module(tt_model)
-            # Once the (sharded) parameters exist and before any weights load, so fp32 master weights get the
-            # loaded values unrounded.
+            # Once the (sharded) parameters exist, before any weights load.
             apply_precision(tt_model, precision)
 
             # Weights are uploaded already-sharded to match each materialized
@@ -198,7 +197,6 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             del hf_state_dict
         else:
             tt_model = Qwen3(qwen_config)
-            # Before any weights load, so fp32 master weights get the loaded values unrounded.
             apply_precision(tt_model, precision)
 
             # Load HF weights into the (still replicated) model, then shard.

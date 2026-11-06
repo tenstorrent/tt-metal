@@ -10,8 +10,6 @@ and AdamW to everything else (embeddings, norms, biases, LM head).
 Registered as "MuonWithAdamW"
 """
 
-import ttnn
-
 import ttml
 
 # Module names whose weights should use AdamW instead of Muon.
@@ -28,25 +26,6 @@ def _is_muon_param(name, adamw_modules):
     if not name.endswith("/weight"):
         return False
     return not any(part in adamw_modules for part in name.split("/"))
-
-
-def _require_bf16_muon_params(muon_params):
-    """Raise unless every trainable parameter Muon would update is stored in bf16.
-
-    ``MuonComposite`` updates bf16 parameters only, so ``precision.master_dtype: float32``, which stores every trainable
-    parameter in fp32, can't be combined with this optimizer. Raised here, before either inner optimizer is built, with
-    a message about the combination rather than the inner optimizer's.
-    """
-    for name, tensor in muon_params.items():
-        if not tensor.get_requires_grad():
-            continue
-        dtype = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype
-        if dtype != ttnn.DataType.BFLOAT16:
-            raise ValueError(
-                f"MuonWithAdamW takes bf16 parameters, but '{name}' is stored as {dtype}: Muon updates bf16 weights "
-                "only, so fp32 master weights (precision.master_dtype: float32) don't work with it. Drop "
-                "precision.master_dtype: float32, or use type: AdamW."
-            )
 
 
 class MuonWithAdamW(ttml.optimizers.OptimizerBase):
@@ -102,7 +81,9 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
                 muon_params[name] = tensor
             else:
                 adamw_params[name] = tensor
-        _require_bf16_muon_params(muon_params)
+        # Muon updates bf16 parameters only (fp32 master weights don't work with it); checked before either inner
+        # optimizer is built, with this optimizer's name in the message.
+        ttml.optimizers.require_bf16_parameters(muon_params, "MuonWithAdamW")
 
         # TODO: add FSDP-aware Muon.
         muon_dict = {"type": "MuonComposite", "lr": 0.02, "momentum": 0.95, "ns_steps": 5, **muon_cfg}

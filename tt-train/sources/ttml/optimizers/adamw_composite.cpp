@@ -62,7 +62,7 @@ void MorehAdamW::zero_grad() {
 }
 
 void MorehAdamW::step() {
-    // The moreh_adamw op takes bf16 gradients: an fp32 gradient (accumulated in fp32) is rounded to bf16 once here.
+    // moreh_adamw takes bf16 gradients.
     core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
@@ -193,7 +193,7 @@ void AdamWComposite::zero_grad() {
 }
 
 void AdamWComposite::step() {
-    // The update takes bf16 gradients: an fp32 gradient (accumulated in fp32) is rounded to bf16 once here.
+    // The update takes bf16 gradients.
     core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();

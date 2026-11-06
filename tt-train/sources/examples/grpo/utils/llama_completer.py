@@ -162,8 +162,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
             )
 
         tt_model = Llama(llama_cfg)
-        # Before any weights load, so fp32 master weights get the loaded values unrounded.
-        apply_precision(tt_model, precision)
+        apply_precision(tt_model, precision)  # before any weights load
 
         if dev_config.enable_ddp:
             # NOTE: TP is intentionally disabled here. The cross_entropy_loss call below

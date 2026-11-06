@@ -147,8 +147,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
             )
 
         tt_model = LlamaHfExport(llama_cfg)
-        # Before the weights load, so fp32 master weights get the loaded values unrounded.
-        apply_precision(tt_model, precision)
+        apply_precision(tt_model, precision)  # before the weights load
 
         if enable_ddp:
             autograd_ctx.initialize_parallelism_context(

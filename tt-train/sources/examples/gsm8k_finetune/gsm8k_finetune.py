@@ -28,6 +28,7 @@ from ttml.common.config import (
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
+    apply_precision,
     round_up_to_tile,
     initialize_device,
     build_logits_mask,
@@ -335,9 +336,6 @@ def train():
         print(yaml.dump(yaml_config, sort_keys=False, default_flow_style=False))
         print("*********************************\n\n")
 
-    # A typo under training_config.precision stops the run here rather than after the model is built.
-    raw_training_config = yaml_config.get("training_config") or {}
-    ttml.core.validate_precision_config(raw_training_config)
     training_config = TrainingConfig(yaml_config)
     scheduler_config = SpeedrunSchedulerConfig.from_yaml(yaml_config)
 
@@ -373,9 +371,8 @@ def train():
 
     print("Creating model...")
     tt_model = tt_model_factory.create_model()
-    # Before the weights load, so they load in the stored dtype: an fp32 file keeps its bits in fp32 master weights.
-    # SFTTrainer applies the same block again below, which then changes nothing.
-    ttml.core.apply_precision_config(raw_training_config, tt_model.parameters())
+    # Before the weights load, so they load in the stored dtype; SFTTrainer applying it again changes nothing.
+    apply_precision(tt_model, training_config.precision)
     print("Loading from safetensors...")
     tt_model.load_from_safetensors(safetensors_path)
 
@@ -445,7 +442,7 @@ def train():
         # SpeedrunScheduler uses a 0-based step index; the optimizer's lr is max_lr, so lr_at / max_lr is the factor.
         lr_lambda=lambda step: sched.lr_at(step) / scheduler_config.max_lr,
         attention_mask=causal_mask,
-        precision=raw_training_config.get("precision"),
+        precision=training_config.precision,
     )
 
     print(f"Starting training for max {training_config.steps} steps...")

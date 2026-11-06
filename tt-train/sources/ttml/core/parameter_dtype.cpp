@@ -75,15 +75,14 @@ PrecisionDtypes read_precision_config(const YAML::Node& training_config) {
     return {master_dtype, reduce_dtype};
 }
 
-// Stores reduce_dtype as the gradient syncs' default and sets FLOAT32 gradient accumulation on the trainable parameters
+// Stores reduce_dtype as the gradient syncs' default and sets fp32 gradient accumulation on the trainable parameters
 // when it is FLOAT32, clearing it otherwise.
 void apply_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype, const serialization::NamedParameters& parameters) {
     autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
-    const auto accumulation_dtype =
-        reduce_dtype == ttnn::DataType::FLOAT32 ? std::optional{ttnn::DataType::FLOAT32} : std::nullopt;
+    const bool accumulate_in_fp32 = reduce_dtype == ttnn::DataType::FLOAT32;
     for (const auto& [name, parameter] : parameters) {
         if (parameter->get_requires_grad()) {
-            parameter->set_grad_accumulation_dtype(accumulation_dtype);
+            parameter->set_accumulate_grad_in_fp32(accumulate_in_fp32);
         }
     }
 }

@@ -148,8 +148,9 @@ void py_module(nb::module_& m) {
         nb::arg("parameters"),
         "Apply training_config.precision before creating the optimizer: precision.master_dtype to the parameters, "
         "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. With "
-        "reduce_dtype float32, the trainable parameters' gradients also accumulate in fp32 (their "
-        "grad_accumulation_dtype); otherwise that is cleared on them. Returns the master dtype applied, or None.");
+        "reduce_dtype float32, the trainable parameters' gradients also accumulate in fp32 "
+        "(Tensor.accumulates_grad_in_fp32); otherwise that is cleared on them. Returns the master dtype applied, or "
+        "None.");
 
     m.def(
         "validate_precision_config",

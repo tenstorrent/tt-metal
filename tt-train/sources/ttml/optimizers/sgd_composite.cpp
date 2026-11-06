@@ -34,15 +34,11 @@ SGDComposite::SGDComposite(
 }
 
 void SGDComposite::zero_grad() {
-    for (auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
-        }
-    }
+    install_zero_gradients(m_parameters);
 }
 
 void SGDComposite::step() {
-    // The update takes bf16 gradients: an fp32 gradient (accumulated in fp32) is rounded to bf16 once here.
+    // The update takes bf16 gradients.
     core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();

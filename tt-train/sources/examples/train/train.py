@@ -821,8 +821,6 @@ def main() -> None:
     configs_root = f"{tt_train_root}/configs"
     try:
         yaml_config = load_config(args.config, f"{configs_root}/training_configs")
-        # A typo under training_config.precision stops the run here rather than after the model is built.
-        ttml.core.validate_precision_config(yaml_config.get("training_config") or {})
         training_cfg = TrainingConfig(yaml_config)
         if training_cfg.model_config:
             model_yaml = load_config(training_cfg.model_config, tt_train_root)

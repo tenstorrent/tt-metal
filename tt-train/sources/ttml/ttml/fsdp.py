@@ -257,13 +257,9 @@ class FSDPState:
             ttnn.deallocate(to_reduce)
             # Mean-reduction: reduce_scatter sums one shard's contribution
             # per DP rank; divide by axis_size to get the per-shard average,
-            # matching the implicit averaging a DDP all-reduce would do. A sum
-            # in fp32 keeps the mean shard in fp32, as add_grad keeps a
-            # parameter's gradient under the same reduce dtype, so the next
-            # micro-batch and an HSDP sync over the other mesh axis add to the
-            # unrounded mean; otherwise the multiply writes the grad's dtype.
-            mean_dtype = ttnn.DataType.FLOAT32 if reduce_dtype == ttnn.DataType.FLOAT32 else grad_dtype
-            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=mean_dtype)
+            # matching the implicit averaging a DDP all-reduce would do. The mean
+            # stays in the sum's dtype (fp32 when the sum ran in fp32).
+            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=summed.dtype)
             ttnn.deallocate(summed)
             param_tensor.set_grad(reduced)
 

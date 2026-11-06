@@ -16,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import torch
-import ttml
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
@@ -121,10 +120,6 @@ if __name__ == "__main__":
     tt_metal_root = get_tt_metal_runtime_root()
     config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
     raw = load_config(config_path)
-    # A typo under training_config.precision stops the run here rather than after the model is built.
-    raw_training_config = raw.get("training_config") or {}
-    ttml.core.validate_precision_config(raw_training_config)
-    precision = raw_training_config.get("precision")
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
     logging.info(
@@ -165,7 +160,7 @@ if __name__ == "__main__":
             device_config=device_config,
             model_source=model_id,
             memory_efficient=args.memory_efficient,
-            precision=precision,
+            precision=training_config.precision,
         )
     else:
         completer = LlamaGRPOCompleter(
@@ -177,7 +172,7 @@ if __name__ == "__main__":
             transformer_config=transformer_config,
             device_config=device_config,
             model_source=model_id,
-            precision=precision,
+            precision=training_config.precision,
         )
 
     grpo_trainer = GRPOTrainer(
@@ -187,7 +182,7 @@ if __name__ == "__main__":
         reward_funcs=[accuracy_reward, brevity_reward],
         optimizer_dict=optimizer_dict,
         model_source=model_id,
-        precision=precision,
+        precision=training_config.precision,
     )
     grpo_trainer.train()
     logging.info("BOOLQ GRPO TRAINING COMPLETE")

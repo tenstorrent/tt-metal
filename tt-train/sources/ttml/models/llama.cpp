@@ -385,10 +385,7 @@ void load_model_from_safetensors(
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
-        fmt::print(
-            "Using parameter: {} with shape: {}\n",
-            name,
-            it->second->get_value(autograd::PreferredPrecision::NATIVE).logical_shape());
+        fmt::print("Using parameter: {} with shape: {}\n", name, it->second->get_shape());
         used_parameters.insert(name);
         return it->second;
     };
@@ -400,7 +397,7 @@ void load_model_from_safetensors(
         auto block_name = fmt::format("llama/llama_block_{}/attention/kv_linear/weight", layer_idx);
         auto out_tensor = get_parameter(block_name);
 
-        const auto tgt = out_tensor->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+        const auto tgt = out_tensor->get_shape();
         const int64_t tr = tgt[-2], tc = tgt[-1];
 
         auto K = k_weights[layer_idx];
@@ -470,7 +467,7 @@ void load_model_from_safetensors(
                     (weight_tying == WeightTyingType::Enabled) ? "llama/fc/weight" : "llama/tok_emb/weight";
                 auto out_tensor1 = get_parameter(embedding_weights_name);
 
-                auto tgt = out_tensor1->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                auto tgt = out_tensor1->get_shape();
 
                 auto resized_emb = pad_and_resize_flat(float_vec, info.shape[0], info.shape[1], tgt[-2], tgt[-1]);
                 serialization::assign_from_floats(out_tensor1, resized_emb);
@@ -480,7 +477,7 @@ void load_model_from_safetensors(
             if (info.name == "lm_head.weight") {
                 if (config.weight_tying == WeightTyingType::Disabled) {
                     auto out_tensor2 = get_parameter("llama/fc/weight");
-                    auto tgt2 = out_tensor2->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                    auto tgt2 = out_tensor2->get_shape();
 
                     auto resized_emb2 =
                         pad_and_resize_flat(float_vec, info.shape[0], info.shape[1], tgt2[-2], tgt2[-1]);
@@ -491,7 +488,7 @@ void load_model_from_safetensors(
             // ---- Final LayerNorm (vector) ----
             if (info.name == "norm.weight" || info.name == "model.norm.weight") {
                 auto out = get_parameter("llama/ln_fc/gamma");
-                auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                auto tgt = out->get_shape();
                 const int64_t N = tgt[-1];
 
                 if (static_cast<int64_t>(float_vec.size()) != N) {
@@ -512,7 +509,7 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".input_layernorm.weight") {
                     auto name = fmt::format("llama/llama_block_{}/attention_norm/gamma", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                    auto tgt = out->get_shape();
                     const int64_t N = tgt[-1];
 
                     if (static_cast<int64_t>(float_vec.size()) != N) {
@@ -528,7 +525,7 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".post_attention_layernorm.weight") {
                     auto name = fmt::format("llama/llama_block_{}/mlp_norm/gamma", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                    auto tgt = out->get_shape();
                     const int64_t N = tgt[-1];
 
                     if (static_cast<int64_t>(float_vec.size()) != N) {
@@ -544,7 +541,7 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".self_attn.q_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/attention/q_linear/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                    auto tgt = out->get_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     std::vector<float> src = float_vec;
@@ -593,7 +590,7 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".self_attn.o_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/attention/out_linear/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                    auto tgt = out->get_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
@@ -607,7 +604,7 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".mlp.gate_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/mlp/w1/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                    auto tgt = out->get_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
@@ -619,7 +616,7 @@ void load_model_from_safetensors(
                 if (info.name == layer_pfx + ".mlp.up_proj.weight" || info.name == layers_pfx + ".mlp.up_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/mlp/w3/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                    auto tgt = out->get_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
@@ -632,7 +629,7 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".mlp.down_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/mlp/w2/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
+                    auto tgt = out->get_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(

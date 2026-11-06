@@ -25,37 +25,34 @@ namespace ttml::core {
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype);
 
 // Checks training_config.precision without applying it: the block must be a map of known keys (or null), and each
-// dtype name "bfloat16" or "float32". Anything else is the TT_FATAL apply_precision_config() would raise. A runner
-// calls it right after loading its config, so a typo stops the run before the model is built.
+// dtype name "bfloat16" or "float32". Anything else is the TT_FATAL apply_precision_config() would raise. The runners'
+// config parsers call it, so a typo stops the run before the model is built.
 void validate_precision_config(const YAML::Node& training_config);
 
 // Applies training_config.precision. precision.master_dtype ("bfloat16" or "float32") stores the parameters in that
 // dtype with store_trainable_parameters_as(), whose contract applies; unset, or set to null, leaves them in the dtype
-// the model builds them in. precision.reduce_dtype (same names) becomes the dtype the gradient syncs sum in when a call
-// passes none (autograd::AutoContext::set_gradient_reduce_dtype), stored every time: unset or null stores none, so each
-// gradient is summed in its own dtype and nothing carries over from a config applied earlier in the process. A script
-// that sets the default itself does so after this call. With reduce_dtype "float32" it also sets FLOAT32 as the
-// gradient accumulation dtype of every trainable parameter (autograd::Tensor::set_grad_accumulation_dtype), so their
-// micro-batch sums run in fp32 too; otherwise it clears that dtype on them. Frozen parameters keep theirs. The block
-// must be a map of known keys, and any other key or name is a TT_FATAL; both are read before anything changes. Returns
-// the master dtype it applied, if any.
+// the model builds them in. precision.reduce_dtype (same names) is applied as apply_reduce_dtype_config() does. The
+// block must be a map of known keys, and any other key or name is a TT_FATAL; both are read before anything changes.
+// Returns the master dtype it applied, if any.
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters);
 
-// Applies only training_config.precision.reduce_dtype, as apply_precision_config() does: stores it as the gradient
-// syncs' default and, with "float32", sets fp32 gradient accumulation on the trainable parameters (clearing it
-// otherwise). The parameters keep the dtype they are stored in, whatever master_dtype says, though the whole block is
-// still validated. For a process that computes gradients on bf16 copies of parameters whose master weights live
-// elsewhere, such as a 3-tier worker, and, with no parameters, for one that only needs the reduce dtype, such as the
-// 3-tier aggregator. Returns the reduce dtype it stored, if any.
+// Applies only training_config.precision.reduce_dtype. It becomes the dtype the gradient syncs sum in when a call
+// passes none (autograd::AutoContext::set_gradient_reduce_dtype), stored every time: unset or null stores none, so each
+// gradient is summed in its own dtype and nothing carries over from a config applied earlier in the process; a script
+// that sets the default itself does so after this call. With "float32" every trainable parameter also accumulates its
+// gradient in fp32 (autograd::Tensor::set_accumulate_grad_in_fp32), so its micro-batch sums run in fp32 too; otherwise
+// that is cleared on them. Frozen parameters are left alone, and no parameter changes its stored dtype, whatever
+// master_dtype says, though the whole block is still validated. Used on its own by a process whose parameters stay bf16
+// while the master weights live elsewhere, such as the 3-tier workers and aggregator. Returns the reduce dtype it
+// stored, if any.
 std::optional<ttnn::DataType> apply_reduce_dtype_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters);
 
 // Installs a bf16 copy of every fp32 gradient of the parameters, which frees the fp32 one; bf16 gradients and
-// parameters without one are left as they are. With reduce_dtype "float32" a trainable parameter's gradient can be fp32
-// (see apply_precision_config), and the consumers that take bf16 gradients only call this right before they read them:
-// the optimizers other than fused AdamW (which reads an fp32 gradient as it is), clip_grad_norm and RemoteOptimizer
-// before it sends. It is the gradient's one rounding to bf16, and calling it again does nothing.
+// parameters without one are left as they are. With reduce_dtype "float32" a trainable parameter's gradient can be
+// fp32, and whatever reads gradients as bf16 only calls this right before it reads them (see
+// optimizers::OptimizerBase::step). It is the gradient's one rounding to bf16, and calling it again does nothing.
 void cast_fp32_gradients_to_bf16(const serialization::NamedParameters& parameters);
 
 }  // namespace ttml::core

@@ -181,7 +181,7 @@ class SFTTrainer:
             precision: Optional ``training_config.precision`` block of the
                 YAML, as a dict (e.g. ``{"master_dtype": "float32",
                 "reduce_dtype": "float32"}``). Applied with
-                ``ttml.core.apply_precision_config`` after the LoRA wrapping and
+                ``ttml.common.utils.apply_precision`` after the LoRA wrapping and
                 before the optimizer is built from a dict or the default, so
                 the optimizer state follows the stored dtype. It can't be
                 combined with a ready optimizer instance, whose state is
@@ -514,7 +514,7 @@ class SFTTrainer:
                 raise ValueError(
                     "SFTTrainer: precision is applied before the optimizer is created, but this optimizer already "
                     "exists with its state sized for the current parameters. Apply it first with "
-                    "ttml.core.apply_precision_config, or pass the optimizer as a dict."
+                    "ttml.common.utils.apply_precision(model, precision), or pass the optimizer as a dict."
                 )
             return optimizer
 

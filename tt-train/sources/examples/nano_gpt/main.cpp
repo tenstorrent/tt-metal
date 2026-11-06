@@ -176,6 +176,8 @@ struct TrainingConfig {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
+    // Checked before anything is built, so a typo under precision stops the run early.
+    ttml::core::validate_precision_config(training_config);
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
@@ -377,9 +379,6 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(training_config_name);
-    // A typo under training_config.precision stops the run here rather than after the model is built.
-    ttml::core::validate_precision_config(yaml_config["training_config"]);
-
     TrainingConfig training_config = parse_config(yaml_config);
     training_config.model_config = expand_config_path(training_config.model_config);
 
@@ -711,17 +710,17 @@ int main(int argc, char **argv) {
     // the dtype the model builds, so it skips the conversion. 3-tier workers keep bf16 parameters for RemoteOptimizer,
     // since the optimizer worker holds the fp32 master weights, and take only the reduce dtype: with float32 their
     // micro-batches add up in fp32, and RemoteOptimizer sends the sum in bf16.
-    if (save_and_exit_path.empty() && !is_three_tier_training(multihost_config)) {
-        if (auto master_dtype =
-                ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
-            fmt::print("Master dtype: {}\n", *master_dtype);
+    if (save_and_exit_path.empty()) {
+        const auto &training_config_node = yaml_config["training_config"];
+        if (!is_three_tier_training(multihost_config)) {
+            if (auto master_dtype =
+                    ttml::core::apply_precision_config(training_config_node, get_model_parameters(model))) {
+                fmt::print("Master dtype: {}\n", *master_dtype);
+            }
+        } else {
+            (void)ttml::core::apply_reduce_dtype_config(training_config_node, get_model_parameters(model));
         }
         if (auto reduce_dtype = ttml::autograd::ctx().get_gradient_reduce_dtype()) {
-            fmt::print("Reduce dtype: {}\n", *reduce_dtype);
-        }
-    } else if (save_and_exit_path.empty()) {
-        if (auto reduce_dtype =
-                ttml::core::apply_reduce_dtype_config(yaml_config["training_config"], get_model_parameters(model))) {
             fmt::print("Reduce dtype: {}\n", *reduce_dtype);
         }
     }

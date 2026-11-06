@@ -19,12 +19,12 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
                             const ttnn::Tensor& tensor,
                             const std::string& name,
                             const tt::tt_metal::Layout required_layout,
-                            const tt::tt_metal::DataType required_dtype) {
+                            const std::vector<tt::tt_metal::DataType>& required_dtypes) {
         check_device_tensor(
             tensor,
             "AdamW",
             name,
-            {.dtypes = {required_dtype}, .layout = required_layout, .buffer_type = tt::tt_metal::BufferType::DRAM});
+            {.dtypes = required_dtypes, .layout = required_layout, .buffer_type = tt::tt_metal::BufferType::DRAM});
 
         // Logical shapes must match for element-for-element correspondence with the parameter;
         // padding alone cannot tell apart tensors that round up to the same tile extent.
@@ -67,24 +67,25 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         "Got stochastic_rounding=Enabled with parameter dtype '{}'",
         enchantum::to_string(param_dtype));
 
-    // The gradient may be bf16 or fp32, whatever the parameter's dtype: an fp32 gradient (accumulated in fp32) is
-    // read as it is, without rounding it to bf16 first.
-    const auto grad_dtype = grad.dtype();
-    TT_FATAL(
-        grad_dtype == tt::tt_metal::DataType::BFLOAT16 || grad_dtype == tt::tt_metal::DataType::FLOAT32,
-        "Gradient tensor must be BFLOAT16 or FLOAT32, but got '{}'",
-        enchantum::to_string(grad_dtype));
-
     // Validate all tensors
-    check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, param_dtype);
-    check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, grad_dtype);
+    check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, {param_dtype});
+    // The gradient may be bf16 or fp32, whatever the parameter's dtype: an fp32 gradient (accumulated in fp32) is read
+    // as it is, without rounding it to bf16 first.
+    check_tensor(
+        grad,
+        "Gradient",
+        tt::tt_metal::Layout::TILE,
+        {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32});
     // Optimizer states must match param dtype
-    check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, param_dtype);
-    check_tensor(exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+    check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, {param_dtype});
+    check_tensor(exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, {param_dtype});
 
     if (max_exp_avg_sq.has_value()) {
         check_tensor(
-            max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+            max_exp_avg_sq.value(),
+            "Max Exponential Average Squared Buffer",
+            tt::tt_metal::Layout::TILE,
+            {param_dtype});
     }
 }
 
