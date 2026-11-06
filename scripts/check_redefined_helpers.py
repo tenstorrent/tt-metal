@@ -731,10 +731,31 @@ def added_lines_by_path(diff_text):
     return found
 
 
-def _git_diff(args):
+def _diff_paths(paths):
+    """Repo-relative paths safe to place after ``--`` in a git diff.
+
+    ``--literal-pathspecs`` stops a name such as ``:(exclude)*`` from becoming a pathspec.
+    ``safe_repo_path`` rejects a path that leaves the repository.
+    """
+    scoped = []
+    for path in paths or []:
+        resolved = safe_repo_path(path)
+        if resolved is None:
+            continue
+        rel = os.path.relpath(resolved, REPO_ROOT).replace("\\", "/")
+        if rel == ".." or rel.startswith("../"):
+            continue
+        scoped.append(rel)
+    return scoped
+
+
+def _git_diff(args, paths=None):
+    command = ["git", "--literal-pathspecs", "diff", "-U0", "--no-ext-diff", *args, "--"]
+    if paths:
+        command.extend(paths)
     try:
         return subprocess.check_output(
-            ["git", "diff", "-U0", "--no-ext-diff", *args, "--"],
+            command,
             cwd=REPO_ROOT,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -743,12 +764,16 @@ def _git_diff(args):
         return None
 
 
-def commit_added_lines():
-    """Added lines for every file in this commit. None when git cannot answer.
+def commit_added_lines(paths=None):
+    """Added lines for the given files, or the whole commit when no path is usable.
 
-    The diff is of the whole commit. Caller-supplied paths are not command arguments.
+    ``git diff HEAD -- <files>`` sees staged and unstaged edits in those files and does not
+    stat the rest of the work tree. ``PRE_COMMIT`` is also set for ``pre-commit run --files``,
+    which does not stash unstaged changes, so the index alone would hide them.
     ``PRE_COMMIT_FROM_REF`` and ``PRE_COMMIT_TO_REF`` are passed only after ``safe_git_rev``.
+    None when git cannot answer.
     """
+    scoped = _diff_paths(paths)
     from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
     to_ref = os.environ.get("PRE_COMMIT_TO_REF")
     if from_ref or to_ref:
@@ -756,15 +781,11 @@ def commit_added_lines():
         safe_to = safe_git_rev(to_ref)
         if safe_from is None or safe_to is None:
             return None
-        diff = _git_diff([safe_from, safe_to])
-    elif os.environ.get("PRE_COMMIT"):
-        # pre-commit has stashed unstaged changes, so the index is the commit. Diffing it
-        # against HEAD skips the stat of every work tree file that `git diff HEAD` pays.
-        diff = _git_diff(["--cached"])
+        diff = _git_diff([safe_from, safe_to], scoped)
     else:
-        diff = _git_diff(["HEAD"])
+        diff = _git_diff(["HEAD"], scoped)
         if diff is None:
-            diff = _git_diff(["--cached"])
+            diff = _git_diff(["--cached"], scoped)
     return None if diff is None else added_lines_by_path(diff)
 
 
@@ -787,7 +808,7 @@ def main(argv=None):
 
     added = None
     if not args.all_lines:
-        added = commit_added_lines()
+        added = commit_added_lines(args.files)
         if added is None:
             print(
                 "check_redefined_helpers: git diff failed or the revision was rejected; skipping (fail open)",

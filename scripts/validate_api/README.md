@@ -36,7 +36,9 @@ python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
 ```
 
 The `validate-metalium-api` pre-commit hook runs this command when a commit
-touches `tt_metal/api/` or `scripts/validate_api/`. The `all-static-checks.yaml`
+touches `tt_metal/api/` or `scripts/validate_api/`, including a deletion.
+Pre-commit does not report deleted paths, so the hook starts on every commit
+and the script checks the diff itself before scanning. The `all-static-checks.yaml`
 workflow runs on PR updates and merge groups. Checker failures fail its
 `Run Pre-commit Hooks` job. The checker tests also run through pre-commit when
 files under `scripts/validate_api/` change.
