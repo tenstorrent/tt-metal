@@ -22,6 +22,7 @@ void kernel_main() {
     DataflowBuffer dfb_y_obj(dfb::y);
     DataflowBuffer dfb_dy_obj(dfb::dy);
     DataflowBuffer dfb_mask_obj(dfb::mask);
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
     DataflowBuffer dfb_ydy_obj(dfb::ydy);
     DataflowBuffer dfb_add_obj(dfb::add);
     DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);
@@ -31,6 +32,9 @@ void kernel_main() {
 
     uint32_t N = get_arg(args::N);
     uint32_t Ht = get_arg(args::Ht);
+
+    dfb_mask_obj.wait_front(onetile);
+    dfb_scaler_obj.wait_front(onetile);
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
@@ -70,7 +74,7 @@ void kernel_main() {
         }
 
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::scaler, dfb::sum>(
-            ckl::ReduceInputBlockShape::single());
+            dfb_add_obj, dfb_scaler_obj, dfb_sum_obj, ckl::ReduceInputBlockShape::single());
 
         for (uint32_t h = 0; h < Ht; ++h) {
             static constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
@@ -105,7 +109,7 @@ void kernel_main() {
 
         // step 2, compute sum(y * dy)
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::scaler, dfb::sum>(
-            ckl::ReduceInputBlockShape::single());
+            dfb_add_obj, dfb_scaler_obj, dfb_sum_obj, ckl::ReduceInputBlockShape::single());
 
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {
@@ -125,4 +129,9 @@ void kernel_main() {
         dfb_sum_obj.pop_front(onetile);
 #endif
     }
+    // The mask and the reduce scaler are each a single tile pushed once by the reader and re-read on
+    // every iteration, so they are waited once up front. Pop them here to leave the buffers balanced:
+    // on Quasar the reader's DataflowBuffers wait for these pops when they go out of scope.
+    dfb_mask_obj.pop_front(onetile);
+    dfb_scaler_obj.pop_front(onetile);
 }

@@ -18,6 +18,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_index_domain,
     assert_indices_exact,
@@ -34,15 +35,24 @@ TOTAL_EXPERTS, K = KIMI[1], KIMI[4]
 SCORE_FUNC = "sigmoid"
 INPUT_DTYPE = ttnn.bfloat16
 
-# Relative gap below which two keys may be equal on device. The sort compares scores with 10
-# mantissa bits (the FPU keeps that many when it moves fp32 tiles), so keys closer than about 1e-3
-# can be exact ties on device even when torch separates them.
+# Relative gap below which two keys may be equal on device. The sort compares 17 mantissa bits of
+# the fp32 keys (~8e-6 relative), and the device's activation differs from torch's slightly, so keys
+# closer than this are not asserted against the torch order. Conservative.
 SORT_RESOLUTION = 2e-3
-# The device's activations against torch: allowed relative error, and the logit range checked. The
-# device's sqrt-softplus returns 0 for logits below about -5 (torch gives up to 0.08 there), so its
-# range starts at -5.
-ACTIVATION_RTOL = {"sigmoid": 2e-3, "sqrtsoftplus": 3e-3}
-ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-5.0, 16.0)}
+# The device's activations against torch: allowed relative error, the logit range checked, and the
+# floor on |torch| the relative error divides by. On Blackhole sqrt-softplus is the fused
+# fp32-accurate routine (~5e-6 relative error on softplus, no cutoff), checked through the far
+# negative tail and past the softplus threshold (20) at a tolerance the stock bf16 polynomial
+# (~1.6e-3) fails, so the test also proves the fused path was selected. Elsewhere it is the stock
+# routine, which returns 0 for logits below about -5 (torch gives up to 0.08 there).
+if is_blackhole():
+    ACTIVATION_RTOL = {"sigmoid": 2e-3, "sqrtsoftplus": 1e-4}
+    ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-30.0, 25.0)}
+    ACTIVATION_FLOOR = {"sigmoid": 1e-3, "sqrtsoftplus": 1e-30}
+else:
+    ACTIVATION_RTOL = {"sigmoid": 2e-3, "sqrtsoftplus": 3e-3}
+    ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-5.0, 16.0)}
+    ACTIVATION_FLOOR = {"sigmoid": 1e-3, "sqrtsoftplus": 1e-3}
 MIN_STRICT_FRACTION = 0.5
 
 ENGINES = pytest.mark.parametrize("stable_sort", [True, False], ids=["stable", "unstable"])
@@ -305,7 +315,7 @@ def test_activation_matches_torch(device, score_func):
 
     got = biased.reshape(-1)[: len(grid)]
     want = score_activation(grid, score_func)
-    rel_err = (got - want).abs() / want.abs().clamp_min(1e-3)
+    rel_err = (got - want).abs() / want.abs().clamp_min(ACTIVATION_FLOOR[score_func])
     worst = rel_err.argmax().item()
     logger.info(f"[{score_func}] max relative error {rel_err.max():.2e} at logit {grid[worst]:.4f}")
     assert rel_err.max() <= ACTIVATION_RTOL[score_func], (

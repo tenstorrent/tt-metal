@@ -20,15 +20,11 @@ from ttml.common.config import load_config
 from ttml.common.data import CharTokenizer, load_shakespeare_text
 from ttml.common.utils import get_tt_metal_runtime_root, set_seed, summary
 from ttml.datasets import InMemoryDataloader, causal_lm_collate_fn
-from ttml.models import RunnerType, WeightTyingType
-from ttml.models.llama import (
-    Llama,
-    LlamaConfig,
-    LlamaRopeScalingConfig,
-    load_from_safetensors,
-)
+from ttml.models.llama import Llama, load_from_safetensors
 from ttml.modules import LoraConfig
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
+
+from llama_config import PRETRAINED_HELP, fetch_pretrained, llama_config
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
@@ -39,7 +35,7 @@ WEIGHT_DECAY = 0.01
 
 LORA_RANK = 8
 LORA_ALPHA = 16
-LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
+LORA_TARGET_MODULES = ["qkv_linear", "out_linear"]
 LORA_DROPOUT = 0.05
 
 
@@ -88,50 +84,6 @@ class ShakespeareChunkDataset:
         }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = False) -> LlamaConfig:
-    """Build a LlamaConfig from a model YAML (transformer_config section)."""
-    tc = yaml_config.get("transformer_config", {})
-
-    rope_scaling = LlamaRopeScalingConfig()
-    if "rope_scaling" in tc:
-        rs = tc["rope_scaling"]
-        rope_scaling = LlamaRopeScalingConfig(
-            scaling_factor=rs.get("scaling_factor", rope_scaling.scaling_factor),
-            high_freq_factor=rs.get("high_freq_factor", rope_scaling.high_freq_factor),
-            low_freq_factor=rs.get("low_freq_factor", rope_scaling.low_freq_factor),
-            original_context_length=rs.get("original_context_length", rope_scaling.original_context_length),
-        )
-
-    runner_type = RunnerType.Default
-    if "runner_type" in tc:
-        runner_type = RunnerType.from_string(tc["runner_type"])
-
-    weight_tying = WeightTyingType.Disabled
-    if "weight_tying" in tc:
-        weight_tying = WeightTyingType.from_string(tc["weight_tying"])
-
-    return LlamaConfig(
-        hidden_size=tc.get("embedding_dim", 384),
-        # Read the MLP intermediate size from the yaml.
-        intermediate_size=tc.get("intermediate_dim", None),
-        num_hidden_layers=tc.get("num_blocks", 6),
-        num_attention_heads=tc.get("num_heads", 6),
-        num_key_value_heads=tc.get("num_groups", 3),
-        vocab_size=vocab_size,
-        max_position_embeddings=tc.get("max_sequence_length", 256),
-        rope_theta=tc.get("theta", 10000.0),
-        attention_dropout=tc.get("dropout_prob", 0.0),
-        mlp_dropout=tc.get("dropout_prob", 0.0),
-        runner_type=runner_type,
-        weight_tying=weight_tying,
-        rope_scaling=rope_scaling,
-        use_tp=use_tp,
-    )
-
-
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
@@ -148,7 +100,7 @@ def parse_args():
         "--pretrained",
         type=str,
         default=None,
-        help="HuggingFace repo ID or local path to .safetensors weights.",
+        help=PRETRAINED_HELP,
     )
     parser.add_argument(
         "--mesh_shape",
@@ -216,28 +168,17 @@ def main():
     pretrained_path = None
 
     if args.pretrained:
-        from pathlib import Path
-
         from transformers import AutoTokenizer
 
-        src = args.pretrained
-        if Path(src).is_dir():
-            pretrained_path = src
-        else:
-            from huggingface_hub import snapshot_download
-
-            print(f"Downloading weights from HuggingFace: {src}")
-            pretrained_path = snapshot_download(src, allow_patterns=["*.safetensors"])
-            print(f"Weights downloaded to: {pretrained_path}")
-
-        hf_tokenizer = AutoTokenizer.from_pretrained(src)
-        vocab_size = (hf_tokenizer.vocab_size + 31) // 32 * 32
+        pretrained_path = fetch_pretrained(args.pretrained)
+        hf_tokenizer = AutoTokenizer.from_pretrained(args.pretrained)
         ids = np.array(hf_tokenizer.encode(text), dtype=np.uint32)
-        print(f"Using HF BPE tokenizer, vocab_size={hf_tokenizer.vocab_size} " f"(padded to {vocab_size})")
+        num_tokens = len(hf_tokenizer)
+        print(f"Using HF BPE tokenizer with {num_tokens} tokens")
     else:
         tokenizer = CharTokenizer(text)
-        vocab_size = (tokenizer.vocab_size + 31) // 32 * 32
         ids = np.array(tokenizer.encode(text), dtype=np.uint32)
+        num_tokens = tokenizer.vocab_size
 
     n_train = int(len(ids) * 0.9)
     train_ids = ids[:n_train]
@@ -282,22 +223,13 @@ def main():
 
     # ── Model ─────────────────────────────────────────────────────────────────
 
+    yaml_config = None
     if args.model_config is not None:
         tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
         print(f"Loading model config from: {args.model_config}")
         yaml_config = load_config(args.model_config, tt_train_root)
-        llama_cfg = llama_config_from_yaml(yaml_config, vocab_size, use_tp=use_tp)
-    else:
-        llama_cfg = LlamaConfig(
-            hidden_size=384,
-            num_hidden_layers=6,
-            num_attention_heads=6,
-            num_key_value_heads=3,
-            vocab_size=vocab_size,
-            max_position_embeddings=256,
-            rope_theta=500000.0,
-            use_tp=use_tp,
-        )
+
+    llama_cfg = llama_config(yaml_config, pretrained_path, num_tokens, use_tp)
 
     seq_len = llama_cfg.max_position_embeddings
     print(
@@ -312,7 +244,7 @@ def main():
 
     if pretrained_path is not None:
         print(f"Loading pretrained weights from: {pretrained_path}")
-        load_from_safetensors(model, pretrained_path, llama_cfg)
+        print(load_from_safetensors(model, pretrained_path))
 
     # ── Dataloader ────────────────────────────────────────────────────────────
 

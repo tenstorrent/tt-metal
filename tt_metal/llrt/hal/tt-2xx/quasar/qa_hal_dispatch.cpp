@@ -18,7 +18,7 @@ using namespace tt::tt_metal::quasar::dispatch;
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))

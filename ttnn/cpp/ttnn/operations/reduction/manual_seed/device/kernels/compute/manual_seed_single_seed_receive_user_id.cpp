@@ -26,7 +26,7 @@ void kernel_main() {
 
     // Get communication entry
     const uint32_t message = kernel_communication_dfb.read_tile_value(/*tile_index=*/0, /*element_offset=*/0);
-    const bool is_core_id = (message != 0) ? true : false;
+    const bool is_core_id = message != 0;
 
     // A seed value of UINT32_MAX (0xFFFFFFFF) is a special value
     // that skips rand_tile_init, leaving the PRNG state unchanged.

@@ -24,7 +24,7 @@ void reduce_scatter_common_validates(
         topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
         "Topology must be either Ring or Linear");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffers on device");
 
     const auto page_size = input_tensor.buffer()->page_size();
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "reduce_scatter currently requires aligned pages");

@@ -16,10 +16,10 @@ coupling the copies:
     would simply describe a kernel that no longer exists and the comparison would
     still "pass".
 
-Both tables also cross a repository boundary. The coefficients reach the kernel in
-LReg0/1/2 (slopes) and LReg4/5/6 (intercepts), so the init lives in tt-metal and the
-kernel in tt-llk, coupled by nothing but that register convention -- which is
-therefore as much a part of the contract as the numbers are.
+Both tables reach their kernels through LReg0/1/2 (slopes) and LReg4/5/6 (intercepts).
+Each init and its kernel are separate functions in the same llk_sfpu header, coupled by
+nothing but that register convention -- which is therefore as much a part of the
+contract as the numbers are.
 
 These tests are the coupling. No hardware needed: they read the headers and exercise
 the golden.

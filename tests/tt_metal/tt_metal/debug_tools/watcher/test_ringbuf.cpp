@@ -5,6 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <functional>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include "impl/debug/debug_helpers.hpp"
+#include "impl/metal2_host_api/helpers.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -67,7 +69,9 @@ void append_expected_writers(
     uint32_t hw_id_offset = 0) {
     for (uint32_t local_idx = 0; local_idx < num_threads; local_idx++) {
         uint32_t hw_id = local_idx + hw_id_offset;
-        expected.push_back(fmt::format("[{}]0x{:08x}", prefix_for_thread(hw_id), (hw_id << 16) | 0));
+        for (uint32_t seq = 0; seq < NUM_PUSHES_MULTI; seq++) {
+            expected.push_back(fmt::format("[{}]0x{:08x}", prefix_for_thread(hw_id), (hw_id << 16) | seq));
+        }
     }
 }
 
@@ -81,7 +85,7 @@ void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
+    Program program = CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
 
     // Depending on riscv type, choose one core to run the test on
@@ -209,13 +213,24 @@ void RunTest(
         fixture->log_file_name, get_expected_single_processor(hal, processor.core_type, thread_idx, num_pushes)));
 }
 
-void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+// sem_wrap (Quasar only): the kernel starts the head so that half the pushes land before the rewind, then
+// every entry and the final head are checked.
+void RunMultiWriterTest(
+    MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool sem_wrap) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
     CoreCoord logical_core{0, 0};
+    const tt_cxy_pair core{
+        static_cast<size_t>(mesh_device->impl().get_devices()[0]->id()),
+        mesh_device->worker_core_from_logical_core(logical_core)};
+    std::optional<uint32_t> expected_head;
+    // Where the kernel hands the final head to the host.
+    const auto head_addr =
+        static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED));
     constexpr const char* kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
 
     std::vector<experimental::KernelSpec> specs;
@@ -224,6 +239,12 @@ void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distr
         spec.unique_id = experimental::KernelSpecName{name};
         spec.source = kernel;
         spec.compile_time_args["num_pushes"] = NUM_PUSHES_MULTI;
+        if (sem_wrap) {
+            spec.compiler_options.defines["WATCHER_RINGBUF_SEM_WRAP"] = "1";
+            spec.compile_time_args["num_dm_threads"] = experimental::QUASAR_USER_DM_CORES_PER_NODE;
+            spec.compile_time_args["num_tensixes"] = experimental::QUASAR_TENSIX_ENGINES_PER_NODE;
+            spec.compile_time_args["head_addr"] = head_addr;
+        }
         names.push_back(spec.unique_id);
         specs.push_back(std::move(spec));
     };
@@ -235,18 +256,33 @@ void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distr
     if (is_quasar) {
         add_spec(
             "dm",
-            {.num_threads = 6,
+            {.num_threads = experimental::QUASAR_USER_DM_CORES_PER_NODE,
              .compiler_options = {.defines = {{"MULTI_DM_TEST", "1"}}},
              .hw_config = experimental::DataMovementHardwareConfig{}});
         add_spec(
             "compute",
-            {.num_threads = 4,
+            {.num_threads = experimental::QUASAR_TENSIX_ENGINES_PER_NODE,
              .compiler_options = {.defines = {{"MULTI_DM_TEST", "1"}}},
              .hw_config = experimental::ComputeHardwareConfig{}});
-        // DM0/DM1 are reserved, so the 6 launched threads land on DM2...DM7. COMPUTE follows the 8
-        // DM entries in the HAL index.
-        append_expected_writers(expected, [](uint32_t dm) { return fmt::format("DM{}", dm); }, 6, 2);
-        append_expected_writers(expected, tensix_name, 16, 8);
+        // DM0/DM1 are reserved, so the launched threads land on DM2...DM7.
+        const uint32_t num_trisc_writers = hal.get_processor_types_count(
+            HalProgrammableCoreType::TENSIX, static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
+        const uint32_t first_trisc_hw_id =
+            hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0);
+        append_expected_writers(
+            expected,
+            tensix_name,
+            experimental::QUASAR_USER_DM_CORES_PER_NODE,
+            experimental::QUASAR_RESERVED_DM_CORES_PER_NODE);
+        append_expected_writers(expected, tensix_name, num_trisc_writers, first_trisc_hw_id);
+        if (sem_wrap) {
+            const uint32_t total_pushes =
+                (experimental::QUASAR_USER_DM_CORES_PER_NODE + num_trisc_writers) * NUM_PUSHES_MULTI;
+            expected_head = total_pushes - total_pushes / 2;
+            // Cleared so a kernel that never hands the head over fails the check.
+            const uint32_t zero = 0;
+            cluster.write_core(&zero, sizeof(zero), core, head_addr);
+        }
     } else {
         add_spec(
             "brisc",
@@ -283,7 +319,17 @@ void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distr
     experimental::ProgramSpec spec{.name = "watcher_ringbuf_multi", .kernels = specs, .work_units = {wu}};
     workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
 
+    const int dumps_before_run = MetalContext::instance().watcher_server()->dump_count();
     fixture->RunProgram(mesh_device, workload, true);
+
+    if (expected_head) {
+        const uint32_t max_head =
+            *expected_head + (MetalContext::instance().watcher_server()->dump_count() - dumps_before_run);
+        uint32_t head = 0;
+        cluster.read_core(&head, sizeof(head), core, head_addr);
+        EXPECT_GE(head, *expected_head);
+        EXPECT_LE(head, max_head);
+    }
 
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
     EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected));
@@ -371,7 +417,26 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscMultiWriter) {
         GTEST_SKIP() << "Multi-writer test requires the MPSC ring buffer";
     }
     for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(RunMultiWriterTest, mesh_device);
+        this->RunTestOnDevice(
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunMultiWriterTest(fixture, mesh_device, false);
+            },
+            mesh_device);
+    }
+}
+
+// All user processors on the core push across the point where push_to_ring_buffer() rewinds the head
+// before its semaphore saturates.
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscSemaphoreRewind) {
+    if (MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Only Quasar keeps the MPSC head in a saturating semaphore";
+    }
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunMultiWriterTest(fixture, mesh_device, true);
+            },
+            mesh_device);
     }
 }
 

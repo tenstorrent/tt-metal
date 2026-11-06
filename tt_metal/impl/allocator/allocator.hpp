@@ -8,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
@@ -78,6 +80,10 @@ public:
 
     std::unordered_set<Buffer*> get_allocated_buffers() const;
     size_t get_num_allocated_buffers() const;
+    // Live DRAM allocations as disjoint per-bank [begin, end) ranges in address order. Scans every allocation.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_dram_allocations() const;
+    // Whether the buffer with this Buffer::unique_id() is allocated at address. Scans every allocated buffer.
+    bool is_buffer_allocated_at(size_t unique_id, DeviceAddr address) const;
 
     std::uint32_t get_num_banks(const BufferType& buffer_type) const;
     DeviceAddr get_bank_size(const BufferType& buffer_type) const;

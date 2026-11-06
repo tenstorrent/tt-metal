@@ -7,11 +7,12 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
-#include <tt-umd/types/cluster_descriptor_types.hpp>   // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>       // ChipId
 #include <memory>
 #include <map>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/packet_header_types.hpp"
 
 namespace tt::llrt {
 class RunTimeOptions;
@@ -26,7 +27,6 @@ namespace tt::tt_fabric {
 // Forward declarations
 class ControlPlane;
 class FabricBuilderContext;
-
 
 /**
  * FabricContext
@@ -135,35 +135,15 @@ public:
 private:
     // ============ Packet Sizing Constants (Implementation Details) ============
 
-    // Implementation limits (memory map & buffer size constraints)
+    // Implementation limits (memory map & buffer size constraints). The header sizes fabric can choose from are in
+    // packet_header_types.hpp.
     struct Limits {
         // 1D: Max hops supported by L1 memory map
         //     ROUTING_PATH_SIZE_1D = 1024 bytes / 16 bytes per entry = 64 chips max (63 hops)
         static constexpr uint32_t MAX_1D_HOPS = 63;
 
-        // Maximum supported 2D shape is 64x4 in either orientation, so packets need 68 action bytes.
-        static constexpr uint32_t MAX_2D_ACTION_MAP_BYTES = 68;
-    };
-
-    // 1D routing: hops per routing word (base word supports 16 hops)
-    static constexpr uint32_t ROUTING_1D_HOPS_PER_WORD = 16;
-
-    // 2D routing: buffer tiers optimized to maximize capacity per header size
-    // Header base = 60 B, aligned to 16 B boundaries
-    // Strategy: One tier per header size (max capacity) to avoid bloat
-    //   80 B: 60 + 20 = 80
-    //   96 B: 60 + 36 = 96
-    // FabricContext selects the smallest header that holds the topology's action map.
-    struct Routing2DHeaderTier {
-        uint32_t max_action_map_bytes;
-        uint32_t route_buffer_size;
-    };
-    static constexpr Routing2DHeaderTier ROUTING_2D_HEADER_TIERS[] = {
-        // NOTE: 80B header size de-stabilized some Mesh benchmarks for 8X4 mesh, so disabling for now
-        //{20, 20},  // 80B header - max capacity (60+20=80)
-        {36, 36},                                                           // 96B header - max capacity (60+36=96)
-        {52, 52},                                                           // 112B header - max capacity (60+52=112)
-        {Limits::MAX_2D_ACTION_MAP_BYTES, Limits::MAX_2D_ACTION_MAP_BYTES}  // 128B header
+        // 2D: the largest action map a packet carries, the largest 2D header's route buffer
+        static constexpr auto MAX_2D_ACTION_MAP_BYTES = static_cast<uint32_t>(PKT_HDR_2D_ROUTE_BUFFER_SIZES.back());
     };
 
     // ============ Private Implementation ============
@@ -178,14 +158,7 @@ private:
     // Topology-based sizing
     uint32_t get_max_1d_hops_from_topology(const ControlPlane& control_plane) const;
     uint32_t get_max_2d_action_map_bytes_from_topology(const ControlPlane& control_plane) const;
-    uint32_t compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const;
-    uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const;
     void compute_packet_specifications(const ControlPlane& control_plane, const tt_metal::Hal& hal, tt::ARCH arch);
-
-    // Header size helpers (use explicit template instantiation for type safety)
-    size_t get_1d_header_size(uint32_t extension_words) const;
-    size_t get_2d_header_size(uint32_t route_buffer_size) const;
-    size_t get_udm_header_size(uint32_t route_buffer_size) const;
 
     ControlPlane& control_plane_;
     const tt_metal::Hal& hal_;

@@ -86,7 +86,7 @@ CreatedProgram create_program_for_device(
     const auto& target = tensor_args.target;
 
     auto* device = input.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     TT_FATAL(
         datatype_to_dataformat_converter(input.dtype()) == tt::DataFormat::Float16_b,
