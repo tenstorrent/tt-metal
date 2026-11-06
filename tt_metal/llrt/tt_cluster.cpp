@@ -1650,7 +1650,8 @@ std::tuple<ChipId, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core
         this->get_cluster_desc()->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
     return std::make_tuple(
         std::get<0>(connected_eth_core),
-        soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
+        get_soc_desc(std::get<0>(connected_eth_core))
+            .get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
 }
 
 // TODO: unify uint64_t with ChipUID
@@ -1707,6 +1708,10 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
     bool enable_internal_routing,
     const std::vector<ChipId>& target_mmio_devices) const {
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
+    // routing_info lives in base Ethernet firmware's L1; without base firmware there is nothing to set.
+    if (!this->hal_->has_eth_base_firmware()) {
+        return;
+    }
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
     // we do not always context switch to base FW

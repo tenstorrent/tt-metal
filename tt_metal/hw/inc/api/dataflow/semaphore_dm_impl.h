@@ -30,7 +30,8 @@ __attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t
 __attribute__((always_inline)) inline volatile tt_l1_ptr std::uint32_t* local_ptr(
     std::uintptr_t l1_offset, SemScope scope) {
     std::uintptr_t addr = l1_offset;
-#ifdef ARCH_QUASAR
+    // On a Keraunos CCE, get_semaphore() already returns the uncached alias.
+#if defined(ARCH_QUASAR) && !defined(KERAUNOS_CCE)
     if (scope != SemScope::DM_LOCAL_CACHED) {
         addr += MEM_L1_UNCACHED_BASE;
     }

@@ -16,16 +16,24 @@ inline void RISC_POST_STATUS(uint32_t status) {
     ptr[0] = status;
 }
 
-#if !defined(ARCH_QUASAR)
-static volatile uint32_t* const fabric_postcode_ptr =
-    reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE));
+#if defined(ARCH_QUASAR)
+// The host polls the postcode and scratch words; a Keraunos CCE stores them through its uncached alias.
+constexpr uintptr_t fabric_status_word_alias = MEM_L1_UNCACHED_BASE;
+#else
+constexpr uintptr_t fabric_status_word_alias = 0;
+#endif
+static volatile uint32_t* const fabric_postcode_ptr = reinterpret_cast<volatile uint32_t*>(
+    static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE) + fabric_status_word_alias);
 
 #define POSTCODE(status) (*fabric_postcode_ptr = static_cast<uint32_t>(status))
 
-static volatile uint32_t* const fabric_scratch_ptr =
-    reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE));
+static volatile uint32_t* const fabric_scratch_ptr = reinterpret_cast<volatile uint32_t*>(
+    static_cast<uintptr_t>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE) + fabric_status_word_alias);
 
 #define ROUTER_SCRATCH_WRITE(id, val) (fabric_scratch_ptr[id]) = val;
+
+#if defined(ARCH_QUASAR)
+#include "internal/tt-2xx/quasar/eth_cce_send.h"
 #endif
 
 struct eth_channel_sync_t {
@@ -57,6 +65,13 @@ struct erisc_info_t {
         channels[eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS];  // user_buffer_bytes_sent
 };
 
+#if defined(ARCH_QUASAR)
+// These name base Ethernet firmware's L1 and jump table, which a Keraunos CCE does not have. Declared so the legacy
+// Ethernet APIs still parse; any use fails to link.
+extern erisc_info_t* erisc_info;
+extern routing_info_t* routing_info;
+extern tt_l1_ptr mailboxes_t* const mailboxes;
+#else
 erisc_info_t* erisc_info = (erisc_info_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 routing_info_t* routing_info = (routing_info_t*)(uintptr_t)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
 
@@ -67,9 +82,54 @@ tt_l1_ptr mailboxes_t* const mailboxes =
 extern uint32_t __erisc_jump_table;
 volatile uint32_t* RtosTable =
     (volatile uint32_t*)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
+#endif
 
 namespace internal_ {
 
+#if defined(ARCH_QUASAR)
+// A Keraunos CCE sends on its command buffer (eth_cce_send.h). There is no base firmware to switch to, so ctx_switch
+// has no effect, and no base-firmware link status for the watcher to check. A remote register write is an inline write
+// to the same flat address in the peer's CCE SRAM (cce_eth::send_dword).
+FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) { return cce_eth::txq_busy(q_num); }
+
+template <bool ctx_switch = true>
+FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    while (eth_txq_is_busy(q_num)) {
+    }
+    cce_eth::send_bytes(
+        q_num,
+        src_word_addr << BYTES_TO_ETH_WORD_SHIFT,
+        dest_word_addr << BYTES_TO_ETH_WORD_SHIFT,
+        num_words << BYTES_TO_ETH_WORD_SHIFT);
+}
+
+FORCE_INLINE
+void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    ASSERT(!eth_txq_is_busy(q_num));
+    cce_eth::send_bytes(
+        q_num,
+        src_word_addr << BYTES_TO_ETH_WORD_SHIFT,
+        dest_word_addr << BYTES_TO_ETH_WORD_SHIFT,
+        num_words << BYTES_TO_ETH_WORD_SHIFT);
+}
+
+FORCE_INLINE
+void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+    ASSERT(!eth_txq_is_busy(q_num));
+    cce_eth::send_bytes(q_num, src_addr, dest_addr, num_bytes);
+}
+
+template <bool ctx_switch = true>
+FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint64_t val) {
+    while (eth_txq_is_busy(q_num)) {
+    }
+    cce_eth::send_dword(q_num, reg_addr, val);
+}
+FORCE_INLINE
+void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint64_t val) {
+    cce_eth::send_dword(q_num, reg_addr, val);
+}
+#else
 FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
 #ifdef ARCH_WORMHOLE
     return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0;
@@ -153,6 +213,8 @@ void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint32
     eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
 }
+
+#endif
 
 #if !defined(ARCH_QUASAR)
 void check_and_context_switch() {

@@ -89,6 +89,9 @@ public:
 
     tt::tt_metal::CoreCoord get_physical_ethernet_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     tt::tt_metal::CoreCoord get_logical_ethernet_core_from_physical(const tt::tt_metal::CoreCoord& physical_coord) const;
+    // The Keraunos core (HSIO tile and CCE) on Ethernet channel `eth_chan`: the descriptor's keraunos.cores entry at
+    // that channel's NOC0 coordinate. Fatal when there is none. The reference lives as long as this descriptor.
+    const tt::umd::KeraunosCore& get_keraunos_core_for_channel(uint32_t eth_chan) const;
     tt::tt_metal::CoreCoord get_physical_tensix_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     tt::tt_metal::CoreCoord get_physical_dram_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     // Map a DRAM view + hardware subchannel to the logical CoreCoord used by CreateKernel(DramConfig).
