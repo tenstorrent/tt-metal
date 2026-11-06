@@ -1,22 +1,26 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MooncakeEmbeddingReader's read logic against a fake Mooncake client: no Mooncake needed. The same paths against a
-real local master are in test_mooncake_store_integration.py."""
+"""MooncakeEmbeddingReader's read logic against a fake Mooncake client. The module imports Mooncake, so this needs the
+wheel (models/common/multimedia_store/requirements.txt); the same paths against a real local master are in
+test_mooncake_store_integration.py."""
 
 import ctypes
+import hashlib
+import sys
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from models.common.multimedia_store.mooncake_store import (
-    OBJECT_NOT_FOUND,
-    MediaEmbeddingStoreConfig,
-    MooncakeEmbeddingReader,
-    parse_bytes,
-)
 from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
+
+if not sys.platform.startswith("linux"):
+    pytest.skip("Mooncake publishes Linux wheels only", allow_module_level=True)
+try:
+    from models.common.multimedia_store.mooncake_store import OBJECT_NOT_FOUND, MooncakeEmbeddingReader
+except ImportError as e:  # a broken env, so it fails rather than skips
+    pytest.fail(f"no Mooncake client ({e}): uv pip install -r models/common/multimedia_store/requirements.txt", False)
 
 ME, OTHER = "10.0.0.1:17800", "10.0.0.2:17800"
 
@@ -43,11 +47,15 @@ class FakeClient:
         self.master_up = True
         self.lookups = 0
         self.registered = {}
+        self.registrable = 1 << 40  # bytes register_buffer accepts in one buffer
 
-    def put(self, key: str, segment: str, data: np.ndarray, status: str = "COMPLETE", replicas: int = 1):
-        self.objects[key] = (segment, data, status, replicas)
+    def put(self, key, segment: str, data: np.ndarray, status: str = "COMPLETE", replicas: int = 1):
+        """Stores under the store key; a bytes media key is written under its lowercase hex, as the encoder does."""
+        self.objects[key.hex() if isinstance(key, bytes) else key] = (segment, data, status, replicas)
 
     def register_buffer(self, ptr, size):
+        if size > self.registrable:
+            return -1
         self.registered[ptr] = size
         return 0
 
@@ -64,10 +72,13 @@ class FakeClient:
             return {}
         return {k: [_replica(seg, data, status)] * n for k, (seg, data, status, n) in self.objects.items() if k in keys}
 
-    def get_into_ranges(self, ptrs, keys, dst_offsets, src_offsets, sizes):
-        self.lookups += 1 + len(keys[0])  # Mooncake looks the keys up again: one batched lookup plus one per key
+    def prepare_get_into_ranges_snapshot(self, keys):
+        self.lookups += 1  # one batched lookup
+        return frozenset(keys)
+
+    def get_into_ranges_from_snapshot(self, snapshot, ptrs, keys, dst_offsets, src_offsets, sizes):
         ((ptr,), (keys,), (dsts,), (srcs,), (lens,)) = (ptrs, keys, dst_offsets, src_offsets, sizes)
-        assert ptr in self.registered
+        assert set(keys) <= snapshot and ptr in self.registered
         out = []
         for key, d_list, s_list, n_list in zip(keys, dsts, srcs, lens):
             if key not in self.objects:
@@ -84,8 +95,8 @@ class FakeClient:
         return 0
 
 
-def _key(i: int) -> str:
-    return f"media-{i}"
+def _key(i: int) -> bytes:
+    return hashlib.sha256(f"media-{i}".encode()).digest()
 
 
 @pytest.fixture
@@ -100,39 +111,24 @@ def setup():
     return client, reader, local, remote
 
 
-def test_key_must_be_ascii(setup):
-    _, reader, _, _ = setup
-    for bad in ("media-\u00e9", b"media-1"):
-        with pytest.raises(ValueError, match="not an ASCII str"):
-            reader.fetch(bad)
+def test_media_keys_are_read_under_their_hex(setup):
+    """By default the caller passes the encoder's raw 32-byte media key, and the reader looks up its lowercase hex, the
+    key the encoder wrote under."""
+    client, reader, local, remote = setup
+    assert reader.key_transform == "hex" and _key(1).hex() in client.objects  # setup's put, as the encoder writes
+    assert bytes(reader.fetch(_key(1))) == local.tobytes() and reader.size(_key(2)) == remote.nbytes
 
 
-@pytest.mark.parametrize(
-    "text, want", [("50G", 50 << 30), ("50GiB", 50 << 30), ("512M", 512 << 20), ("4096", 4096), ("1t", 1 << 40)]
-)
-def test_parse_bytes(text, want):
-    assert parse_bytes(text) == want
-
-
-def test_config_off_without_master():
-    assert MediaEmbeddingStoreConfig.from_env({}) is None
-
-
-def test_config_from_env():
-    env = {
-        "PREFILL_MEDIA_STORE_MASTER": "10.0.0.9:50051",
-        "PREFILL_MEDIA_STORE_SEGMENT": ME,
-        "PREFILL_MEDIA_STORE_BYTES": "50G",
-        "PREFILL_MEDIA_STORE_DEVICE": "rocep201s0f0",
-    }
-    c = MediaEmbeddingStoreConfig.from_env(env)
-    assert (c.master, c.segment, c.segment_bytes, c.device) == ("10.0.0.9:50051", ME, 50 << 30, "rocep201s0f0")
-    assert (c.metadata, c.protocol) == ("http://10.0.0.9:8080/metadata", "rdma")
-
-
-def test_config_needs_segment_and_size():
-    with pytest.raises(ValueError, match="SEGMENT and PREFILL_MEDIA_STORE_BYTES"):
-        MediaEmbeddingStoreConfig.from_env({"PREFILL_MEDIA_STORE_MASTER": "10.0.0.9:50051"})
+def test_untransformed_keys_are_read_as_they_are(setup, expect_error):
+    """With MEDIA_STORE_KEY_TRANSFORM=none a media key is its own store key, which Mooncake needs to be valid UTF-8."""
+    client, _, local, _ = setup
+    reader = MooncakeEmbeddingReader(client, ME, key_transform="none")
+    client.put("media-\u00e9", ME, local)  # non-ASCII text is valid UTF-8, so the batched lookup returns it
+    assert bytes(reader.fetch("media-\u00e9".encode())) == local.tobytes()
+    with expect_error(Missing, "media-\u00e9-absent"):
+        reader.fetch("media-\u00e9-absent".encode())
+    with expect_error(ValueError, "is not valid UTF-8"):
+        reader.fetch(_key(1))  # a raw digest needs the default hex transform
 
 
 def test_local_value_is_read_in_place_with_one_lookup(setup):
@@ -152,7 +148,7 @@ def test_remote_value_is_a_view_into_the_read_buffer(setup):
     view = reader.fetch(_key(2))
     assert bytes(view) == remote.tobytes() and view.readonly
     assert np.frombuffer(view, np.uint8).ctypes.data in client.registered  # no copy out of the read buffer
-    assert client.lookups == 3  # the batched lookup, then get_into_ranges' own two
+    assert client.lookups == 2  # the reader's batched lookup, then the snapshot's
     s = reader.stats.snapshot()
     assert (s["local_hits"], s["remote_hits"], s["bytes_read"]) == (0, 1, remote.nbytes)
 
@@ -173,22 +169,22 @@ def test_batch_mixes_local_and_remote_in_one_lookup(setup):
     assert bytes(got[2]) == remote[-100:].tobytes()
     assert bytes(got[3]) == bytes(got[4]) == b""
     assert bytes(got[5]) == local.tobytes()
-    assert client.lookups == 3  # one batched lookup for all keys, then one remote read of one key
+    assert client.lookups == 2  # one batched lookup for all keys, then the snapshot of the one remote key
     s = reader.stats.snapshot()
     assert (s["local_hits"], s["remote_hits"], s["fetch_calls"]) == (3, 3, 1)
 
 
-def test_one_missing_key_fails_the_batch(setup):
+def test_one_missing_key_fails_the_batch(setup, expect_error):
     _, reader, _, _ = setup
-    with pytest.raises(Missing):
+    with expect_error(Missing, _key(9).hex()):
         reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(9)), FetchRequest(_key(2))])
     s = reader.stats.snapshot()
     assert (s["misses"], s["hits"]) == (1, 0)
 
 
-def test_range_outside_value(setup):
+def test_range_outside_value(setup, expect_error):
     _, reader, local, _ = setup
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "outside the"):
         reader.fetch_batch([FetchRequest(_key(1), local.nbytes - 1, 2)])
 
 
@@ -206,44 +202,57 @@ def test_read_buffer_starts_empty_and_grows_on_demand(setup):
     assert grown >= big.nbytes and list(client.registered.values()) == [grown]  # the old buffer was unregistered
 
 
-def test_missing_key(setup):
+def test_failed_buffer_registration_is_unavailable(setup, expect_error):
+    """A read buffer Mooncake refuses to register (e.g. over `ulimit -l` with RDMA) fails the read, and the next read
+    that fits registers one."""
+    client, reader, local, remote = setup
+    client.registrable = remote.nbytes - 1
+    with expect_error(StoreUnavailable, "registering a"):
+        reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(2))])
+    assert not client.registered and reader.stats.snapshot()["errors"] == 1
+    assert bytes(reader.fetch(_key(1))) == local.tobytes()  # in place: needs no buffer
+    (rows,) = reader.fetch_batch([FetchRequest(_key(2), 0, 4096)])
+    assert bytes(rows) == remote[:4096].tobytes() and list(client.registered.values()) == [4096]
+
+
+def test_missing_key(setup, expect_error):
     _, reader, _, _ = setup
     for read in (reader.fetch, reader.size):
-        with pytest.raises(Missing):
+        with expect_error(Missing, _key(9).hex()):
             read(_key(9))
-    with pytest.raises(KeyError):  # Missing is a KeyError, not a store failure
+    with expect_error(KeyError, _key(9).hex()):  # Missing is a KeyError, not a store failure
         reader.fetch(_key(9))
     s = reader.stats.snapshot()
     assert (s["misses"], s["hits"], s["errors"]) == (2, 0, 0)  # size() is a lookup, not a fetch
 
 
-def test_unfinished_put_reads_as_missing(setup):
+def test_unfinished_put_reads_as_missing(setup, expect_error):
     client, reader, local, _ = setup
     client.put(_key(4), ME, local, status="PROCESSING")
-    with pytest.raises(Missing):
+    with expect_error(Missing, "not a complete memory replica"):
         reader.fetch(_key(4))
 
 
-def test_replicated_value_is_unavailable(setup):
+def test_replicated_value_is_unavailable(setup, expect_error):
     client, reader, local, _ = setup
     client.put(_key(5), ME, local, replicas=2)
-    with pytest.raises(StoreUnavailable, match="2 replicas"):
+    with expect_error(StoreUnavailable, "2 replicas"):
         reader.fetch(_key(5))
 
 
-def test_unreachable_master_is_unavailable(setup):
+def test_unreachable_master_is_unavailable(setup, expect_error):
     client, reader, _, _ = setup
     client.master_up = False
-    with pytest.raises(StoreUnavailable):
+    with expect_error(StoreUnavailable, "unreachable"):
         reader.fetch_batch([FetchRequest(_key(1)), FetchRequest(_key(2))])
     assert reader.stats.snapshot()["errors"] == 1
 
 
-def test_closed_reader_is_unavailable(setup):
+def test_closed_reader_is_unavailable(setup, expect_error):
     _, reader, _, _ = setup
     reader.close()
     for read in (reader.fetch, reader.size):
-        with pytest.raises(StoreUnavailable, match="closed"):
+        with expect_error(StoreUnavailable, "closed"):
             read(_key(1))
 
 
@@ -264,9 +273,9 @@ def test_plain_tuples_and_an_empty_batch(setup):
 
 
 @pytest.mark.parametrize("rc", [-800, -900], ids=["peer_gone", "master_gone"])
-def test_failed_remote_read_is_unavailable(setup, rc):
-    """The codes Mooncake 0.3.13.post1 returns when the host holding the value, or the master, has died."""
+def test_failed_remote_read_is_unavailable(setup, rc, expect_error):
+    """The codes Mooncake returns when the host holding the value, or the master, has died."""
     client, reader, _, _ = setup
-    client.get_into_ranges = lambda *args: [[[rc]]]
-    with pytest.raises(StoreUnavailable, match=f"read {rc} of"):
+    client.get_into_ranges_from_snapshot = lambda *args: [[[rc]]]
+    with expect_error(StoreUnavailable, f"read {rc} of"):
         reader.fetch_batch([FetchRequest(_key(1), 0, 8), FetchRequest(_key(2), 0, 8)])

@@ -6,26 +6,25 @@
 ``MooncakeEmbeddingReader`` is an ``EmbeddingReader`` (reader.py):
 
 - ``fetch_batch(requests)`` reads one byte range from each of several values in one go: one batched lookup at the
-  master for the whole batch, plus one batched transfer for whatever lives on other hosts (inside which Mooncake
-  looks those keys up again). ``fetch(media_key)`` is a batch of one whole value; ``size(media_key)`` returns a
+  master for the whole batch, plus, for whatever lives on other hosts, a second batched lookup and one batched
+  transfer. ``fetch(media_key)`` is a batch of one whole value; ``size(media_key)`` returns a
   value's length.
 - A value in this host's segment comes back in place, read-only. A value in another host's segment is read into this
   reader's registered read buffer, which grows on demand, and comes back as a read-only view into it.
+- Push or pull: with a segment (PREFILL_MEDIA_STORE_BYTES > 0) writers put values on this host; with none (0) this
+  host keeps nothing and reads every value from the host that holds it.
 - A missing key raises ``Missing`` and any other store failure ``StoreUnavailable``; in a batch, the first failing
-  request fails the whole batch. A malformed call (a key that is not ASCII, a range outside the value) raises
-  ``ValueError``.
+  request fails the whole batch. A malformed call (a range outside the value, or with MEDIA_STORE_KEY_TRANSFORM=none a
+  media key that is not valid UTF-8) raises ``ValueError``.
 - ``stats`` counts hits, misses, errors, bytes read, fetch latency and the read buffer's size.
 
-Media keys are ASCII strings, stored as they are. ``open_media_embedding_reader_from_env`` starts the store from the
-``PREFILL_MEDIA_STORE_*`` variables that ``MediaEmbeddingStoreConfig.from_env`` lists.
+Media keys are bytes, stored under their lowercase hex, or with MEDIA_STORE_KEY_TRANSFORM=none, as they are.
+``MooncakeEmbeddingReader.open(config)`` starts the store from a
+``MediaEmbeddingStoreConfig`` (config.py), read from the ``PREFILL_MEDIA_STORE_*`` variables.
 """
-
-from __future__ import annotations
 
 import atexit
 import ctypes
-import os
-import re
 import threading
 import time
 from dataclasses import dataclass
@@ -33,82 +32,26 @@ from typing import Mapping, Optional, Sequence
 
 import numpy as np
 from loguru import logger
+from mooncake.store import MooncakeDistributedStore
 
+from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
 from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
 
 # Mooncake ErrorCode the reader tells apart from other failures (mooncake-store/include/types.h).
 OBJECT_NOT_FOUND = -704
 
-_ENV_PREFIX = "PREFILL_MEDIA_STORE_"
-_DEFAULT_HTTP_METADATA_PORT = 8080  # mooncake_master's --http_metadata_server_port default
-_REQUIREMENTS = "models/common/multimedia_store/requirements.txt"
 
-
-def _check_key(media_key: str) -> str:
-    # Mooncake's batched lookup (batch_get_replica_desc) returns its results keyed by str, decoding each stored key
-    # as UTF-8: a key that isn't text makes it raise UnicodeDecodeError, and a bytes key would never match a str
-    # result and so read as Missing. An ASCII str is stored and returned as the same bytes.
-    if not isinstance(media_key, str) or not media_key.isascii():
-        raise ValueError(f"media key {media_key!r} is not an ASCII str")
-    return media_key
-
-
-def parse_bytes(text: str) -> int:
-    """'50G', '50GiB', '512M', '1048576' -> bytes. Suffixes are binary (G = GiB)."""
-    m = re.fullmatch(r"\s*(\d+)\s*([KMGT]?)(?:i?B)?\s*", text, re.IGNORECASE)
-    if not m:
-        raise ValueError(f"not a byte size: {text!r} (examples: 50G, 512M, 1048576)")
-    return int(m.group(1)) << {"": 0, "K": 10, "M": 20, "G": 30, "T": 40}[m.group(2).upper()]
-
-
-@dataclass(frozen=True)
-class MediaEmbeddingStoreConfig:
-    master: str
-    """Mooncake master address, host:port."""
-    segment: str
-    """This host's segment name, 'host:port', which writers pass as preferred_segment. A bare 'host' gets a port
-    Mooncake picks, so the full name is known only once the store starts (MooncakeEmbeddingReader.segment)."""
-    segment_bytes: int
-    """Host memory this host gives the store."""
-    metadata: str
-    """Mooncake metadata server."""
-    protocol: str = "rdma"
-    device: str = ""
-    """RDMA device(s), e.g. 'rocep201s0f0'; empty lets Mooncake pick."""
-
-    @classmethod
-    def from_env(cls, environ: Mapping[str, str] = os.environ) -> Optional["MediaEmbeddingStoreConfig"]:
-        """The store's config from PREFILL_MEDIA_STORE_*, or None when PREFILL_MEDIA_STORE_MASTER is unset.
-
-        PREFILL_MEDIA_STORE_MASTER    master address, host:port (turns the store on)
-        PREFILL_MEDIA_STORE_SEGMENT   this host's address, host:port or host (required)
-        PREFILL_MEDIA_STORE_BYTES     segment size, e.g. 50G (required)
-        PREFILL_MEDIA_STORE_METADATA  metadata server (default http://<master host>:8080/metadata)
-        PREFILL_MEDIA_STORE_PROTOCOL  rdma (default) or tcp
-        PREFILL_MEDIA_STORE_DEVICE    RDMA device(s) (default: Mooncake's choice)
-        """
-
-        def get(name: str, default: Optional[str] = None) -> Optional[str]:
-            value = environ.get(_ENV_PREFIX + name, "").strip()
-            return value or default
-
-        master = get("MASTER")
-        if master is None:
-            return None
-        if ":" not in master:
-            raise ValueError(f"{_ENV_PREFIX}MASTER={master!r}: want host:port")
-        missing = [_ENV_PREFIX + n for n in ("SEGMENT", "BYTES") if get(n) is None]
-        if missing:
-            raise ValueError(f"{_ENV_PREFIX}MASTER is set, so {' and '.join(missing)} must be set too")
-        master_host = master.rsplit(":", 1)[0]
-        return cls(
-            master=master,
-            segment=get("SEGMENT"),
-            segment_bytes=parse_bytes(get("BYTES")),
-            metadata=get("METADATA", f"http://{master_host}:{_DEFAULT_HTTP_METADATA_PORT}/metadata"),
-            protocol=get("PROTOCOL", "rdma"),
-            device=get("DEVICE", ""),
-        )
+def _store_key(media_key: bytes, transform: str) -> str:
+    """The Mooncake key for media_key under transform, the config's key_transform. 'hex' gives the key's lowercase hex.
+    'none' gives the key itself, as text: Mooncake's batched lookup (batch_get_replica_desc) returns its results keyed
+    by str, decoding each key as UTF-8, so the key must be valid UTF-8, and that text is the same bytes. Raises
+    ValueError for a key that is not."""
+    if transform == "hex":
+        return media_key.hex()
+    try:
+        return media_key.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(f"media key {media_key!r} is not valid UTF-8, as an untransformed key must be") from None
 
 
 class MediaEmbeddingReaderStats:
@@ -172,27 +115,24 @@ class MooncakeEmbeddingReader:
     """EmbeddingReader (reader.py) over this host's Mooncake store.
 
     ``open(config)`` starts the client and mounts the segment; tests may pass an already set up client to the
-    constructor. Not tied to a model: values are opaque bytes."""
+    constructor. Not tied to a model: values are opaque bytes.
 
-    def __init__(self, client, segment: str):
+    Not thread-safe: use a reader from one thread at a time. Reads share the read buffer, and close() must not run
+    while a read is in progress."""
+
+    def __init__(self, client, segment: str, key_transform: str = "hex"):
         self._client = client
         self.segment = segment
         """This host's segment name, the preferred_segment writers use."""
+        self.key_transform = key_transform
+        """How media keys become store keys (MediaEmbeddingStoreConfig.key_transform)."""
         self.stats = MediaEmbeddingReaderStats()
-        self._read_lock = threading.Lock()
         self._read_buffer = np.empty(0, dtype=np.uint8)  # registered on the first read from another host
         self._closed = False
 
     @classmethod
     def open(cls, config: MediaEmbeddingStoreConfig) -> "MooncakeEmbeddingReader":
         """Start this host's store: join the master and mount config.segment_bytes of host memory as its segment."""
-        try:
-            from mooncake.store import MooncakeDistributedStore
-        except ImportError as e:
-            raise StoreUnavailable(
-                f"{_ENV_PREFIX}MASTER is set but this Python env has no Mooncake client: "
-                f"uv pip install -r {_REQUIREMENTS}"
-            ) from e
         client = MooncakeDistributedStore()
         t0 = time.perf_counter()
         # local_buffer_size 0: reads from other hosts land in this reader's own registered read buffer.
@@ -209,37 +149,43 @@ class MooncakeEmbeddingReader:
             client.close()
             raise StoreUnavailable(f"Mooncake master {config.master} is unreachable")
         segment = client.get_hostname()
-        reader = cls(client, segment)
+        reader = cls(client, segment, config.key_transform)
         atexit.register(reader.close)
+        mode = "push" if config.segment_bytes else "pull"
         logger.info(
-            f"[media_embedding_reader] segment={segment} master={config.master} bytes={config.segment_bytes} "
-            f"protocol={config.protocol} ready in {time.perf_counter() - t0:.1f} s"
+            f"[media_embedding_reader] {mode} mode: segment={segment} master={config.master} "
+            f"bytes={config.segment_bytes} protocol={config.protocol} key_transform={config.key_transform} "
+            f"ready in {time.perf_counter() - t0:.1f} s"
         )
         return reader
 
     def close(self) -> None:
+        """Leaves the store. Views of values in this host's segment are invalid afterwards: Mooncake unmounts the
+        segment they point into."""
         if self._closed:
             return
         self._closed = True
         logger.info(f"[media_embedding_reader] closing segment {self.segment}: {self.stats.snapshot()}")
         self._client.close()
 
-    def fetch(self, media_key: str) -> memoryview:
+    def fetch(self, media_key: bytes) -> memoryview:
         """The whole value stored under media_key, as fetch_batch returns it. Raises Missing or StoreUnavailable."""
         return self.fetch_batch([FetchRequest(media_key)])[0]
 
-    def size(self, media_key: str) -> int:
+    def size(self, media_key: bytes) -> int:
         """Bytes stored under media_key. Raises Missing or StoreUnavailable."""
-        return self._locate([_check_key(media_key)])[media_key].size
+        key = _store_key(media_key, self.key_transform)
+        return self._locate([key])[key].size
 
     def fetch_batch(self, requests: Sequence[FetchRequest]) -> list[memoryview]:
         """The bytes of each (media_key, offset, length) request, in order. Raises Missing or StoreUnavailable for the
         first request that fails, failing the whole batch, and ValueError for a range outside its value.
 
         A value in this host's segment comes back in place. The lookup gives this client a lease on the object: for
-        the master's --default_kv_lease_ttl (10 s by default) after the call, the master refuses to remove or evict
-        it. After the lease it stays only while the writer's soft pin holds it (with allow_evict_soft_pinned_objects
-        =false, the master does not evict it) and nothing removes it, so copy what you need before the lease ends.
+        the master's --default_kv_lease_ttl after the call (Mooncake's default is 10 s; deployments set it shorter),
+        the master refuses to remove or evict it. After the lease it stays only while the writer's soft pin holds it
+        (with allow_evict_soft_pinned_objects=false, the master does not evict it) and nothing removes it, so copy
+        what you need before the lease ends.
 
         A value in another host's segment comes back as a view into this reader's read buffer, valid until the next
         fetch on this reader overwrites it. Callers copy the rows out (to device staging) before fetching again."""
@@ -247,19 +193,20 @@ class MooncakeEmbeddingReader:
             return []
         t0 = time.perf_counter()
         requests = [FetchRequest(*r) for r in requests]
+        keys = [_store_key(r.media_key, self.key_transform) for r in requests]
         try:
-            located = self._locate(list(dict.fromkeys(_check_key(r.media_key) for r in requests)))
+            located = self._locate(list(dict.fromkeys(keys)))
             results: list[Optional[memoryview]] = [None] * len(requests)
-            remote = []  # (request index, key, offset, length)
-            for i, r in enumerate(requests):
-                value = located[r.media_key]
+            remote = []  # (request index, store key, offset, length)
+            for i, (r, key) in enumerate(zip(requests, keys)):
+                value = located[key]
                 length = value.size - r.offset if r.length == -1 else r.length
                 if r.offset < 0 or length < 0 or r.offset + length > value.size:
-                    raise ValueError(f"range ({r.offset}, {r.length}) outside the {value.size} B value {r.media_key!r}")
+                    raise ValueError(f"range ({r.offset}, {r.length}) outside the {value.size} B value {key!r}")
                 if value.local_address is not None:
                     results[i] = _view_at(value.local_address + r.offset, length)
                 else:
-                    remote.append((i, r.media_key, r.offset, length))
+                    remote.append((i, key, r.offset, length))
             if remote:
                 self._read_remote(remote, results)
         except (Missing, StoreUnavailable) as e:
@@ -299,7 +246,7 @@ class MooncakeEmbeddingReader:
 
     def _grow_read_buffer(self, nbytes: int) -> None:
         """Make the read buffer at least nbytes, doubling it; it never shrinks, so a long run registers a new buffer
-        only a handful of times. Called with _read_lock held."""
+        only a handful of times."""
         if nbytes <= self._read_buffer.nbytes:
             return
         size = max(nbytes, 2 * self._read_buffer.nbytes)
@@ -317,7 +264,10 @@ class MooncakeEmbeddingReader:
 
     def _read_remote(self, remote: list[tuple[int, str, int, int]], results: list) -> None:
         """Reads the remote requests' ranges in one batched transfer into the read buffer and stores a view of each in
-        results. Mooncake rejects empty ranges, so those are not read and come back empty."""
+        results. Mooncake rejects empty ranges, so those are not read and come back empty.
+
+        The transfer reads from a snapshot of the keys' locations, one batched lookup at the master; a plain
+        get_into_ranges would look each key up again on top of that."""
         by_key: dict[str, list[tuple[int, int, int, int]]] = {}  # key -> [(request index, dst, offset, length)]
         dst = 0
         for i, key, offset, length in remote:
@@ -328,30 +278,22 @@ class MooncakeEmbeddingReader:
             dst += length
         if not by_key:
             return
-        with self._read_lock:
-            self._grow_read_buffer(dst)
-            keys = list(by_key)
-            got = self._client.get_into_ranges(
-                [self._read_buffer.ctypes.data],
-                [keys],
-                [[[d for _, d, _, _ in by_key[k]] for k in keys]],
-                [[[o for _, _, o, _ in by_key[k]] for k in keys]],
-                [[[n for _, _, _, n in by_key[k]] for k in keys]],
-            )[0]
-            if len(got) != len(keys) or any(len(rcs) != len(by_key[k]) for k, rcs in zip(keys, got)):
-                raise StoreUnavailable(f"Mooncake returned an incomplete result for {len(keys)} values")
-            for key, rcs in zip(keys, got):
-                for rc, (i, d, offset, length) in zip(rcs, by_key[key]):
-                    if rc == OBJECT_NOT_FOUND:
-                        raise Missing(key)
-                    if rc != length:
-                        raise StoreUnavailable(f"{key}: read {rc} of {length} B at {offset}")
-                    results[i] = memoryview(self._read_buffer[d : d + length]).toreadonly()
-
-
-def open_media_embedding_reader_from_env(
-    environ: Mapping[str, str] = os.environ,
-) -> Optional[MooncakeEmbeddingReader]:
-    """This host's media embedding reader when PREFILL_MEDIA_STORE_MASTER is set, else None."""
-    config = MediaEmbeddingStoreConfig.from_env(environ)
-    return MooncakeEmbeddingReader.open(config) if config is not None else None
+        self._grow_read_buffer(dst)
+        keys = list(by_key)
+        snapshot = self._client.prepare_get_into_ranges_snapshot(keys)
+        got = self._client.get_into_ranges_from_snapshot(
+            snapshot,
+            [self._read_buffer.ctypes.data],
+            [keys],
+            [[[d for _, d, _, _ in by_key[k]] for k in keys]],
+            [[[o for _, _, o, _ in by_key[k]] for k in keys]],
+            [[[n for _, _, _, n in by_key[k]] for k in keys]],
+        )[0]
+        # One code per range, as requested: a key Mooncake can't read gets its error in every range.
+        for key, rcs in zip(keys, got, strict=True):
+            for rc, (i, d, offset, length) in zip(rcs, by_key[key], strict=True):
+                if rc == OBJECT_NOT_FOUND:
+                    raise Missing(key)
+                if rc != length:
+                    raise StoreUnavailable(f"{key}: read {rc} of {length} B at {offset}")
+                results[i] = memoryview(self._read_buffer[d : d + length]).toreadonly()

@@ -8,6 +8,8 @@ allow_evict_soft_pinned_objects=false):
 
 - ``store``: this runner's store (MooncakeEmbeddingReader.open, segment 127.0.0.1:<port>);
 - ``other``: another prefill host's store (segment 127.0.0.2:<port>, a second loopback address);
+- ``puller``: a host in pull mode, with no store (segment 127.0.0.4:<port>);
+- ``plain_reader``: a pull-mode host whose media keys are their own store keys (MEDIA_STORE_KEY_TRANSFORM=none);
 - ``writer``: the encoder service stand-in, with no segment, writing with put_from, a soft pin and preferred_segment.
 
 Runs on Linux, after ``uv pip install -r models/common/multimedia_store/requirements.txt`` (the CI job does this);
@@ -16,6 +18,8 @@ env that cannot start the store shows up. Skipped on other platforms. Kept out o
 broad CI job does not install Mooncake.
 """
 
+import dataclasses
+import hashlib
 import os
 import re
 import shutil
@@ -28,13 +32,16 @@ import urllib.request
 import numpy as np
 import pytest
 
-from models.common.multimedia_store.mooncake_store import MediaEmbeddingStoreConfig, MooncakeEmbeddingReader
+from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
 from models.common.multimedia_store.reader import FetchRequest, Missing
 
 if not sys.platform.startswith("linux"):
     pytest.skip("Mooncake and the 127.0.0.2 loopback address are Linux only", allow_module_level=True)
 try:
+    import mooncake
     import mooncake.store as mooncake_store
+
+    from models.common.multimedia_store.mooncake_store import MooncakeEmbeddingReader
 except ImportError as e:  # a broken env, so it fails rather than skips
     pytest.fail(f"no Mooncake client ({e}): uv pip install -r models/common/multimedia_store/requirements.txt", False)
 
@@ -49,13 +56,16 @@ def _free_port(host: str = "127.0.0.1") -> int:
 
 
 def _master_binary() -> str:
-    found = shutil.which("mooncake_master")
-    if found:
-        return found
-    bundled = os.path.join(os.path.dirname(mooncake_store.__file__), "mooncake_master")
-    if not os.access(bundled, os.X_OK):
-        pytest.skip("mooncake_master not found")
-    return bundled
+    """mooncake_master from PATH, the venv's bin, or the wheel's package directory."""
+    candidates = [
+        shutil.which("mooncake_master"),
+        os.path.join(os.path.dirname(sys.executable), "mooncake_master"),
+        os.path.join(os.path.dirname(mooncake.__file__), "mooncake_master"),
+    ]
+    for path in candidates:
+        if path and os.access(path, os.X_OK):
+            return path
+    pytest.fail(f"mooncake_master not found in {candidates}")
 
 
 def _wait_until_healthy(master: subprocess.Popen, metrics_port: int, log) -> None:
@@ -106,13 +116,17 @@ def cluster(tmp_path_factory):
 
     store = MooncakeEmbeddingReader.open(config("127.0.0.1", 64 << 20))
     other = MooncakeEmbeddingReader.open(config("127.0.0.2", 64 << 20))
+    puller = MooncakeEmbeddingReader.open(config("127.0.0.4", 0))  # pull mode: no store on this host
+    plain_reader = MooncakeEmbeddingReader.open(dataclasses.replace(config("127.0.0.5", 0), key_transform="none"))
     w = config("127.0.0.3", 0)
     writer = mooncake_store.MooncakeDistributedStore()
     assert writer.setup(w.segment, w.metadata, 0, 16 << 20, w.protocol, "", w.master) == 0
     try:
-        yield SimpleCluster(store, other, writer, metrics)
+        yield SimpleCluster(store, other, writer, metrics, puller, plain_reader)
     finally:
         writer.close()
+        plain_reader.close()
+        puller.close()
         other.close()
         store.close()
         master.terminate()
@@ -121,16 +135,21 @@ def cluster(tmp_path_factory):
 
 
 class SimpleCluster:
-    def __init__(self, store, other, writer, metrics_port):
-        self.store, self.other, self.writer = store, other, writer
+    def __init__(self, store, other, writer, metrics_port, puller, plain_reader):
+        self.store, self.other, self.writer, self.puller, self.plain_reader = store, other, writer, puller, plain_reader
         self.metrics_port = metrics_port
         self._buffers = []
         self._n = 0
 
-    def put(self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True) -> tuple[str, np.ndarray]:
-        """The encoder service's write: put_from a registered buffer into segment, soft-pinned. Returns (key, value)."""
+    def put(
+        self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True, store_key: str = ""
+    ) -> tuple[bytes, np.ndarray]:
+        """The encoder service's write: put_from a registered buffer into segment, soft-pinned. Returns (media key,
+        value): by default a fresh 32-byte media key, stored under its lowercase hex as the encoder does; with
+        store_key, stored under that text, whose UTF-8 bytes are the media key."""
         self._n += 1
-        media_key = f"test-media-key-{self._n}"
+        media_key = store_key.encode() if store_key else hashlib.sha256(f"test-media-key-{self._n}".encode()).digest()
+        store_key = store_key or media_key.hex()
         value = np.random.default_rng(self._n).integers(0, 256, nbytes, dtype=np.uint8)
         assert self.writer.register_buffer(value.ctypes.data, nbytes) == 0
         self._buffers.append(value)
@@ -139,17 +158,18 @@ class SimpleCluster:
         if pin:
             config.soft_pin_action = mooncake_store.SoftPinAction.ENABLE
             config.soft_pin_ttl_ms = 60_000
-        assert self.writer.put_from(media_key, value.ctypes.data, nbytes, config) == 0  # the media key itself
+        assert self.writer.put_from(store_key, value.ctypes.data, nbytes, config) == 0
         return media_key, value
 
-    def _descriptor(self, media_key: str):
-        (replica,) = self.writer.get_replica_desc(media_key)
+    def _descriptor(self, media_key: bytes):
+        (replica,) = self.writer.get_replica_desc(media_key.hex())
         return replica.get_memory_descriptor().buffer_descriptor
 
-    def placed_on(self, media_key: str) -> str:
+    def placed_on(self, media_key: bytes) -> str:
+        """Where the value under media_key (stored under its hex) lives."""
         return self._descriptor(media_key).transport_endpoint
 
-    def address(self, media_key: str) -> int:
+    def address(self, media_key: bytes) -> int:
         return self._descriptor(media_key).buffer_address
 
     def master_lookups(self) -> int:
@@ -201,20 +221,20 @@ def test_range_read(cluster, where):
     assert [bytes(v) for v in got] == [w.tobytes() for w in want]
 
 
-def test_missing_key(cluster):
-    absent = "no-such-media-key"
+def test_missing_key(cluster, expect_error):
+    absent = hashlib.sha256(b"no-such-media-key").digest()
     before = cluster.store.stats.snapshot()
-    with pytest.raises(Missing):
+    with expect_error(Missing, absent.hex()):
         cluster.store.fetch(absent)
-    with pytest.raises(Missing):
+    with expect_error(Missing, absent.hex()):
         cluster.store.fetch_batch([FetchRequest(absent, 0, 64)])
-    with pytest.raises(Missing):
+    with expect_error(Missing, absent.hex()):
         cluster.store.size(absent)
     after = cluster.store.stats.snapshot()
     assert after["misses"] == before["misses"] + 2 and after["errors"] == before["errors"]
 
 
-def test_batch_of_several_requests(cluster):
+def test_batch_of_several_requests(cluster, expect_error):
     """A forward's batch: ranges of values on this host and another in one lookup at the master and one batched read
     from the other host. One missing key fails the whole batch."""
     here = [cluster.put(cluster.store.segment) for _ in range(3)]
@@ -222,16 +242,17 @@ def test_batch_of_several_requests(cluster):
     requests = [FetchRequest(k, 64 + 1000 * i, 4096) for i, (k, _) in enumerate(here + there)]
     lookups = cluster.master_lookups()
     got = cluster.store.fetch_batch(requests)
-    # Ours: one batched lookup for all five keys. Mooncake's get_into_ranges then looks the other host's keys up
-    # again: one batched lookup plus one per key.
-    assert cluster.master_lookups() - lookups == 1 + 1 + len(there)
+    # One batched lookup for all five keys, then one for the snapshot the other host's keys are read from; no lookup
+    # per key.
+    assert cluster.master_lookups() - lookups == 1 + 1
     for i, ((_, value), result) in enumerate(zip(here + there, got)):
         assert bytes(result) == value[64 + 1000 * i : 64 + 1000 * i + 4096].tobytes()
     lookups = cluster.master_lookups()
     cluster.store.fetch_batch([FetchRequest(k) for k, _ in here])  # all on this host: in place
     assert cluster.master_lookups() - lookups == 1
-    with pytest.raises(Missing):
-        cluster.store.fetch_batch(requests + [FetchRequest("absent-media-key")])
+    absent = hashlib.sha256(b"absent-media-key").digest()
+    with expect_error(Missing, absent.hex()):
+        cluster.store.fetch_batch(requests + [FetchRequest(absent)])
 
 
 def test_many_values_from_both_stores(cluster):
@@ -253,6 +274,26 @@ def test_value_read_in_place_is_leased(cluster):
     unread, _ = cluster.put(cluster.store.segment, 1 << 20, pin=False)
     read, value = cluster.put(cluster.store.segment, 1 << 20, pin=False)
     view = cluster.store.fetch(read)
-    assert cluster.writer.remove(read) != 0
+    assert cluster.writer.remove(read.hex()) != 0
     assert bytes(view) == value.tobytes()
-    assert cluster.writer.remove(unread) == 0  # nothing looked it up, so nothing holds it
+    assert cluster.writer.remove(unread.hex()) == 0  # nothing looked it up, so nothing holds it
+
+
+def test_pull_mode_reads_everything_from_the_host_that_holds_it(cluster):
+    """A host with no store (PREFILL_MEDIA_STORE_BYTES=0) reads each value, and its ranges, from the host holding it,
+    here standing in for the encoder's store."""
+    media_key, value = cluster.put(cluster.other.segment)
+    before = cluster.puller.stats.snapshot()
+    assert bytes(cluster.puller.fetch(media_key)) == value.tobytes()
+    (rows,) = cluster.puller.fetch_batch([FetchRequest(media_key, 64, 4096)])
+    assert bytes(rows) == value[64 : 64 + 4096].tobytes()
+    after = cluster.puller.stats.snapshot()
+    assert after["remote_hits"] == before["remote_hits"] + 2 and after["local_hits"] == before["local_hits"]
+
+
+def test_untransformed_non_ascii_media_key(cluster):
+    """With MEDIA_STORE_KEY_TRANSFORM=none a media key is its own store key, and only has to be valid UTF-8, which
+    Mooncake's batched lookup decodes."""
+    media_key, value = cluster.put(cluster.other.segment, store_key="test-media-é-中")
+    assert media_key == "test-media-é-中".encode()
+    assert bytes(cluster.plain_reader.fetch(media_key)) == value.tobytes()

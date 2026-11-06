@@ -17,14 +17,14 @@ class StoreUnavailable(RuntimeError):
 class FetchRequest(NamedTuple):
     """Bytes [offset, offset + length) of the value under media_key; length -1 runs to the end of the value."""
 
-    media_key: str
-    """ASCII; the module that generates media keys guarantees it."""
+    media_key: bytes
+    """Any bytes, e.g. the 32-byte SHA-256 the encoder service returns."""
     offset: int = 0
     length: int = -1
 
 
 class EmbeddingReader(Protocol):
-    def fetch(self, media_key: str) -> memoryview:
+    def fetch(self, media_key: bytes) -> memoryview:
         """The stored value under media_key, in the model's format. Raises Missing or StoreUnavailable."""
 
     def fetch_batch(self, requests: Sequence[FetchRequest]) -> list[memoryview]:
