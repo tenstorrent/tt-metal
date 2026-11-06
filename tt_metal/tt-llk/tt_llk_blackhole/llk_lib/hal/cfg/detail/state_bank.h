@@ -19,8 +19,7 @@ extern std::uint32_t cfg_state_id;
 namespace hal::cfg::detail
 {
 
-// This duplicates ckernel::get_cfg_pointer.
-// TODO(njokovic) issue #58443: Remove ckernel:: implementation when HAL is applied to all kernels.
+// TODO: #58443 Remove the duplicate ckernel::get_cfg_pointer.
 
 /**
  * @brief Return the state-CFG MMIO bank selected by the software state tracker.

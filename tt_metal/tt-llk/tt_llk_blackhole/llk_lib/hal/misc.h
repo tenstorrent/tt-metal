@@ -24,7 +24,7 @@ namespace hal::misc
  * linger_time is a four-bit mask OR'ed into a shift register while a conflicting RISC MMIO
  * access stalls a Tensix instruction; it shifts right once per cycle after that access completes, delaying the instruction until it reaches zero.
  *
- * @note No LLK call site exists; the hardware defaults are in use everywhere today.
+ * @note Discouraged: use only when strictly required, and read the ISA documentation first.
  */
 struct ResourceDeclaration
 {
@@ -79,7 +79,8 @@ struct FlushTdma
  *
  * @tparam Scope: Component selection; @ref FlushScope::All drains the entire engine.
  * @note Blocks every thread's ThCon issue while draining; the ISA recommends a targeted
- *       STALLWAIT instead — see @ref hal::sync::wait. No LLK call site exists.
+ *       STALLWAIT instead — see @ref hal::sync::wait.
+ * @note Discouraged: use only when strictly required, and read the ISA documentation first.
  */
 template <FlushScope Scope = FlushScope::All>
 constexpr std::uint32_t flush_tdma_operation()
@@ -98,8 +99,8 @@ inline __attribute__((always_inline)) void flush_tdma()
 /**
  * @brief Encode a TDMA soft reset (RSTDMA).
  *
- * @note The instruction metadata carries "fixme; remove instr?" and no ISA documentation
- *       exists; no LLK call site exists. Wrapped for encoding completeness only.
+ * @note Discouraged: use only when strictly required. No ISA documentation exists and the
+ *       instruction metadata carries "fixme; remove instr?"; confirm the behavior before use.
  */
 constexpr std::uint32_t reset_tdma_operation()
 {

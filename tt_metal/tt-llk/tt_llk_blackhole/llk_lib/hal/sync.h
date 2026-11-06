@@ -57,8 +57,7 @@ enum class Semaphore : std::uint8_t
 enum class StallTarget : std::uint16_t
 {
     HardwareDefault = 0,
-    Compute         = 1u << 0,
-    Tdma            = Compute,
+    Tdma            = 1u << 0,
     Sync            = 1u << 1,
     Pack            = 1u << 2,
     Unpack          = 1u << 3,
@@ -225,8 +224,7 @@ constexpr std::uint32_t semaphore_mask()
     return SemaphoreSet {First, Others...}.mask();
 }
 
-// These duplicate ckernel::semaphore_read, semaphore_post, and semaphore_get.
-// TODO issue #58443: Remove ckernel:: implementations when HAL is applied to all kernels.
+// TODO: #58443 Remove the duplicate ckernel::semaphore_read, semaphore_post, and semaphore_get.
 
 /** @brief Read a semaphore value from the shared PC-buffer MMIO window. */
 inline __attribute__((always_inline)) std::uint8_t semaphore_read_mmio(const std::uint8_t index)
