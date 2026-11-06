@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <functional>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include "conv3d_program_factory.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "kernels/conv3d_gather_tuning.hpp"
@@ -859,6 +862,35 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         } else if (inner_gather_burst >= conv3d_gather_tuning::kGatherInnerBurstCutoff) {
             gather_trids = conv3d_gather_tuning::kGatherTridDepthLow;
         }
+    }
+
+    // SCRATCH (conv3d ring experiments, never merge): env hooks to force the ring depth and report the gate.
+    if (const char* force = std::getenv("TT_CONV3D_FORCE_GATHER_TRIDS")) {
+        gather_trids = static_cast<uint32_t>(std::atoi(force));
+    }
+    if (std::getenv("TT_CONV3D_PRINT_GATHER") || std::getenv("TT_CONV3D_PROBE_ONLY")) {
+        const std::string line = fmt::format(
+            "CONV3D_GATHER bytes_per_tile={} inner_burst={} gather_trids={} coalesced={} staging={} "
+            "dram_interleaved={} cin_blocks={} cin_block_bytes={} row_bytes={} w_shard={} dram_banks={} M_t={} K_t={} "
+            "N_t={}",
+            bytes_per_tile,
+            inner_gather_burst,
+            gather_trids,
+            static_cast<int>(enable_coalesced_shard_reads),
+            static_cast<int>(enable_dram_read_staging),
+            static_cast<int>(geometry.input_is_dram_interleaved),
+            geometry.C_in_num_blocks,
+            C_in_block_bytes,
+            in_row_size_bytes,
+            W_shard,
+            device_num_dram_banks,
+            matmul_M_t,
+            matmul_K_t,
+            matmul_N_t);
+        if (std::getenv("TT_CONV3D_PROBE_ONLY")) {
+            TT_THROW("{}", line);
+        }
+        fprintf(stderr, "%s\n", line.c_str());
     }
 
     log_debug(
