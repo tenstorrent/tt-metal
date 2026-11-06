@@ -18,8 +18,8 @@ inline const std::uint32_t get_operand_dst_format(const std::uint32_t operand_id
     return unpack_dst_format[operand_id];
 }
 
-// Per-operand unpack-to-dest route under UnpackToDestEn: UNP_DEST does not widen or narrow (see
-// is_quasar_unpack_reconfig_pair_supported), so the operand width must match the DEST width, else SrcA / SrcB.
+// UNP_DEST does not widen or narrow (see is_quasar_unpack_reconfig_pair_supported), so the operand width must match the
+// DEST width, else SrcA / SrcB.
 inline bool operand_fits_unpack_to_dest(const std::uint32_t operand_id) {
     const auto fmt = static_cast<DataFormat>(unpack_dst_format[operand_id]);
     const bool is_32bit = (fmt == DataFormat::Float32) || (fmt == DataFormat::Int32);

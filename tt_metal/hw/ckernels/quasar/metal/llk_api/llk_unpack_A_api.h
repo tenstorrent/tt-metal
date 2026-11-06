@@ -48,7 +48,7 @@ inline constexpr ckernel::trisc::BfdResource unpack_a_bfd_resource() {
  * Overload matching Blackhole/Wormhole API signature `(transpose_of_faces, within_face_16x16_transpose, operand)`.
  *
  * When `binary_reuse_dest != NONE`, uses the eltwise-binary dest-reuse init path (UNP_A, default tile/face counts).
- * Otherwise uses the unary / unary-broadcast path; `unpack_to_dest` selects the sync-free UNP_DEST init (the section
+ * Otherwise uses the unary / unary-broadcast path. unpack_to_dest selects the sync-free UNP_DEST init (the section
  * handshake lives in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done), else UNP_A / UNP_B.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path

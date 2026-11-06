@@ -150,15 +150,14 @@ inline void llk_unpack_wait_for_dest_available() {
  * @note Math blocks in tile_regs_acquire until this post, so it sees nothing of the section before the unpack thread
  *       commits it. SrcA / SrcB unpacks issued in the same section are therefore consumed only after this call and
  *       must fit the src banks. A section that mixes unpack-to-dest copies with a src-path run is outside
- *       this contract and stalls both threads! SrcB dummy dvalids are the exception: @ref
- *       llk_unpack_set_srcb_dummy_valid defers them, and this call issues them after the UNPACK_MATH post.
+ *       this contract and stalls both thread with the exception of SrcB dummy dvalids @ref
+ * llk_unpack_set_srcb_dummy_valid defers them, and this call issues them after the UNPACK_MATH post.
  */
 template <bool EN_32BIT_DEST>
 inline void llk_unpack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-        // Math runs the section from here on, so the deferred dummies no longer wait on a SrcB bank it holds.
         for (std::uint32_t i = 0; i < ckernel::trisc::unpack_to_dest_deferred_srcb_dummies; i++) {
             _llk_unpack_set_srcB_dummy_valid_();
         }
@@ -192,8 +191,6 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
-    // Unp0 serves UNP_A and UNP_DEST, so its output format follows the operand on either route; an operand routed to
-    // DEST (per-operand routing under UnpackToDestEn) is allowed the Dest-only conversions, e.g. Float32 to Float32.
     _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, EN_32BIT_DEST>(
         unpack_src_format[srca_operand_id],
         unpack_dst_format[srca_operand_id],
@@ -264,7 +261,7 @@ inline void llk_unpack_reconfig_data_format(
 /**
  * @brief Dummy SrcB dvalid for an op that reads DEST through SrcB (transpose-dest, broadcast from DEST).
  *
- * Under UnpackToDestEn it is deferred to llk_unpack_dest_section_done, past the UNPACK_MATH post (#58115 deadlock).
+ * Under UnpackToDestEn only counted, llk_unpack_dest_section_done issues it after the UNPACK_MATH post.
  */
 inline void llk_unpack_set_srcb_dummy_valid() {
     if constexpr (UnpackToDestEn) {

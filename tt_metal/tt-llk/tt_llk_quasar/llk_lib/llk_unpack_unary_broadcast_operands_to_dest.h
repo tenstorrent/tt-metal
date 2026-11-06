@@ -16,11 +16,10 @@ using namespace ckernel::trisc;
  * @brief MOP configuration for unpacking the broadcast source rows of one tile directly into DEST (UNP_DEST).
  *
  * Only the rows the math broadcast reads are unpacked: SCALAR = face 0 row 0, ROW = row 0 of faces 0 and 1,
- * COL = faces 0 and 2. One run places one tile. No dvalid is set: the section handshake or dest-dvalid takes its
- * place, as for @ref _llk_unpack_unary_operand_to_dest_mop_config_.
+ * COL = faces 0 and 2. One run places one tile.
  *
  * @tparam BROADCAST_TYPE: Broadcast type, values = <COL/ROW/SCALAR>
- * @param buf_desc_id: Buffer descriptor of the L1 operand, unpack TRISC partition [0,16) (see llk_bfd_alloc.h)
+ * @param buf_desc_id: Buffer descriptor of the L1 operand, unpack TRISC partition [0,16)
  */
 template <BroadcastType BROADCAST_TYPE>
 inline void _llk_unpack_unary_broadcast_operands_to_dest_mop_config_(const std::uint32_t buf_desc_id)
@@ -61,9 +60,8 @@ inline void _llk_unpack_unary_broadcast_operands_to_dest_mop_config_(const std::
 /**
  * @brief Initializes the unpacker to unpack the broadcast source of a single operand directly into DEST.
  *
- * Unpack-to-dest counterpart of @ref _llk_unpack_unary_broadcast_operands_init_ (SrcB). Sync-free: the tile calls
- * are bracketed by the section handshake or by dest-dvalid exactly as for @ref _llk_unpack_unary_operand_to_dest_init_
- * (see its notes for the per-thread sequence, including the once-per-program @ref _llk_unpack_dest_init_).
+ * Unpack-to-dest counterpart of @ref _llk_unpack_unary_broadcast_operands_init_ (SrcB). Tile calls are
+ * bracketed by the section handshake or by dest-dvalid exactly as for @ref _llk_unpack_unary_operand_to_dest_init_.
  *
  * @tparam BROADCAST_TYPE: Broadcast type, values = <COL/ROW/SCALAR>
  * @param buf_desc_id: Buffer descriptor of the L1 operand, unpack TRISC partition [0,16) (see llk_bfd_alloc.h)
@@ -95,8 +93,8 @@ inline void _llk_unpack_unary_broadcast_operands_to_dest_init_(const std::uint32
  */
 inline void _llk_unpack_unary_broadcast_operands_to_dest_tile_(const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx)
 {
-    // UNP_DEST is driven off the UNP_A bank's counters; the DEST bank is part of the tile index
-    // (see _llk_unpack_dest_bank_tile_offset_), the face / row offsets are immediates of the MOP instructions.
+    // UNP_DEST is driven off the UNP_A bank's counters. The DEST bank is part of the tile index
+    // the face / row offsets are immediates of the MOP instructions.
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _llk_unpack_dest_bank_tile_offset_() + dst_tile_idx);
     ckernel_template::run_bank0_sw_cntl(instrn_buffer);

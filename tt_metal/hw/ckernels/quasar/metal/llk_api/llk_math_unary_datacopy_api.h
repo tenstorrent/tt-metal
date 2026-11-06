@@ -23,7 +23,7 @@
  * @tparam type sets which src register to copy from, values = <A2D, B2D>
  * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
  * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math init
- * @tparam unpack_to_dest Set true to enable the UNP_DEST routing decision (unary and unary-broadcast paths)
+ * @tparam unpack_to_dest Set true to enable the UNP_DEST routing decision
  * @param operand Logical dataflow buffer id for the input operand
  */
 template <
@@ -59,7 +59,6 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
             "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
 
         if constexpr (unpack_to_dest) {
-            // DEST -> SrcB -> DEST requires mov-ops ALU state (Tf32 sources, Float32 dest override on 32-bit).
             _configure_mov_ops_explicit_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
         } else {
             _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);

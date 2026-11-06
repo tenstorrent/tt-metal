@@ -67,14 +67,6 @@
 //
 // All stimulus values are integers, exactly representable in Float16_b and Float32 through every
 // conversion on the path, so the comparison is bit-exact.
-//
-// Quasar runs the same sequence through the Metal 2.0 spec (run_unpack_to_dest_bcast_dst_offset_quasar) with the same
-// operand formats: the Float16_b copy operand is unpacked to SrcA and MOVA2D widens it into DST[1], the Float32
-// broadcast operand is placed at DST[0] by the unpacker and math broadcasts it in place. The route is per operand
-// under the kernel-wide UnpackToDestEn (operand_fits_unpack_to_dest): UNP_DEST does not widen, so a 16-bit operand
-// through it in a 32-bit DEST lands wrong (observed on the emulator before the per-operand route: the bank-1 copy in
-// the low plane of bank-0 tile 1, bank-1 DST[1] zero). The srcA reconfigs between the two ops switch Unp0's output
-// format between Float16_b (SrcA) and Float32 (DEST), so they also cover the to-dest reconfig check.
 
 namespace tt::tt_metal {
 
@@ -306,8 +298,8 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
     return check_result(device_tiled, stim.golden_tiled);
 }
 
-// Quasar: Metal 2.0 spec, Float16_b copy operand on SrcA and Float32 broadcast operand marked UnpackToDest (kernel-wide
-// UnpackToDestEn, per-operand route, 32-bit DEST).
+// Quasar Metal 2.0 spec
+// Float16_b copy operand on SrcA and Float32 broadcast operand marked UnpackToDest
 bool run_unpack_to_dest_bcast_dst_offset_quasar(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, BcastDim dim) {
     auto& cq = mesh_device->mesh_command_queue();

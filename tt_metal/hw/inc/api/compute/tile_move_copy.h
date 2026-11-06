@@ -69,8 +69,8 @@ ALWI void copy_init(
     MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // Per-operand route: an operand width must match DEST datum width to go through UNP_DEST, otherwise
-    // through SrcA (MOVA2D widens datum).
+    // An operand width must match DEST datum width to go through UNP_DEST, otherwise through SrcA (MOVA2D widens
+    // datum).
     if (UnpackToDestEn && operand_fits_unpack_to_dest(cbid)) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             transpose, transpose_within_16x16_face, cbid)));
@@ -147,7 +147,6 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
         dst_tile_index, in_cb_id)));
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // Per-operand route, see copy_init.
     if (UnpackToDestEn && operand_fits_unpack_to_dest(in_cb_id)) {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             in_cb_id, in_tile_index, dst_tile_index)));
@@ -210,7 +209,6 @@ ALWI void copy_block(
           UnpackToDestEn>(start_dst_tile_index, ntiles, in_cb_id)));
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // Per-operand route, see copy_init.
     if (UnpackToDestEn && operand_fits_unpack_to_dest(in_cb_id)) {
         UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));

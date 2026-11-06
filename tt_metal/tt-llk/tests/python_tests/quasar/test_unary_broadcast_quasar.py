@@ -96,8 +96,8 @@ def get_valid_dest_acc_unary_broadcast(formats):
 
 
 def get_valid_unpack_to_dest_unary_broadcast(formats, dest_acc):
-    """Valid unpack-to-dest routes: a 32-bit input always unpacks to Dest; a 16-bit input
-    unpacks to Dest only into a 16-bit Dest (UNP_DEST does not widen), next to its SrcB route.
+    """Valid unpack-to-dest routes: 32-bit input always unpacks to Dest and 16-bit inputs
+    unpack to Dest only into a 16-bit Dest (UNP_DEST does not widen), next to its SrcB route.
     """
     if formats.input_format.is_32_bit():
         return [True]
