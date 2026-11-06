@@ -24,8 +24,9 @@ class SRAMArenaAllocationTest : public test_helpers::MockMeshDeviceFixture<tt::A
 TEST_F(SRAMArenaAllocationTest, CPU_LockstepRejectsSizeThatOverflows32Bits) {
     // Oversized lockstep reservations must fail even when their 32-bit total wraps to zero.
     distributed::MeshDevice& fixture_device = *mesh_device_;
-    ASSERT_EQ(fixture_device.allocator()->get_num_banks(BufferType::L1), 72u);
     constexpr uint32_t per_bank_size = 512 * 1024 * 1024;
+    const uint32_t num_banks = fixture_device.allocator()->get_num_banks(BufferType::L1);
+    ASSERT_EQ(static_cast<uint32_t>(uint64_t{per_bank_size} * num_banks), 0u);
     EXPECT_THAT(
         [&] { SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{.per_bank_size = per_bank_size}); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Out of Memory")));
