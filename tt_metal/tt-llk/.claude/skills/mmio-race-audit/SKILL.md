@@ -38,8 +38,12 @@ it's not a race candidate there (confirm the AutoTTSync model per the arch note)
 write to the same register not ordered before it: `TENSIX_WRITE_SAME_FN` (earlier in
 the store's own function), `TENSIX_WRITE_AFTER_RELEASE` (issued after the `SEMGET`
 the store's poll waits for), `TENSIX_WRITE_NO_RELEASE` (in a function with no later
-release — init/reconfig/uninit, or the store has no poll). Each writer is marked
-`(held: after <stall>)` when a stall precedes it; held writers are the priority.
+release — init/reconfig/uninit, or the store has no poll), `UNRESOLVED_TARGET` (the
+store's index is a local or a parameter, e.g. `cfg[upk0_reg]`: find its writers by
+hand). Each writer is marked `(held: after <stall>)` when a stall precedes it; held
+writers are the priority. The evidence also lists the call sites of the store's and
+each writer's function (two caller levels), so `--changed` keeps a finding when only a
+caller changes; for a change further up the call chain, run the check unscoped.
 Then **widen for what the tool cannot see** (its `blind_spots`: interprocedural
 ordering; Quasar AutoTTSync — incl. its RQ-consumer-exception over-clear (a CFG/GPR write
 consumed by MOP_CFG/REPLAY/RESOURCEDECL is not RQ-tracked; the non-CFG/GPR replay-unit
@@ -70,7 +74,7 @@ The same asymmetry bites the other way. A Tensix config/GPR write (`WRCFG`, `REG
 1. Take the tool's `tensix-risc-order` list (or, manually: every RISC cfg/GPR store and read, and every same-thread Tensix write to the same word — resolve words through `cfg_defines.h`; `FIELD_ADDR32 + i` stores span several words).
 2. Per pair, find what orders it (above). `AFTER_RELEASE` / `SAME_FN` with a held writer is a real race unless the values match.
 3. `NO_RELEASE` pairs meet **across API calls**: map the writer and the store to compute APIs and search compute kernels (ttnn/, models/, tt_metal/, tests/) for the writer's API followed by the store's API (e.g. `reconfig_data_format_srca` / an `*_uninit` / `*_init`, then `compute_kernel_hw_startup` or another API reaching `_llk_unpack_hw_configure_`) with **no unpack call between** (an unpack call's release would order it). Check the writer can actually be held there, and whether the values differ; a later Tensix rewrite of the register before its next consumer masks it.
-4. Quasar: the per-thread TTSync holds a RISC config store behind older queued config-touching Tensix instructions, so shape 2 cannot race there.
+4. Quasar: the per-thread TTSync holds a RISC config store until older queued config-writing Tensix instructions **issue**; it does not wait for them to land, and `RESOURCEDECL`, `MOP_CFG`, `REPLAY(load=1)` and the instructions loaded after it are not tracked. That closes the held-behind-a-stall window, but confirm the pair against Confluence `1340276980` before clearing it, and treat a writer issued during a replay load as not covered.
 
 ## UNSAFE primitives (RISC MMIO — hunt for these)
 - `cfg[...] = ...` via `get_cfg_pointer()` / `get_cfg16_pointer()`
@@ -109,7 +113,7 @@ The same asymmetry bites the other way. A Tensix config/GPR write (`WRCFG`, `REG
 ## Verdict
 - **Quasar + relies on AutoTTSync** → SAFE **only after confirming the AutoTTSync ordering guarantee for this write against Confluence `1340276980` at audit** (see the architecture note); flag the `EN_SUBDIVIDED` cross-unpacker corner.
 - **WH/BH ordered (Tensix-instr write / sync_regfile_write / leading TRISC_CFG stall / idle handshake)** → SAFE.
-- **WH/BH unordered with a reachable consumer** → RACE (real).
+- **WH/BH unordered with a reachable consumer** → RACE (real). Fix = convert the MMIO write to a Tensix-instruction write (`REG2FLOP`/`WRCFG`), or add `sync_regfile_write`, or a `STALLWAIT(..., TRISC_CFG)` before the consumer.
 - **WH/BH shape 2: a same-register Tensix write that can still be held when the RISC store lands, on a reachable call sequence, with a different value** → RACE (real). Reachable only through an API order no current kernel uses → LATENT. Fix = make the store wait for the older write: convert the RISC store to an in-stream Tensix write (`WRCFG`/`REG2FLOP`/`cfg_reg_rmw_tensix`), so it queues behind the older one; or move the covering release after the writer (as in the known instance), so the poll waits for it; or, as a last resort, a `tensix_sync()` after the writer and before the store. (`sync_regfile_write` and a `STALLWAIT(..., TRISC_CFG)` order a RISC store before a later Tensix *consumer* — shape 1 — and do not drain an older Tensix write.)
 - **Window exists but value-invariant or unit-idle in all current callers** → UNCERTAIN/latent hardening — say it is not a live bug; let the maintainer decide.
 

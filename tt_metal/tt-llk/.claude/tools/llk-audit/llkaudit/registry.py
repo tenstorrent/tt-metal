@@ -792,10 +792,59 @@ def resolve_word(text: str, addr32: dict):
 # still be queued (e.g. behind a STALLWAIT) when the RISC store lands, and then
 # overwrites it.
 RISC_POLL_CALLS = ("semaphore_read",)
+# A poll wrapper that returns while `arg0 - 1` releases may still be pending:
+# wait_for_next_context(n) spins on `count >= n`, so with n = 2 the SEMGET of the
+# most recent call may not have executed. Only n = 1 waits for every release.
+PARTIAL_POLL_CALLS = ("wait_for_next_context",)
+
+
+def poll_is_full(call_fact: dict) -> bool:
+    """True if a poll call waits until every release issued so far has executed."""
+    if call_fact.get("name", "") not in PARTIAL_POLL_CALLS:
+        return True
+    return (call_fact.get("arg0", "") or "").strip() == "1"
+
+
+# Config words that hold one unpacker context's state only. With two contexts that
+# alternate per call, a wait_for_next_context(2) poll proves the release of the
+# call that last used THIS context, so it orders writes to these words (and only
+# these). The unprefixed Base_address is context 0's L1 base.
+_CNTX_RE = re.compile(r"_cntx(\d+)_")
+_BASE0_RE = re.compile(r"_REG\d+_Base_address_ADDR32$")
+
+
+def _context_of_field(name: str):
+    m = _CNTX_RE.search(name)
+    if m:
+        return int(m.group(1))
+    return 0 if _BASE0_RE.search(name) else None
+
+
+def is_per_context_word(tok: str, addr32: dict) -> bool:
+    """True if the config word `tok` names holds fields of a single context only.
+    With cfg_defines, every field on the word must belong to the same context
+    (Dest_cntx0/1_address share one word, so that word is not per-context).
+    Without it, only the full-word Base addresses count."""
+    w, field = resolve_word(tok, addr32) if addr32 else (None, None)
+    if w is None:
+        name = re.sub(r"[+\-]\d+$", "", tok)
+        return bool(re.search(r"_Base(_cntx\d+)?_address_ADDR32$", name))
+    ctxs = {
+        _context_of_field(n)
+        for n, v in addr32.items()
+        if n.endswith("_ADDR32") and v == w
+    }
+    return len(ctxs) == 1 and None not in ctxs
+
+
 # Only the decrementing op releases a "wait until the count drops" poll — the
 # context-release idiom. An `== 0` poll released by a SEMPOST is a blind spot.
 RELEASE_SEMAPHORE_OPS = ("get",)
-_GPR_TOKEN_RE = re.compile(r"p_gpr\w*::\s*[A-Za-z_]\w*")
+# Keeps a literal GPR offset (`p_gpr_pack::TILE_HEADER + 1` is the next GPR).
+_GPR_TOKEN_RE = re.compile(
+    r"p_gpr\w*::\s*[A-Za-z_]\w*(?:\s*[+\-]\s*(?:0[xX][0-9a-fA-F]+|\d+)\b)?"
+)
+_GPR_OFFSET_RE = re.compile(r"(p_gpr\w*::[A-Za-z_]\w*)([+\-])(0[xX][0-9a-fA-F]+|\d+)$")
 # Keeps a literal word offset (`FIELD_ADDR32 + 2`), so the token resolves to the
 # word actually written; a runtime offset (`+ i`) stays outside the token.
 _ADDR32_TOKEN_RE = re.compile(
@@ -820,6 +869,19 @@ def _norm_tok(tok: str) -> str:
     return f"{m.group(1)}{m.group(2)}{off}"
 
 
+def _norm_gpr(tok: str) -> str:
+    """`p_gpr::X + 0x1` -> `p_gpr::X+1`; `p_gpr::X + 0` -> `p_gpr::X`."""
+    tok = re.sub(r"\s+", "", tok)
+    m = _GPR_OFFSET_RE.match(tok)
+    if not m:
+        return tok
+    try:
+        off = int(m.group(3), 0)
+    except ValueError:
+        return tok
+    return m.group(1) if off == 0 else f"{m.group(1)}{m.group(2)}{off}"
+
+
 def ordered_write_target(fact: dict):
     """(namespace, token) of the register an in-stream Tensix write targets:
     namespace "cfg" (Config), "thread" (ThreadConfig, written by SETC16) or "gpr";
@@ -837,7 +899,7 @@ def ordered_write_target(fact: dict):
         return ("cfg", a.group(1) + "_ADDR32") if a else (None, None)
     if is_gpr_source_write(name):
         toks = _GPR_TOKEN_RE.findall(text)
-        return ("gpr", re.sub(r"\s+", "", toks[-1])) if toks else (None, None)
+        return ("gpr", _norm_gpr(toks[-1])) if toks else (None, None)
     m = _ADDR32_TOKEN_RE.search(text)
     if not m:
         return None, None
@@ -850,11 +912,7 @@ def risc_store_target(pw: dict):
     kind, _ = classify_write(pw)
     if kind in GPR_WRITE_KINDS:
         toks = _GPR_TOKEN_RE.findall(idx)
-        return (
-            ("gpr", re.sub(r"\s+", "", toks[-1]), False)
-            if toks
-            else (None, None, False)
-        )
+        return ("gpr", _norm_gpr(toks[-1]), False) if toks else (None, None, False)
     if kind in CFG_WRITE_KINDS:
         m = _ADDR32_TOKEN_RE.search(idx)
         return (
@@ -863,6 +921,26 @@ def risc_store_target(pw: dict):
             else (None, None, False)
         )
     return None, None, False
+
+
+# Direct config/GPR array stores (`cfg[...]`, `regfile[...]`) whose index names no
+# register: a local holding the word (`cfg[upk0_reg]`) or a wrapper parameter.
+# Generic MMIO pointers (MOP template, reg_write) are not config stores.
+_DIRECT_STORE_NS = {
+    "cfg32": "cfg",
+    "cfg16": "cfg",
+    "cfg_ptr": "cfg",
+    "regfile_gpr": "gpr",
+}
+
+
+def unresolved_store_ns(pw: dict):
+    """The namespace of a direct cfg/GPR store whose target does not resolve to a
+    named register, else None."""
+    ns = _DIRECT_STORE_NS.get(classify_write(pw)[0])
+    if ns is None or risc_store_target(pw)[0]:
+        return None
+    return ns
 
 
 def same_register(
