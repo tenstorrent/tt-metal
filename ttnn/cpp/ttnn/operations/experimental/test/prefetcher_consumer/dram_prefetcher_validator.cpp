@@ -363,7 +363,7 @@ void test_dram_prefetcher_validator(
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 
-void test_tensor_prefetcher_pipe_validator(
+tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_workload(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
@@ -470,6 +470,20 @@ void test_tensor_prefetcher_pipe_validator(
 
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    return workload;
+}
+
+void test_tensor_prefetcher_pipe_validator(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& source_tensor,
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool streaming,
+    const std::vector<uint32_t>& rotation) {
+    tt::tt_metal::distributed::MeshWorkload workload = make_tensor_prefetcher_pipe_validator_workload(
+        mesh_device, source_tensor, num_layers, print_stride, prefetcher_pipes, bank_to_receivers, streaming, rotation);
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
     tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 }
