@@ -16,9 +16,6 @@ struct affine_coefficients {
     }
 };
 
-template <typename Config>
-inline void init_signed_abs_affine() {}
-
 template <typename Config, int Iterations = 8>
 inline void calculate_signed_abs_affine() {
     static_assert(Iterations > 0 && Iterations % 2 == 0);

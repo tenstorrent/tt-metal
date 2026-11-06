@@ -6,7 +6,6 @@
 namespace ckernel::sfpu {
 struct TanhshrinkBf16Config {
     static constexpr uint32_t kDegree = 8u;
-    // Fit: minimax degree-8 polynomial on [0, 3], 1 segment, max pure (continuous) ULP 0.781.
     static constexpr uint32_t kCoefficientBits[] = {
         0x00000000u,
         0x00000000u,
@@ -39,12 +38,11 @@ inline bool bf16_dest_tanhshrink() {
     return false;
 #endif
 }
+// Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
+// record from replay_buf_offset = 16).
 template <int ITERATIONS = 32>
-inline void calculate_tanhshrink_bf16() {
+__attribute__((noinline)) inline void calculate_tanhshrink_bf16() {
     ckernel::sfpu::bf16::tanhshrink::calculate_signed_abs_affine<ckernel::sfpu::TanhshrinkBf16Config, ITERATIONS>();
-}
-inline void init_tanhshrink_bf16() {
-    ckernel::sfpu::bf16::tanhshrink::init_signed_abs_affine<ckernel::sfpu::TanhshrinkBf16Config>();
 }
 
 }  // namespace ckernel::sfpu

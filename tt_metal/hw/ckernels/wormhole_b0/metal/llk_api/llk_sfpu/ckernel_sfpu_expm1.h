@@ -8,7 +8,7 @@
 
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 
 /*
  * The expm1(x) code is derived from code by Norbert Juffa.
