@@ -24,13 +24,17 @@ FORCE_INLINE uint32_t core_index(uint32_t grid_x) {
 FORCE_INLINE void core_span(
     uint32_t Nt, uint32_t ncores, uint32_t grid_x, uint32_t unit, uint32_t& first, uint32_t& n) {
     uint32_t c = core_index(grid_x);
-#ifdef RX_SPAN_NS
-    // the weight stream's span order for ops on ncores receivers (stream.py span_ns: info words 4..)
-    constexpr uint32_t span_ns[] = RX_SPAN_NS;
-    for (uint32_t k = 0; k < sizeof(span_ns) / sizeof(span_ns[0]); ++k) {
-        if (span_ns[k] == ncores) {
-            c = reinterpret_cast<volatile uint32_t*>(RX_INFO)[4 + k];
-            break;
+#ifdef RX_SPAN_KEYS
+    // the weight stream's sender-balanced split for ops on ncores receivers over Nt / unit units (stream.py
+    // span_keys: info words 4 .., first unit << 16 | units)
+    constexpr uint32_t span_keys[] = RX_SPAN_KEYS;
+    const uint32_t key = (ncores << 16) | (Nt / unit);
+    for (uint32_t k = 0; k < sizeof(span_keys) / sizeof(span_keys[0]); ++k) {
+        if (span_keys[k] == key) {
+            const uint32_t v = reinterpret_cast<volatile uint32_t*>(RX_INFO)[4 + k];
+            first = unit * (v >> 16);
+            n = unit * (v & 0xffff);
+            return;
         }
     }
 #endif

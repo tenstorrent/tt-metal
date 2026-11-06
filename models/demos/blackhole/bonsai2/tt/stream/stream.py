@@ -74,7 +74,7 @@ def receiver_count(device):
 
 
 class Stream:
-    def __init__(self, device, slot=SLOT, ring_slots=RING_SLOTS, loads=None, span_ns=()):
+    def __init__(self, device, slot=SLOT, ring_slots=RING_SLOTS, loads=None, span_keys=()):
         """loads: slots per receiver index for the whole step (Plan's work), to balance the senders' totals."""
         self.device, self.slot, self.S = device, slot, ring_slots
         grid = device.compute_with_storage_grid_size()
@@ -184,19 +184,21 @@ class Stream:
             sv = device.worker_core_from_logical_core(self.senders[b])
             for r, c in enumerate(g):
                 where[(c.x, c.y)] = (sv.x, sv.y, r)
-        # span orders (core_span.hpp RX_SPAN): for an op on the first n receivers, the order in which they take its
-        # output tiles; the ones that take one more come first, spread over the senders (each sender's r-th receiver
-        # in turn) so every sender's share of each linear balances
-        self.span_ns = list(span_ns)[:12]
+        # span splits (core_span.hpp RX_SPAN_KEYS): for an op on the first n receivers over U output units, each core's
+        # (first unit, units), so every sender's share of each linear is U / NS (+ 1): a sender's DRAM bank load is its
+        # receivers' share, and the n receivers spread unevenly over the senders (107 of 112: 5 senders with 6 active
+        # receivers, a 7 / 6 bank imbalance with equal per-core splits)
+        self.span_keys, self.span_split_of = [], {}
         g_of = {}
         for b, g in enumerate(self.groups):
-            for r, c in enumerate(g):
-                g_of[(c.x, c.y)] = (r, b)
-        self.span_pos = {}  # n -> {receiver index: position}
-        for n in self.span_ns:
-            cores = self.rx_order[:n]
-            ordered = sorted(cores, key=lambda c: g_of[(c.x, c.y)])
-            self.span_pos[n] = {self.rx_index[(c.x, c.y)]: p for p, c in enumerate(ordered)}
+            for c in g:
+                g_of[self.rx_index[(c.x, c.y)]] = b
+        max_u = int(os.environ.get("STREAM_BALANCE_MAX_U", "4096"))  # (the LM head: its per-core CBs fill L1)
+        for n, U in list(span_keys):
+            split = self._balanced_split(n, U, g_of) if U <= max_u else None
+            if split is not None and len(self.span_keys) < 12:
+                self.span_keys.append((n, U))
+                self.span_split_of[(n, U)] = split
         self.info = sharded(shard_order, 16)
         # each core writes its own record (not via the shard order of a host tensor)
         rt = ttnn.RuntimeArgs()
@@ -204,7 +206,10 @@ class Stream:
             k = (c.x, c.y)
             sx, sy, r = where.get(k, (0, 0, 0))
             i = self.rx_index.get(k, 0xFFFF)
-            spans = [self.span_pos[n].get(i, 0xFFFF) for n in self.span_ns]
+            spans = []
+            for key in self.span_keys:
+                f, u = self.span_split_of[key].get(i, (0, 0))
+                spans.append((f << 16) | u)
             rt[c.x][c.y] = [self.info.buffer_address(), i, sx, sy, r] + spans
         ttnn.generic_op(
             [self.info, self.info],
@@ -214,7 +219,7 @@ class Stream:
                         kernel_source=KERNELS + "rx_init.cpp",
                         core_ranges=self.receiver_crs,
                         compile_time_args=[],
-                        defines=[("NARGS", str(4 + len(self.span_ns)))],
+                        defines=[("NARGS", str(4 + len(self.span_keys)))],
                         runtime_args=rt,
                         config=ttnn.ReaderConfigDescriptor(),
                     )
@@ -268,13 +273,37 @@ class Stream:
             ("RX_RING_SLOTS", str(self.S)),
             ("RX_SLOT", str(self.slot)),
         ]
-        if self.span_ns:
-            d.append(("RX_SPAN_NS", "{" + ",".join(str(n) for n in self.span_ns) + "}"))
+        if self.span_keys:
+            d.append(("RX_SPAN_KEYS", "{" + ",".join(str((n << 16) | U) for n, U in self.span_keys) + "}"))
         return d
 
-    def span_order(self, n):
-        """{receiver index: span position} for an op on the first n receivers (None: in receiver order)."""
-        return self.span_pos.get(n)
+    def _balanced_split(self, n, U, g_of):
+        """{receiver index: (first unit, units)} for an op on the first n receivers over U units, every sender's
+        active receivers taking U / NS (+ 1) between them; None if some receiver would take none."""
+        active = [[] for _ in self.groups]
+        for i in range(n):
+            active[g_of[i]].append(i)
+        busy = [b for b in range(len(self.groups)) if active[b]]
+        base, extra = divmod(U, len(busy))
+        count = {}
+        for k, b in enumerate(busy):
+            q = base + (1 if k < extra else 0)
+            if q < len(active[b]):
+                return None
+            qb, qe = divmod(q, len(active[b]))
+            for r, i in enumerate(active[b]):
+                count[i] = qb + (1 if r < qe else 0)
+        split, f = {}, 0
+        for i in range(n):  # contiguous in receiver order
+            split[i] = (f, count[i])
+            f += count[i]
+        assert f == U, (f, U)
+        return split
+
+    def span_split(self, n, U):
+        """{receiver index: (first unit, units)} for an op on the first n receivers over U units (None: the even
+        split, cores 0 .. taking one more)."""
+        return self.span_split_of.get((n, U))
 
     # ------------------------------------------------------------------ sender side
     def launch(self, plan, start=0):

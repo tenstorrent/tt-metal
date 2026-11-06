@@ -53,22 +53,38 @@ class StreamDecode:
             order += [(m.gateup, layer._bonsai_ff_nrot.B), (m.down, m.rot_hidden.B)]
         self.head = model.ternary_lm_head.lin
         order.append((self.head, self.final_nrot.B))
-        span_ns = set()
+        span_keys = set()
         for lin, B in order:
-            lin.cores, lin.spread, lin.streamed = nl - B, True, True
-            span_ns.add(lin._spans()[0])
+            lin.cores, lin.spread, lin.streamed, lin.split = nl - B, True, True, None
+            n = lin._spans()[0]
+            span_keys.add((n, (lin.N // 32) // (2 if getattr(lin, "glu", False) else 1)))
         # (before the stream's sub-devices load: a copy op on the whole grid) the decode q / k norm + RoPE consts in
         # L1 while the stream runs (a DRAM read waits behind the senders'); DRAM again for prefill (its CBs need that L1)
         self.qkr = []
         for layer in model.layers:
             for op in (getattr(layer.attention.ternary, "pre_qkr", None) or {}).values():
                 self.qkr.append((op, op.consts, ttnn.to_memory_config(op.consts, ttnn.L1_MEMORY_CONFIG)))
-        # compact sender groups; each linear's tiles split in a sender-balanced order (Stream span_ns)
-        self.st = st = Stream(device, span_ns=sorted(span_ns, reverse=True))
+        # compact sender groups; each linear's tiles split so every sender takes an equal share (Stream span_keys)
+        self.st = st = Stream(device, span_keys=sorted(span_keys, reverse=True))
         core_ranges.set_layout(st.rx_order, st.defines())
-        pages = [lin.stream_pages(device, st.span_order(lin._spans()[0])) for lin, _ in order]
+        for lin, _ in order:
+            n = lin._spans()[0]
+            lin.split = st.span_split(n, (lin.N // 32) // (2 if getattr(lin, "glu", False) else 1))
+        pages = [lin.stream_pages(device) for lin, _ in order]
         self.plan = Plan(st)
         self.takes = [self.plan.add(p) for p in pages]
+        if os.environ.get("STREAM_PLAN_DEBUG") == "1":
+            gi = {st.rx_index[(c.x, c.y)]: b for b, g in enumerate(st.groups) for c in g}
+            seen = set()
+            for (lin, B), t in zip(order, self.takes):
+                per = [0] * len(st.groups)
+                for i, ns in t.items():
+                    per[gi[i]] += ns
+                key = (lin.K, lin.N, B)
+                if key in seen:
+                    continue
+                seen.add(key)
+                print("PLAN", key, "n", lin._spans()[0], "slots/sender", per, flush=True)
         self.plan.build()
         if os.environ.get("STREAM_BENCH") == "1":
             self.bench()
