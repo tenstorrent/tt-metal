@@ -374,6 +374,7 @@ class VADHead(nn.Module):
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         dtype = mlvl_feats[0].dtype
         object_query_embeds = self.query_embedding.weight.to(dtype)
+        # The coders are built from their config dicts on the first call only.
         if isinstance(self.bbox_coder, dict):
             self.bbox_coder = CustomNMSFreeCoder(
                 self.bbox_coder["pc_range"],
