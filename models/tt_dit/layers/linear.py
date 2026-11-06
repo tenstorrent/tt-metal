@@ -209,6 +209,7 @@ class ColParallelLinear(Module):
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+        self._ag_num_buffers_per_channel = 24 if is_blackhole() else 48
         self.chunks = chunks
         # Per-chunk output widths in ELEMENTS (global, pre-TP-shard); None => uniform N/chunks.
         self.chunk_sizes = chunk_sizes
@@ -463,7 +464,7 @@ class ColParallelLinear(Module):
                 ),
                 force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                num_buffers_per_channel=self._ag_num_buffers_per_channel,
                 chunks=self.chunks if self.chunks is not None else 1,
                 # Op's N is per-device, so pass per-device widths (each global width is % TP == 0).
                 chunk_sizes=(
