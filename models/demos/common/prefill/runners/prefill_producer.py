@@ -109,7 +109,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 def _load_env_config(check_budget: bool = True) -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
-    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES, MEDIA_MAX_REFS, MEDIA
+    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, H2D_METADATA_SIZE_BYTES, MEDIA_MAX_REFS, MEDIA
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
@@ -123,7 +123,7 @@ def _load_env_config(check_budget: bool = True) -> None:
     # Must match the runner's. PREFILL_PRODUCER_MEDIA="start:num_tokens,..." places synthetic images at those prompt
     # positions of every request; the runner reads them from the metadata as the engine would send them.
     MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
-    CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
+    H2D_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
     MEDIA = [tuple(int(x) for x in m.split(":")) for m in os.environ.get("PREFILL_PRODUCER_MEDIA", "").split(",") if m]
     assert not MEDIA or MEDIA_MAX_REFS, "PREFILL_PRODUCER_MEDIA needs PREFILL_MEDIA_MAX_REFS > 0"
     assert all(n > 0 for _, n in MEDIA), f"PREFILL_PRODUCER_MEDIA={MEDIA}: an image needs at least one token"
@@ -145,7 +145,7 @@ _load_env_config(check_budget=False)
 
 def _media_refs(chunks) -> list:
     return [
-        MediaRef(k, start, n, stub_media_key(n, i))
+        MediaRef(k, start, start + n, stub_media_key(n, i))
         for k, c in enumerate(chunks)
         if not c.is_empty
         for i, (start, n) in enumerate(MEDIA)
@@ -1877,7 +1877,7 @@ def main() -> None:
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         rows, mtp_rows, sentinel = _shutdown_payload()
-        assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
+        assert len(sentinel) == H2D_METADATA_SIZE_BYTES
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
         _push(service, payload_bytes, rows, mtp_rows, sentinel)
         service.barrier()
