@@ -103,7 +103,37 @@ def load_ep_experts(source, layer: int, num_experts: int, mesh, cache_dir: str, 
             gu_slots.append(ttnn.to_device(ttnn.from_host_shards(gus, mesh.shape), mesh, memory_config=gu_cfg))
             dn_slots.append(ttnn.to_device(ttnn.from_host_shards(dns, mesh.shape), mesh, memory_config=dn_cfg))
         return EpList(gu_slots, num_experts), EpList(dn_slots, num_experts)
-    assert not group, "GLM53_TP_XSL_GROUP: host sources only (the tile-cache path keeps whole experts)"
+    if group:  # the tile cache + GLM53_TP_XSL_GROUP (2026-11-06): byte-exact slices of the expert files, as Stage 7a's
+        # load_xsl_experts cuts them (tile columns of the PERMUTED gate_up / tile rows of down, tp = group), no host
+        # packing: slot i on chip r = slice r % group of expert e_loc (r // group) + i, the host path's layout
+        from models.autoports.zai_org_glm_5_3_flash.tt.fused_decoder import _xsl_host_tensor, _xsl_slices_bytes
+
+        cs = list(range(group))
+        gu_cfg = dn_cfg = None
+        gu_slots, dn_slots = [], []
+        for i in range(e_loc):
+            gus, dns = [], []
+            for g in range(ngroups):  # ranks r = g * group + c in row-major order
+                e = e_loc * g + i
+                ge = source._entry(layer, f"mlp.experts.{e}.gate_up_proj")
+                de = source._entry(layer, f"mlp.experts.{e}.down_proj")
+                assert ge["dtype"] == "bfloat4_b" and de["dtype"] == "bfloat4_b", (ge["dtype"], de["dtype"])
+                src = os.path.join(source.cache_dir, ge["path"])
+                dst = os.path.join(cache_dir, f"L{layer:02d}", f"{e:03d}.gate_up_proj.{ge['sha256'][:16]}.tensorbin")
+                if not os.path.exists(dst):  # the permuted copy is kept (the 32-chip replica reads it every run)
+                    _permuted_gate_up_file(src, dst, ge["shape"], 576)
+                gshape = (ge["shape"][0], ge["shape"][1] // group)
+                dshape = (de["shape"][0] // group, de["shape"][1])
+                if gu_cfg is None:
+                    gu_cfg, dn_cfg = _nd_dram(gshape[0], 64), _nd_dram(dshape[0], 64)
+                gb = _xsl_slices_bytes(dst, ge["shape"], group, cs, "gate_up")
+                db = _xsl_slices_bytes(os.path.join(source.cache_dir, de["path"]), de["shape"], group, cs, "down")
+                for c in cs:
+                    gus.append(_xsl_host_tensor(gb[c], gshape, f"L{layer}e{e}g{c}"))
+                    dns.append(_xsl_host_tensor(db[c], dshape, f"L{layer}e{e}d{c}"))
+            gu_slots.append(ttnn.to_device(ttnn.from_host_shards(gus, mesh.shape), mesh, memory_config=gu_cfg))
+            dn_slots.append(ttnn.to_device(ttnn.from_host_shards(dns, mesh.shape), mesh, memory_config=dn_cfg))
+        return EpList(gu_slots, num_experts), EpList(dn_slots, num_experts)
     gu_cfg = dn_cfg = None
     gu_slots, dn_slots = [], []
     for i in range(e_loc):
@@ -161,8 +191,17 @@ def build_moe_ep(mesh, cfg, source, layer: int, ocfg, routed: bool = True):
         gate_up, down = [None] * cfg.n_routed_experts, [None] * cfg.n_routed_experts
     moe = FusedMoE(mesh, router, gate_up, down, shared, intermediate=cfg.moe_intermediate_size, hidden=cfg.hidden_size,
                    limit=cfg.swiglu_limit, scaling=cfg.routed_scaling_factor, cfg=ocfg)  # fmt: skip
-    if routed:
+    if routed and not xsl_group(int(mesh.get_num_devices())):
         _check_expert_weights(source, layer, moe.gate_up, moe.down)  # shape / dtype per expert id (its slot's spec)
+    elif routed and hasattr(source, "_entry"):  # the group layout's slots hold 1 / group slices (checked here)
+        g = xsl_group(int(mesh.get_num_devices()))
+        for e in range(cfg.n_routed_experts):
+            ge = source._entry(layer, f"mlp.experts.{e}.gate_up_proj")
+            de = source._entry(layer, f"mlp.experts.{e}.down_proj")
+            want = ([ge["shape"][0], ge["shape"][1] // g], [de["shape"][0] // g, de["shape"][1]])
+            got = (list(moe.gate_up[e].shape), list(moe.down[e].shape))
+            if got != want:
+                raise ValueError(f"layer {layer} expert {e}: slot shapes {got} != group slices {want}")
     _upgrade(moe.shared, OptimizedSwiGLU, ocfg, "shared")
     _upgrade(moe.router, OptimizedRouter, ocfg)
     moe.__class__ = OptimizedMoE
