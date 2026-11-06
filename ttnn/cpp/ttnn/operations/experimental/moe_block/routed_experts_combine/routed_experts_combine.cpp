@@ -46,7 +46,7 @@ tt::tt_metal::TensorSpec rm_spec(const ttnn::Shape& shape, DataType dt, const Me
 }
 
 fre::FlatRoutedExpertConfig base_flat_config(
-    MoEBlockResources& res, uint32_t m, uint32_t activation, const fre::FlatLayoutOptions& layout) {
+    MoEBlockResources& res, uint32_t m, const fre::FlatLayoutOptions& layout) {
     const auto& dims = res.dims();
     const uint32_t N = res.topology().num_chips();
     TT_FATAL(dims.num_experts % N == 0, "routed_experts_combine: {} experts over {} chips", dims.num_experts, N);
@@ -59,7 +59,7 @@ fre::FlatRoutedExpertConfig base_flat_config(
         res.dtypes().routed_weights == DataType::BFLOAT8_B,
         1,
         layout);
-    cfg.activation = activation;
+    cfg.activation = routed_activation_code(dims.routed_expert_activation);  // (the model's, from the resources)
     cfg.down_fp32 = true;
     return cfg;
 }
@@ -97,7 +97,6 @@ std::pair<uint32_t, uint32_t> block_group_and_head_port(const MoEBlockResources&
 CombineL1Plan plan_routed_experts_combine_l1(
     MoEBlockResources& res,
     uint32_t m,
-    uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout,
     const CombineConfig& combine,
     uint32_t group,
@@ -111,7 +110,7 @@ CombineL1Plan plan_routed_experts_combine_l1(
     // its budget (FlatLayoutOptions.arena_bytes: the flat plan fits it) - a smaller plan leaves the arena at least as
     // large, so the fitted plan still fits.
     CombineL1Plan out;
-    out.flat = base_flat_config(res, m, activation, layout);
+    out.flat = base_flat_config(res, m, layout);
     out.arena_bytes = combine.arena_bytes;
     std::shared_ptr<const flat_routed_expert::FlatRoutedExpertPlan> fp;
     for (uint32_t i = 0; i < 4; ++i) {
@@ -157,7 +156,6 @@ namespace routed_experts_combine_detail {
 CombineState make_state(
     MoEBlockResources& res,
     uint32_t m,
-    uint32_t activation,
     const fre::FlatLayoutOptions& layout,
     const CombineConfig& combine,
     uint32_t rows_cap) {
@@ -168,7 +166,7 @@ CombineState make_state(
     s.layout = layout;
     // (in the block: its L1 plan's dispatch group and the head's ports below the shared arena)
     const auto [group, head_port] = block_group_and_head_port(res);
-    const CombineL1Plan l1 = plan_routed_experts_combine_l1(res, m, activation, layout, combine, group, head_port);
+    const CombineL1Plan l1 = plan_routed_experts_combine_l1(res, m, layout, combine, group, head_port);
     s.flat_config = l1.flat;
     s.flat = fre::ensure_flat_routed_expert_resources(res, s.flat_config);
     s.flat_config = fre::with_combine_overlap(s.flat_config, *s.flat.plan, true);
@@ -226,14 +224,13 @@ const CombineState& state(
     MoEBlockResources& res,
     uint32_t rows_cap,
     uint32_t m,
-    uint32_t activation,
     const fre::FlatLayoutOptions& layout,
     const CombineConfig& combine) {
     // (planned once per resources: a cache hit does a lookup, the hash and the address patches)
     const auto& st = res.plan<CombineState>(
-        "routed_experts_combine/state", [&] { return make_state(res, m, activation, layout, combine, rows_cap); });
+        "routed_experts_combine/state", [&] { return make_state(res, m, layout, combine, rows_cap); });
     TT_FATAL(
-        st.combine == combine && st.flat_config.activation == activation &&
+        st.combine == combine &&
             st.flat_config.max_tokens == (m + 31) / 32 * 32 && st.layout == layout && st.rows_cap == rows_cap,
         "routed_experts_combine: the resources' combine was planned for another config");
     return st;
@@ -241,28 +238,15 @@ const CombineState& state(
 
 }  // namespace routed_experts_combine_detail
 
-uint32_t routed_experts_combine_static_cb_bytes(
-    MoEBlockResources& resources,
-    uint32_t max_tokens_per_expert,
-    uint32_t activation,
-    const flat_routed_expert::FlatLayoutOptions& layout) {
-    using namespace routed_experts_combine_detail;
-    const auto [group, head_port] = block_group_and_head_port(resources);
-    const auto l1 = plan_routed_experts_combine_l1(
-        resources, max_tokens_per_expert, activation, layout, CombineConfig{}, group, head_port);
-    return std::max(l1.static_bytes, head_port);
-}
-
 tt::tt_metal::TensorSpec routed_experts_combine_arena_spec(
     MoEBlockResources& resources,
     uint32_t rows_cap,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout,
     const CombineConfig& combine,
     uint32_t other_bytes) {
     using namespace routed_experts_combine_detail;
-    const auto& st = state(resources, rows_cap, max_tokens_per_expert, activation, layout, combine);
+    const auto& st = state(resources, rows_cap, max_tokens_per_expert, layout, combine);
     const auto& sh = *st.arena_spec->memory_config().shard_spec();
     const uint32_t need = sh.shape[0] * 64;
     if (other_bytes <= need) {
@@ -292,13 +276,12 @@ ttnn::Tensor routed_experts_combine(
     const ttnn::Tensor& down_weights,
     MoEBlockResources& resources,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const std::optional<ttnn::Tensor>& arena,
     const flat_routed_expert::FlatLayoutOptions& layout,
     const CombineConfig& combine) {
     using namespace routed_experts_combine_detail;
     const uint32_t rows_cap = table.logical_shape()[-2] * 32;
-    const auto& st = state(resources, rows_cap, max_tokens_per_expert, activation, layout, combine);
+    const auto& st = state(resources, rows_cap, max_tokens_per_expert, layout, combine);
     auto& mesh = resources.mesh_device();
     // the call's arena: the block's shared one (the fused head ran in it first), else one of our own for the call
     std::optional<ttnn::Tensor> own;

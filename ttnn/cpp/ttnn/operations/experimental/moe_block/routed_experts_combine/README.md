@@ -4,8 +4,8 @@
 per chip** (the MoE block's experts + combine stage). Every expert output row goes from the flat expert's y writers
 through L1 into a fabric port's injection ring (or straight into a local accumulator's ring), home over the 2D fabric
 (Y first, then X; multi-hop unicasts the routers forward) into a landing ring of the home accumulator, and is summed
-there in fp32 (gate weight x row). With `combine_snap` (a power of two q) every term is rounded to a multiple of q
-before its add, so the sum is bit-identical in any landing order.
+there in fp32 (gate weight x row). With `combine_snap` (a power of two q; on by default, q = 2^-14) every term is
+rounded to a multiple of q before its add, so the sum is bit-identical in any landing order.
 
 Defines: `REC_ACC_LUT` (a home chip's accumulator cells from a DRAM table), `REC_FUSED` (ports that are also
 accumulators).

@@ -240,7 +240,7 @@ def setup(mesh):
     cfg = mb.MoEBlockConfig(chunk_tokens=CHUNK, num_links=2, persist_l1_small=True)
     cfg.combine_snap = SNAP
     res = mb.MoEBlockResources(mesh, dims, cfg, dtypes)
-    block = MoEBlock(mesh, res, dtypes=dtypes, activation=fw.ACTS["silu"])  # (the planner's accumulators)
+    block = MoEBlock(mesh, res, dtypes=dtypes)  # (the planner's accumulators)
     g = torch.Generator().manual_seed(5)
     rnd = lambda *s, sc=1.0: torch.randn(*s, generator=g) * sc  # noqa: E731
     f32 = lambda t: ttnn.from_torch(t, dtype=ttnn.float32)  # noqa: E731

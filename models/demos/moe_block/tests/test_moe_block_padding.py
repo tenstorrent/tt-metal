@@ -105,7 +105,7 @@ def setup(mesh, request):
     cfg.head_router_iterations = router_iters
     cfg.token_loops = loops
     res = mb.MoEBlockResources(mesh, dims, cfg, dtypes)
-    block = MoEBlock(mesh, res, dtypes=dtypes, activation=fw.ACTS["silu"])  # (the planner's accumulators)
+    block = MoEBlock(mesh, res, dtypes=dtypes)  # (the planner's accumulators)
     g = torch.Generator().manual_seed(3)
     r = lambda *s, sc=1.0: ttnn.from_torch(torch.randn(*s, generator=g) * sc, dtype=ttnn.float32)
     head_w = mb.prepare_fused_head_weights(

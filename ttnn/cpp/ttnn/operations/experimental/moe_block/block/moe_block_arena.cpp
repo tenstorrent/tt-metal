@@ -42,7 +42,6 @@ const MoEBlockPlan& moe_block_plan(
     const MoEDtypes& dtypes,
     std::optional<uint32_t> accumulators,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout,
     const routed_experts_combine::CombineConfig& combine,
     std::optional<int64_t> l1_free) {
@@ -64,7 +63,7 @@ const MoEBlockPlan& moe_block_plan(
             }
             // (the combine first without the head's ports below its arena: its accumulators plan the head)
             auto c = routed_experts_combine::plan_routed_experts_combine_l1(
-                resources, max_tokens_per_expert, activation, layout, comb, g, 0);
+                resources, max_tokens_per_expert, layout, comb, g, 0);
             const uint32_t A = c.plan->A;
             const auto& fit = fused_head::plan_fused_head(resources, dtypes, A, l1, c.static_bytes);
             if (!fit.ok || fit.planned.empty()) {
@@ -77,7 +76,7 @@ const MoEBlockPlan& moe_block_plan(
             const uint32_t port = 0;
             comb.n_acc = A;  // (pinned: the head is planned for A)
             c = routed_experts_combine::plan_routed_experts_combine_l1(
-                resources, max_tokens_per_expert, activation, layout, comb, g, port);
+                resources, max_tokens_per_expert, layout, comb, g, port);
             const auto fp = flat_routed_expert::flat_routed_expert_plan(mesh, c.flat);
             const auto& cp = *c.plan;
             const GroupKey key{fp->mt, fp->hbuf, cp.A, cp.D, cp.QP, std::min(cp.QL, 8u), cp.fused, cp.flat_pool, lay};
@@ -119,7 +118,6 @@ tt::tt_metal::TensorSpec moe_block_arena_spec(
     const MoEDtypes& dtypes,
     uint32_t accumulators,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout,
     const routed_experts_combine::CombineConfig& combine,
     std::optional<int64_t> l1_free) {
@@ -129,7 +127,7 @@ tt::tt_metal::TensorSpec moe_block_arena_spec(
         *combine.n_acc,
         accumulators);
     const auto& bp =
-        moe_block_plan(resources, dtypes, accumulators, max_tokens_per_expert, activation, layout, combine, l1_free);
+        moe_block_plan(resources, dtypes, accumulators, max_tokens_per_expert, layout, combine, l1_free);
     TT_FATAL(
         bp.accumulators == accumulators,
         "moe_block: the block was planned for {} accumulators, the arena asked for {}",
@@ -139,7 +137,7 @@ tt::tt_metal::TensorSpec moe_block_arena_spec(
     const uint32_t head_bytes = fused_head::head_tensor_shapes(*head.model).arena_bytes;
     const uint32_t rows_cap = head.inputs.table.logical_shape()[-2] * 32;
     auto spec = routed_experts_combine::routed_experts_combine_arena_spec(
-        resources, rows_cap, max_tokens_per_expert, activation, layout, combine, head_bytes);
+        resources, rows_cap, max_tokens_per_expert, layout, combine, head_bytes);
     // (fused_head's own checks on the arena: L1, its cores, its bytes a core)
     const auto& shard = *spec.memory_config().shard_spec();
     TT_FATAL(

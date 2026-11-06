@@ -39,8 +39,7 @@ class MoEBlock:
     """One MoE block on ``mesh_device``. ``resources``: the block's MoEBlockResources on it; ``dtypes``: MoEDtypes;
     ``accumulators``: the combine's accumulator count (the head's routing planner is planned for it); None: what the
     combine planner gives (moe_block_plan, which also picks the dispatch's row group);
-    ``max_tokens_per_expert`` / ``activation``: the flat routed experts' capacity and activation (gate_up_compute
-    SE_ACT);
+    ``max_tokens_per_expert``: the flat routed experts' capacity (their activation is the resources' dims');
     ``layout`` / ``combine``: FlatLayoutOptions / CombineConfig (combine.n_acc is set to ``accumulators``).
     Capacity and layout default to max(chunk, 256) and FlatLayoutOptions() - the combine fits the flat plan into its
     arena (the largest free L1 block less the static CBs below it; FlatLayoutOptions.arena_bytes).
@@ -57,7 +56,6 @@ class MoEBlock:
         resources,
         *,
         dtypes,
-        activation: int,
         accumulators: Optional[int] = None,
         max_tokens_per_expert: Optional[int] = None,
         layout=None,
@@ -77,7 +75,7 @@ class MoEBlock:
             layout = mb.FlatLayoutOptions()
         self.combine = combine if combine is not None else mb.CombineConfig()
         n_acc = self.combine.n_acc
-        ask = (accumulators, max_tokens_per_expert, activation, layout)
+        ask = (accumulators, max_tokens_per_expert, layout)
         # (padding rows: a chunk whose rows a mesh row are not whole 32 x TP rows - the head's rows rule - runs with
         # each SP row padded up to them; the padding rows are padding tokens of a padded chunk, their output dropped)
         topo = resources.topology
@@ -103,13 +101,9 @@ class MoEBlock:
                 else ""
             )
         )
-        self.exchange_spec = (
-            None  # (the dispatch + combine's arena when the head's does not fit: the first call sets it)
-        )
-        self.one_arena = None
         self.chunk_words = None  # (a padded chunk's scalars given as ints: two persistent device words, rewritten)
 
-    def _plan(self, accumulators, max_tokens_per_expert, activation, layout, n_acc):
+    def _plan(self, accumulators, max_tokens_per_expert, layout, n_acc):
         """The block's plans for the resources' token loops (raises where one does not fit)."""
         mb, resources, dtypes, l1_free = self.mb, self.resources, self.dtypes, self.l1_free
         # (an expert sees each token of a split at most once - the experts run once a split; the flat op is built for
@@ -124,7 +118,6 @@ class MoEBlock:
                 if resources.config.chunk_splits > 1
                 else max_tokens_per_expert
             ),
-            activation=activation,
             layout=layout,
             combine=self.combine,
         )
@@ -186,29 +179,6 @@ class MoEBlock:
                 return
         raise first_error
 
-    def _one_arena_fits(self) -> bool:
-        """One arena of the head's size a forward when it sits above the block's own programs' static circular buffers
-        (allocated top-down in the largest free L1 block, it reaches from the block's top down by its size), else two:
-        the head's, then the exchange's (planned above them). Every CB of the ops that run in the arena (head, dispatch,
-        flat experts, combine) is in it, so nothing sits below it (static 0) and the head's arena, planned on the free
-        L1, always fits: one arena. The check stays for a caller whose flat layout brings static CBs back."""
-        free = int(ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
-        kw = self.expert_kw
-        static = self.mb.routed_experts_combine_static_cb_bytes(
-            self.resources,
-            max_tokens_per_expert=kw["max_tokens_per_expert"],
-            activation=kw["activation"],
-            layout=kw["layout"],
-        )
-        head = int(self.arena_spec.memory_config.shard_spec.shape[0]) * 64
-        bound = free - static - 1024  # (1 KB for the allocator's alignment)
-        fits = head <= bound
-        logger.info(
-            f"MoEBlock: arena {head} B a core, room above the block's static CBs {bound} B (largest free L1 block "
-            f"{free} B, static CBs {static} B): {'one arena' if fits else 'two arenas (the exchange planned above them)'}"
-        )
-        return fits
-
     def _words(self, a: int, b: int) -> tuple:
         """a pair of one-word device tensors (replicated, uint32, DRAM) holding a and b"""
         word = lambda v: torch.tensor([[[[v]]]], dtype=torch.int64)  # noqa: E731
@@ -267,8 +237,6 @@ class MoEBlock:
         if isinstance(actual_start, int) or isinstance(actual_end, int):
             assert isinstance(actual_start, int) and isinstance(actual_end, int), "MoEBlock: two ints or two tensors"
             actual_start, actual_end = self.chunk_scalars(actual_start, actual_end)
-        if self.exchange_spec is None:  # (the first call, before any arena: one arena or two)
-            self.one_arena = self._one_arena_fits()
         if self.pad_rows:  # (padding rows: each chip's rows padded up to whole 32 x TP rows; their output dropped)
             if actual_start is None:
                 if self.full_words is None:  # (made at the first call: eager - a trace captures them as they are)
@@ -346,19 +314,6 @@ class MoEBlock:
                 ttnn.deallocate(xs[i])
             ses.append(head.se)  # (each loop's shared expert output: its own tensor)
         self.last_head = head  # (its persistent outputs: a model's checks read the routing rows - every loop's)
-        if self.exchange_spec is None:  # (once: the exchange's own arena - the combine's, without the head's bytes)
-            self.exchange_spec = (
-                False
-                if self.one_arena
-                else mb.routed_experts_combine_arena_spec(
-                    self.resources, rows_cap=int(head.table.shape[-2]) * 32, **self.expert_kw
-                )
-            )
-        if self.exchange_spec:
-            # (two arenas a forward only for a head arena larger than the room above static CBs - none since every
-            # CB is in the arena; the exchange's arena is then planned above them)
-            ttnn.deallocate(arena)
-            arena = ttnn.allocate_tensor_on_device(self.exchange_spec, self.mesh_device)
         # (the dispatch's CBs in the call's arena - between the head's use of it and the combine's)
         dispatched = mb.sparse_dispatch_2d(head.xbuf, head.route, self.resources, arena=arena)
         y_own = mb.routed_experts_combine(

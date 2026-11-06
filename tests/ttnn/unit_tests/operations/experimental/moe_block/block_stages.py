@@ -161,9 +161,7 @@ class BlockStages:
         cfg.words_slab_bytes = moe_block_words_slab(model.cfg)
         self.dtypes = mb.MoEDtypes()
         self.res = mb.MoEBlockResources(mesh, d, cfg, self.dtypes)
-        self.block = MoEBlock(mesh, self.res, dtypes=self.dtypes, activation=fw.ACTS[self.act])
-        # (one arena or two, decided on the free L1 before any arena is allocated - as MoEBlock's first call does)
-        self.one_arena = self.block._one_arena_fits()
+        self.block = MoEBlock(mesh, self.res, dtypes=self.dtypes)
         kw = self.block.expert_kw
 
         key = f"{case.id}-seed{case.seed}"
@@ -187,7 +185,7 @@ class BlockStages:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=(R, C), dims=(2, 3)),
         )
-        self.head = self.xg = self.exchange_spec = None
+        self.head = self.xg = None
         self.w_up = None
         if self.block.loops != 1:
             pytest.skip(f"{case.id}: {self.block.loops} token loops (these tests run one head call a chunk)")
@@ -212,19 +210,13 @@ class BlockStages:
         )  # fmt: skip
         if x_full is not None:
             ttnn.deallocate(x_full)
-        if not self.one_arena:  # (the exchange's own arena: MoEBlock's two-arena case)
-            ttnn.deallocate(arena)
-            self.exchange_spec = mb.routed_experts_combine_arena_spec(
-                self.res, rows_cap=int(self.head.table.shape[-2]) * 32, **blk.expert_kw
-            )
-            arena = ttnn.allocate_tensor_on_device(self.exchange_spec, self.mesh)
         self.xg = mb.sparse_dispatch_2d(self.head.xbuf, self.head.route, self.res, arena=arena)
         ttnn.deallocate(arena)
         ttnn.synchronize_device(self.mesh)
         self.routing = routing
 
     def _arena(self):
-        return ttnn.allocate_tensor_on_device(self.block.arena_spec if self.one_arena else self.exchange_spec, self.mesh)
+        return ttnn.allocate_tensor_on_device(self.block.arena_spec, self.mesh)
 
     def dispatch(self):
         """sparse_dispatch_2d again on the kept head's xbuf + route (in a call's own arena): xbuf filled in place."""

@@ -16,6 +16,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -30,6 +31,32 @@ bool torus_x_of(tt::tt_fabric::FabricConfig cfg) {
 bool torus_y_of(tt::tt_fabric::FabricConfig cfg) {
     return cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
            cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+}
+
+// Fail fast on a fabric the block does not support: it needs a 2D fabric; a torus axis the fabric config claims must be
+// wired as a ring on this mesh (ccl::is_axis_wrap_wired, the check get_usable_topology makes), else the planners would
+// route over a wrap link that is not there; a latent model (Kimi-K3) without any torus axis hangs on its first call.
+void check_topology(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_fabric::FabricConfig cfg,
+    const MeshTopology& topo,
+    const MoEModelDims& dims) {
+    TT_FATAL(
+        tt::tt_fabric::is_2d_fabric_config(cfg),
+        "moe_block: needs a 2D fabric (FABRIC_2D or a 2D torus), the mesh was opened with fabric config {}",
+        static_cast<uint32_t>(cfg));
+    TT_FATAL(
+        !topo.wrap_y || ttnn::ccl::is_axis_wrap_wired(mesh_device, 0),
+        "moe_block: the fabric config wraps the mesh's rows ({} chips) but this mesh has no wrap link on that axis",
+        topo.R);
+    TT_FATAL(
+        !topo.wrap_x || ttnn::ccl::is_axis_wrap_wired(mesh_device, 1),
+        "moe_block: the fabric config wraps the mesh's columns ({} chips) but this mesh has no wrap link on that axis",
+        topo.C);
+    TT_FATAL(
+        !dims.latent_dim.has_value() || topo.wrap_x || topo.wrap_y,
+        "moe_block: a latent model (Kimi-K3) on a fabric without a torus axis hangs on its first call - open the mesh "
+        "with a torus fabric (FABRIC_2D_TORUS_Y / _XY)");
 }
 
 // The planners route a torus tie (a destination half a ring away) by the source's parity (mesh_routing.hpp route); the
@@ -168,6 +195,7 @@ MoEBlockResources::MoEBlockResources(
         "moe_block: {} experts don't divide over {} chips",
         dims_.num_experts,
         plan_.topo.num_chips());
+    resources_detail::check_topology(mesh_device, fabric_config_, plan_.topo, dims_);
     resources_detail::check_fabric_ties(mesh_device, plan_.topo);
     luts_ = moe_block::port_luts(plan_);
     plan_key_ = make_plan_key();

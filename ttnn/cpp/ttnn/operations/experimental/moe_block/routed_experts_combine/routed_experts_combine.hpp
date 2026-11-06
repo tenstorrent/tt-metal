@@ -38,7 +38,6 @@ ttnn::Tensor routed_experts_combine(
     const ttnn::Tensor& down_weights,
     MoEBlockResources& resources,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const std::optional<ttnn::Tensor>& arena = std::nullopt,
     const flat_routed_expert::FlatLayoutOptions& layout = {},
     const CombineConfig& combine = {});
@@ -57,19 +56,10 @@ struct CombineL1Plan {
 CombineL1Plan plan_routed_experts_combine_l1(
     MoEBlockResources& resources,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout,
     const CombineConfig& combine,
     uint32_t dispatch_group,
     uint32_t head_port_cb = 0);
-
-// L1 a core the block's own programs that run while its arena is allocated (the fused head's ports, the dispatch, the
-// flat experts + this op's combine) take for their static circular buffers: what the arena must stay above.
-uint32_t routed_experts_combine_static_cb_bytes(
-    MoEBlockResources& resources,
-    uint32_t max_tokens_per_expert,
-    uint32_t activation,
-    const flat_routed_expert::FlatLayoutOptions& layout = {});
 
 // The L1 arena spec the block allocates once a call and shares between the fused head and this op (arena=): an L1
 // tensor height-sharded over every worker core, max(this op's need, other_bytes) a core (other_bytes: the head's
@@ -78,7 +68,6 @@ tt::tt_metal::TensorSpec routed_experts_combine_arena_spec(
     MoEBlockResources& resources,
     uint32_t rows_cap,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout = {},
     const CombineConfig& combine = {},
     uint32_t other_bytes = 0);

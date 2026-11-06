@@ -71,6 +71,35 @@ uint32_t snap_bits(std::optional<float> q) {
     return std::bit_cast<uint32_t>(std::ldexp(1.5f, e - 1 + 23));
 }
 
+uint32_t routed_activation_code(const ExpertActivation& act) {
+    act.check();
+    auto is = [](const std::optional<float>& v, float want) { return v.has_value() && std::fabs(*v - want) <= 1e-6f * want; };
+    switch (act.kind) {
+        case ExpertActivationKind::Silu: return 0;
+        case ExpertActivationKind::SwigluOai:
+            TT_FATAL(
+                is(act.limit, 7.0f) && is(act.alpha, 1.702f),
+                "moe_block: the routed experts' SwiGLU-OAI is built for limit 7, alpha 1.702 (got limit {}, alpha {})",
+                act.limit.value_or(0.0f),
+                act.alpha.value_or(0.0f));
+            return 1;
+        case ExpertActivationKind::Situ:
+            TT_FATAL(
+                is(act.beta, 4.0f) && is(act.linear_beta, 25.0f),
+                "moe_block: the routed experts' SiTU is built for beta 4, linear_beta 25 (got {}, {})",
+                act.beta.value_or(0.0f),
+                act.linear_beta.value_or(0.0f));
+            return 2;
+        case ExpertActivationKind::ClampedSilu:
+            TT_FATAL(
+                is(act.limit, 10.0f),
+                "moe_block: the routed experts' clamped SiLU is built for limit 10 (got {})",
+                act.limit.value_or(0.0f));
+            return 3;
+    }
+    TT_THROW("moe_block: unknown expert activation");
+}
+
 uint32_t MoEBlockConfig::snap_bits() const { return moe_block::snap_bits(combine_snap); }
 
 void MoEBlockConfig::check() const {

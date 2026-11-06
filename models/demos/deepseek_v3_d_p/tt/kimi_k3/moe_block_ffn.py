@@ -50,7 +50,7 @@ class MoEBlockFfnOptions:
     """The MoE block's choices a caller may change; None / the defaults are production's.
 
     combine_snap: the combine's snap q (a power of two: every routed term rounded to a multiple of q, so the sum is
-        bit-identical in any landing order); None: no snap.
+        bit-identical in any landing order); None: the MoEBlockConfig default (2^-14); 0: off.
     words_slab_bytes: the persistent words' packed L1_SMALL slab, bytes a core (0: a tensor a word set); None: the
         MoEBlockConfig default.
     accumulators: the combine's accumulator count; None: what the combine planner gives (GLM-5.3 / Kimi-K3 at 8x4
@@ -269,9 +269,10 @@ class TtK3MoEBlockFfn:
             cfg = mb.MoEBlockConfig(
                 chunk_tokens=chunk,
                 num_links=LINKS,
-                combine_snap=opts.combine_snap,
                 persist_l1_small=True,  # (the ops' words in L1_SMALL: MoEBlock)
             )
+            if opts.combine_snap is not None:  # (else the config's default snap)
+                cfg.combine_snap = opts.combine_snap
             # (the model's slab, the one its mesh opened L1_SMALL for: moe_impl.moe_block_words_slab)
             cfg.words_slab_bytes = (
                 opts.words_slab_bytes if opts.words_slab_bytes is not None else moe_block_words_slab(self.model_name)
@@ -285,7 +286,6 @@ class TtK3MoEBlockFfn:
                 dtypes=dtypes,
                 accumulators=opts.accumulators,  # (None: the combine planner's)
                 max_tokens_per_expert=max(chunk, 256),
-                activation=flat_weights_module().ACTS[self.act],
                 # (the flat plan's own choices: the gate/up read pieces from its weight block's bytes, the sub-blocks
                 # fitted into the combine's arena)
                 layout=mb.FlatLayoutOptions(),
@@ -555,15 +555,9 @@ class TtK3MoEBlockFfn:
             from models.demos.moe_block.tt.moe_block import l1_small_bytes
 
             mv = ttnn.get_memory_view(self.mesh, ttnn.BufferType.L1_SMALL)
-            ex = block.exchange_spec
             logger.info(
                 f"MoE block: L1_SMALL {l1_small_bytes(self.mesh)} B a bank allocated after its first call (the mesh "
-                f"has {int(mv.total_bytes_allocated_per_bank) + int(mv.total_bytes_free_per_bank)} B); "
-                + (
-                    f"two arenas: the exchange's {ex.memory_config.shard_spec.shape[0] * 64 >> 10} KB"
-                    if ex
-                    else "one arena"
-                )
+                f"has {int(mv.total_bytes_allocated_per_bank) + int(mv.total_bytes_free_per_bank)} B)"
             )
             block._logged_l1_small = True
         if getattr(block, "_logged_arena", None) != block.arena_address:  # (where each call's arena lands)

@@ -294,14 +294,12 @@ class Head:
     def _accumulators(self):
         """The block planner's accumulator count (the head plans the combine's routing for it); a model whose experts
         a chip exceed the flat op's 64 on this mesh (K3 on 8 chips) takes the Galaxy's 11."""
-        m = self.model
         try:
             plan = mb.moe_block_plan(
                 self.res,
                 dtypes=self.dtypes,
                 accumulators=None,
                 max_tokens_per_expert=max(self.case.chunk, 256),
-                activation=weights_py.ACTS[m.act],
                 layout=mb.FlatLayoutOptions(),
                 combine=mb.CombineConfig(),
             )

@@ -80,7 +80,7 @@ def test_moe_block_smoke(mesh):
         mesh, dims, mb.MoEBlockConfig(chunk_tokens=CHUNK, num_links=2, persist_l1_small=True), dtypes
     )
     try:
-        block = MoEBlock(mesh, res, dtypes=dtypes, activation=fw.ACTS["silu"])
+        block = MoEBlock(mesh, res, dtypes=dtypes)
         assert block.accumulators == ACCUMULATORS, f"the combine planner's accumulators {block.accumulators}"
         host = lambda *s: ttnn.from_torch(torch.zeros(*s), dtype=ttnn.float32)
         head_w = mb.prepare_fused_head_weights(

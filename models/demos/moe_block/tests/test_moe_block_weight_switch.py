@@ -51,7 +51,7 @@ def test_moe_block_weight_switch(mesh_device):
         dtypes,
     )
     try:
-        block = MoEBlock(mesh, res, dtypes=dtypes, accumulators=11, activation=fw.ACTS["silu"])
+        block = MoEBlock(mesh, res, dtypes=dtypes, accumulators=11)
         kw = block.expert_kw
 
         def head(seed):

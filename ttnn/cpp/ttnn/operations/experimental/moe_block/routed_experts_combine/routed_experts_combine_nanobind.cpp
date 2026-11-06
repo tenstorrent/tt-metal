@@ -98,7 +98,6 @@ void bind_routed_experts_combine(nb::module_& mod) {
                 (flat_routed_expert_plan with this op's capacity and layout).
             resources: the block's MoEBlockResources (config, placement, persistent words).
             max_tokens_per_expert: the flat expert's capacity m.
-            activation: the experts' activation (gate_up_compute SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU).
             arena: the block's shared L1 arena (routed_experts_combine_arena_spec; the fused head ran in it first);
                 None: the op allocates one for the call.
             layout: FlatLayoutOptions.
@@ -120,7 +119,6 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::arg("resources"),
         nb::kw_only(),
         nb::arg("max_tokens_per_expert"),
-        nb::arg("activation"),
         nb::arg("arena") = nb::none(),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         nb::arg("combine") = CombineConfig{});
@@ -132,7 +130,6 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("rows_cap"),
         nb::arg("max_tokens_per_expert"),
-        nb::arg("activation"),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         nb::arg("combine") = CombineConfig{},
         nb::arg("other_bytes") = 0,
@@ -213,13 +210,12 @@ void bind_routed_experts_combine(nb::module_& mod) {
         "routed_experts_combine_l1_plan",
         [](MoEBlockResources& resources,
            uint32_t max_tokens_per_expert,
-           uint32_t activation,
            const flat_routed_expert::FlatLayoutOptions& layout,
            const CombineConfig& combine,
            uint32_t dispatch_group,
            uint32_t head_port_cb) {
             const auto l1 = plan_routed_experts_combine_l1(
-                resources, max_tokens_per_expert, activation, layout, combine, dispatch_group, head_port_cb);
+                resources, max_tokens_per_expert, layout, combine, dispatch_group, head_port_cb);
             nb::dict d;
             d["layout"] = l1.flat.layout;
             d["static_bytes"] = l1.static_bytes;
@@ -238,7 +234,6 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::arg("resources"),
         nb::kw_only(),
         nb::arg("max_tokens_per_expert"),
-        nb::arg("activation"),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         nb::arg("combine") = CombineConfig{},
         nb::arg("dispatch_group"),
@@ -246,18 +241,6 @@ void bind_routed_experts_combine(nb::module_& mod) {
         "Host-only what-if: the combine's L1 plan at a dispatch group as a dict (the flat layout fitted into its "
         "arena, "
         "static CB bytes, arena bytes, accumulators A, landing depth D, QP, QL, acc_on_ports).");
-    mod.def(
-        "routed_experts_combine_static_cb_bytes",
-        &routed_experts_combine_static_cb_bytes,
-        nb::arg("resources"),
-        nb::kw_only(),
-        nb::arg("max_tokens_per_expert"),
-        nb::arg("activation"),
-        nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
-        R"doc(
-        L1 bytes a core the block's own programs that run while its arena is allocated (the dispatch, the flat experts
-        + the combine) take for their static circular buffers: what the arena must stay above.
-        )doc");
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine

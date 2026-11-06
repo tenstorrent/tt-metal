@@ -81,7 +81,9 @@ struct MoEDtypes {
 // The block's options. Geometry (mesh shape, torus) is derived from the mesh and the fabric config by
 // MoEBlockResources, never passed in.
 struct MoEBlockConfig {
-    std::optional<float> combine_snap;  // power of two q: every routed term rounded to a multiple of q
+    // power of two q: every routed term rounded to a multiple of q, so the combine's fp32 sums are bit-identical in
+    // any landing order (costs no measurable time); nullopt or 0: off - long chunks are then nondeterministic
+    std::optional<float> combine_snap = 0x1p-14f;
     bool head_dram_fallback = true;     // the head planner may take its DRAM fallback
     // the fused head's router iterations (HeadLayout.NIT): 0 the planner's (by cost, each layout with the fewest that
     // fit), n at least n (tests: the iterated router where the planner would not pick it)
@@ -126,12 +128,17 @@ struct MoEBlockConfig {
 
     // The fused head's hand-off stride: 4 B in L1_SMALL, else 16 B.
     uint32_t handoff_bytes() const { return persist_l1_small ? 4u : 16u; }
-    // The combine's snap constant: the fp32 bits of C = 1.5 x 2^23 q, 0 when combine_snap is unset.
+    // The combine's snap constant: the fp32 bits of C = 1.5 x 2^23 q, 0 when combine_snap is off.
     uint32_t snap_bits() const;
     void check() const;  // TT_FATAL on an invalid field
     bool operator==(const MoEBlockConfig&) const = default;
 };
 
 uint32_t snap_bits(std::optional<float> q);
+
+// The routed experts' activation as the flat expert's gate_up_compute code (SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU,
+// 3 clamped SiLU). The kernel builds its constants in (SwiGLU-OAI limit 7, alpha 1.702; SiTU betas 4 and 25; clamped
+// SiLU limit 10): TT_FATAL on a model whose constants differ, instead of computing another activation.
+uint32_t routed_activation_code(const ExpertActivation& act);
 
 }  // namespace ttnn::operations::experimental::moe_block

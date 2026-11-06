@@ -36,7 +36,6 @@ const MoEBlockPlan& moe_block_plan(
     const MoEDtypes& dtypes,
     std::optional<uint32_t> accumulators,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout = {},
     const routed_experts_combine::CombineConfig& combine = {},
     std::optional<int64_t> l1_free = std::nullopt);
@@ -52,7 +51,6 @@ tt::tt_metal::TensorSpec moe_block_arena_spec(
     const MoEDtypes& dtypes,
     uint32_t accumulators,
     uint32_t max_tokens_per_expert,
-    uint32_t activation,
     const flat_routed_expert::FlatLayoutOptions& layout = {},
     const routed_experts_combine::CombineConfig& combine = {},
     std::optional<int64_t> l1_free = std::nullopt);

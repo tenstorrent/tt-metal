@@ -44,19 +44,17 @@ void bind_moe_block(nb::module_& experimental) {
            const MoEDtypes& dtypes,
            std::optional<uint32_t> accumulators,
            uint32_t max_tokens_per_expert,
-           uint32_t activation,
            const flat_routed_expert::FlatLayoutOptions& layout,
            const routed_experts_combine::CombineConfig& combine,
            std::optional<int64_t> l1_free) {
             return moe_block_plan(
-                resources, dtypes, accumulators, max_tokens_per_expert, activation, layout, combine, l1_free);
+                resources, dtypes, accumulators, max_tokens_per_expert, layout, combine, l1_free);
         },
         nb::arg("resources"),
         nb::kw_only(),
         nb::arg("dtypes"),
         nb::arg("accumulators") = nb::none(),
         nb::arg("max_tokens_per_expert"),
-        nb::arg("activation"),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         nb::arg("combine") = routed_experts_combine::CombineConfig{},
         nb::arg("l1_free") = nb::none(),
@@ -75,7 +73,6 @@ void bind_moe_block(nb::module_& experimental) {
         nb::arg("dtypes"),
         nb::arg("accumulators"),
         nb::arg("max_tokens_per_expert"),
-        nb::arg("activation"),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         nb::arg("combine") = routed_experts_combine::CombineConfig{},
         nb::arg("l1_free") = nb::none(),
@@ -87,7 +84,7 @@ void bind_moe_block(nb::module_& experimental) {
         Args:
             resources: the block's MoEBlockResources.
             dtypes, accumulators, l1_free: as fused_head's (plans the head on first use).
-            max_tokens_per_expert, activation, layout, combine: as routed_experts_combine's (plans it on first use;
+            max_tokens_per_expert, layout, combine: as routed_experts_combine's (plans it on first use;
                 combine.n_acc, when set, must equal accumulators).
         )doc");
 }
