@@ -105,24 +105,25 @@ JUNK = "junk"  # a state written by a padding verify row (a draft the step did n
 
 
 # --------------------------------------------------------------------------------------------------- page layouts
-# (TP, block, n_banks, layout): the Galaxy primary (BF8 1024, 8 banks, two pools), its 7-bank Bin6 variant (896), the
-# k_only variant (2048), and the P150x4 TP=4 test layouts.
+# (TP, block, n_banks): the Galaxy primary (BF8 1024, 8 banks, heads in K and V), its 7-bank Bin6 variant (896), BF8
+# 2048 at TP=8, and the P150x4 TP=4 test geometries (2048, 4096).
 GEOMETRIES = [
-    (8, 1024, 8, "two_pool"),
-    (8, 896, 7, "two_pool"),
-    (8, 2048, 8, "k_only"),
-    (4, 2048, 8, "two_pool"),
-    (4, 4096, 8, "k_only"),
+    (8, 1024, 8),
+    (8, 896, 7),
+    (8, 2048, 8),
+    (4, 2048, 8),
+    (4, 4096, 8),
 ]
+EVERY_HEAD_IN_K = [(8, 2048, 8), (4, 4096, 8)]  # K's block holds every head: V's block holds only the conv history
 
 
-def _layout(tp, block, n_banks, name, num_blocks=200):
+def _layout(tp, block, n_banks, num_blocks=200):
     nv, C = 48 // tp, (2 * 16 * 128 + 48 * 128) // tp
     S = sbs.kv_block_bytes_per_bank([num_blocks, 1, block, 256], "bfloat8_b", n_banks)
-    return sbs.SpecBlockLayout(S, n_banks, num_blocks, nv, sbs.conv_carry_pages(4, C), name)
+    return sbs.SpecBlockLayout(S, n_banks, num_blocks, nv, sbs.conv_carry_pages(4, C))
 
 
-@pytest.mark.parametrize("geo", GEOMETRIES, ids=lambda g: f"tp{g[0]}_b{g[1]}_{g[2]}banks_{g[3]}")
+@pytest.mark.parametrize("geo", GEOMETRIES, ids=lambda g: f"tp{g[0]}_b{g[1]}_{g[2]}banks")
 def test_layout_pages_lie_inside_their_block_and_never_overlap(geo):
     lay = _layout(*geo)
     for b in range(lay.num_blocks):
@@ -131,22 +132,33 @@ def test_layout_pages_lie_inside_their_block_and_never_overlap(geo):
     assert bool(((heads % sbs.HALF_PAGES) == 0).all()), "head pages must start on a [Dk / 2, Dv] view block"
     k_side = heads < lay.pool1_pages
     assert bool((k_side.sum(-1) == lay.heads_in_k).all())
-    if geo[3] == "k_only":
-        assert lay.heads_in_k == lay.nv
+    assert (lay.heads_in_k == lay.nv) == (geo in EVERY_HEAD_IN_K)
 
 
-@pytest.mark.parametrize(
-    "geo",
-    [(8, 1024, 8, "k_only"), (4, 1024, 8, "two_pool"), (8, 1024, 7, "two_pool")],
-    ids=["tp8_1024_k_only", "tp4_1024", "tp8_1024_7banks"],
-)
+@pytest.mark.parametrize("geo", EVERY_HEAD_IN_K, ids=lambda g: f"tp{g[0]}_b{g[1]}")
+def test_every_head_in_k_puts_the_conv_history_at_the_start_of_v(geo):
+    """K's block holds every head: the heads are K's, consecutive from the block's first whole fp32 page (rounded up
+    to HALF_PAGES), and each block's conv history starts at the first bf16 page of V's block."""
+    lay = _layout(*geo)
+    S, nb = lay.block_bytes, lay.n_banks
+    assert lay.heads_in_k == lay.nv
+    blocks = torch.arange(lay.num_blocks)
+    row0 = -(-blocks * S // sbs.FP32_PAGE)  # each block's first whole fp32 row on a bank
+    first = -(-row0 * nb // sbs.HALF_PAGES) * sbs.HALF_PAGES
+    want = first.unsqueeze(-1) + sbs.HEAD_PAGES * torch.arange(lay.nv)
+    assert torch.equal(lay.head_pages(blocks), want) and bool((want < lay.pool1_pages).all())
+    for b in range(lay.num_blocks):
+        assert lay.conv_page(b) == -(-b * S // sbs.BF16_PAGE) * nb < lay.conv_pages_total, f"block {b}"
+
+
+@pytest.mark.parametrize("geo", [(4, 1024, 8), (8, 1024, 7)], ids=["tp4_1024", "tp8_1024_7banks"])
 def test_layout_refuses_a_block_that_cannot_hold_the_state(geo):
     with pytest.raises(ValueError):  # allow-pytest.raises: host test, runs with --noconftest (no expect_error)
         _layout(*geo)
 
 
 def test_ctrl_page_words_follow_the_op_contract():
-    lay = _layout(8, 1024, 8, "two_pool")
+    lay = _layout(8, 1024, 8)
     blocks = torch.tensor([[11, 12, 13, 14], [21, 22, 23, 24], [0, 0, 0, 0], [41, 42, 43, 44]])
     start = torch.tensor([2, 0, 0, 3])
     sw = sbs.StepWindows([blocks], start)
@@ -170,7 +182,7 @@ def test_chain_body_twin_builds_the_host_ctrl_pages():
     # chained step that is the host's page with start column mi and no held row.
     from models.demos.blackhole.qwen36.tt.spec_chain import chain_ctrl_rows
 
-    lay = _layout(4, 2048, 8, "two_pool")
+    lay = _layout(4, 2048, 8)
     book = sbs.SpecBlockBook(lay, 3, B, T, "none")
     g = torch.Generator().manual_seed(0)
     blocks = [torch.randperm(60, generator=g)[: B * T].reshape(B, T) + 1 for _ in range(3)]
@@ -335,7 +347,6 @@ class _Harness:
         tp=8,
         block=1024,
         n_banks=8,
-        layout="two_pool",
         num_blocks=96,
         retention=0,
         max_model_len=8192,
@@ -413,7 +424,7 @@ class _Harness:
         self.groups = mamba_cache_groups(self.kv.kv_cache_groups, cfg.cache_config, max_model_len)
         self.mamba = [i for i, g in enumerate(self.kv.kv_cache_groups) if isinstance(g.kv_cache_spec, MambaSpec)]
         self.max_model_len = max_model_len
-        lay = _layout(tp, block, n_banks, layout, num_blocks)
+        lay = _layout(tp, block, n_banks, num_blocks)
         self.book = _BookAsState(lay, len(self.mamba), B, T, mode, block if mode == "align" else 0)
         layer_of = {gdn_layer_name(i): i for i in range(len(specs))}
         self.book.layer_groups = {
@@ -763,7 +774,7 @@ def test_a_copied_block_names_the_state_of_its_source_column():
     # mode align, all drafts accepted at a step ending on a boundary: after_acceptance copies window column K into
     # column 0 (src == dst column), and the next begin_step copies column 0 on. The second copy must carry column K's
     # conv rows, not column 0's.
-    lay = _layout(8, 1024, 8, "two_pool")
+    lay = _layout(8, 1024, 8)
     book = sbs.SpecBlockBook(lay, 1, B, T, "align", 1024)
     w = torch.zeros(B, T, dtype=torch.int64)
     w[2] = torch.tensor([30, 31, 32, 33])
@@ -900,7 +911,7 @@ def test_the_spec_flag_turns_on_the_in_replay_snapshots(monkeypatch, env, on):
 
 
 def test_a_checkpoint_off_the_block_grid_or_outside_the_prefill_is_refused():
-    book = _BookAsState(_layout(8, 1024, 8, "two_pool"), 3, B, T, "align", 1024)
+    book = _BookAsState(_layout(8, 1024, 8), 3, B, T, "align", 1024)
     eng = _EngineStub(book, 1024)
     book.set_prefill_blocks([torch.tensor([5])] * 3)
     for n, (s, L) in [(1500, (0, 3000)), (3072, (0, 3000)), (1024, (1024, 3000))]:
@@ -918,7 +929,7 @@ def test_a_multimodal_row_writes_its_checkpoints_from_position_0():
     """A multimodal prompt never resumes from a block, but vLLM's checkpoints inside it become segment ends from 0
     (a block before the first image hashes like text, so it must hold the state); without checkpoints the plan stays
     None (one segment, as before)."""
-    book = _BookAsState(_layout(8, 1024, 8, "two_pool"), 3, B, T, "align", 1024)
+    book = _BookAsState(_layout(8, 1024, 8), 3, B, T, "align", 1024)
     eng = _EngineStub(book, 1024)
     book.set_prefill_blocks([torch.tensor([5])] * 3)
     book.set_prefill_checkpoints([torch.tensor([[7]])] * 3, torch.tensor([[2048]]))
@@ -984,10 +995,10 @@ def test_preemption_replays_from_a_prefix_hit_or_from_zero(tmp_path):
     assert h.verifies > 50
 
 
-@pytest.mark.parametrize("geo", [(4, 2048, 8, "two_pool"), (8, 2048, 8, "k_only")], ids=["tp4_two_pool", "tp8_k_only"])
-def test_other_layouts(tmp_path, geo):
-    tp, block, nb, name = geo
-    h = _Harness(tmp_path, "align", tp=tp, block=block, n_banks=nb, layout=name, retention=None)
+@pytest.mark.parametrize("geo", [(4, 2048, 8), (8, 2048, 8)], ids=["tp4_b2048", "tp8_b2048"])
+def test_other_geometries(tmp_path, geo):
+    tp, block, nb = geo
+    h = _Harness(tmp_path, "align", tp=tp, block=block, n_banks=nb, retention=None)
     h.accept = _rotate
     a = _prompt(30, block - 2)
     h.add("a", a, max_tokens=12)
@@ -1030,9 +1041,9 @@ def test_spec_class_binds_and_routes_only_through_the_spec_layout(monkeypatch):
     made = []
 
     class Recorder:
-        def __init__(self, model, specs, kv, T, layout, cache_mode, mamba_block_size, partial_prefix_hits):
-            made.append((T, layout, cache_mode, mamba_block_size, partial_prefix_hits))
-            self.layout = SimpleNamespace(layout=layout, heads_in_k=8, nv=12)
+        def __init__(self, model, specs, kv, T, cache_mode, mamba_block_size, partial_prefix_hits):
+            made.append((T, cache_mode, mamba_block_size, partial_prefix_hits))
+            self.layout = SimpleNamespace(heads_in_k=8, nv=12)
             self.G, self.calls = 3, []
 
         def copy_blocks(self, copies):
@@ -1053,7 +1064,7 @@ def test_spec_class_binds_and_routes_only_through_the_spec_layout(monkeypatch):
     )
     cls = Qwen36MTPContractForCausalLM
     kv = cls.allocate_kv_cache_per_layer(me, _per_layer_specs())
-    assert len(kv) == 16 and made == [(T, "two_pool", "align", 2048, False)]
+    assert len(kv) == 16 and made == [(T, "align", 2048, False)]
     assert isinstance(model._spec_blocks, Recorder) and not hasattr(model, "_paged_state")
     cls.copy_kv_cache_blocks(me, None, [(3, 4)])
     cls.zero_kv_cache_blocks(me, None, [5])
@@ -1128,7 +1139,7 @@ def _fake_ttnn(monkeypatch):
     monkeypatch.setattr(ttnn.experimental, "paged_fill_cache", fill)
 
 
-@pytest.mark.parametrize("geo", [(4, 2048, 8, "two_pool"), (8, 1024, 8, "two_pool"), (8, 2048, 8, "k_only")])
+@pytest.mark.parametrize("geo", [(4, 2048, 8), (8, 1024, 8), (8, 2048, 8)])
 def test_spec_state_device_writes_land_where_the_verify_reads(monkeypatch, geo):
     """SpecGdnBlockState's eager writes (prefill, copy materialize) and reads (restore) run with a fake ttnn that keeps
     each view page's label; the verify's ctrl start pages (SpecBlockLayout via SpecBlockBook) must find the prefill's
@@ -1210,7 +1221,7 @@ def test_spec_state_device_writes_land_where_the_verify_reads(monkeypatch, geo):
 
 
 def _moves_case(G=2):
-    lay = _layout(4, 2048, 8, "two_pool")
+    lay = _layout(4, 2048, 8)
     book = sbs.SpecBlockBook(lay, G, B, T, "align", 2048)
     stay = torch.arange(1, B * T + 1).reshape(B, T) * 2 + 10  # every row's staged (optimistic) window
     blocks = [stay + 100 * g for g in range(G)]
@@ -1371,7 +1382,7 @@ def _chain_copy_state(monkeypatch):
     state after token 1 ("rec:21") and the conv window holds rows x0 .. x6."""
     _fake_ttnn(monkeypatch)
     _torch_ops_over_fake(monkeypatch)
-    lay = _layout(4, 2048, 8, "two_pool")
+    lay = _layout(4, 2048, 8)
     views = sbs._LayerViews(
         rec1=_View(sbs.HALF_PAGES), rec2=_View(sbs.HALF_PAGES), conv=_View(1), conv_k=_View(1), group=0, two_pool=True
     )
@@ -1467,7 +1478,7 @@ def test_chain_audit_twin_reads_the_pages_of_its_own_staging():
     """The chain audit runs when the reader thread reads the step, after the engine staged later steps. Its expected
     ctrl words must come from the start pages the step was staged with (start_pages_snapshot), not from the live book:
     a row that finished since then holds the null block in the live book."""
-    lay = _layout(8, 1024, 8, "two_pool")
+    lay = _layout(8, 1024, 8)
     book = sbs.SpecBlockBook(lay, 1, B, T, "none")
     words = spec_ctrl_words(B, lay.nv)
     w = torch.arange(1, B * T + 1).reshape(B, T) + 20
@@ -1486,7 +1497,7 @@ def test_model_aux_builder_passes_the_snapshot_through_the_block_state():
     SpecBlockBook.ctrl_rows."""
     from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-    lay = _layout(4, 2048, 8, "two_pool")
+    lay = _layout(4, 2048, 8)
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
     st.book = sbs.SpecBlockBook(lay, 1, B, T, "none")
     w = torch.arange(1, B * T + 1).reshape(B, T) + 20

@@ -11,9 +11,10 @@ state (recurrent state and conv history) per block, inside the K and V buffers o
 * conv history: the B=1 prefill carry ([kc - 1, C] bf16, the last kc - 1 conv inputs, oldest first) in row-major order,
   32 values per tile row, in ceil((kc - 1) * C / 1024) consecutive tiles of a flat bf16 view of V (4 at TP=8).
 
-Only whole view pages inside the block's bytes are used (SpecBlockLayout). Layout "two_pool": heads fill K first, the
-rest go to V, the conv history follows them in V (block 1024 BF8 at TP=8 on 8 banks). Layout "k_only": every head in K,
-the conv history at the start of V's block (block 2048 BF8 at TP=8).
+Only whole view pages inside the block's bytes are used (SpecBlockLayout). The heads fill K's block first, the rest go
+to V's block, and the conv history follows them in V (BF8 block 1024 at TP=8 on 8 banks: 4 heads in K, 2 in V). When
+K's block holds every head, V's block holds only the conv history, at its start (BF8 block 2048 at TP=8, BF8 block 4096
+at TP=4).
 
 A verify (gdn_spec_step with ring_page_idx) reads the start state of row u from its window column
 mamba_state.accepted_counts[u] - 1 and writes the state after token t into window column t. The conv window of the
@@ -38,7 +39,6 @@ HALF_PAGES = 8  # fp32 pages of one [Dk / 2, Dv] slice: the unit of the rec view
 WARMUP_REQ = -1  # the prefill request index of the engine's warmup prompts: they write into vLLM's null block 0
 ZERO_BLOCKS_PER_FILL = 8  # attention blocks zeroed by one paged_fill_cache (the zero source is this many blocks long)
 ZERO_SOURCE_MAX_BYTES = 8 << 20  # cap of that zero source per device
-LAYOUTS = ("two_pool", "k_only")
 # S = tiles * 1088 is a multiple of 64, so block b's offset b * S modulo a 4096 B page repeats within 64 blocks: the
 # whole-page counts of blocks 0 .. 63 are those of every block
 _PERIOD = 65
@@ -64,32 +64,22 @@ class SpecBlockLayout:
     num_blocks: int
     nv: int
     conv_pages: int
-    layout: str = "two_pool"
     heads_in_k: int = field(init=False)
     pool1_pages: int = field(init=False)
     conv_pages_total: int = field(init=False)
 
     def __post_init__(self):
-        if self.layout not in LAYOUTS:
-            raise ValueError(f"layout {self.layout!r} not in {LAYOUTS}")
         S, nb = int(self.block_bytes), int(self.n_banks)
         rows_per_bank = (self.num_blocks * S) // FP32_PAGE
         # pool 1 = the fp32 view of K in HALF_PAGES units: the op splits the two-pool page space at its page count
         self.pool1_pages = (rows_per_bank * nb) // HALF_PAGES * HALF_PAGES
         self.conv_pages_total = (self.num_blocks * S) // BF16_PAGE * nb
         k_heads = min(self._pool_heads(b) for b in range(min(self.num_blocks, _PERIOD)))
-        if self.layout == "k_only":
-            if k_heads < self.nv:
-                raise ValueError(
-                    f"k_only: a K block holds {k_heads} whole heads of 16 fp32 pages per block, the layer has {self.nv}"
-                )
-            self.heads_in_k = self.nv
-        else:
-            self.heads_in_k = min(self.nv, k_heads)
-            if self.nv - self.heads_in_k > k_heads:
-                raise ValueError(
-                    f"two_pool: K and V blocks hold {2 * k_heads} whole heads of 16 fp32 pages, the layer has {self.nv}"
-                )
+        self.heads_in_k = min(self.nv, k_heads)
+        if self.nv - self.heads_in_k > k_heads:
+            raise ValueError(
+                f"K and V blocks hold {2 * k_heads} whole heads of 16 fp32 pages per block, the layer has {self.nv}"
+            )
         for b in range(min(self.num_blocks, _PERIOD)):
             self.conv_page(b)  # raises when the history does not fit
 
@@ -600,7 +590,6 @@ class SpecGdnBlockState:
         per_layer_specs,
         kv_caches,
         T,
-        layout="two_pool",
         cache_mode="none",
         mamba_block_size=0,
         partial_prefix_hits=False,
@@ -633,7 +622,7 @@ class SpecGdnBlockState:
             if k.dtype != v.dtype or tuple(k.shape) != tuple(v.shape):
                 raise ValueError(f"layer {i}: K {k.dtype} {tuple(k.shape)} and V {v.dtype} {tuple(v.shape)} differ")
             S = kv_block_bytes_per_bank(k.shape, _dtype_name(k.dtype), n_banks)
-            this = SpecBlockLayout(S, n_banks, int(k.shape[0]), dn.Nv, conv_carry_pages(dn.K, dn.qkv_dim_tp), layout)
+            this = SpecBlockLayout(S, n_banks, int(k.shape[0]), dn.Nv, conv_carry_pages(dn.K, dn.qkv_dim_tp))
             if lay is None:
                 lay = this
             elif (this.block_bytes, this.nv, this.conv_pages, this.num_blocks) != (
@@ -1295,7 +1284,7 @@ class SpecGdnBlockState:
             if h1 <= h0:
                 continue
             n = h1 - h0
-            # every head in one pool (k_only): a whole-tensor slice returns rec's own buffer, which must survive
+            # every head in K (heads_in_k == Nv): a whole-tensor slice returns rec's own buffer, which must survive
             whole = h0 == 0 and h1 == int(rec.shape[1])
             part = (
                 rec

@@ -82,7 +82,7 @@ def _mamba_state(windows, counts=None, ckpt=None, positions=None, chain=None):
 def _layout():
     nv, C = 48 // 8, (2 * 16 * 128 + 48 * 128) // 8
     S = sbs.kv_block_bytes_per_bank([2000, 1, BLOCK, 256], "bfloat8_b", 8)
-    return sbs.SpecBlockLayout(S, 8, 2000, nv, sbs.conv_carry_pages(4, C), "two_pool")
+    return sbs.SpecBlockLayout(S, 8, 2000, nv, sbs.conv_carry_pages(4, C))
 
 
 def _spec_state():

@@ -1478,7 +1478,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         """vllm-tt-plugin per-layer allocation. MambaSpec entries (QWEN36_MAMBA_SPEC=1, num_speculative_blocks = K): every
         GDN layer keeps its state in its layer slot's K and V buffers, 1 + K blocks per request window
-        (tt/spec_block_state.py; QWEN36_MAMBA_SPEC_LAYOUT = two_pool (default) or k_only)."""
+        (tt/spec_block_state.py)."""
         from models.demos.blackhole.qwen36.tt.gdn_block_state import is_mamba_entry
         from models.demos.blackhole.qwen36.tt.spec_block_state import SpecGdnBlockState
 
@@ -1504,7 +1504,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 per_layer_specs,
                 kv,
                 self._SPEC_K + 1,
-                layout=os.environ.get("QWEN36_MAMBA_SPEC_LAYOUT", "two_pool"),
                 cache_mode=mode,
                 mamba_block_size=int(getattr(cc, "block_size", 0) or 0) if mode == "align" else 0,
                 partial_prefix_hits=0
@@ -1512,8 +1511,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 < int(getattr(cc, "block_size", 0) or 0),
             )
             logger.info(
-                f"QWEN36_MAMBA_SPEC: GDN state in vLLM blocks, mode {mode}, layout {model._spec_blocks.layout.layout} "
-                f"({model._spec_blocks.layout.heads_in_k}/{model._spec_blocks.layout.nv} heads in K), "
+                f"QWEN36_MAMBA_SPEC: GDN state in vLLM blocks, mode {mode}, "
+                f"{model._spec_blocks.layout.heads_in_k}/{model._spec_blocks.layout.nv} heads in K, "
                 f"{model._spec_blocks.G} GDN groups"
             )
         return kv

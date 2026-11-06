@@ -44,12 +44,12 @@ def _kv(device, num_blocks, block):
     )
 
 
-def _state(device, g, block, num_blocks, layout):
+def _state(device, g, block, num_blocks):
     """A SpecGdnBlockState over one GDN layer of geometry g, bound to fresh BF8 K and V buffers."""
     k, v = _kv(device, num_blocks, block), _kv(device, num_blocks, block)
     nb = int(device.dram_grid_size().x)
     S = sbs.kv_block_bytes_per_bank(k.shape, "bfloat8_b", nb)
-    lay = sbs.SpecBlockLayout(S, nb, num_blocks, g.Nv, sbs.conv_carry_pages(4, g.C), layout)
+    lay = sbs.SpecBlockLayout(S, nb, num_blocks, g.Nv, sbs.conv_carry_pages(4, g.C))
     half = [lay.pool1_pages // sbs.HALF_PAGES, 1, 64, 128]
     views = sbs._LayerViews(
         rec1=ttnn.experimental.alias_view(k, half, ttnn.float32, check_slices=False),
@@ -79,9 +79,9 @@ def _dev_u32(device, t):
     return ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 
-# (geometry, block, layout): TP=4 two pools at 2048 (the QuietBox runs), TP=8 two pools at 1024 (Galaxy primary),
-# TP=8 K only at 2048 (option 1)
-CASES = [(op.GEOS[1], 2048, "two_pool"), (op.GEOS[0], 1024, "two_pool"), (op.GEOS[0], 2048, "k_only")]
+# (geometry, block): TP=4 at 2048 (the QuietBox runs, heads in K and V), TP=8 at 1024 (Galaxy primary, heads in K and
+# V), TP=8 at 2048 (every head in K)
+CASES = [(op.GEOS[1], 2048), (op.GEOS[0], 1024), (op.GEOS[0], 2048)]
 
 
 # the deployment's gdn_spec_step options: QWEN36_SPEC_STEP_VALUE_BLOCKS=4, QWEN36_SPEC_STEP_OPT=250 and
@@ -94,16 +94,16 @@ STEP_OPTS = {
 
 
 @pytest.mark.parametrize("step_opts", list(STEP_OPTS))
-@pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
+@pytest.mark.parametrize("geo_block", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}")
 @pytest.mark.parametrize("B,hold", [(1, ()), (4, (2,)), (8, ())])
-def test_pages_match_ring(device, geo_block_layout, B, hold, step_opts):
-    g, block, layout = geo_block_layout
+def test_pages_match_ring(device, geo_block, B, hold, step_opts):
+    g, block = geo_block
     so = STEP_OPTS[step_opts]
     num_blocks = 48
     c = op.Case(device, g, B, T, seed=7 + B, hold=hold, par=B & 1, R=op.round_up32(B * T), mode=op.MODES[2])
     out_ref, ring_ref, _, win_ref = c.snapshot(c.run(**so))
     c.reseed()
-    st, dn, k, v = _state(device, g, block, num_blocks, layout)
+    st, dn, k, v = _state(device, g, block, num_blocks)
     win = _windows(B, num_blocks, seed=B)
     book = sbs.SpecBlockBook(st.layout, 1, B, T, "none")
     st.book = book
@@ -140,11 +140,11 @@ def test_pages_match_ring(device, geo_block_layout, B, hold, step_opts):
         assert not ttnn.to_torch(st._read_rec(dn, b)).float().any(), f"block {b} outside every window was written"
 
 
-@pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
-def test_conv_history_round_trip(device, geo_block_layout):
+@pytest.mark.parametrize("geo_block", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}")
+def test_conv_history_round_trip(device, geo_block):
     """_write_carry / _read_carry, and materialize from a conv window: exact bf16 rows."""
-    g, block, layout = geo_block_layout
-    st, dn, k, v = _state(device, g, block, 32, layout)
+    g, block = geo_block
+    st, dn, k, v = _state(device, g, block, 32)
     torch.manual_seed(3)
     carry = torch.randn(1, 3, g.C).bfloat16()
     rm = ttnn.from_torch(carry, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -166,16 +166,16 @@ def test_conv_history_round_trip(device, geo_block_layout):
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16_000_000}], indirect=True)
-@pytest.mark.parametrize("geo_block_layout", [CASES[0], CASES[1]], ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
-def test_traced_time_ring_vs_pages(device, geo_block_layout):
+@pytest.mark.parametrize("geo_block", [CASES[0], CASES[1]], ids=lambda c: f"{c[0].id}_b{c[1]}")
+def test_traced_time_ring_vs_pages(device, geo_block):
     """Traced time per call at B=8, T=4, the model's arithmetic: the default ring vs the KV-buffer pages."""
-    g, block, layout = geo_block_layout
+    g, block = geo_block
     N, REPS, B = 48, 10, 8
     if B * g.Nv > op.num_cores(device):
         pytest.skip("over the grid")
     c = op.Case(device, g, B, T, seed=23, par=0, R=op.round_up32(B * T), mode=op.MODES[2])
     ring, ctrl = c.ring, c.ctrl
-    st, dn, k, v = _state(device, g, block, 64, layout)
+    st, dn, k, v = _state(device, g, block, 64)
     win = _windows(B, 64, seed=5)
     book = sbs.SpecBlockBook(st.layout, 1, B, T, "none")
     book.set_step([win], torch.tensor(c.mi), range(B))
@@ -204,18 +204,19 @@ def test_traced_time_ring_vs_pages(device, geo_block_layout):
     r_min, r_med = per_call_us(ring, ctrl, {})
     p_min, p_med = per_call_us(dn._spec_paged.rec1, pctrl, kw)
     print(
-        f"\n[{g.id} block {block} {layout}] gdn_spec_step B={B} T={T}: ring {r_min:.1f} us (median {r_med:.1f}), "
-        f"KV-buffer pages {p_min:.1f} us (median {p_med:.1f}), {100 * (p_min - r_min) / r_min:+.2f}%"
+        f"\n[{g.id} block {block}, {st.layout.heads_in_k}/{g.Nv} heads in K] gdn_spec_step B={B} T={T}: "
+        f"ring {r_min:.1f} us (median {r_med:.1f}), KV-buffer pages {p_min:.1f} us (median {p_med:.1f}), "
+        f"{100 * (p_min - r_min) / r_min:+.2f}%"
     )
 
 
-@pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
-def test_block_copies_keep_the_state(device, geo_block_layout):
+@pytest.mark.parametrize("geo_block", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}")
+def test_block_copies_keep_the_state(device, geo_block):
     """SpecGdnBlockState.copy_blocks: a whole-block copy between blocks of the same phase and a page-by-page copy
     between blocks of different phase (BF8 1024: odd and even blocks) both leave the source's state at the
     destination's layout pages."""
-    g, block, layout = geo_block_layout
-    st, dn, k, v = _state(device, g, block, 32, layout)
+    g, block = geo_block
+    st, dn, k, v = _state(device, g, block, 32)
     st.model = SimpleNamespace(_paged_kv_caches=[(k, v)], mesh_device=device)
     st._slot_layers = {0: dn}
     st.book = sbs.SpecBlockBook(st.layout, 1, 8, T, "none")
@@ -227,7 +228,7 @@ def test_block_copies_keep_the_state(device, geo_block_layout):
         st._write_rec(dn, 7, rec_dev, pts)
         rm = ttnn.from_torch(carry, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         st._write_carry(dn, 7, rm, pts)
-    # the source is the bound prefill scratch in the model: the write must leave it allocated (k_only: one pool)
+    # the source is the bound prefill scratch in the model: the write must leave it allocated (every head in K)
     assert rec_dev.is_allocated() and torch.equal(ttnn.to_torch(rec_dev).reshape(rec.shape).float(), rec)
     for dst in (9, 10, 13, 20):
         st.copy_blocks([(7, dst)])
@@ -264,15 +265,15 @@ def test_zero_blocks_zeroes_only_the_listed_blocks(device, block):
                 assert torch.equal(host[b], torch.ones_like(host[b])), f"{name} block {b} changed"
 
 
-@pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
-def test_chained_copies_select_dst_by_the_device_count(device, geo_block_layout):
+@pytest.mark.parametrize("geo_block", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}")
+def test_chained_copies_select_dst_by_the_device_count(device, geo_block):
     """run_chain_copies with the counts on the device (the chain copies of a chained step's mamba_state): a row whose
     count selects its copy gets the source's state and the pending verify's conv rows of that column at dst; a row
     whose count does not keeps dst as it was (the copy lands in the null block 0)."""
     from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
 
-    g, block, layout = geo_block_layout
-    st, dn, k, v = _state(device, g, block, 40, layout)
+    g, block = geo_block
+    st, dn, k, v = _state(device, g, block, 40)
     st.model = SimpleNamespace(_paged_kv_caches=[(k, v)], mesh_device=device)
     st._slot_layers, st.moves_counts, st.chain_copies = {0: dn}, None, []
     B = 8
@@ -310,14 +311,14 @@ def test_chained_copies_select_dst_by_the_device_count(device, geo_block_layout)
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16_000_000}], indirect=True)
-@pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
-def test_copy_traces_match_the_eager_block_ops(device, geo_block_layout):
+@pytest.mark.parametrize("geo_block", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}")
+def test_copy_traces_match_the_eager_block_ops(device, geo_block):
     """_CopyTraces: the replayed whole-block copy, page-by-page copy (blocks of either phase), conv write
     from either window half and the chained copy with device-selected pages leave what the eager ops leave."""
     from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
 
-    g, block, layout = geo_block_layout
-    st, dn, k, v = _state(device, g, block, 40, layout)
+    g, block = geo_block
+    st, dn, k, v = _state(device, g, block, 40)
     st.model = SimpleNamespace(_paged_kv_caches=[(k, v)], mesh_device=device)
     st._slot_layers, st.moves_counts, st.chain_copies = {0: dn}, None, []
     B = 8
