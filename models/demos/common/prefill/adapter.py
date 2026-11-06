@@ -161,6 +161,11 @@ class PrefillModelAdapter(ABC):
     # chunk per KV-writing layer, each chunk's records contiguous). Otherwise the runner refuses those at F > 1.
     supports_packed_forward_trace: bool = False
     supports_packed_forward_d2h_acks: bool = False
+    # With supports_packed_forward and passes_indexer_indices, whether prefill_forward takes a pipeline boundary's
+    # indexer indices for every chunk of the forward (indexer_indices=..., one tensor of indexer_indices_shape(), which
+    # covers all forward_chunks chunks) and leaves its own the same way (outbound_indexer_indices). Otherwise the runner
+    # refuses F > 1 on a split that passes indices.
+    supports_packed_forward_indexer_indices: bool = False
     # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
     passes_indexer_indices: bool = False
     # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.

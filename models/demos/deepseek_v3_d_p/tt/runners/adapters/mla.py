@@ -110,10 +110,24 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 mesh_shape=params.mesh_shape,
                 sp_axis=params.sp_axis,
                 num_layers=params.num_layers,
-                num_users=params.num_users,
+                num_users=self.kv_cache_slots(params),
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
                 bank_aligned=True,
             )
+        )
+
+    def packed_forward_chunks(self, params: PrefillRunParams) -> int:
+        """Chunks per forward the runtime packs: params.forward_chunks when this adapter's runtime serves
+        prefill_forward, else 1 (the runner runs a forward of several chunks one chunk at a time)."""
+        return params.forward_chunks if self.supports_packed_forward else 1
+
+    def kv_cache_slots(self, params: PrefillRunParams) -> int:
+        """User slots to allocate in every KV cache: the runtime's cache_num_users (num_users, plus the traced
+        packed forward's scratch slot past them). The engine still addresses and migrates num_users slots."""
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import kv_cache_slots
+
+        return kv_cache_slots(
+            params.num_users, forward_chunks=self.packed_forward_chunks(params), use_trace=params.use_trace
         )
 
     def _dense_tp_shard_kv(self, params: PrefillRunParams) -> bool:
@@ -142,6 +156,11 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
             chunk_size=params.chunk_size,
+            # Only an adapter whose runtime serves prefill_forward packs; otherwise the runner runs a forward of
+            # several chunks as prefill_chunk per chunk, on a one-chunk runtime.
+            forward_tokens_budget=(
+                params.forward_chunks * params.chunk_size if self.packed_forward_chunks(params) > 1 else None
+            ),
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,

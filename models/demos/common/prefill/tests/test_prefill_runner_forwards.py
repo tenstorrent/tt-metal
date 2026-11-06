@@ -296,3 +296,22 @@ def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata
     assert writes == own[:3] + own[:1] + [(out, "zero", rows), (out, "zero", 2 * rows)] + own
     assert all(a is out for a, _ in sent[:-1])
     assert [w for _, w in sent] == words
+
+
+def test_packed_forward_takes_the_upstream_indexer_indices(monkeypatch):
+    """A rank starting on a GLM-5.3 "shared" layer gets the upstream rank's indices for every chunk of the forward
+    in one packed tensor, through prefill_forward; a rank that receives none gets no keyword at all."""
+    _configure(monkeypatch, supports_packed_forward=True)
+    seen = []
+
+    class _Downstream(_PackedRuntime):
+        def prefill_forward(self, inp, kv, chunks, request_id=0, d2h_service=None, *, metadata_msg=None, **kwargs):
+            seen.append(kwargs)
+
+    runtime = _Downstream()
+    meta = runner._meta_from_words(forward_metadata_words(pad_chunks(FORWARDS[0], F), F))
+    sockets = runner.SocketBuffers(metadata=None)
+    indices = _Tensor()
+    runner._compute_and_send(runtime, None, 1, 0, _Tensor(), meta, runner.D2DBoundary(), sockets, indices=indices)
+    runner._compute_and_send(runtime, None, 1, 1, _Tensor(), meta, runner.D2DBoundary(), sockets)
+    assert seen == [{"indexer_indices": indices}, {}]

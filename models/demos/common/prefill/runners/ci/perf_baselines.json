@@ -24,7 +24,7 @@
       }
     },
     "glm53": {
-      "sc4": {
+      "sc4_8x4": {
         "probe": "@1020k",
         "8kw": {
           "throughput_tok_s": 17933,

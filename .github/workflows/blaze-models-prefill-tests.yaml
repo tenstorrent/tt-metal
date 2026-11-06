@@ -224,8 +224,11 @@ jobs:
         include:
           - model: glm53
             title: "(GLM-5.3-744B) disaggregated prefill SC4 vs SC1 scaling"
+          # MTP has no 4x4 cache, so its legs run the 8x4 layout's configs.
           - model: glm53_mtp_kv_share
             title: "(GLM-5.3-744B) MTP KV share prefill SC4 vs SC1 scaling"
+            base: sc1_8x4
+            ref: sc4_8x4
           # sc4 alone: K3's sc1 leg runs 24 of 93 layers, so there is no sc1 baseline to scale from.
           - model: kimi_k3
             title: "(Kimi-K3-2.8T) disaggregated prefill SC4 perf"

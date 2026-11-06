@@ -119,6 +119,11 @@ case "${MODEL}" in
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
       PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
       [ "${SCALE}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+    elif [ "${VARIANT}" = _packed ]; then
+      # Two chunks per forward (PREFILL_FORWARD_TOKENS_BUDGET = 2 x PREFILL_CHUNK_SIZE): the producer packs the
+      # same golden request into packed forwards, traced with D2H acks, every chunk's indexer indices crossing
+      # ranks. Same golden and PCC gate: packing moves the MoE output by rounding only (#63555).
+      MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
     fi
     case "${CONFIG}" in
       sc4|sc1)

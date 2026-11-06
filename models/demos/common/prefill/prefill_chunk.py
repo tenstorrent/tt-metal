@@ -176,12 +176,15 @@ def packed_forward_refusals(
     indexer_indices: bool = False,
     traced_forward: bool = False,
     forward_d2h_acks: bool = False,
+    forward_indexer_indices: bool = False,
 ) -> list:
     """Why a configuration cannot run ``forward_chunks`` chunks per forward (empty list: it can).
 
-    ``traced_forward`` / ``forward_d2h_acks`` are the adapter's supports_packed_forward_trace /
-    supports_packed_forward_d2h_acks: its prefill_forward stages each chunk's inputs before a trace replay, and sends
-    one 12-byte D2H ack record per chunk per KV-writing layer, chunk by chunk."""
+    ``traced_forward`` / ``forward_d2h_acks`` / ``forward_indexer_indices`` are the adapter's
+    supports_packed_forward_trace / supports_packed_forward_d2h_acks / supports_packed_forward_indexer_indices: its
+    prefill_forward stages each chunk's inputs before a trace replay; sends one 12-byte D2H ack record per chunk per
+    KV-writing layer, chunk by chunk; and takes and leaves a pipeline boundary's indexer indices for every chunk of
+    the forward, packed in one tensor of the runtime's indexer_indices_shape()."""
     if forward_chunks == 1:
         return []
     reasons = []
@@ -193,9 +196,10 @@ def packed_forward_refusals(
         reasons.append("PREFILL_USE_TRACE=1 (per-chunk arguments are not trace inputs)")
     if d2h_acks and supports_packed_forward and not forward_d2h_acks:
         reasons.append("PREFILL_LAYER_ACK_D2H=1 with the adapter's prefill_forward")
-    if indexer_indices:
+    if indexer_indices and not (supports_packed_forward and forward_indexer_indices):
         reasons.append(
-            "a multi-rank runtime passes indexer indices between ranks, which a packed forward does not carry"
+            "a multi-rank runtime passes indexer indices between ranks, which this adapter's packed forward does not "
+            "carry"
         )
     return reasons
 
@@ -207,6 +211,7 @@ def packed_forward_capabilities(adapter) -> dict:
         "supports_packed_forward": adapter.supports_packed_forward,
         "traced_forward": adapter.supports_packed_forward_trace,
         "forward_d2h_acks": adapter.supports_packed_forward_d2h_acks,
+        "forward_indexer_indices": adapter.supports_packed_forward_indexer_indices,
     }
 
 

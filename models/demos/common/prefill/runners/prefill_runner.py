@@ -875,7 +875,13 @@ def _compute_and_send(
                 ttnn.deallocate(sockets.metadata)
         elif FORWARD_CHUNKS > 1:
             out = runtime.prefill_forward(
-                inp, kv_caches, meta["chunks"], request_id=c, d2h_service=d2h_service, metadata_msg=sockets.metadata
+                inp,
+                kv_caches,
+                meta["chunks"],
+                request_id=c,
+                d2h_service=d2h_service,
+                metadata_msg=sockets.metadata,
+                **({"indexer_indices": indices} if indices is not None else {}),
             )
         else:
             mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}

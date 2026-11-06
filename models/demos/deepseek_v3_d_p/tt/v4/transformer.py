@@ -79,6 +79,8 @@ class TtV4Transformer(LightweightModule):
         sparse_kv_cache_format=None,
         mtp_predictor=None,
         tp_shard_kv: Optional[bool] = None,
+        # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget); V4 runs one chunk per forward.
+        forward_chunks: int = 1,
         **block_kwargs,
     ):
         """``state_dict`` is ``{"embed_weight", "norm_weight", "hc_head": (fn, base, scale), "layers"}``,
@@ -105,6 +107,8 @@ class TtV4Transformer(LightweightModule):
             raise ValueError(f"DeepSeek-V4 attention state is single-user; got slot_num={slot_num}")
         if padding_side != "right":
             raise ValueError(f"V4 attention is right-padded by construction, got {padding_side!r}")
+        if forward_chunks != 1:
+            raise NotImplementedError(f"DeepSeek-V4 has no packed forward; got forward_chunks={forward_chunks}")
 
         topology = topology if topology is not None else per_axis_topology()
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
@@ -245,6 +249,7 @@ class TtV4Transformer(LightweightModule):
         input_is_embedded: bool = False,
         provided_levels: int = 0,
         mtp_geometry=None,
+        chunks: Optional[list] = None,
     ):
         """Run one chunk through this rank's layers.
 
@@ -270,6 +275,8 @@ class TtV4Transformer(LightweightModule):
             raise ValueError(
                 "DeepSeek-V4 prefill has no MTP predictor; MTP forward arguments must be left at their defaults"
             )
+        if chunks is not None:
+            raise NotImplementedError("DeepSeek-V4 has no packed forward; chunks must be None")
         if kvpe_cache is not None or index_kv_cache is not None:
             raise ValueError("DeepSeek-V4 attention owns its state; kvpe_cache and index_kv_cache must be None")
         if metadata is not None:
