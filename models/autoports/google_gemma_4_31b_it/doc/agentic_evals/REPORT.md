@@ -103,3 +103,5 @@ The idle-host workload repeat passed5requests: cold TTFT0.783/8.284/48.065second
 ![Valid SWE smoke timeline](figures/swe_valid_timeline.svg)
 
 Query windows include API work and client overhead; the plot does not separate device generation, prefill or queue time. The two agents overlap, so summed lane time exceeds suite wall time.
+
+Capacity preparation has a conditional C4 SWE5 source candidate (`3d5d41d149ac8d12465842232c97d11d413baf9b`) with34focused tests and hooks passing. It is not dispatched or device-validated. The current planning guess is25% less eval wall time on provisional GPQA198/SWE5/Terminal10 lists,2.164hours total, with0.15local device hours estimated; these are forecasts, not measurements or frozen release projections. Acceptance still needs distinct real histories, resource admission and a same-cohort scored comparison. C2 rungs proceed independently.

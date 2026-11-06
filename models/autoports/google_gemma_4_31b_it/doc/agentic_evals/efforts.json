@@ -80,7 +80,7 @@
     },
     {
       "problem": "agent-capacity-and-contention",
-      "owner": "coordinator",
+      "owner": "local_serving_check",
       "goal": "Choose agents/batch that finishes release fastest",
       "predicted": {
         "saving_hours": {
@@ -93,8 +93,8 @@
         "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
         "device_cost_reason": "Current planning estimate only; .25h short replay box, or0 for operator-excluded local credential provisioning."
       },
-      "status": "not_run",
-      "reason": "C2 confirmed by actual workloads; next usefulC4 replay awaits4 distinct faithfully retained histories. Current valid SWE has2; Terminal native retention prepared for next normal rung. No fabricated histories or redundant C2 rerun.",
+      "status": "running",
+      "reason": "Host-only C4 source preparation while awaiting4distinct native histories; no device launch or C4 admission yet. Normal C2 rungs advance immediately.",
       "prediction_reconciliation": {
         "at": "2026-11-06T08:19:21.396893+00:00",
         "original_unavailable_fields": {
@@ -108,7 +108,38 @@
         "success": "Choose concurrency fitting pool/host and reduce projected release time without changed outputs"
       },
       "plan": "runs/agent-capacity-and-contention/plan.md",
-      "box_hours": 0.25
+      "box_hours": 0.25,
+      "re_estimate": {
+        "device_hours": 0.15,
+        "basis": "guess",
+        "reason": "Latest idle B8 total393s includes167s client; paired replay may fit540s plus margin inside900s box, but actualhistory lengths must set launch projection.",
+        "saving_hours": {
+          "r1_gpqa_diamond": 1.3021431219073494,
+          "swe_bench_verified": 0.06510209982638888,
+          "terminal_bench_2_1": 0.7969460291666668
+        },
+        "planning_task_lists": {
+          "r1_gpqa_diamond": 198,
+          "swe_bench_verified": 5,
+          "terminal_bench_2_1": 10
+        },
+        "baseline_linear_eval_hours": {
+          "r1_gpqa_diamond": 5.2085724876293975,
+          "swe_bench_verified": 0.26040839930555554,
+          "terminal_bench_2_1": 3.187784116666667
+        },
+        "saving_basis": "Guess:25% eval-wall reduction atC4, half the ideal50% benefit of doubling workers, allowing resource/tail effects. Uses currently dispatched planning lists, not frozen release; setup/queue unchanged. Replace after each rung and when release lists chosen. No measured speed credit."
+      },
+      "preparation": {
+        "candidate": "3d5d41d149ac8d12465842232c97d11d413baf9b",
+        "base": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+        "branch": "prep/swe-c4-capacity",
+        "focused_tests": 34,
+        "hooks": "pass",
+        "evidence": "runs/agent-capacity-and-contention/candidate-validation.json; runs/agent-capacity-and-contention/host-admission-preparation.json",
+        "admission": "Not yet device-validated; no C4 dispatch. Static16CPU/249.31GB host, C4SWEdeclared4CPU/16G, networknominal31. Current headroom unknown.",
+        "acceptance": "Stock replay capacity only, then same-cohort scored C4/C2 pair; normal C2 rungs do not wait."
+      }
     },
     {
       "problem": "source-only-packaging",
@@ -3835,6 +3866,56 @@
         }
       ],
       "reason": "Validity issues unchanged. Idle-host cold/overlap measurements complete; release overlap frequency still unknown, no numerical speed credit. Capacity remains first speed candidate awaiting4distinct native histories."
+    },
+    {
+      "after": "capacity-source-preparation-started",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Validity issues first; idle-host measurements complete. Capacity preparation costs no device now and cannot delay normalC2 rungs. No C4 admission until actual4histories and confirmation; numerical speed credit remains0."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

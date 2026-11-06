@@ -1,0 +1,89 @@
+{
+  "status": "historical_host_facts_not_current_C4_admission",
+  "device_hours": 0,
+  "historical_runner": {
+    "hostname": "qb2-120-p05t02",
+    "at": "2026-11-06T11:07:02Z",
+    "logical_cpus": 16,
+    "physical_cores": 8,
+    "memory_reported": "249.31 GB",
+    "memory_available": null,
+    "free_disk_reported": "953 GB",
+    "source": "bringup/artifacts/stage12-swe-activation-live.log:78-88,522-529,580",
+    "corroboration": "bringup/artifacts/stage12-terminal-lifecycle-live.log:host_info and lscpu, same runner09:58"
+  },
+  "tasks": [
+    {
+      "task": "pylint-dev__pylint-7080",
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      }
+    },
+    {
+      "task": "django__django-11265",
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      }
+    },
+    {
+      "task": "psf__requests-1766",
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      }
+    },
+    {
+      "task": "pydata__xarray-4966",
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      }
+    },
+    {
+      "task": "astropy__astropy-14598",
+      "environment": {
+        "build_timeout_sec": 1800.0,
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G"
+      }
+    }
+  ],
+  "c4_task_requirements": {
+    "cpu_quota_sum": 4,
+    "memory_definition_sum": "16G (16384 MiB under existing Harbor normalization)",
+    "storage_definition_sum": "40G (40960 MiB under existing Harbor normalization)",
+    "cohort_total_storage": "50G excluding retained images/build/server overhead"
+  },
+  "network_ceiling": {
+    "approximate": 31,
+    "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/device-instructions.md:68",
+    "occupancy": null,
+    "c4_below_nominal_ceiling": true
+  },
+  "missing_reasons": [
+    "Reported Memory is host total, not free RAM or cgroup limit for future job.",
+    "Future pool-selected runner and current Docker network occupancy unknown.",
+    "Concurrent server/harness peak CPU/RAM and retained Docker storage overhead not measured for C4.",
+    "Four simultaneous real sandbox tasks not yet demonstrated; local replay cannot establish this."
+  ],
+  "acceptance": "Capacity-only replay followed by host admission evidence and scored same-cohort C2/C4 pair on normal CI route; C2 next rung proceeds without waiting. No added CI admission checks/dispatch.",
+  "forecast_guess": {
+    "eval_wall_fraction_saved": 0.25,
+    "provisional_release_tasks": "GPQA198/SWE5/Terminal10",
+    "total_eval_wall_hours_saved": 2.164,
+    "local_device_hours": 0.15,
+    "setup_saving": 0,
+    "note": "Coordinator planning guess, not measured or justified by current C4 evidence; revise after rung and release selection."
+  }
+}

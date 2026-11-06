@@ -1,0 +1,43 @@
+{
+  "status": "prepared_not_accepted",
+  "base": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+  "candidate": "3d5d41d149ac8d12465842232c97d11d413baf9b",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-swe-c4-capacity",
+  "branch": "prep/swe-c4-capacity",
+  "changes": [
+    "Model-specific SWE n_concurrent_trials2 to4",
+    "Matching generated Harbor config test expectation"
+  ],
+  "unchanged": [
+    "Frozen SWE nightly5 cohort",
+    "GPQA/Terminal nightly0",
+    "Serving B8",
+    "All limits and task resources",
+    "Pins and runtime"
+  ],
+  "validation": {
+    "focused": "34 passed in3.33s",
+    "exact_source_comparison": "one concurrency literal only",
+    "ruff": "pass",
+    "ruff_format": "pass",
+    "full_pytest_hook": "pass",
+    "copyright": "pass",
+    "diff_check": "pass"
+  },
+  "planned_clients": 4,
+  "device_box_hours": 0.25,
+  "device_hours_used": 0,
+  "output_confirmation": false,
+  "capacity_confirmation": false,
+  "pending": [
+    "Four distinct faithfully reconstructed real histories and measured admission/reuse",
+    "Exact output confirmation; existing stock replay only records usage and is insufficient",
+    "Scored same-cohort pair if behavior-changing configuration cannot obtain exact confirmation"
+  ],
+  "normal_rung_constraint": "Next eligible C2 run proceeds immediately; candidate cannot delay it",
+  "publication_or_dispatch": false,
+  "evidence": [
+    "plan.md",
+    "c4-candidate.patch"
+  ]
+}

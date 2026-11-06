@@ -1,0 +1,26 @@
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index 1be481a..8a3539b 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -11990,7 +11990,7 @@ _eval_config_list = [
+                 agentic_eval_config=HarborEvalConfig(
+                     dataset="swebench-verified",
+                     agent="mini-swe-agent",
+-                    n_concurrent_trials=2,
++                    n_concurrent_trials=4,
+                     n_attempts=1,
+                     agent_timeout_sec=21600,
+                     llm_timeout_sec=3600,
+diff --git a/tests/workflows/test_gemma4_autoport_smoke_suites.py b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+index 8eaaf9a..5baaa3d 100644
+--- a/tests/workflows/test_gemma4_autoport_smoke_suites.py
++++ b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+@@ -115,7 +115,7 @@ def test_stock_harbor_route_preserves_smoke_limits_and_task_resources(
+     generated = json.loads(_write_harbor_config(config).read_text())
+     assert generated["datasets"][0]["task_names"] == names
+     assert generated["datasets"][0]["n_tasks"] == len(names)
+-    assert generated["n_concurrent_trials"] == 2
++    assert generated["n_concurrent_trials"] == (4 if index == 1 else 2)
+     assert "override_cpus" not in generated["environment"]
+     assert "override_memory_mb" not in generated["environment"]
+     agent = generated["agents"][0]

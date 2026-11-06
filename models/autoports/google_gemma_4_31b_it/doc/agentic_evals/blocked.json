@@ -1,5 +1,5 @@
 {
-  "status": "resolved_by_operator_decision_8",
+  "status": "stage_active_final_route_decisions_pending",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -29,7 +29,7 @@
     "Stage gate pass"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T10:56:39.641216+00:00",
+  "updated_at": "2026-11-06T12:10:39.013324+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -117,11 +117,13 @@
     "eval_started_at": "2026-11-06T09:06:12Z"
   },
   "swe_network_validity": {
-    "status": "host_fix_passed_same_smoke_retry_queued",
+    "status": "resolved_valid_original_smoke",
     "run_id": 42173587147,
     "reason": "Bothtasksdownloadedpackages; suspectedstockagentbase-vs-testbedenvironment mismatch",
-    "evidence": "runs/swe-network-validity/AUTOFIX.md",
-    "retry_run_id": 42200513517
+    "evidence": "runs/smoke2-swe-activation-repair/audit.json",
+    "retry_run_id": 42200513517,
+    "confirmation_run": 42200513517,
+    "confirmation": "Both original tasks validly submitted using prepared environments; no external retrieval or limit loss. Scores0/2; nightly5running."
   },
   "disk_admission_question": {
     "asked_at": "2026-11-06T11:40:38.748608+00:00",
