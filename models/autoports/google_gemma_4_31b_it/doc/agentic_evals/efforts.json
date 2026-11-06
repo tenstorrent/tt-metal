@@ -367,6 +367,56 @@
         "ci_score_validity": "pending"
       },
       "evidence": "runs/parser-protocol/RESULT.md; runs/parser-protocol/AUTOFIX.md"
+    },
+    {
+      "problem": "ci-fabric-topology",
+      "owner": "harness_registration",
+      "goal": "Identify supported recovery for premodel fabric mapping failure",
+      "plan": "runs/ci-topology/plan.md",
+      "predicted": {
+        "saving_hours": null,
+        "device_hours": 0.2167,
+        "basis": "measured failed devicejob; successful evaluation runtime unknown"
+      },
+      "unblocks": [
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Stock CI retry loads full autoport and produces valid tasks after runner setup/reset",
+        "success": "Full60 loaded and task trajectories collected"
+      },
+      "box_hours": 0.25,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": "Host diagnosis excludes mesh alias error; physical channel deficit observed; recovery pending retry42175367781",
+      "evidence": "runs/ci-topology/result.json"
+    },
+    {
+      "problem": "native-tool-roundtrip",
+      "owner": "harness_registration",
+      "goal": "Accept actualmini tool-result secondturn",
+      "plan": "runs/native-tool-roundtrip/plan.md",
+      "predicted": {
+        "saving_hours": null,
+        "device_hours": 0.002777777777777778,
+        "basis": "guess"
+      },
+      "unblocks": [
+        "swe_bench_verified"
+      ],
+      "confirm": {
+        "method": "HTTP POST and actualmini parser",
+        "success": "200 and valid subsequent toolaction"
+      },
+      "box_hours": 0.05,
+      "status": "done",
+      "used_device_hours": 0.0005186512244270287,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": "HTTP200 and valid parsed submissionaction, no commands executed",
+      "evidence": "runs/native-tool-roundtrip/result.json"
     }
   ],
   "rankings": [
@@ -747,6 +797,38 @@
         }
       ],
       "reason": "Native-tool validity issue solved locally and replacementCIqueued; score/trajectory validity and dryrunroute decision remain. No speed tuning before validsmoke."
+    },
+    {
+      "after": "native-roundtrip-and-ci-topology",
+      "order": [
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": null,
+          "device_hours": 0.2167
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": null,
+          "device_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": null,
+          "device_hours": 0
+        }
+      ],
+      "reason": "Validity remains first. Topology recovery dispatched; real trajectories unavailable. No informative extra synthetic device run until actual histories arrive."
     }
   ]
 }

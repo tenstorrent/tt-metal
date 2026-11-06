@@ -260,7 +260,7 @@
           "created_at": "2026-11-06T04:57:29.302524+00:00",
           "submitted_at": "2026-11-06T05:03:52.538961+00:00",
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166117505",
-          "last_observed_at": "2026-11-06T06:21:41.708248+00:00",
+          "last_observed_at": "2026-11-06T06:37:55.384782+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-hmpdl",
           "build_started_at": "2026-11-06T05:13:39Z",
           "submission_to_build_start_seconds": 605.0,
@@ -268,7 +268,9 @@
           "build_completed_at": "2026-11-06T06:06:06Z",
           "runner": "qb2-120-p05t02",
           "device_job_started_at": "2026-11-06T06:06:08Z",
-          "device_job_id": 127742759927
+          "device_job_id": 127742759927,
+          "workflow_status": "in_progress",
+          "workflow_conclusion": null
         },
         {
           "arm": "smoke2-swe_bench_verified",
@@ -295,14 +297,16 @@
           "created_at": "2026-11-06T04:57:29.302524+00:00",
           "submitted_at": "2026-11-06T05:04:06.619874+00:00",
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166151590",
-          "last_observed_at": "2026-11-06T05:32:56.918587+00:00",
+          "last_observed_at": "2026-11-06T06:07:29.119355+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-jhxps",
           "build_started_at": "2026-11-06T05:14:04Z",
           "submission_to_build_start_seconds": 610.0,
           "queue_measurement_note": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time.",
           "cancellation_reason": "Confirmed native tool protocol HTTP400; obsolete registration cannot score. Not cancelled for queueing.",
           "cancellation_at": "2026-11-06T06:10:11.226462+00:00",
-          "score_valid": false
+          "score_valid": false,
+          "workflow_status": "completed",
+          "workflow_conclusion": "cancelled"
         },
         {
           "arm": "smoke2-terminal_bench_2_1",
@@ -329,7 +333,7 @@
           "created_at": "2026-11-06T04:57:29.302524+00:00",
           "submitted_at": "2026-11-06T05:04:23.720597+00:00",
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166175324",
-          "last_observed_at": "2026-11-06T06:21:41.698975+00:00",
+          "last_observed_at": "2026-11-06T06:24:44.192032+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-z44pz",
           "build_started_at": "2026-11-06T05:14:15Z",
           "submission_to_build_start_seconds": 607.0,
@@ -340,7 +344,10 @@
           "device_job_id": 127744425903,
           "score_valid": false,
           "failure": "CI fabric topology mapping failed before model initialization; zero scored tasks",
-          "evidence": "bringup/artifacts/stage12-terminal-job.log"
+          "evidence": "bringup/artifacts/stage12-terminal-job.log",
+          "workflow_status": "completed",
+          "workflow_conclusion": "failure",
+          "device_job_completed_at": "2026-11-06T06:24:22Z"
         },
         {
           "arm": "smoke2-swe-native-parser",
@@ -372,7 +379,41 @@
           "supersedes_run_id": 42166151590,
           "reason": "Native-tool registration repaired: baselineHTTP400,candidate200actualminiparser;paired2x168tokenIDs exact;hosthooks pass",
           "submitted_at": "2026-11-06T06:18:22Z",
-          "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42173587147"
+          "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42173587147",
+          "last_observed_at": "2026-11-06T06:37:03.790027+00:00",
+          "workflow_status": "in_progress",
+          "workflow_conclusion": null
+        },
+        {
+          "arm": "smoke2-terminal-infra-retry",
+          "device": "qb2-ci",
+          "owner": "coordinator",
+          "status": "queued",
+          "eval": "terminal_bench_2_1",
+          "planned_clients": 2,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "tasks": 2,
+          "task_ids": [
+            "terminal-bench/llm-inference-batching-scheduler",
+            "terminal-bench/mailman"
+          ],
+          "tt_metal_sha": "08ee8790bcbcd9e85cb799593b2bbaf40b785134",
+          "tti_sha": "a087be086b6e2cd6edf215dddb4c47c48463f13a",
+          "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+          "predicted_hours": 7.34,
+          "prediction_basis": "Failed route measured 1.337h submission-to-completion plus conservative 6h agent ceiling; valid suite timing unknown",
+          "run_timeout_hours": 12,
+          "ci_job_timeout_hours": 18,
+          "created_at": "2026-11-06T06:35:07.942591+00:00",
+          "supersedes_run_id": 42166175324,
+          "reason": "Infrastructure retry after premodel fabric mapping failed; same frozen smoke2 tasks, native parser registration retained",
+          "run_id": 42175367781,
+          "submitted_at": "2026-11-06T06:35:10Z",
+          "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42175367781",
+          "last_observed_at": "2026-11-06T06:37:24.816519+00:00",
+          "workflow_status": "in_progress",
+          "workflow_conclusion": null
         }
       ]
     }
@@ -383,6 +424,20 @@
       "command": "timeout60 tt-smi -ls --local",
       "exit_status": 0,
       "result": "four p300c ASICs visible; no resets or model jobs"
+    }
+  ],
+  "monitors": [
+    {
+      "run_id": 42173587147,
+      "session_id": 78675,
+      "script": "bringup/artifacts/stage12-monitor-ci.py",
+      "role": "read-only observation and artifact collection"
+    },
+    {
+      "run_id": 42175367781,
+      "session_id": 56328,
+      "script": "bringup/artifacts/stage12-monitor-ci.py",
+      "role": "read-only observation and artifact collection"
     }
   ]
 }

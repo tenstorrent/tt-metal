@@ -59,6 +59,14 @@
     {
       "fact": "mini-swe-agent2.2.8 uses nativebash tool_calls. New model serving entry needs explicit gemma4 tool_call_parser and enable_auto_tool_choice, not only metadata. reasoning_parser separates pinnedHF thoughtchannel. Exact token pairs demonstrate format-only repair.",
       "evidence": "runs/parser-protocol/AUTOFIX.md; TTI da219dd56a241bb5314ae1da4b87104b84b0da15"
+    },
+    {
+      "fact": "A QB2 CI job can fail before model loading when strict fabric mapping requires two channels but discovery sees one. P300x2 still correctly resolves1x4; do not infer model mesh misconfiguration or weaken num_links from this failure. Stock infrastructure retry retains cohort.",
+      "evidence": "runs/ci-topology/result.json; run42166175324 on qb2-120-p05t06"
+    },
+    {
+      "fact": "CI manual dispatch defaults vllm-git-ref to main. Terminal retry resolver explicitly observed ca7a18246e4111629ed6cb4a7d1192002749fccf; future dispatches must supply this immutable ref explicitly.",
+      "evidence": "bringup/artifacts/stage12-terminal-retry-resolve.log:443-444"
     }
   ],
   "suite_timings": [],

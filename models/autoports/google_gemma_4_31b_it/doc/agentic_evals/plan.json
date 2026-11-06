@@ -198,10 +198,18 @@
       "reason": "Native-tool registration repaired: baselineHTTP400,candidate200actualminiparser;paired2x168tokenIDs exact;hosthooks pass",
       "submitted_at": "2026-11-06T06:18:22Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42173587147"
+    },
+    {
+      "arm": "smoke2-terminal-infra-retry",
+      "run_id": 42175367781,
+      "status": "queued",
+      "planned_clients": 2,
+      "batch": 8,
+      "predicted_hours": 7.34
     }
   ],
   "status": "resumed_ci_release_authorized",
-  "last_updated": "2026-11-06T06:32:20.327395+00:00",
+  "last_updated": "2026-11-06T06:36:13.231239+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -314,6 +322,13 @@
       "suite_seconds": null,
       "score": null,
       "outcome": "Infrastructure topology failure before model; retry unchanged cohort required"
+    }
+  ],
+  "local_idle_intervals": [
+    {
+      "start": "2026-11-06T06:31:00Z",
+      "end": null,
+      "reason": "Local benchmarks/protocol/fullcontext/contention complete; remaining useful capacity replay depends on real CI histories. Avoid redundant hardware runs; CI carries Docker-required work."
     }
   ]
 }

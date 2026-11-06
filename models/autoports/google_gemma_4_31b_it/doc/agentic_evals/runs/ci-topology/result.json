@@ -1,0 +1,27 @@
+{
+  "status": "diagnosed_infrastructure_retry_pending",
+  "unblocks": [
+    "terminal_bench_2_1"
+  ],
+  "change": "none",
+  "problem_status": "open",
+  "used_device_hours": 0,
+  "box_hours": 0.25,
+  "prediction": {
+    "retry_wall_hours": 1.3333333333333333,
+    "retry_device_hours": 0.21666666666666667,
+    "basis": "measured prior failed build/startup supplied by coordinator; successful model/eval time must be added"
+  },
+  "findings": [
+    "P300x2 alias matches validated local1x4; no supported registration shape correction",
+    "CI target two-channel edge mapped against discovered one-channel edge; strict mapping fails before model/tasks",
+    "Unknown motherboard warning also occurs on healthy local stage11 and alone is not causal"
+  ],
+  "next_action": "Stock-route infrastructure retry on available p300x2 runner; do not weaken num_links or strict channel target without separate correctness/performance evidence",
+  "score": null,
+  "evidence": [
+    "AUTODEBUG.md",
+    "../../runs/smoke2-terminal_bench_2_1/collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/docker_server/",
+    "bringup/artifacts/stage12-terminal-job.log"
+  ]
+}

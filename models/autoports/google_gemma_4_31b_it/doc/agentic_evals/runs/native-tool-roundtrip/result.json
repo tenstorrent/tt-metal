@@ -7,7 +7,7 @@
   "batch": 1,
   "max_num_seqs": 1,
   "elapsed_seconds": 1.8671444079373032,
-  "used_device_hours": null,
+  "used_device_hours": 0.0005186512244270287,
   "confirmation": "HTTP200; actualmini parser accepts echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT action; separate reasoning present",
   "evidence": [
     "request.json",

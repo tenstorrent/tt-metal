@@ -19,7 +19,7 @@
     },
     "terminal_bench_2_1": {
       "decision": "stop",
-      "reason": "No valid scored smoke or measured release projection yet. Decision8 authorizesCI; existing smoke source build is in progress. Stop is provisional release exclusion, not a capacity or accuracy stop.",
+      "reason": "No scored smoke: first CI attempt failed before model initialization on fabric topology. Infrastructure retry42175367781 dispatched; provisional release exclusion, not measured capacity stop.",
       "functional_at": 0,
       "projected_hours": null,
       "score": null,
