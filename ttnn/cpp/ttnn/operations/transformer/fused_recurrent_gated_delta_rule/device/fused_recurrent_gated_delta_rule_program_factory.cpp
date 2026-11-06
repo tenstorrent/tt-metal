@@ -128,8 +128,17 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::u16, Vt);
     add_state_cb(cb::state_s2, kv);
     add_state_cb(cb::state_s3, kv);
-    // compute -> writer
+    // compute -> writer: o fp32 (the writer rounds it to bf16 for a bf16 output), the state fp32
     add_cb(cb::out16, Vt, 2);
+    if (outputs[0].dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        // obf16: the writer's landing for the bf16 rows of one token's o (Vt tiles x 2 face rows x 32 B).
+        const uint32_t obf16_bytes = Vt * 2 * 32u;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = obf16_bytes,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb::obf16), .data_format = fmt, .page_size = obf16_bytes}}}});
+    }
     add_cb(cb::state_out, kv, 2);
     // raw64: the reader's landing zone for the 64-byte chunks of bf16 rows, (2Kt + Vt) rows x 2 faces + g + beta,
     // reader-private (reserved once, never pushed).
@@ -169,7 +178,8 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
     TensorAccessorArgs(blk_buf).append_to(reader_ct);
 
-    std::vector<uint32_t> writer_ct = {Kt, Vt, per_token};
+    const uint32_t o_bf16 = outputs[0].dtype() == tt::tt_metal::DataType::BFLOAT16 ? 1u : 0u;
+    std::vector<uint32_t> writer_ct = {Kt, Vt, per_token, use_blk_idx, o_bf16, attrs.HV};
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
 
@@ -230,7 +240,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
         const auto& core = head_cores[h];
         reader.emplace_runtime_args(
             core, {h, T, q_buf, k_buf, v_buf, g_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
-        // BH is needed by the writer to place per-token state token-major (page t*BH + h).
+        // BH is the ring's token-major stride (ring mode only).
         writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
         compute.emplace_runtime_args(core, {T, scale_bits});
     }

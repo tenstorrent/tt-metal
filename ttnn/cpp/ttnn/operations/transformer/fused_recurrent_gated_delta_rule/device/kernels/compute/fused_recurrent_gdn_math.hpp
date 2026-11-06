@@ -80,7 +80,7 @@ struct TokenCbs {
     uint32_t ccol32;     // 32x32 of c: allocated by the factory but not produced or read by these passes (c goes from
                          // DEST straight into ebc16); kept so the factory's CB plan needs no change
     uint32_t u16;        // Vt x 16x32: row 0 = u, rows 1-15 exactly 0 (compute)
-    uint32_t out16;      // Vt x 16x32: row 0 = o, rows 1-15 0 (compute -> writer)
+    uint32_t out16;      // Vt x 16x32: row 0 = o, rows 1-15 0 (compute -> writer; fp32, the writer converts to bf16)
     uint32_t state_out;  // Kt*Vt x 32x32 (compute -> writer, when emit_state)
     uint32_t ebc16;      // 16x32: column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c, 12-15 = ik, 0, s_q, 0 (compute, utd)
     uint32_t qk16_utd;   // the utd view of qk16 (same L1, never pushed): the norm's exact copies of the rows
