@@ -83,6 +83,13 @@ def _load_tokpar_mlp(mesh, mlp_state, cache_dir):
     return {"w1": load("gate_proj"), "w3": load("up_proj"), "w2": load("down_proj")}
 
 
+def _TBW():
+    """QWEN36_TOKPAR_BW: in0_block_w of the token-parallel matmuls (default 8; 4 fits bf16 weights)."""
+    import os
+
+    return int(os.environ.get("QWEN36_TOKPAR_BW", "8"))
+
+
 def _tokpar_pc(m, k, n, bw, act=None, lim=4, prefer_h=False):
     """2D mcast prefill config on the full 12x10 grid: per_core_M = M tiles / 10 rows, per_core_N = N tiles / 12.
     lim: max subblock tiles (4 with fp32 dest accumulation, 8 without); prefer_h: subblock height pm (x 1) when the
@@ -427,7 +434,7 @@ class Qwen36DecoderLayer:
             compute_kernel_config=ck,
             memory_config=act_mc,
             program_config=_tokpar_pc(
-                M, K, F, 8, act=None if silu_mul else ttnn.UnaryOpType.SILU, lim=8 if cfg2 else 4
+                M, K, F, _TBW(), act=None if silu_mul else ttnn.UnaryOpType.SILU, lim=8 if cfg2 else 4
             ),
         )
         up = ttnn.linear(
@@ -435,7 +442,7 @@ class Qwen36DecoderLayer:
             w["w3"],
             compute_kernel_config=ck,
             memory_config=act_mc,
-            program_config=_tokpar_pc(M, K, F, 8, lim=8 if cfg2 else 4),
+            program_config=_tokpar_pc(M, K, F, _TBW(), lim=8 if cfg2 else 4),
         )
         if x8 is not x:
             ttnn.deallocate(x8)
@@ -537,7 +544,7 @@ class Qwen36DecoderLayer:
                     if os.environ.get("QWEN36_TOKPAR_OUTP_L1", "0") == "1"
                     else ttnn.DRAM_MEMORY_CONFIG
                 ),  # QWEN36_TOKPAR_OUTP_L1
-                program_config=_tokpar_pc(M, K, self._tokpar["wo"].shape[-1], 8),
+                program_config=_tokpar_pc(M, K, self._tokpar["wo"].shape[-1], _TBW()),
             )
             ttnn.deallocate(a8)
         # QWEN36_TOKPAR_RES_L1=1: the [S/tp, dim] residual stream lives in L1 (interleaved, ~46 KB/core at S/tp=672)
