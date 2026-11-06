@@ -27,6 +27,10 @@ void kernel_main() {
     constexpr auto num_cols_per_input_block = get_arg(args::num_cols_per_input_block);
     constexpr auto num_cols_per_output_block = get_arg(args::num_cols_per_output_block);
 
+    // The column loop below advances by min(columns left, num_cols_per_output_block) per pass, so an
+    // empty output block would never terminate it. On this interleaved path it is the tensor width.
+    static_assert(num_cols_per_output_block > 0, "untilize writer: the output block must hold a column");
+
     // Interleaved input: one input block spans the whole row, so the column bookkeeping is fixed.
     constexpr uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
     constexpr uint32_t width_wise_output_block_start_index = 0;
