@@ -615,11 +615,13 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["streaming", "standard"])
 @pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(128, 512)], ids=["q128_k512"])
 @pytest.mark.parametrize("b, nh, nkv, sq, d", ([1, 4, 1, 256, 128],))
-@pytest.mark.parametrize("sks", [(224, 256, 512, 1056, 1536)], ids=["sk224_256_512_1056_1536"])
+@pytest.mark.parametrize("sks", [(224, 256, 480, 512), (544, 1024, 1056, 1536)], ids=["one_k_chunk", "many_k_chunks"])
 def test_sdpa_noncausal_k_len_shares_program(
     device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, fp32_dest_acc_en, sks
 ):
-    """A dense mask and a different K length each call: the length is a runtime argument, so one program serves all."""
+    """A dense mask and a different K length each call: the length is a runtime argument, so one program serves all.
+    K/V retention is a compile-time variant that turns on with a single K chunk, so each sweep stays on one side of it.
+    """
     entries_after_first = None
     for sk in sks:
         run_sdpa_noncausal(

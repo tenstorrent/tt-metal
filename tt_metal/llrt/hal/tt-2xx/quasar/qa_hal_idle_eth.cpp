@@ -5,7 +5,7 @@
 #define HAL_BUILD tt::tt_metal::quasar::idle_eth
 #define COMPILE_FOR_ERISC
 
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
@@ -19,7 +19,7 @@ using namespace tt::tt_metal::quasar::idle_eth;
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 

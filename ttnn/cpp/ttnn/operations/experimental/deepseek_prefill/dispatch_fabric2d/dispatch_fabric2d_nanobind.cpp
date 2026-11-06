@@ -55,11 +55,22 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   token capacity of each chip's output buffer.
             cluster_axis          mesh axis the ring of chips runs along. Default 0.
             num_links             forwarding links per direction, 1 to 4. Default 1.
+            fwd_vc_pages          pages one forwarding channel holds. The region is split by movement class,
+                                  so no depth can deadlock the ring and this trades only throughput: a
+                                  channel is a pipeline buffer, not a function of how much a launch sends.
             topology              fabric topology of cluster_axis.
             memory_config         memory config of both outputs.
             subdevice_id          sub-device whose Tensix cores the op may use. Defaults to the first
                                   sub-device, which is the whole compute grid when no sub-device manager
                                   is loaded.
+            forwarding_buffer     optional DRAM buffer the op relays tokens through, the first of
+                                  dispatch_fabric2d_buffers. Left to the op, every cached program allocates
+                                  its own at cache miss.
+            staging_buffer        optional DRAM buffer a TILE input is untilized into, the second of
+                                  dispatch_fabric2d_buffers. One token page per token; a row-major input
+                                  never reads it.
+                                  Pass both on every call. Buffers sized for a larger seq_len_per_chip serve
+                                  a smaller one; each must be its own allocation.
 
         Returns [dispatched_buffer, metadata], both per device and ROW_MAJOR, in `memory_config`.
         dispatched_buffer is (1, 1, max_dispatch_buffer_token_size, emb_dim) BFLOAT16. metadata is
@@ -105,9 +116,30 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("seq_len_per_chip"),
         nb::arg("cluster_axis") = 0,
         nb::arg("num_links") = 1,
+        nb::arg("fwd_vc_pages") = 64,
         nb::arg("topology"),
         nb::arg("memory_config"),
-        nb::arg("subdevice_id") = nb::none());
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("forwarding_buffer") = nb::none(),
+        nb::arg("staging_buffer") = nb::none());
+
+    ttnn::bind_function<"dispatch_fabric2d_buffers", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+        Allocate [forwarding_buffer, staging_buffer] for dispatch_fabric2d.
+
+        Create them once per mesh, before the first forward, and pass them on every call. The arguments
+        are the ones those calls pass; emb_dim is the token width. Buffers sized for the largest
+        seq_len_per_chip and fwd_vc_pages serve every smaller one.
+        )doc",
+        &dispatch_fabric2d_buffers,
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("emb_dim"),
+        nb::arg("seq_len_per_chip"),
+        nb::arg("cluster_axis") = 0,
+        nb::arg("num_links") = 1,
+        nb::arg("fwd_vc_pages") = 64);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d::detail

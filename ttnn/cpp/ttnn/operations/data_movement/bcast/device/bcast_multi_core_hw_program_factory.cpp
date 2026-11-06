@@ -92,7 +92,7 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
     }
 
     // Legacy CB (c_0 / c_16) sizing: the HW factory used tt::tile_size directly for the page size in both
-    // interleaved and sharded configs (unlike the ShardedH factory's round_up_to_mul32) — preserved verbatim.
+    // interleaved and sharded configs (unlike the ShardedH factory's tt::round_up(..., 32)) — preserved verbatim.
     const std::uint32_t num_input_tiles_cb0 = src0_sharded ? num_tiles_per_shard : num_input_tiles;
     const std::uint32_t num_output_tiles = output_sharded ? num_tiles_per_shard : 2;
 

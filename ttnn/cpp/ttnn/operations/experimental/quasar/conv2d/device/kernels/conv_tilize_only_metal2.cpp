@@ -54,6 +54,9 @@ void kernel_main() {
     // The whole point of Option B: bring the engine up for tilize (in -> out), NOT for matmul.
     // 2-arg form == compute_kernel_hw_startup(in0_cb_id, in0_cb_id, out_cb_id). This is the exact
     // startup the passing standalone tilize op uses. There is no matmul_block_init here.
+    DataflowBuffer cb_in0(in0_cb_id);
+    DataflowBuffer cb_out(out_cb_id);
+
     compute_kernel_hw_startup(in0_cb_id, out_cb_id);
 
     // MIRROR THE PASSING STANDALONE TILIZE OP EXACTLY (data_movement/tilize/.../compute/tilize.cpp):
@@ -86,5 +89,5 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-        fp32_mode>(num_blocks);
+        fp32_mode>(cb_in0, cb_out, num_blocks);
 }  // void kernel_main()

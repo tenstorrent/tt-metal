@@ -40,7 +40,8 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
     // The Q and K lengths and the legacy chunk offset are runtime arguments
     // (SDPAProgramFactory::override_runtime_arguments), so the key keeps what sizes the program: every other
     // attribute, each tensor's layout and non-sequence dimensions, and the derived values that pick a kernel
-    // variant or the core split. A paged K/V cache's shape is its capacity, not a length.
+    // variant or the core split (Q chunk count, GQA Q-head crossing, K/V retention, the synthesized padding
+    // mask, the streaming partial-tile column). A paged K/V cache's shape is its capacity, not a length.
     const auto geo = sdpa_seq_geometry(attrs, tensors);
     SDPAParams keyed = attrs;
     if (keyed.chunk_start_idx.has_value()) {
@@ -50,10 +51,13 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
         tensors.page_table.has_value() ? ttsl::SmallVector<int>{} : ttsl::SmallVector<int>{2};
     // A sharded output bakes its tile shape into the writer's and compute kernel's accessor compile-time args,
     // so its Q tile count stays in the key. An interleaved accessor carries no shape.
-    const uint32_t sharded_output_q_tiles = attrs.output_mem_config.is_sharded() ? geo.valid_Sqt : 0u;
+    const uint32_t sharded_output_q_tiles = attrs.output_mem_config.is_sharded() ? geo.q_tiles : 0u;
     return tt::tt_metal::operation::hash_operation<SDPAOperation>(
         keyed,
         geo.q_num_chunks,
+        geo.gqa_pack,
+        geo.writer_gqa_pack_sqt,
+        geo.kv_retain,
         sharded_output_q_tiles,
         geo.kernel_padding_mask,
         geo.k_partial_col,
@@ -95,7 +99,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     // Basic tensor properties
     for (const auto* input_tensor : {&q, &k, &v}) {
         TT_FATAL(input_tensor->storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
-        TT_FATAL(input_tensor->buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
+        TT_FATAL(input_tensor->is_allocated(), "Operands to SDPA need to be allocated in buffers on device");
         TT_FATAL((input_tensor->layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
             input_tensor->dtype() == DataType::BFLOAT16 || input_tensor->dtype() == DataType::BFLOAT8_B ||
@@ -538,7 +542,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
         const auto& cu = tensors.cu_window_seqlens.value();
         TT_FATAL(cu.storage_type() == StorageType::DEVICE, "cu_window_seqlens must be on device.");
-        TT_FATAL(cu.buffer() != nullptr, "cu_window_seqlens must be allocated on device.");
+        TT_FATAL(cu.is_allocated(), "cu_window_seqlens must be allocated on device.");
         TT_FATAL(q.device() == cu.device(), "cu_window_seqlens must be on the same device as Q/K/V.");
         TT_FATAL(
             cu.dtype() == DataType::INT32 || cu.dtype() == DataType::UINT32,
@@ -590,7 +594,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         if (tensors.windowed_q_token_offset_tensor.has_value()) {
             const auto& off = tensors.windowed_q_token_offset_tensor.value();
             TT_FATAL(off.storage_type() == StorageType::DEVICE, "windowed_q_token_offset_tensor must be on device.");
-            TT_FATAL(off.buffer() != nullptr, "windowed_q_token_offset_tensor must be allocated on device.");
+            TT_FATAL(off.is_allocated(), "windowed_q_token_offset_tensor must be allocated on device.");
             TT_FATAL(q.device() == off.device(), "windowed_q_token_offset_tensor must be on the same device as Q/K/V.");
             TT_FATAL(
                 off.dtype() == DataType::INT32 || off.dtype() == DataType::UINT32,

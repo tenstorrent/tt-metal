@@ -22,23 +22,30 @@ uint32_t usable_l1_bytes(const tt::tt_metal::distributed::MeshDevice& device) {
 }
 
 // Correctness scope of the codegen path: TILE input, interleaved (non-sharded) input AND
-// requested output memory config, dtype bfloat16 or bfloat8_b.
+// requested output memory config, dtype bfloat16, bfloat8_b, int32 or uint32.
 //
-// Tile-alignment is dtype-conditional. Non-tile-aligned bfloat16 is in scope -- build_with_unpadding()
-// in the program factory strips the padding directly. Non-tile-aligned bfloat8_b is not: serving it
-// would require first casting bf8_b -> bf16, a step this implementation does not have, so it routes
-// to native.
+// Tile-alignment is dtype-conditional. Non-tile-aligned bfloat16 / int32 / uint32 are in scope --
+// build_with_unpadding() in the program factory strips the padding directly, and those dtypes are
+// their own RM representation. Non-tile-aligned bfloat8_b is not: serving it would require first
+// casting bf8_b -> bf16, a step this implementation does not have, so it routes to native.
+//
+// float32 is left out: its pack_untilize is only exact with the input CB unpacked straight to the
+// 32-bit DEST (UnpackToDestFp32), which the program factory does not configure. int32 / uint32 do
+// not need that mode: tt_metal/jit_build/data_format.cpp applies it to a Float32 source only, so
+// native's UnpackToDest setting for them is a no-op and fp32_dest_acc_en alone makes their unpack
+// exact.
 bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
     using tt::tt_metal::DataType;
     using tt::tt_metal::Layout;
+    namespace plan = ttnn::prim::untilize_codegen_detail;
 
     if (input.layout() != Layout::TILE) {
         return false;
     }
     // Every page-geometry term here and in the program factory is a hardcoded 32x32 quantity --
-    // kTileSize below, and the wt / total_tile_rows divisions. An off-default tile shape changes
-    // both the buffer's page size and its page count, so that plan mis-addresses it in both
-    // directions. A transposed tile keeps both but permutes the datums the untilize kernels lift
+    // the per-dtype tile_size below, and padded_grid's wt / total_tile_rows. An off-default tile
+    // shape changes both the buffer's page size and its page count, so that plan mis-addresses it
+    // in both directions. A transposed tile keeps both but permutes the datums the untilize kernels lift
     // out of each face, and nothing here configures the unpacker for that permutation. Declining
     // is not a correctness guarantee for either case: native reads the tile but does not serve an
     // off-default one reliably either. This only stops codegen claiming support it lacks.
@@ -47,7 +54,9 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
         tile.get_transpose_within_face() || tile.get_transpose_of_faces()) {
         return false;
     }
-    if (input.dtype() != DataType::BFLOAT16 && input.dtype() != DataType::BFLOAT8_B) {
+    const DataType dtype = input.dtype();
+    if (dtype != DataType::BFLOAT16 && dtype != DataType::BFLOAT8_B && dtype != DataType::INT32 &&
+        dtype != DataType::UINT32) {
         return false;
     }
     if (input.is_sharded()) {
@@ -57,7 +66,7 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
         return false;
     }
 
-    constexpr uint32_t kTileSize = 2048;  // bf16/bf8_b only in this scope
+    const uint32_t tile_size = plan::planning_tile_size(dtype, untilize_output_dtype(dtype));
     constexpr uint64_t kWideChunkThreshold = 800'000;
 
     // Mirrors build_column_parallel + plan_cb_depths: that builder's CB plan is sized by the
@@ -72,49 +81,38 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
         auto split = tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
         uint32_t max_tiles_per_core =
             std::max(std::get<4>(split), std::get<3>(split).empty() ? 0u : std::get<5>(split));
-        return 2ull * max_tiles_per_core * kTileSize <= usable_l1_bytes(*device);
+        return 2ull * max_tiles_per_core * tile_size <= usable_l1_bytes(*device);
     };
 
-    const auto& logical = input.logical_shape();
-    const bool tile_aligned =
-        logical[-2] % tt::constants::TILE_HEIGHT == 0 && logical[-1] % tt::constants::TILE_WIDTH == 0;
+    // The same physical grid the program factory dispatches on (Wt and the tile-row count are
+    // padded, tile-grid quantities; padded_shape is always tile-rounded, so Wt is also the
+    // ceil(W / TILE_W) the unpadding path needs).
+    const auto g = plan::padded_grid(input);
 
-    if (!tile_aligned) {
-        // bf8_b (block-float) cannot produce non-tile-aligned RM output directly -- the reference
-        // casts to bf16 first (see file comment); that cast step is out of this port's scope.
-        if (input.dtype() != DataType::BFLOAT16) {
+    if (!g.tile_aligned) {
+        // bf8_b has no RM form: native casts it to bf16 first, a step this implementation does
+        // not have.
+        if (dtype == DataType::BFLOAT8_B) {
             return false;
         }
         // The with-unpadding path has no column-parallel fallback, so ANY row wide enough to
         // overflow the L1 budget -- regardless of total_tile_rows -- is out of scope and goes to
-        // native. Uses ceil(W/TILE_W) since W is not tile-aligned here.
-        uint32_t wt_ceil = (logical[-1] + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
-        return 2ull * wt_ceil * kTileSize <= kWideChunkThreshold;
+        // native.
+        return 2ull * g.wt * tile_size <= kWideChunkThreshold;
     }
 
     // Tile-aligned path: mirrors ops/untilize/untilize.py's wide-tensor guard for
     // build_untilize_tile -- a multi-tile-row input wide enough that a single tile-row would
-    // overflow the slice+concat chunking threshold (~800KB for two double-buffered CBs at
-    // 2048B/tile) is routed to a slice -> untilize -> concat cascade over unrelated builder
-    // entries, out of scope here. Computed from the PADDED shape (Wt/Ht are physical, tile-grid
-    // quantities), matching how the program factory itself derives Wt/total_tile_rows.
-    const auto& padded_shape = input.padded_shape();
-    uint32_t rank = padded_shape.rank();
-    uint32_t w = padded_shape[-1];
-    uint32_t h = padded_shape[-2];
-    uint32_t wt = w / tt::constants::TILE_WIDTH;
-    uint32_t nc = 1;
-    for (uint32_t i = 0; i + 2 < rank; ++i) {
-        nc *= padded_shape[i];
-    }
-    uint32_t total_tile_rows = nc * (h / tt::constants::TILE_HEIGHT);
-    if (total_tile_rows > 1 && 2ull * wt * kTileSize > kWideChunkThreshold) {
+    // overflow the slice+concat chunking threshold (~800KB for two double-buffered CBs at the
+    // dtype's tile size) is routed to a slice -> untilize -> concat cascade over unrelated builder
+    // entries, out of scope here.
+    if (g.total_tile_rows > 1 && 2ull * g.wt * tile_size > kWideChunkThreshold) {
         return false;
     }
     // A single tile-row skips the chunk cascade (build_column_parallel splits Wt across the grid
     // in one dispatch instead), so it is bounded by that builder's own per-core plan, not by the
     // whole-row threshold above.
-    if (total_tile_rows == 1 && wt > 1 && !column_parallel_plan_fits(wt)) {
+    if (g.total_tile_rows == 1 && g.wt > 1 && !column_parallel_plan_fits(g.wt)) {
         return false;
     }
 
@@ -125,7 +123,7 @@ bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::Memor
     using tt::tt_metal::Layout;
     namespace plan = ttnn::prim::untilize_codegen_detail;
 
-    if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
+    if (input.storage_type() != ttnn::StorageType::DEVICE || !input.is_allocated()) {
         return true;
     }
 
@@ -155,18 +153,37 @@ bool supported_execution_controls(bool use_multicore, const std::optional<CoreRa
     return use_multicore && !sub_core_grids.has_value();
 }
 
-// Perf-demote ledger: shapes that supported_by_codegen() already accepts (correct under codegen)
-// but that a device-measured (DEVICE KERNEL DURATION, not e2e_perf) comparison found do not beat
-// native. The previous entries here (nightly/broaden_suite's bfloat8_b shapes) were re-measured
-// under DEVICE KERNEL DURATION and found 20-55% AHEAD of native on every one -- the prior list came
-// from an end-to-end timing, which is dispatch-overhead-dominated for these single-digit-microsecond
-// kernels and doesn't reflect actual device time. Re-populate from a device kernel-duration
-// comparison, never from an end-to-end one, if a future case regresses.
+// Perf-demote ledger: cases supported_by_codegen() accepts (correct under codegen) that a device
+// kernel-duration comparison found slower than native. Populate only from device kernel
+// durations, never from an end-to-end timing: dispatch overhead dominates these single-digit-
+// microsecond kernels, so an end-to-end number says nothing about the kernel.
 //
-// [6,4,102,93] bf16 DRAM was demoted here on a pre-port reading; re-measured on the real kernel
-// (native/ported=3.42x) it
-// clears the gate the seed was demoted ahead of -- removed per the phase-7 handoff. Empty demote
-// set: every in-scope case is expected to run on codegen under auto.
-bool is_demoted(const Tensor& /*input*/, const tt::tt_metal::MemoryConfig& /*output_mem_config*/) { return false; }
+// Demoted: a tile-aligned, one-tile-wide int32/uint32 input written to DRAM with 256 or more tile
+// rows, when the input is in DRAM on any arch, or in L1 on blackhole. Measured as forced codegen
+// over native (device kernel duration) at 263 tile rows: on N300 a DRAM input loses 16-17% while
+// an L1 input wins 21%; on P150 a DRAM input loses 2-3% and an L1 input 5-6%. On P150 the same
+// DRAM-to-DRAM case, swept by height (median of 5): 2% slower at 255-256 rows, 10-12% slower at
+// 384-512, level at 1024, and 6-19% faster at 32-240 rows with one 2% dip at 192, so the bound
+// marks where codegen stops winning rather than a cliff. L1 outputs (8-20% faster at 263 rows on
+// both archs), bf16 (24% faster at 256 rows) and rows two or more tiles wide (7-8% faster at
+// 256-512 rows) stay on codegen. Non-tile-aligned inputs are not demoted: native serves them
+// through its unpadding path, several times slower.
+bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::DataType;
+    namespace plan = ttnn::prim::untilize_codegen_detail;
+    constexpr uint64_t kNarrow32BitDramTileRowLimit = 256;
+
+    const DataType dtype = input.dtype();
+    if ((dtype != DataType::INT32 && dtype != DataType::UINT32) ||
+        output_mem_config.buffer_type() != BufferType::DRAM) {
+        return false;
+    }
+    const auto g = plan::padded_grid(input);
+    if (!g.tile_aligned || g.wt != 1 || g.total_tile_rows < kNarrow32BitDramTileRowLimit) {
+        return false;
+    }
+    return input.memory_config().buffer_type() == BufferType::DRAM || input.device()->arch() == tt::ARCH::BLACKHOLE;
+}
 
 }  // namespace ttnn::operations::data_movement::untilize_codegen
