@@ -25,6 +25,8 @@ but the pipeline test also run on a LoudBox.
 * test_glm_packed_traced_matches_eager: the same schedule through TtPrefillRuntime.prefill_forward with
   use_trace (one capture, replayed per forward; per-chunk metadata and the MoE padding config read on
   device) must fill the same KV as the eager packed forward.
+* test_glm_packed_mtp_traced_matches_eager: traced packed forwards with MTP through prefill_forward (per-chunk level
+  geometries, both MTP captures replayed) must fill the same trunk and MTP KV as the eager packed MTP forward.
 * test_glm_packed_pipeline_matches_one_rank (8x4 only): the model split over two pipeline ranks on one mesh,
   packed forwards handed rank to rank, must match one rank, eager and traced.
 
@@ -141,6 +143,42 @@ MESH_PARAMS = [
         id="torus-xy-8x4",
     ),
 ]
+
+
+def _traced_mesh_params(l1_small_extra: int = 0) -> list:
+    """MESH_PARAMS with a trace region; ``l1_small_extra`` grows L1_SMALL as the runner does for MTP."""
+    l1_small = GLM53Adapter.l1_small_size + l1_small_extra
+    return [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=l1_small,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=l1_small,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ]
+
+
+TRACED_MESH_PARAMS = _traced_mesh_params()
+# The prefill runner's MTP L1_SMALL headroom (prefill_runner._L1_SMALL_SIZE): a traced MTP forward and an eager one on
+# the same device do not fit the trunk's L1_SMALL.
+MTP_L1_SMALL_EXTRA = 512
+TRACED_MTP_MESH_PARAMS = _traced_mesh_params(MTP_L1_SMALL_EXTRA)
 
 
 def _build(mesh_device, config, device_params, num_links, chunk, num_slots, forward_chunks=1):
@@ -508,22 +546,14 @@ def test_glm_packed_forward_matches_one_chunk_forwards(variant, config_only, mes
 MTP_LEVELS = 1
 
 
-def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, forward_chunks):
-    """:func:`_build` with a random-weight MTP predictor (layer NUM_LAYERS, MTP_LEVELS levels) on the transformer, the
-    norm / LM head tail MTP needs, and caches widened by the MTP layer."""
+def _mtp_test_weights(config):
+    """Random weights for a 4-layer trunk with MTP: ``(trunk state dict with the norm / LM head tail MTP needs, the
+    MTP predictor's state dict, its MTPConfig)``. The MTP decoder layer is layer NUM_LAYERS, an MoE layer sharing the
+    trunk's experts."""
     import dataclasses
 
     from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
-    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
-    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
 
-    sp_axis, tp_axis = 0, 1
-    mesh_shape = list(mesh_device.shape)
-    seq_cache = N_CHUNKS * chunk
-    config = _test_config(config)
-    config.max_seq_len = seq_cache
-    enable_mtp_indexer_slot(config, NUM_LAYERS)
-    topology = per_axis_topology(device_params["fabric_config"])
     hidden = config.hidden_size
     g = torch.Generator().manual_seed(77)
 
@@ -545,6 +575,23 @@ def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, 
         "eh_proj": (torch.randn(hidden, 2 * hidden, generator=g) * (2 * hidden) ** -0.5).to(torch.bfloat16),
         "shared_head_norm": (torch.randn(hidden, generator=g) * 0.1 + 1.0).to(torch.bfloat16),
     }
+    return state_dict, {"mtp": mtp_weights, "layer": mtp_layer}, mtp_cfg
+
+
+def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, forward_chunks):
+    """:func:`_build` with a random-weight MTP predictor (layer NUM_LAYERS, MTP_LEVELS levels) on the transformer, the
+    norm / LM head tail MTP needs, and caches widened by the MTP layer."""
+    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
+    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    seq_cache = N_CHUNKS * chunk
+    config = _test_config(config)
+    config.max_seq_len = seq_cache
+    enable_mtp_indexer_slot(config, NUM_LAYERS)
+    topology = per_axis_topology(device_params["fabric_config"])
+    state_dict, mtp_state, mtp_cfg = _mtp_test_weights(config)
     common = dict(
         dispatch_buffer_capacity_factor=8,
         num_links=num_links,
@@ -564,7 +611,7 @@ def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, 
         mesh_device,
         config,
         _TestGLM53Config,
-        {"mtp": mtp_weights, "layer": mtp_layer},
+        mtp_state,
         mtp_cfg,
         seq_len=chunk,
         num_levels=MTP_LEVELS,
@@ -586,7 +633,7 @@ def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, 
         mtp_predictor=predictor,
         **common,
     )
-    del state_dict, mtp_layer
+    del state_dict, mtp_state
     assert transformer.num_kvpe_cache_layers == NUM_LAYERS + MTP_LEVELS
 
     kvpe_cache = init_mla_kv_cache(
@@ -614,16 +661,39 @@ def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, 
     return config, transformer, kvpe_cache, index_kv_cache
 
 
-def _mtp_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, lengths, chunk):
-    """One packed forward of ``chunks`` with MTP, its inputs built as the H2D producer builds them: per chunk, the
-    rotated trunk ids and the lookahead block (_mtp_rows), and its provided levels as the runner counts them.
-    ``lengths[slot]`` is that user's prompt length; a position at or past it is MTP_PAD_TOKEN_ID."""
+def _mtp_chunk_inputs(c, ids_by_slot, lengths, chunk, sp):
+    """One chunk's MTP inputs as the H2D producer and the runner build them: ``(natural-order trunk ids, chunk_size of
+    them, zero past actual_end; [sp, num_mtp_tokens] lookahead block (_mtp_rows); provided levels as the runner counts
+    them)``. ``lengths[slot]`` is that user's prompt length; a position at or past it is MTP_PAD_TOKEN_ID. An empty
+    chunk is zero ids, an all-pad block and 0 levels."""
     from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID, num_mtp_tokens
     from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+
+    mtp = torch.full((sp, num_mtp_tokens(MTP_LEVELS)), MTP_PAD_TOKEN_ID, dtype=torch.int64)
+    if c.is_empty:
+        return [0] * chunk, mtp, 0
+    ids, length = ids_by_slot[c.slot_id], lengths[c.slot_id]
+
+    def token(p):
+        return int(ids[p]) if p < length else MTP_PAD_TOKEN_ID
+
+    real = [token(p) if p < c.actual_end else 0 for p in range(c.actual_start, c.actual_start + chunk)]
+    slots = mtp_lookahead_positions(c.actual_start, sp, chunk // sp, c.actual_end, MTP_LEVELS)
+    for chip, positions in enumerate(slots):
+        mtp[chip, : len(positions)] = torch.tensor([token(p) for p in positions], dtype=torch.int64)
+    # The runner's count: real lookahead ids on the chip holding the chunk's last position; 0 when partial.
+    provided = 0
+    if c.actual_end == c.actual_start + chunk:
+        provided = sum(1 for p in range(c.actual_end, c.actual_end + MTP_LEVELS) if p < length)
+    return real, mtp, provided
+
+
+def _mtp_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, lengths, chunk):
+    """One eager packed forward of ``chunks`` with MTP, called on the transformer directly, its inputs from
+    _mtp_chunk_inputs. Returns the chunks' provided levels."""
     from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
 
     sp = mesh_device.shape[0]
-    chunk_local, n_mtp = chunk // sp, num_mtp_tokens(MTP_LEVELS)
 
     def upload(rows):  # [sp, n] int64 -> [sp, 1, n] uint32, one row per SP chip
         return ttnn.from_torch(
@@ -637,27 +707,9 @@ def _mtp_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, i
 
     unions, levels = [], []
     for c in chunks:
-        if c.is_empty:
-            trunk = torch.zeros(sp, chunk_local, dtype=torch.int64)
-            mtp = torch.full((sp, n_mtp), MTP_PAD_TOKEN_ID, dtype=torch.int64)
-            levels.append(0)
-        else:
-            ids, length = ids_by_slot[c.slot_id], lengths[c.slot_id]
-
-            def token(p):
-                return int(ids[p]) if p < length else MTP_PAD_TOKEN_ID
-
-            real = [token(p) if p < c.actual_end else 0 for p in range(c.actual_start, c.actual_start + chunk)]
-            trunk = torch.tensor(pack_forward_tokens([real], [c.actual_start], sp), dtype=torch.int64).reshape(sp, -1)
-            slots = mtp_lookahead_positions(c.actual_start, sp, chunk_local, c.actual_end, MTP_LEVELS)
-            mtp = torch.full((sp, n_mtp), MTP_PAD_TOKEN_ID, dtype=torch.int64)
-            for chip, positions in enumerate(slots):
-                mtp[chip, : len(positions)] = torch.tensor([token(p) for p in positions], dtype=torch.int64)
-            # The runner's count: real lookahead ids on the chip holding the chunk's last position; 0 when partial.
-            provided = 0
-            if c.actual_end == c.actual_start + chunk:
-                provided = sum(1 for p in range(c.actual_end, c.actual_end + MTP_LEVELS) if p < length)
-            levels.append(provided)
+        real, mtp, provided = _mtp_chunk_inputs(c, ids_by_slot, lengths, chunk, sp)
+        levels.append(provided)
+        trunk = torch.tensor(pack_forward_tokens([real], [c.actual_start], sp), dtype=torch.int64).reshape(sp, -1)
         tt_trunk, tt_mtp = upload(trunk), upload(mtp)
         unions.append(MTPUnionEmbedding.from_ids(tt_trunk, tt_mtp, transformer.mtp_embed_ids, num_levels=MTP_LEVELS))
         ttnn.deallocate(tt_trunk)
@@ -757,32 +809,7 @@ def test_glm_packed_mtp_matches_one_chunk_forwards(variant, config_only, mesh_de
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
-                l1_small_size=GLM53Adapter.l1_small_size,
-                trace_region_size=GLM_TRACE_REGION_SIZE,
-            ),
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
-                l1_small_size=GLM53Adapter.l1_small_size,
-                trace_region_size=GLM_TRACE_REGION_SIZE,
-            ),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+    "mesh_device, device_params, num_links", TRACED_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
@@ -882,6 +909,187 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
         cross = _pcc(kv_slots[0][NUM_LAYERS - 1], kv_slots[3][NUM_LAYERS - 1])
         assert cross < DISTINCT_USERS_MAX_PCC, f"users A and D hold the same KV (PCC {cross:.6f})"
         assert not failures, f"[traced] {len(failures)} mismatch(es):\n" + "\n".join(failures)
+    finally:
+        runtime.release_trace()
+
+
+def _mtp_traced_schedule(chunk):
+    """(user lengths, forwards) for the traced packed-MTP test: _packed_schedule's users and chunks, regrouped so that
+    one forward generates no level (forward 1: two full chunks whose lookahead is real), which replays the "provided"
+    capture, while the others generate (prompt-ending chunks, partial or full) and replay "generate".
+
+    Each forward puts its partial chunk last, as the producer does (_partial_runs_last). A partial chunk ahead of a
+    full one routes its pad rows through the MoE (packed_routed_pad_rows), and the traced and eager MoE then differ
+    by rounding that the MTP layer amplifies (0.9993 on galaxy 8x4) past this test's bit-level bar."""
+    C = chunk
+    lengths, _ = _packed_schedule(chunk)
+    E = PrefillChunk(0, 0, 0)
+    forwards = [
+        [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C), PrefillChunk(2, 0, 896), E],
+        [PrefillChunk(0, C, 2 * C), PrefillChunk(3, 0, C), E, E],
+        [PrefillChunk(3, C, 2 * C), PrefillChunk(1, C, C + 704), E, E],
+        [PrefillChunk(0, 2 * C, 3 * C), E, E, E],
+    ]
+    return lengths, forwards
+
+
+class _RandomMTPRuntime(TtPrefillRuntime):
+    """TtPrefillRuntime whose MTP predictor is built from ``mtp_state`` (random weights) instead of the MTP weight
+    cache, with the production runtime's settings otherwise."""
+
+    mtp_state = None
+    mtp_cfg = None
+
+    def _build_mtp_predictor(self) -> None:
+        from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
+
+        cfg = self.config
+        self.mtp_predictor = TtMTPPredictor(
+            self.mesh_device,
+            self.hf_config,
+            cfg.model_cfg,
+            self.mtp_state,
+            self.mtp_cfg,
+            seq_len=cfg.chunk_size,
+            num_levels=cfg.mtp_levels,
+            layer_idx=NUM_LAYERS,
+            first_cache_slot=cfg.num_layers,
+            kv_only_last_level=cfg.kv_only_last_mtp_level,
+            tp_axis=cfg.tp_axis,
+            sp_axis=cfg.sp_axis,
+            num_links=cfg.num_links,
+            topology=cfg.topology,
+            gate_fallback_mode=cfg.gate_fallback_mode,
+            dispatch_buffer_capacity_factor=cfg.capacity_factor,
+            routing_use_l1_small_for_semaphores=cfg.routing_use_l1_small_for_semaphores,
+            sparse_kv_cache_format=cfg.sparse_kv_cache_format,
+            tp_shard_kv=cfg.tp_shard_kv,
+            is_chunked=True,
+            max_seq_len=cfg.max_seq_len,
+            slot_num=cfg.cache_num_users,
+            layer_num=cfg.num_layers + cfg.mtp_levels,
+            forward_chunks=cfg.forward_chunks,
+        )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links", TRACED_MTP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_packed_mtp_traced_matches_eager(variant, config_only, mesh_device, device_params, num_links):
+    """Traced packed forwards with MTP (TtPrefillRuntime.prefill_forward, slots 0..3) must fill every user's trunk and
+    MTP KV as the eager packed forward of the same chunks on the same model does (slots 4..7). The schedule
+    (_mtp_traced_schedule) replays both MTP captures: "generate", with chunks that generate their token next to
+    chunks that do not and empty positions in the scratch slot, and "provided". Each chunk's union is rebuilt from
+    the persistent inputs and its level geometry refreshed per forward, so a stale geometry, a window into another
+    chunk's rows or a missing MTP KV write breaks the comparison."""
+    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
+
+    assert_gate_mode_matches_adapter(variant, GATE_MODE)
+    sp = mesh_device.shape[0]
+    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
+    lengths, forwards = _mtp_traced_schedule(chunk)
+    num_users = len(lengths)
+    seq_cache = N_CHUNKS * chunk
+    config = _test_config(config_only)
+    config.max_seq_len = seq_cache
+    # The runtime places the MTP layer after config.num_hidden_layers (enable_mtp_indexer_slot), so the test's depth
+    # has to be the config's, or the MTP indexer addresses the real model's 78 index layers.
+    config.num_hidden_layers = NUM_LAYERS
+    enable_mtp_indexer_slot(config, NUM_LAYERS)
+    rt_config = TtPrefillRuntimeConfig(
+        num_layers=NUM_LAYERS,
+        max_seq_len=seq_cache,
+        mesh_shape=tuple(mesh_device.shape),
+        chunk_size=chunk,
+        forward_tokens_budget=FORWARD_CHUNKS * chunk,
+        num_users=2 * num_users,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        capacity_factor=8,
+        gate_fallback_mode=GATE_MODE,
+        model_cfg=_TestGLM53Config,
+        routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
+        sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+        use_trace=True,
+        tp_shard_kv=True,
+        mtp_levels=MTP_LEVELS,
+    )
+    mesh_device.enable_program_cache()
+    state_dict, mtp_state, mtp_cfg = _mtp_test_weights(config)
+    runtime_cls = type("_Runtime", (_RandomMTPRuntime,), {"mtp_state": mtp_state, "mtp_cfg": mtp_cfg})
+    runtime = runtime_cls(mesh_device, config, state_dict, rt_config)
+    del state_dict, mtp_state
+    kv_layers = NUM_LAYERS + MTP_LEVELS
+    cache_slots = rt_config.cache_num_users  # the users plus the traced forward's scratch slot
+    mesh_shape = list(mesh_device.shape)
+    caches = MlaKvCaches(
+        kvpe=init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=seq_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=kv_layers,
+            num_users=cache_slots,
+        ),
+        index=init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=full_indexer_rank(config, kv_layers),
+            num_users=cache_slots,
+            dtype=ttnn.bfloat8_b,
+        ),
+    )
+    try:
+        runtime.compile(caches)
+        runtime.capture_trace(caches)
+        ids = _token_ids(config, num_users, N_CHUNKS * chunk)
+        ids_by_slot = {s: ids[s % num_users] for s in range(2 * num_users)}
+        lengths_by_slot = {s: lengths[s % num_users] for s in range(2 * num_users)}
+
+        variants = []
+        for f, chunks in enumerate(forwards):
+            inputs = [_mtp_chunk_inputs(c, ids_by_slot, lengths_by_slot, chunk, sp) for c in chunks]
+            levels = [provided for _, _, provided in inputs]
+            generates = any(p < MTP_LEVELS for c, p in zip(chunks, levels) if not c.is_empty)
+            variants.append("generate" if generates else "provided")
+            logger.info(f"[traced mtp] forward {f}: {chunks} provided_levels={levels} ({variants[-1]})")
+            runtime.prefill_forward(
+                runtime.make_forward_input([real for real, _, _ in inputs], [c.actual_start for c in chunks]),
+                caches,
+                chunks,
+                mtp_tokens=runtime.make_forward_mtp_tokens([mtp for _, mtp, _ in inputs]),
+                provided_levels=levels,
+            )
+        ttnn.synchronize_device(mesh_device)
+        assert set(variants) == {"generate", "provided"}, f"the schedule replays only {set(variants)}"
+
+        # Eager reference on the same model: the packed forward called directly, so it runs the host-scalar programs
+        # and run_mtp_packed rather than the captured ones.
+        for chunks in forwards:
+            ref = [
+                c if c.is_empty else PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end) for c in chunks
+            ]
+            _mtp_forward(runtime.model, caches.kvpe, caches.index, mesh_device, ref, ids_by_slot, lengths_by_slot, chunk)
+
+        kv_slots = _read_user_slots(caches.kvpe, mesh_device, kv_layers, cache_slots)
+        idx_slots = _read_user_slots(caches.index, mesh_device, full_indexer_rank(config, kv_layers), cache_slots)
+        failures = _compare_slots(
+            "traced mtp", kv_slots, idx_slots, [(u + num_users, u) for u in range(num_users)], TRACED_PCC
+        )
+        # The MTP slots must hold real, user-specific KV, or the comparison above proves nothing.
+        cross = _pcc(kv_slots[0][NUM_LAYERS], kv_slots[1][NUM_LAYERS])
+        assert cross < DISTINCT_USERS_MAX_PCC, f"users 0 and 1 have the same MTP KV (PCC {cross:.6f})"
+        assert not failures, f"[traced mtp] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         runtime.release_trace()
 

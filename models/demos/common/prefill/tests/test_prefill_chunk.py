@@ -265,27 +265,30 @@ def test_packed_forward_refusals():
 
 
 def test_packed_forward_mtp_refusal():
-    """MTP at F > 1 is lifted only by an adapter whose prefill_forward runs it (supports_packed_forward_mtp), and
-    only eager: a traced packed forward still refuses it."""
+    """MTP at F > 1 is lifted only by an adapter whose prefill_forward runs it (supports_packed_forward_mtp), eager or
+    traced; tracing still needs supports_packed_forward_trace."""
     base = {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": True}
     (reason,) = packed_forward_refusals(4, mtp_levels=1, **base)
     assert "MTP" in reason
     (reason,) = packed_forward_refusals(4, mtp_levels=1, supports_packed_forward=False, forward_mtp=True)
     assert "MTP" in reason
     assert packed_forward_refusals(4, mtp_levels=1, d2h_acks=True, forward_mtp=True, **base) == []
-    (reason,) = packed_forward_refusals(4, mtp_levels=1, use_trace=True, forward_mtp=True, **base)
-    assert "USE_TRACE" in reason and "MTP" in reason
+    assert packed_forward_refusals(4, mtp_levels=1, use_trace=True, forward_mtp=True, **base) == []
+    (reason,) = packed_forward_refusals(
+        4, mtp_levels=1, use_trace=True, forward_mtp=True, **{**base, "traced_forward": False}
+    )
+    assert "USE_TRACE" in reason and "MTP" not in reason
     # One chunk per forward: nothing to lift.
     assert packed_forward_refusals(1, supports_packed_forward=False, mtp_levels=1, use_trace=True) == []
 
 
-def test_glm_adapter_runs_packed_mtp_eager():
+def test_glm_adapter_runs_packed_mtp():
     from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 
     caps = packed_forward_capabilities(GLM53Adapter)
     assert caps["forward_mtp"]
     assert packed_forward_refusals(2, mtp_levels=1, d2h_acks=True, **caps) == []
-    assert packed_forward_refusals(2, mtp_levels=1, use_trace=True, **caps)
+    assert packed_forward_refusals(2, mtp_levels=1, d2h_acks=True, use_trace=True, **caps) == []
 
 
 def test_packed_forward_capabilities_name_every_flag():
