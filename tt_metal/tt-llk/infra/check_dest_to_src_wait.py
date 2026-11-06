@@ -48,10 +48,9 @@ COPIES_GLOB = os.path.join(
 )
 REPO = os.path.normpath(os.path.join(LLK, "..", ".."))
 # The same two globs as git pathspecs, relative to REPO.
-TREE_PATHSPECS = (
-    ":(glob)tt_metal/tt-llk/tt_llk_*/**/*.h",
-    ":(glob)ttnn/**/kernel_includes/**/*.h",
-)
+LLK_PATHSPEC = ":(glob)tt_metal/tt-llk/tt_llk_*/**/*.h"
+COPIES_PATHSPEC = ":(glob)ttnn/**/kernel_includes/**/*.h"
+TREE_PATHSPECS = (LLK_PATHSPEC, COPIES_PATHSPEC)
 
 # (move, the valid bit that must be waited on)
 PAIRS = (("MOVD2A", "SRCA_VLD"), ("MOVD2B", "SRCB_VLD"))
@@ -257,44 +256,52 @@ def scan(path, providers):
             yield line + 1, move, vld, kind, lines[sig].strip()[:76]
 
 
+def _git_ls_files(*args):
+    res = subprocess.run(
+        ["git", "-C", REPO, "ls-files", "-z", *args],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        return None
+    return [
+        os.path.normpath(os.path.join(REPO, p)) for p in res.stdout.split("\0") if p
+    ]
+
+
 def tree_headers():
     """The LLK headers and their ttnn copies. Listed from git when it can answer:
     walking all of ttnn/ for kernel_includes/ directories is slow on a network mount.
 
-    ``--cached`` is the index. ``--others`` adds headers that are not tracked yet, which a
-    recursive glob used to see. ``--exclude-standard`` leaves ignored build output out.
+    ``--cached`` reads the index without walking ttnn/ on disk. ``--others`` is scoped to
+    ``tt_metal/tt-llk/`` (plus any ``kernel_includes/`` directories already in the index) so
+    untracked headers are still found without walking the whole ttnn/ tree.
     """
     try:
-        res = subprocess.run(
-            [
-                "git",
-                "-C",
-                REPO,
-                "ls-files",
-                "--cached",
+        tracked = _git_ls_files("--cached", "--", *TREE_PATHSPECS)
+        if tracked is not None:
+            copy_dirs = sorted(
+                {
+                    rel[: rel.index("/kernel_includes/") + len("/kernel_includes")]
+                    for p in tracked
+                    for rel in (os.path.relpath(p, REPO).replace("\\", "/"),)
+                    if "/kernel_includes/" in rel
+                }
+            )
+            untracked = _git_ls_files(
                 "--others",
                 "--exclude-standard",
-                "-z",
                 "--",
-                *TREE_PATHSPECS,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if res.returncode == 0 and res.stdout:
-            # ls-files still names a header after it is deleted in the work tree.
-            # Opening that path raises, so keep only files that are still there.
-            present = sorted(
-                path
-                for path in (
-                    os.path.normpath(os.path.join(REPO, p))
-                    for p in res.stdout.split("\0")
-                    if p
-                )
-                if os.path.isfile(path)
+                LLK_PATHSPEC,
+                *(f":(glob){d}/**/*.h" for d in copy_dirs),
             )
-            if present:
-                return present
+            if untracked is not None:
+                combined = set(tracked) | set(untracked)
+                # ls-files --cached still names a header after it is deleted in the work tree.
+                # Opening that path raises, so keep only files that are still there.
+                present = sorted(path for path in combined if os.path.isfile(path))
+                if present:
+                    return present
     except OSError:
         pass
     return sorted(

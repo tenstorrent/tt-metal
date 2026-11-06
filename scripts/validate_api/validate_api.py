@@ -340,7 +340,7 @@ class ApiTree:
         self.root = root
         self.real_root = root.resolve()
         self.files: dict[str, str | None] = {}
-        self.sources: list[str] = []
+        self.readable: set[str] = set()
         self.has_dir_links = False
         if root.is_dir():
             self._scan(root, "")
@@ -362,13 +362,13 @@ class ApiTree:
                         except (OSError, ValueError):
                             self.files[rel] = None
                         if os.path.isfile(entry.path):
-                            self.sources.append(rel)
+                            self.readable.add(rel)
                 elif entry.is_file():
                     self.files[rel] = rel
-                    self.sources.append(rel)
+                    self.readable.add(rel)
 
     def paths(self) -> list[Path]:
-        return [self.root / rel for rel in self.sources]
+        return [self.root / rel for rel in self.readable]
 
     def target(self, source: Path, name: str, quoted: bool) -> str | None:
         # Follow a directory symlink before removing `..`. Lexical normpath turns
@@ -382,6 +382,11 @@ class ApiTree:
             candidates.insert(0, posixpath.normpath(posixpath.join(source_dir, name)))
         for candidate in candidates:
             if candidate in self.files:
+                # A dangling symlink is not a file the compiler opens. The old
+                # resolver skips it and keeps looking, so an existing API-root
+                # header still wins over a source-relative link whose target is absent.
+                if candidate not in self.readable:
+                    return include_target(self.root, source, name, quoted)
                 return self.files[candidate]
         fallback = candidates[-1] if name.startswith(("tt-metalium/", "internal/")) else candidates[0]
         if fallback in (".", "..") or fallback.startswith(("../", "/")):
@@ -549,11 +554,22 @@ def _interesting(path: str) -> bool:
 
 
 def _changed_paths() -> list[str] | None:
-    """Paths in this pre-commit diff, including deletions. None when git cannot answer."""
+    """Paths in this pre-commit diff, including deletions. None when git cannot answer.
+
+    A local run diffs the work tree against HEAD, limited to the trees this hook cares
+    about. ``--cached`` misses an unstaged deletion, and ``pre-commit run --files`` does
+    not stash the work tree, so the stale-exception check would be skipped. CI passes an
+    explicit revision range.
+    """
     revisions = precommit_revisions()
     if revisions is None:
         return None
-    payload = git_output(["diff", "--name-status", "-z", "--no-ext-diff", *(revisions or ["--cached"])])
+    if revisions:
+        payload = git_output(["diff", "--name-status", "-z", "--no-ext-diff", *revisions])
+    else:
+        payload = git_output(["diff", "--name-status", "-z", "--no-ext-diff", "HEAD", "--", *_HOOK_PREFIXES])
+        if payload is None:
+            payload = git_output(["diff", "--name-status", "-z", "--no-ext-diff", "--cached", "--", *_HOOK_PREFIXES])
     if payload is None:
         return None
     return [path for _status, paths in name_status_entries(payload) for path in paths]
