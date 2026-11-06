@@ -19,7 +19,9 @@
 
 #include <stdint.h>
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_combine.hpp"
 
 namespace {
@@ -50,7 +52,10 @@ constexpr uint32_t SEM_LEAD_CREDIT = get_compile_time_arg_val(FB + 19);
 constexpr uint32_t SEM_ROOT_CREDIT = get_compile_time_arg_val(FB + 20);
 static_assert(!fused || COMBINE_LAG + 1 <= COMBINE_DEPTH, "grants run LAG rows ahead of collects");
 
-constexpr auto f_args = TensorAccessorArgs<FB + 22>();
+constexpr uint32_t proj_passes = get_compile_time_arg_val(FB + 22);
+constexpr uint32_t cb_proj_masks = get_compile_time_arg_val(FB + 23);
+constexpr uint32_t FUSED_CT_LEN = 25;  // len(fused_ct) in the descriptor
+constexpr auto f_args = TensorAccessorArgs<FB + FUSED_CT_LEN>();
 constexpr auto x_args = TensorAccessorArgs<f_args.next_compile_time_args_offset()>();
 constexpr auto post_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
@@ -58,6 +63,7 @@ constexpr auto w_args = TensorAccessorArgs<comb_args.next_compile_time_args_offs
 
 constexpr uint32_t FACE_WORDS = 256;  // 16x16 fp32 face
 constexpr uint32_t FACE_DIM = 16;
+static_assert(proj_passes == 1 || proj_passes == FACE_DIM, "exact projection: one masked column pair per face lane");
 
 // Word offset of element (row t, col c) inside a 32x32 fp32 tile (faces 0..3 row-major).
 FORCE_INLINE uint32_t tile_word(uint32_t t, uint32_t c) {
@@ -131,6 +137,28 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_w_slice, n * num_c);
+        if constexpr (proj_passes > 1) {
+            // Exact-projection masks: tile j = 1.0 (bf16) at columns j and j + 16, 0 elsewhere.
+            // Zeroed by the NoC; only the 64 pattern lanes per tile are written by the RISC.
+            const uint32_t mask_bytes = get_tile_size(cb_proj_masks);
+            cb_reserve_back(cb_proj_masks, proj_passes);
+            Noc noc;
+            CircularBuffer masks(cb_proj_masks);
+            noc.async_write_zeros(masks, proj_passes * mask_bytes);
+            noc.write_zeros_l1_barrier();
+            volatile tt_l1_ptr uint16_t* m =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_proj_masks));
+            constexpr uint16_t BF16_ONE = 0x3F80;
+            for (uint32_t j = 0; j < proj_passes; ++j) {
+                volatile tt_l1_ptr uint16_t* t = m + j * (mask_bytes / 2);
+                for (uint32_t face = 0; face < 4; ++face) {
+                    for (uint32_t row = 0; row < FACE_DIM; ++row) {
+                        t[face * FACE_WORDS + row * FACE_DIM + j] = BF16_ONE;
+                    }
+                }
+            }
+            cb_push_back(cb_proj_masks, proj_passes);
+        }
     }
     constexpr uint32_t RT_MEMBERS = 13;  // (x, y) of my group's members, then of every group leader
     const uint32_t rt_leaders = RT_MEMBERS + 2 * geo.size;

@@ -43,7 +43,8 @@ constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(FB + 17);
 constexpr uint32_t SEM_ROOT_GATHER = get_compile_time_arg_val(FB + 18);
 constexpr uint32_t SEM_LEAD_CREDIT = get_compile_time_arg_val(FB + 19);
 constexpr uint32_t SEM_ROOT_CREDIT = get_compile_time_arg_val(FB + 20);
-constexpr auto out_args = TensorAccessorArgs<FB + 22>();
+constexpr uint32_t FUSED_CT_LEN = 25;  // len(fused_ct) in the descriptor
+constexpr auto out_args = TensorAccessorArgs<FB + FUSED_CT_LEN>();
 constexpr auto stats_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t SS_COL = 24;  // n (n + 2)

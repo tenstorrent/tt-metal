@@ -33,6 +33,14 @@ COMBINE_FANIN = 16  # fused: partials per leader (> FANIN column groups -> two-l
 COMBINE_DEPTH = 2  # fused: gather slot sets in flight per consumer
 COMBINE_LAG = 1  # fused: a row is combined after the mix of row + LAG (root: + 2*LAG)
 MAX_SEMAPHORES = 16  # per-core semaphore ids available to one program
+# Projection passes. The FPU dot product rounds every 16-term (face) partial sum to ~tf32 at any
+# fidelity (measured on device: two exact products in one face already lose ~2^-11); a single
+# product per face lands in fp32 DEST exactly. EXACT = 16 column-masked passes (columns j, j+16),
+# each an FPU matmul with one product per face -> fp32-exact projection. Used where the caller's
+# fidelity makes every product exact (HiFi3 / HiFi4); HiFi2 / LoFi (product-limited anyway, the
+# DeepSeek-V4.1 setting) run the single FPU matmul.
+PROJ_EXACT_PASSES = 16
+PROJ_EXACT_FIDELITIES = (ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
 IO_DEPTH = 2  # cb_f_tiles / cb_x_tiles depth, in blocks
 OUT_DEPTH = 2  # cb_out_tiles depth, in blocks (design: 1; 2 measured -8..10% on DM-bound shapes)
 COEF_DEPTH = 1  # cb_coef_cols depth, in rows
@@ -57,6 +65,8 @@ CB_ROOT_GATHER = 13
 CB_LEAD_OUT = 14
 CB_COMB_ACC = 15
 CB_STATS_ROW = 16
+CB_PROJ_MASKS = 17  # exact projection: PROJ_EXACT_PASSES bf16 0/1 column masks (reader-built)
+CB_XPRIME_MASKED = 18  # exact projection: one masked X' block
 
 
 def _tile_bytes(dtype):
@@ -140,7 +150,7 @@ def fused_fixed_bytes(core_c_max, Q, n=N_STREAMS):
 def fused_per_c_bytes(f_tile, x_tile, n=N_STREAMS):
     """Per c-tile of block_c: F, X (IO_DEPTH), X' out (OUT_DEPTH), cb_xprime_mm (bf16), y (collapse)."""
     bf16 = 2048
-    return plain_per_c_bytes(f_tile, x_tile, n) + n * bf16 + bf16
+    return plain_per_c_bytes(f_tile, x_tile, n) + 2 * n * bf16 + bf16  # + cb_xprime_masked
 
 
 def choose_block_c(core_c_max, core_rows_max, *, fixed_bytes, per_c_bytes):
@@ -262,6 +272,7 @@ def create_program_descriptor(
         _cb(CB_OUT_TILES, output_tensor.dtype, x_tile, n * block_c * OUT_DEPTH, core_ranges),
     ]
     fp32_copy_cbs = []  # Float32 CBs read only by CopyTile -> UnpackToDestFp32
+    proj_passes = PROJ_EXACT_PASSES if compute_config.math_fidelity in PROJ_EXACT_FIDELITIES else 1
     if fused:
         f32 = lambda idx, pages: _cb(idx, ttnn.float32, FP32_TILE_BYTES, pages, core_ranges)  # noqa: E731
         cbs += [
@@ -279,6 +290,10 @@ def create_program_descriptor(
         ]
         if num_groups > 1:
             cbs.append(f32(CB_ROOT_GATHER, num_groups * COMBINE_DEPTH))
+        if proj_passes > 1:
+            bf16_tile = ttnn.tile_size(ttnn.bfloat16)
+            cbs.append(_cb(CB_PROJ_MASKS, ttnn.bfloat16, bf16_tile, proj_passes, core_ranges))
+            cbs.append(_cb(CB_XPRIME_MASKED, ttnn.bfloat16, bf16_tile, n * block_c, core_ranges))
         fp32_copy_cbs = [CB_PROJ_BLOCK, CB_PROJ_RUN, CB_SS_RUN, CB_GATHER, CB_ROOT_GATHER, CB_COMB_ACC]
 
     fused_ct = [
@@ -304,6 +319,9 @@ def create_program_descriptor(
         SEM_LEAD_CREDIT,
         SEM_ROOT_CREDIT,
         core_c_max,
+        proj_passes,
+        CB_PROJ_MASKS,
+        CB_XPRIME_MASKED,
     ]
     w_tensor = stats_weight if fused else residual  # placeholder accessor when not fused
     s_tensor = stats_output if fused else output_tensor

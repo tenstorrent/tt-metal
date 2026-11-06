@@ -19,6 +19,9 @@
 //   against the resident W slice (block-major, same order) -> cb_proj_block (fp32), then an
 //   exact SFPU add into the running row partial (cb_proj_run; the row's last block packs
 //   straight into cb_partial for the writer).
+//   Exact variant (HiFi3/HiFi4, proj_passes = 16): the FPU rounds every 16-term face partial sum
+//   to ~tf32, so the block is projected in 16 passes, pass j on X' masked to columns {j, j+16}
+//   (one product per face -> exact in fp32 DEST), each accumulated with the exact SFPU add.
 // finish_row_partial (fused): ss_run -> SfpuRowSum -> cb_ss_row (col 0); the writer patches it
 //   into column 24 of the partial and ships it to the group leader.
 // combine_row (fused): sum the gathered partials in slot-index order (exact SFPU adds, running
@@ -69,6 +72,9 @@ constexpr uint32_t cb_stats_row = get_compile_time_arg_val(FB + 12);
 constexpr uint32_t Q = get_compile_time_arg_val(FB + 13);
 constexpr uint32_t COMBINE_FANIN = get_compile_time_arg_val(FB + 14);
 constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(FB + 16);
+constexpr uint32_t proj_passes = get_compile_time_arg_val(FB + 22);
+constexpr uint32_t cb_proj_masks = get_compile_time_arg_val(FB + 23);
+constexpr uint32_t cb_xprime_masked = get_compile_time_arg_val(FB + 24);
 
 static_assert(n == 4, "mhc_post: the mix chain is written for n = 4 streams");
 
@@ -141,6 +147,25 @@ using CopyRun = ckl::CopyTile<ckl::input(cb), Slot>;
 template <uint32_t cb>
 using PackTo = ckl::PackTile<ckl::output(cb), ckl::Dst::D0>;
 using AddD0D1 = ckl::AddBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>;
+// Exact projection mask pass: X' block tile i (srcA, 8 significant bits) * column mask j (srcB).
+using MaskX = ckl::BinaryFpu<
+    ckl::BinaryFpuOp::Mul,
+    ckl::input(
+        cb_xprime_mm,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    ckl::input(
+        cb_proj_masks,
+        ckl::BroadcastDim::None,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    ckl::Dst::D0>;
 
 // ---------------------------------------------------------------------------
 // Block operations
@@ -330,6 +355,8 @@ void kernel_main() {
         DataflowBuffer lead_out_buf(cb_lead_out);
         DataflowBuffer comb_acc_buf(cb_comb_acc);
         DataflowBuffer stats_row_buf(cb_stats_row);
+        DataflowBuffer masks_buf(proj_passes > 1 ? cb_proj_masks : cb_xprime_mm);
+        DataflowBuffer xmasked_buf(proj_passes > 1 ? cb_xprime_masked : cb_xprime_mm);
 
         constexpr auto geo0 = mhc_post_combine::Geometry::of(0, Q, COMBINE_FANIN);
         const auto geo = mhc_post_combine::Geometry::of(g_c, Q, COMBINE_FANIN);
@@ -337,6 +364,9 @@ void kernel_main() {
         // Matmul boot (SrcOrder::Reverse); the chain elements re-init themselves.
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_xprime_mm, cb_w_slice, cb_proj_block);
         w_buf.wait_front(n * num_c);  // resident W slice for the whole kernel
+        if constexpr (proj_passes > 1) {
+            masks_buf.wait_front(proj_passes);  // resident exact-projection masks
+        }
 
         auto leader_combine = [&]() {
             gather_buf.wait_front(geo.slots);
@@ -353,6 +383,38 @@ void kernel_main() {
                 root_buf.wait_front(geo0.groups);
                 sum_slots<cb_root_gather, cb_stats_row>(geo0.groups, root_buf, comb_acc_buf, stats_row_buf);
                 root_buf.pop_front(geo0.groups);
+            }
+        };
+
+        // Row partial: running + block (exact SFPU add); the row's last contribution packs into
+        // cb_partial for the writer.
+        auto accumulate_partial = [&](bool first, bool last) {
+            if (first) {
+                if (last) {
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        CopyRun<cb_proj_block, ckl::Dst::D0>{proj_block_buf},
+                        PackTo<cb_partial>{partial_buf});
+                } else {
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        CopyRun<cb_proj_block, ckl::Dst::D0>{proj_block_buf},
+                        PackTo<cb_proj_run>{proj_run_buf});
+                }
+            } else if (last) {
+                ckl::eltwise_chain(
+                    ckl::IterationShape::one_tile(),
+                    CopyRun<cb_proj_run, ckl::Dst::D0>{proj_run_buf},
+                    CopyRun<cb_proj_block, ckl::Dst::D1>{proj_block_buf},
+                    AddD0D1{},
+                    PackTo<cb_partial>{partial_buf});
+            } else {
+                ckl::eltwise_chain(
+                    ckl::IterationShape::one_tile(),
+                    CopyRun<cb_proj_run, ckl::Dst::D0>{proj_run_buf},
+                    CopyRun<cb_proj_block, ckl::Dst::D1>{proj_block_buf},
+                    AddD0D1{},
+                    PackTo<cb_proj_run>{proj_run_buf});
             }
         };
 
@@ -380,39 +442,37 @@ void kernel_main() {
                         xprime_buf.reserve_back(n * pad);
                         xprime_buf.push_back(n * pad);
                     }
-                    project_block(extent, b * n * block_c, xprime_buf, w_buf, proj_block_buf);
-                    if (pad) {
-                        xprime_buf.wait_front(n * pad);
-                        xprime_buf.pop_front(n * pad);
-                    }
-                    // Row partial: running + block (exact SFPU add); the last block packs into cb_partial.
-                    const bool last = (b + 1 == num_blocks);
-                    if (b == 0) {
-                        if (last) {
-                            ckl::eltwise_chain(
-                                ckl::IterationShape::one_tile(),
-                                CopyRun<cb_proj_block, ckl::Dst::D0>{proj_block_buf},
-                                PackTo<cb_partial>{partial_buf});
-                        } else {
-                            ckl::eltwise_chain(
-                                ckl::IterationShape::one_tile(),
-                                CopyRun<cb_proj_block, ckl::Dst::D0>{proj_block_buf},
-                                PackTo<cb_proj_run>{proj_run_buf});
+                    const bool last_block = (b + 1 == num_blocks);
+                    const uint32_t w_base = b * n * block_c;
+                    if constexpr (proj_passes == 1) {
+                        project_block(extent, w_base, xprime_buf, w_buf, proj_block_buf);
+                        accumulate_partial(b == 0, last_block);
+                        if (pad) {
+                            xprime_buf.wait_front(n * pad);
+                            xprime_buf.pop_front(n * pad);
                         }
-                    } else if (last) {
-                        ckl::eltwise_chain(
-                            ckl::IterationShape::one_tile(),
-                            CopyRun<cb_proj_run, ckl::Dst::D0>{proj_run_buf},
-                            CopyRun<cb_proj_block, ckl::Dst::D1>{proj_block_buf},
-                            AddD0D1{},
-                            PackTo<cb_partial>{partial_buf});
                     } else {
-                        ckl::eltwise_chain(
-                            ckl::IterationShape::one_tile(),
-                            CopyRun<cb_proj_run, ckl::Dst::D0>{proj_run_buf},
-                            CopyRun<cb_proj_block, ckl::Dst::D1>{proj_block_buf},
-                            AddD0D1{},
-                            PackTo<cb_proj_run>{proj_run_buf});
+                        // Exact projection: pass j multiplies the X' block by column mask j (columns
+                        // j, j + 16; exact 0/1 FPU product) so every face of the matmul holds a
+                        // single product, then accumulates in fp32 (exact SFPU add).
+                        xprime_buf.wait_front(n * block_c);
+                        for (uint32_t j = 0; j < proj_passes; ++j) {
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::tiles(n * extent),
+                                MaskX{xprime_buf, masks_buf, 0, j},
+                                PackTo<cb_xprime_masked>{xmasked_buf});
+                            if (pad) {
+                                xmasked_buf.reserve_back(n * pad);
+                                xmasked_buf.push_back(n * pad);
+                            }
+                            project_block(extent, w_base, xmasked_buf, w_buf, proj_block_buf);
+                            if (pad) {
+                                xmasked_buf.wait_front(n * pad);
+                                xmasked_buf.pop_front(n * pad);
+                            }
+                            accumulate_partial(b == 0 && j == 0, last_block && j + 1 == proj_passes);
+                        }
+                        xprime_buf.pop_front(n * block_c);
                     }
                 }
                 // finish_row_partial: ss row sums -> column 0 of cb_ss_row
