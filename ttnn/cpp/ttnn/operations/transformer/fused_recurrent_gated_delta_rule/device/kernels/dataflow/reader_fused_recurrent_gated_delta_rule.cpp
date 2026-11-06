@@ -80,7 +80,7 @@ void kernel_main() {
     CircularBuffer cb_g(cb::gcol32), cb_b(cb::bcol16), cb_ones(cb::ones32), cb_zero(cb::zero32);
     // The state is one allocation under two ids (utd for the compute's exact copies, mm for its matmul); both are
     // reserved and pushed here so their pointers stay in lockstep.
-    CircularBuffer cb_S(cb::S), cb_S_mm(cb::S_mm);
+    CircularBuffer cb_S(cb::S);  // its matmul view (c_20) is never pushed: see the CB header
 
     // ---- once at kernel start: constants and the zero paddings of every per-token CB ----------------------------
     // Reserving the whole CB (nothing is pushed yet) gives the base of all its slot sets; the per-token reserve/push
@@ -257,14 +257,12 @@ void kernel_main() {
             ASSERT(s0_block % BH == h && s0_block < T * BH);
         }
         cb_S.reserve_back(kv);
-        cb_S_mm.reserve_back(kv);
         for (uint32_t i = 0; i < kv; i++) {
             noc.async_read(s0_acc, cb_S, src_tb, {.page_id = s0_block * kv + i}, {.offset_bytes = i * src_tb});
         }
         issue_token_reads(0);
         noc.async_read_barrier();
         cb_S.push_back(kv);
-        cb_S_mm.push_back(kv);
     }
     finish_token();
 

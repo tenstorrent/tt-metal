@@ -24,8 +24,9 @@
 // 16x32, kT16 is 32x16, everything else 32x32; all fp32. CBs read by copy_tile (gcol32, v16, bcol16, S, ecol32, r16,
 // ebc16) are UnpackToDestFp32 so the copies are exact. A utd CB cannot be a matmul operand (the jit-build gives it the
 // Float32 unpack format and the matmul then reads garbage from SrcA; measured in test_gdn_decode_math.cpp), so every
-// state CB is TWO ids over the same L1 memory (one CircularBufferConfig with two buffer indices): `utd` for the exact
-// seed copies, `mm` for the read-pass matmul in1. Both ids are reserved / pushed / waited / popped in lockstep.
+// state CB is a StateCb: two ids over one allocation, `utd` (UnpackToDestFp32, all the flow control, the exact seed
+// copies) and `mm` (a format view for the read-pass matmul in1 that is never pushed or popped). Why the view needs no
+// flow control of its own: ../fused_recurrent_gdn_cb.hpp.
 // DEST holds 4 fp32 tiles per acquire (half-sync); the same code runs under full sync. The packer is re-initialised
 // (pack_init) whenever the output tile shape changes, the unpacker MOPs by copy_init / matmul_init per acquire, and the
 // unpacker's per-source tile geometry (which only compute_kernel_hw_startup and reconfig_full_operand program, not
@@ -46,6 +47,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "../fused_recurrent_gdn_cb.hpp"
 #include "fused_recurrent_gdn_sfpu.hpp"
 
 namespace gdn_decode {
@@ -76,13 +78,19 @@ struct TokenCbs {
     uint32_t ebc16;      // 16x32: column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c, else 0 (compute, utd)
 };
 
-// One state CB (Kt*Vt x 32x32) under its two ids: `utd` (UnpackToDestFp32, read by copy_tile for the exact seed)
-// and `mm` (plain, the read-pass matmul in1). utd == mm is allowed when the CB is never a matmul operand (a test's
-// output CB); it is then handled once.
-struct StateCbs {
-    uint32_t utd;
-    uint32_t mm;
-};
+// One state CB (Kt*Vt x 32x32) under its two ids, `utd` (UnpackToDestFp32, read by copy_tile for the exact seed; owns
+// the flow control) and `mm` (the read-pass matmul's format view, never pushed or popped): gdn_decode_cb::StateCb.
+using StateCb = gdn_decode_cb::StateCb;
+
+// The invariant the mm view rests on, checked under LLK asserts on the unpack thread before each read pass: the view's
+// read pointer equals the utd id's (both start at the CB base, and the CB holds exactly one state that is produced and
+// consumed whole, so they stay equal). A no-op in release builds.
+inline void check_state_views(StateCb s) {
+    // A statement, not an expression: with asserts on, LLK_ASSERT expands to a do / while block.
+    UNPACK(LLK_ASSERT(
+        get_local_cb_interface(s.utd).fifo_rd_ptr == get_local_cb_interface(s.mm).fifo_rd_ptr,
+        "state CB views diverged: the mm view needs a single-buffered CB produced and consumed whole"));
+}
 
 // Constants pass (three acquires): ecol32 <- exp(gcol32) on the column-0 vectors (column 0 of all 32 rows; the other
 // columns are never read); craw16 <- sum_ki qk16[ki] x qcol32[ki] (c at [0,0]); then one acquire with the FPU scalar
@@ -158,13 +166,15 @@ void constants_pass(
     craw.pop_front(1);
 }
 
-// Read pass: r16[j] <- sum_ki qk16[ki] x S_cur[ki*Vt + j], up to kDstTiles output tiles per acquire. cb_s_cur is the
-// plain (`mm`) id of the state. Waits qk16 (Kt) and S_cur (Kt*Vt); pushes r16 (Vt).
+// Read pass: r16[j] <- sum_ki qk16[ki] x S_cur[ki*Vt + j], up to kDstTiles output tiles per acquire. Waits on the
+// state's utd id and unpacks it through its mm view. Waits qk16 (Kt) and S_cur (Kt*Vt); pushes r16 (Vt).
 template <uint32_t Kt, uint32_t Vt>
-void read_pass(uint32_t cb_qk16, uint32_t cb_s_cur, uint32_t cb_r16) {
-    CircularBuffer qk(cb_qk16), s(cb_s_cur), r(cb_r16);
+void read_pass(uint32_t cb_qk16, StateCb s_cur, uint32_t cb_r16) {
+    const uint32_t cb_s_cur = s_cur.mm;
+    CircularBuffer qk(cb_qk16), s(s_cur.utd), r(cb_r16);
     qk.wait_front(Kt);
     s.wait_front(Kt * Vt);
+    check_state_views(s_cur);
     r.reserve_back(Vt);
     reconfig_full_operand<SrcOrder::Reverse>(cb_qk16, cb_s_cur);
     matmul_init(cb_qk16, cb_s_cur, 0);
@@ -235,14 +245,16 @@ void vector_pass(uint32_t cb_r16, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t c
 // Fused read + vector pass (the optional form of section 8): per V tile j one acquire does the Kt products
 // qk16 x S_cur[., j] into slot 0 (r_j, exactly what the read pass packs) and then the vector pass's SFPU chain on it,
 // so r16 is never packed or copied. The round trip it removes is exact (fp32 pack of an fp32 DEST, UnpackToDestFp32
-// copy), so the bits are identical to read_pass + vector_pass. cb_s_cur is the plain (`mm`) id. Waits qk16 (Kt),
-// S_cur (Kt*Vt), v16 (Vt), ebc16 (1); pushes u16 (Vt) and out16 (Vt).
+// copy), so the bits are identical to read_pass + vector_pass. Waits on the state's utd id and unpacks it through its
+// mm view. Waits qk16 (Kt), S_cur (Kt*Vt), v16 (Vt), ebc16 (1); pushes u16 (Vt) and out16 (Vt).
 template <uint32_t Kt, uint32_t Vt>
 void read_vector_pass(
-    uint32_t cb_qk16, uint32_t cb_s_cur, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t cb_u16, uint32_t cb_out16) {
-    CircularBuffer qk(cb_qk16), s(cb_s_cur), v(cb_v16), ebc(cb_ebc16), u(cb_u16), out(cb_out16);
+    uint32_t cb_qk16, StateCb s_cur, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t cb_u16, uint32_t cb_out16) {
+    const uint32_t cb_s_cur = s_cur.mm;
+    CircularBuffer qk(cb_qk16), s(s_cur.utd), v(cb_v16), ebc(cb_ebc16), u(cb_u16), out(cb_out16);
     qk.wait_front(Kt);
     s.wait_front(Kt * Vt);
+    check_state_views(s_cur);
     v.wait_front(Vt);
     ebc.wait_front(1);
     u.reserve_back(Vt);
@@ -280,8 +292,8 @@ void read_vector_pass(
 // acquire: ecol32 is copied into slot 0 and its [0, 0] parked in an SFPU register (load_scalar), the exact seeds are
 // copied from the utd S_cur into slots 0..3, each is decayed by the parked e (mul_loaded_scalar<32>, bit-identical to
 // the column broadcast of a uniform column), then the rank-1 products accumulate onto the seeded slots. With
-// emit_state every slot is also packed to state_out. cb_s_cur is the utd id of the current state; s_next is the next
-// state's pair (packed through s_next.utd, both ids reserved and pushed).
+// emit_state every slot is also packed to state_out. s_cur and s_next are state CBs; the pass touches their utd ids
+// only (the mm views are never pushed or popped).
 // The outputs are reserved, packed (indices relative to the reservation; the (i, j) order is sequential) and pushed
 // per acquire group, so a writer can stream the state tiles while the pass runs. Waits kT16 (Kt), u16 (Vt), S_cur
 // (Kt*Vt), ecol32 (1); pushes S_next (Kt*Vt in total) and, with emit_state, state_out (Kt*Vt in total).
@@ -289,15 +301,15 @@ template <uint32_t Kt, uint32_t Vt>
 void update_pass(
     uint32_t cb_kT16,
     uint32_t cb_u16,
-    uint32_t cb_s_cur,
+    StateCb s_cur,
     uint32_t cb_ecol32,
-    StateCbs s_next,
+    StateCb s_next,
     uint32_t cb_state_out,
     bool emit_state) {
     constexpr uint32_t kv = Kt * Vt;
+    const uint32_t cb_s_cur = s_cur.utd;
     const uint32_t cb_s_next = s_next.utd;
-    const bool two_ids = s_next.mm != s_next.utd;
-    CircularBuffer kT(cb_kT16), u(cb_u16), s(cb_s_cur), ecol(cb_ecol32), sn(cb_s_next), sn_mm(s_next.mm);
+    CircularBuffer kT(cb_kT16), u(cb_u16), s(cb_s_cur), ecol(cb_ecol32), sn(cb_s_next);
     CircularBuffer st(cb_state_out);
     kT.wait_front(Kt);
     u.wait_front(Vt);
@@ -309,9 +321,6 @@ void update_pass(
         for (uint32_t j0 = 0; j0 < Vt; j0 += kUpdateGroup) {
             const uint32_t nn = (Vt - j0 < kUpdateGroup) ? (Vt - j0) : kUpdateGroup;
             sn.reserve_back(nn);
-            if (two_ids) {
-                sn_mm.reserve_back(nn);
-            }
             if (emit_state) {
                 st.reserve_back(nn);
             }
@@ -340,9 +349,6 @@ void update_pass(
             }
             tile_regs_release();
             sn.push_back(nn);
-            if (two_ids) {
-                sn_mm.push_back(nn);
-            }
             if (emit_state) {
                 st.push_back(nn);
             }
@@ -357,32 +363,27 @@ struct NoHook {
 // One token: constants -> read -> vector -> update, then pop the token-internal CBs. s_cur is the state the token
 // reads (the reader's S at t = 0, the ring after), s_next the ring CB it writes (left in its CBs for the next token);
 // emit_state also packs S_new to state_out. With pop_inputs (the op) the per-token inputs qk16, kT16, qcol32, v16,
-// gcol32, bcol16 and both ids of s_cur are popped at the end as well; ones32 never is. The caller must have run
+// gcol32, bcol16 and s_cur (its utd id) are popped at the end as well; ones32 never is. The caller must have run
 // compute_kernel_hw_startup once (both source orders give the same bits). FuseReadVector selects read_vector_pass
 // (one acquire per V tile for the products and the vector chain; r16 unused) instead of read_pass + vector_pass; the
 // bits are the same. `hook(p)` is called after pass p (0 constants, 1 read, 2 vector, 3 update; fused: 1 after the
 // fused pass and no 2); the gtest stamps the MATH clock there, the op passes nothing.
 template <uint32_t Kt, uint32_t Vt, bool FuseReadVector = false, typename Hook = NoHook>
 void decode_token(
-    const TokenCbs& cb,
-    StateCbs s_cur,
-    StateCbs s_next,
-    bool emit_state,
-    bool pop_inputs = true,
-    Hook&& hook = Hook{}) {
+    const TokenCbs& cb, StateCb s_cur, StateCb s_next, bool emit_state, bool pop_inputs = true, Hook&& hook = Hook{}) {
     constexpr uint32_t kv = Kt * Vt;
     constants_pass<Kt>(cb.gcol32, cb.qk16, cb.qcol32, cb.ones32, cb.bcol16, cb.ecol32, cb.craw16, cb.ebc16);
     hook(0);
     if constexpr (FuseReadVector) {
-        read_vector_pass<Kt, Vt>(cb.qk16, s_cur.mm, cb.v16, cb.ebc16, cb.u16, cb.out16);
+        read_vector_pass<Kt, Vt>(cb.qk16, s_cur, cb.v16, cb.ebc16, cb.u16, cb.out16);
         hook(1);
     } else {
-        read_pass<Kt, Vt>(cb.qk16, s_cur.mm, cb.r16);
+        read_pass<Kt, Vt>(cb.qk16, s_cur, cb.r16);
         hook(1);
         vector_pass<Vt>(cb.r16, cb.v16, cb.ebc16, cb.u16, cb.out16);
         hook(2);
     }
-    update_pass<Kt, Vt>(cb.kT16, cb.u16, s_cur.utd, cb.ecol32, s_next, cb.state_out, emit_state);
+    update_pass<Kt, Vt>(cb.kT16, cb.u16, s_cur, cb.ecol32, s_next, cb.state_out, emit_state);
     hook(3);
     CircularBuffer(cb.ecol32).pop_front(1);
     CircularBuffer(cb.ebc16).pop_front(1);
@@ -398,9 +399,6 @@ void decode_token(
         CircularBuffer(cb.gcol32).pop_front(1);
         CircularBuffer(cb.bcol16).pop_front(1);
         CircularBuffer(s_cur.utd).pop_front(kv);
-        if (s_cur.mm != s_cur.utd) {
-            CircularBuffer(s_cur.mm).pop_front(kv);
-        }
     }
 }
 
