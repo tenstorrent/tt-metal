@@ -88,15 +88,34 @@ ALWI void release_dst() {
 // new APIs, TODO: migrate all kernels to these
 
 /**
+ * The UNPACK thread's half of tile_regs_commit: closes its DST section, handing it to MATH. A no-op except on Quasar
+ * with unpack-to-dest, where MATH starts a section only after this hand-off, so the section's SrcA / SrcB unpacks
+ * (matmul_block, unary_bcast, binary ops) stall both threads once the src banks are full unless it comes first.
+ * A section with src-path work calls it after its last unpack-to-dest copy (or right after tile_regs_acquire if it has
+ * none) and before its first src-path unpack, and then ends with tile_regs_math_commit, not tile_regs_commit.
+ */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tile_regs_unpack_commit() {
+    UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
+}
+
+/**
+ * The MATH thread's half of tile_regs_commit: ends a section whose UNPACK half went earlier in tile_regs_unpack_commit.
+ */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tile_regs_math_commit() {
+    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+}
+
+/**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  *
  * NOTE: On Quasar with unpack-to-dest the UNPACK thread also closes its DST section here, handing it to MATH.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_commit() {
-    // UNPACK step: no-op except on Quasar unpack-to-dest, where it closes the unpack thread's DEST section.
-    UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
-    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+    tile_regs_unpack_commit<is_fp32_dest_acc_en>();
+    tile_regs_math_commit<is_fp32_dest_acc_en>();
 }
 
 /**

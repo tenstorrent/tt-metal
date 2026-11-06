@@ -58,7 +58,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
             _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_PACK);
-            _llk_unpack_unary_operand_to_dest_tile_(i /*l1_tile_idx*/, 0 /*dst_tile_idx*/);
+            // A section without a DEST write must pack the zeros pack's release of that bank left there.
+            if (!SKIP_LAST_UNPACK || i + 1 < TILE_CNT)
+            {
+                _llk_unpack_unary_operand_to_dest_tile_(i /*l1_tile_idx*/, 0 /*dst_tile_idx*/);
+            }
             _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
             _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
             if constexpr (dest_sync == ckernel::DstSync::SyncHalf)
@@ -166,14 +170,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
     if constexpr (unpack_to_dest)
     {
-        // Pack side of the unpack-to-dest handshake, as tt-metal's llk_pack_dest_section_done: behind the PACK0 drain,
-        // release the bank to the unpacker (UNPACK_PACK, the count it stalls on) and the section to math (MATH_PACK);
-        // in SyncHalf move the packer's DEST read base to the other bank. No ZEROACC: the unpacker overwrites the bank.
+        // Pack side of the unpack-to-dest handshake, as tt-metal's llk_pack_dest_section_done.
         _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
             _llk_packer_wait_for_math_done_();
             _llk_pack_(0 /*dest_idx*/, i, ckernel::DEFAULT_TENSOR_SHAPE);
+            _llk_pack_dest_section_clear_<dest_sync, is_fp32_dest_acc_en>();
             _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);
             _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
             if constexpr (dest_sync == ckernel::DstSync::SyncHalf)
