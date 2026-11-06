@@ -10,6 +10,25 @@ from models.experimental.vadv2.tt.tt_encoder import TtBEVFormerEncoder
 from models.experimental.vadv2.tt.tt_decoder import TtDetectionTransformerDecoder, TtMapDetectionTransformerDecoder
 
 
+def rotation_gather(img_metas, bev_h, bev_w, rotate_center):
+    """Host (index, mask) that rotate the previous BEV as a row gather.
+
+    Sample b's cell q takes stacked row index[..., b * num_query + q] of the
+    previous BEV, or zero where mask is zero. Rotating an image of cell numbers
+    with the same torchvision call as the reference makes the gather match its
+    nearest-neighbour, zero-filled rotation exactly.
+    """
+    num_query = bev_h * bev_w
+    # One-based so the zero `rotate` fills in marks outside; float32 holds these indices exactly.
+    cells = torch.arange(1, num_query + 1, dtype=torch.float32).view(1, bev_h, bev_w)
+    indices, masks = [], []
+    for b, meta in enumerate(img_metas):
+        source = rotate(cells, float(meta["can_bus"][-1]), center=list(rotate_center)).flatten().long()
+        indices.append((source - 1).clamp(min=0) + b * num_query)
+        masks.append((source > 0).float())
+    return torch.cat(indices).view(1, 1, 1, -1), torch.stack(masks).unsqueeze(-1)
+
+
 class TtVADPerceptionTransformer:
     def __init__(
         self,
@@ -113,11 +132,22 @@ class TtVADPerceptionTransformer:
         # Per-frame device inputs derived from img_metas. refill_frame() writes
         # them before every forward, so the forward itself does no host work.
         can_bus_dims = params.can_bus_mlp["0"].weight.shape[0]  # preprocess stores (in, out)
+        # float32: the shift moves the previous BEV's reference points, which are float32.
         self._shift_buffer = ttnn.from_torch(
-            torch.zeros(1, 2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, 1, 2), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
         self._can_bus_buffer = ttnn.from_torch(
             torch.zeros(1, can_bus_dims), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        num_query = bev_h * bev_w
+        self._rotation_index_buffer = ttnn.from_torch(
+            torch.zeros(1, 1, 1, num_query, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        self._rotation_mask_buffer = ttnn.from_torch(
+            torch.zeros(1, num_query, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self._frame_ready = False
 
@@ -139,15 +169,30 @@ class TtVADPerceptionTransformer:
         shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / self.bev_w
         shift_y = shift_y * self.use_shift
         shift_x = shift_x * self.use_shift
-        shift_torch = torch.tensor([shift_x, shift_y], dtype=torch.float32).permute(1, 0)
+        shift_torch = torch.tensor([shift_x, shift_y], dtype=torch.float32).permute(1, 0).reshape(-1, 1, 1, 2)
         can_bus_torch = torch.tensor([each["can_bus"] for each in img_metas], dtype=torch.float32)
+        rotation_index, rotation_mask = rotation_gather(img_metas, self.bev_h, self.bev_w, self.rotate_center)
 
-        for host, buffer in ((shift_torch, self._shift_buffer), (can_bus_torch, self._can_bus_buffer)):
+        for host, buffer, dtype, layout in (
+            (shift_torch, self._shift_buffer, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+            (can_bus_torch, self._can_bus_buffer, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            (rotation_index.int(), self._rotation_index_buffer, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            (rotation_mask, self._rotation_mask_buffer, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        ):
             assert tuple(host.shape) == tuple(
                 buffer.shape
             ), f"frame {tuple(host.shape)} != buffer {tuple(buffer.shape)}"
-            ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), buffer)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=dtype, layout=layout), buffer)
         self._frame_ready = True
+
+    def _rotate_prev_bev(self, prev_bev):
+        """(num_query, bs=1, C) previous BEV rotated by the frame's heading change, on device."""
+        num_query, bs, embed_dims = prev_bev.shape
+        assert bs == 1, "the rotation gather is built for bs=1"
+        rows = ttnn.reshape(ttnn.to_layout(prev_bev, ttnn.ROW_MAJOR_LAYOUT), (1, 1, num_query, embed_dims))
+        rotated = ttnn.embedding(self._rotation_index_buffer, rows, layout=ttnn.TILE_LAYOUT)
+        rotated = ttnn.mul(ttnn.reshape(rotated, (bs, num_query, embed_dims)), self._rotation_mask_buffer)
+        return ttnn.permute(rotated, (1, 0, 2))
 
     def attn_bev_encode(
         self,
@@ -176,22 +221,12 @@ class TtVADPerceptionTransformer:
         bev_pos = ttnn.permute(bev_pos, (2, 0, 1))
         assert self._frame_ready, "call refill_frame() with this frame's img_metas before the forward"
         self._frame_ready = False
-        # Clone so the encoder's ttnn.deallocate(shift) does not free the persistent buffer.
-        shift = ttnn.clone(self._shift_buffer)
 
         if prev_bev is not None:
             if prev_bev.shape[1] == bev_h * bev_w:
                 prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             if self.rotate_prev_bev:
-                for i in range(bs):
-                    rotation_angle = kwargs["img_metas"][i]["can_bus"][-1]
-                    tmp_prev_bev = prev_bev[:, i]
-                    tmp_prev_bev = ttnn.reshape(tmp_prev_bev, (bev_h, bev_w, -1))
-                    tmp_prev_bev = ttnn.permute(tmp_prev_bev, (2, 0, 1))
-                    tmp_prev_bev = rotate(tmp_prev_bev, rotation_angle, center=self.rotate_center)
-                    tmp_prev_bev = ttnn.permute(tmp_prev_bev, (1, 2, 0))
-                    tmp_prev_bev = ttnn.reshape(tmp_prev_bev, (bev_h * bev_w, 1, -1))
-                    prev_bev[:, i] = tmp_prev_bev[:, 0]
+                prev_bev = self._rotate_prev_bev(prev_bev)
 
         # Clone so downstream ops can't free the persistent buffer.
         can_bus = ttnn.clone(self._can_bus_buffer)
@@ -239,7 +274,7 @@ class TtVADPerceptionTransformer:
             bev_w=bev_w,
             bev_pos=bev_pos,
             prev_bev=prev_bev,
-            shift=shift,
+            shift=self._shift_buffer,
             **kwargs,
         )
         return bev_embed

@@ -80,177 +80,74 @@ class TtBEVFormerEncoder:
         # grid and the camera rig, which are fixed for the lifetime of the model.
         self.bev_h = bev_h
         self.bev_w = bev_w
-        self.ref_3d = self.get_reference_points_ttnn(
-            bev_h, bev_w, pc_range[5] - pc_range[2], num_points_in_pillar, dim="3d", bs=1, device=device
+        # Built on the host in float32, as the reference computes them: in bfloat16 the BEV cell
+        # centres round by up to 0.4 cells and the projection moves points by pixels.
+        ref_3d = self.reference_points_3d(bev_h, bev_w, pc_range[5] - pc_range[2], num_points_in_pillar)
+        self.ref_2d = ttnn.from_torch(
+            self.reference_points_2d(bev_h, bev_w),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=1, device=device)
-        # Both live for the whole model lifetime; keep them out of L1.
-        self.ref_3d = ttnn.to_memory_config(self.ref_3d, ttnn.DRAM_MEMORY_CONFIG)
-        self.ref_2d = ttnn.to_memory_config(self.ref_2d, ttnn.DRAM_MEMORY_CONFIG)
-        reference_points_cam, bev_mask = self.point_sampling_ttnn(self.ref_3d, pc_range, lidar2img, img_shape)
+        reference_points_cam, bev_mask = self.point_sampling(ref_3d, pc_range, lidar2img, img_shape)
         for layer in self.layers:
             layer.attentions[1].prepare(reference_points_cam, bev_mask)
-        ttnn.deallocate(reference_points_cam)
-        ttnn.deallocate(bev_mask)
 
     @staticmethod
-    def get_reference_points_ttnn(H, W, Z=8, num_points_in_pillar=4, dim="3d", bs=1, device=None, dtype=ttnn.bfloat16):
-        if dim == "3d":
+    def reference_points_3d(H, W, Z, num_points_in_pillar):
+        """(1, num_points_in_pillar, H * W, 3) pillar points in [0, 1], float32."""
+        zs = torch.linspace(0.5, Z - 0.5, num_points_in_pillar).view(-1, 1, 1).expand(num_points_in_pillar, H, W) / Z
+        xs = torch.linspace(0.5, W - 0.5, W).view(1, 1, W).expand(num_points_in_pillar, H, W) / W
+        ys = torch.linspace(0.5, H - 0.5, H).view(1, H, 1).expand(num_points_in_pillar, H, W) / H
+        ref_3d = torch.stack((xs, ys, zs), -1)
+        return ref_3d.permute(0, 3, 1, 2).flatten(2).permute(0, 2, 1)[None]
 
-            def _linspace_ttnn(start, end, steps):
-                idx = ttnn.arange(0, steps, dtype=ttnn.bfloat16, device=device)
-                step_size = (end - start) / (steps - 1)
-                return ttnn.add(ttnn.multiply(idx, step_size), start)
+    @staticmethod
+    def reference_points_2d(H, W):
+        """(1, H * W, 1, 2) BEV cell centres in [0, 1], float32."""
+        ref_y, ref_x = torch.meshgrid(torch.linspace(0.5, H - 0.5, H), torch.linspace(0.5, W - 0.5, W), indexing="ij")
+        ref_2d = torch.stack((ref_x.reshape(-1)[None] / W, ref_y.reshape(-1)[None] / H), -1)
+        return ref_2d.unsqueeze(2)
 
-            # Generate z-values
-            z_vals = _linspace_ttnn(0.5, Z - 0.5, num_points_in_pillar)
-            z_vals = ttnn.reshape(z_vals, (num_points_in_pillar, 1, 1))
-            z_vals = ttnn.expand(z_vals, (num_points_in_pillar, H, W))
-            z_vals = ttnn.divide(z_vals, Z)
+    @staticmethod
+    def point_sampling(reference_points, pc_range, lidar2img, img_shape):
+        """Project the pillar points into every camera, in float32 on the host.
 
-            # Generate x-values
-            x_vals = _linspace_ttnn(0.5, W - 0.5, W)
-            x_vals = ttnn.reshape(x_vals, (1, 1, W))
-            x_vals = ttnn.expand(x_vals, (num_points_in_pillar, H, W))
-            x_vals = ttnn.divide(x_vals, W)
-
-            # Generate y-values
-            y_vals = _linspace_ttnn(0.5, H - 0.5, H)
-            y_vals = ttnn.reshape(y_vals, (1, H, 1))
-            y_vals = ttnn.expand(y_vals, (num_points_in_pillar, H, W))
-            y_vals = ttnn.divide(y_vals, H)
-
-            ref = ttnn.stack((x_vals, y_vals, z_vals), dim=-1)  # [P, H, W, 3]
-            ref = ttnn.permute(ref, (0, 3, 1, 2))  # [P, 3, H, W]
-            ref = ttnn.reshape(ref, (num_points_in_pillar, 3, H * W))
-            ref = ttnn.permute(ref, (0, 2, 1))  # [P, H*W, 3]
-            ref = ttnn.reshape(ref, (1, num_points_in_pillar, H * W, 3))
-
-            ref = ttnn.repeat(ref, (bs, 1, 1, 1))  # [B, P, HW, 3]
-            ttnn.deallocate(x_vals)
-            ttnn.deallocate(y_vals)
-            ttnn.deallocate(z_vals)
-            return ref
-
-        elif dim == "2d":
-            y_vals = ttnn.arange(0, H, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-            x_vals = ttnn.arange(0, W, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-            y_vals = ttnn.add(y_vals, 0.5)
-            x_vals = ttnn.add(x_vals, 0.5)
-
-            y_vals = ttnn.divide(y_vals, H)
-            x_vals = ttnn.divide(x_vals, W)
-
-            y_vals = ttnn.reshape(y_vals, (H, 1))
-            y_vals = ttnn.repeat(y_vals, (1, W))  # [H, W]
-
-            x_vals = ttnn.reshape(x_vals, (1, W))
-            x_vals = ttnn.repeat(x_vals, (H, 1))  # [H, W]
-
-            y_vals = ttnn.reshape(y_vals, (-1,))
-            y_vals = ttnn.unsqueeze(y_vals, 0)  # [1, H*W]
-            x_vals = ttnn.reshape(x_vals, (-1,))
-            x_vals = ttnn.unsqueeze(x_vals, 0)  # [1, H*W]
-
-            ref = ttnn.stack((x_vals, y_vals), dim=-1)  # [1, H*W, 2]
-
-            ref = ttnn.repeat(ref, (bs, 1, 1))  # [bs, H*W, 2]
-            ref = ttnn.reshape(ref, (bs, H * W, 1, 2))  # [bs, H*W, 1, 2]
-            ttnn.deallocate(x_vals)
-            ttnn.deallocate(y_vals)
-
-            return ref
-
-    def point_sampling_ttnn(self, reference_points, pc_range, lidar2img, img_shape):
-        """Project the 3D BEV reference points into every camera.
-
-        lidar2img: (num_cams, 4, 4) lidar-to-image matrices; img_shape: (H, W) of
-        the network input the projections are normalized by.
+        lidar2img: (num_cams, 4, 4) lidar-to-image matrices; img_shape: (H, W) of the network
+        input. Returns reference_points_cam (num_cams, 1, num_query, D, 2) and bev_mask
+        (num_cams, 1, num_query, D) bool.
         """
-        # Round to bf16 in torch so the matrices do not depend on ttnn's host conversion.
-        lidar2img = torch.as_tensor(np.asarray(lidar2img), dtype=torch.float32).to(torch.bfloat16)
-        lidar2img = lidar2img.reshape(1, -1, 4, 4)  # (B=1, N, 4, 4)
-        lidar2img = ttnn.from_torch(lidar2img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        ref = ttnn.clone(reference_points)
-        if ref.layout != ttnn.TILE_LAYOUT:
-            # The projection matmul below needs tile-aligned operands.
-            ref_rm = ref
-            ref = ttnn.to_layout(ref_rm, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(ref_rm)
+        lidar2img = torch.as_tensor(np.asarray(lidar2img), dtype=torch.float32).reshape(1, -1, 4, 4)
+        reference_points = reference_points.clone()
+        reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
+        reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
+        reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
+        reference_points = torch.cat((reference_points, torch.ones_like(reference_points[..., :1])), -1)
 
-        x, y, z = ttnn.split(ref, (1, 1, 1), dim=3)
-
-        x = x * (pc_range[3] - pc_range[0]) + pc_range[0]
-        y = y * (pc_range[4] - pc_range[1]) + pc_range[1]
-        z = z * (pc_range[5] - pc_range[2]) + pc_range[2]
-
-        reference_points = ttnn.concat((x, y, z), dim=-1)
-        ones = ttnn.ones_like(reference_points[..., :1])
-        reference_points = ttnn.concat((reference_points, ones), dim=-1)
-
-        reference_points = ttnn.permute(reference_points, (1, 0, 2, 3))  # [D, B, Q, 4]
-        D = reference_points.shape[0]
-        B = reference_points.shape[1]
-        num_query = reference_points.shape[2]
-        num_cam = lidar2img.shape[1]
-
-        reference_points = ttnn.unsqueeze(reference_points, 2)
-        reference_points = ttnn.repeat(reference_points, (1, 1, num_cam, 1, 1))
-        reference_points = ttnn.unsqueeze(reference_points, -1)
-
-        lidar2img = ttnn.unsqueeze(lidar2img, 0)
-        lidar2img = ttnn.unsqueeze(lidar2img, 3)
-        lidar2img = ttnn.repeat(lidar2img, (D, 1, 1, num_query, 1, 1))
-
-        reference_points_cam = ttnn.matmul(lidar2img, reference_points)
-        reference_points_cam = ttnn.squeeze(reference_points_cam, -1)
-
-        ttnn.deallocate(lidar2img)
-        ttnn.deallocate(reference_points)
+        reference_points = reference_points.permute(1, 0, 2, 3)
+        D, B, num_query = reference_points.size()[:3]
+        num_cam = lidar2img.size(1)
+        reference_points = reference_points.view(D, B, 1, num_query, 4).repeat(1, 1, num_cam, 1, 1).unsqueeze(-1)
+        lidar2img = lidar2img.view(1, B, num_cam, 1, 4, 4).repeat(D, 1, 1, num_query, 1, 1)
+        reference_points_cam = torch.matmul(lidar2img, reference_points).squeeze(-1)
 
         eps = 1e-5
-        z = reference_points_cam[..., 2:3]
-        bev_mask = z > eps
-
-        reference_points_cam = ttnn.divide(
-            reference_points_cam[..., 0:2],
-            ttnn.maximum(reference_points_cam[..., 2:3], ttnn.ones_like(reference_points_cam[..., 2:3]) * eps),
+        bev_mask = reference_points_cam[..., 2:3] > eps
+        reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
+            reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps
         )
-        x = reference_points_cam[..., 0]
-        y = reference_points_cam[..., 1]
-
-        x = ttnn.divide(x, img_shape[1])
-        y = ttnn.divide(y, img_shape[0])
-        x = ttnn.unsqueeze(x, dim=-1)
-        y = ttnn.unsqueeze(y, dim=-1)
-        reference_points_cam = ttnn.concat([x, y], dim=-1)
-
-        a = reference_points_cam[..., 1:2]
-        b = reference_points_cam[..., 0:1]
-        y_gt_0 = ttnn.gt(a, 0.0)
-        y_lt_1 = ttnn.lt(a, 1.0)
-        x_gt_0 = ttnn.gt(b, 0.0)
-        x_lt_1 = ttnn.lt(b, 1.0)
-        bev_mask = ttnn.logical_and(bev_mask, y_gt_0)
-        bev_mask = ttnn.logical_and(bev_mask, y_lt_1)
-        bev_mask = ttnn.logical_and(bev_mask, x_gt_0)
-        bev_mask = ttnn.logical_and(bev_mask, x_lt_1)
-
-        bev_mask = ttnn.where(ttnn.isnan(bev_mask), ttnn.zeros_like(bev_mask), bev_mask)
-        reference_points_cam = ttnn.permute(reference_points_cam, [2, 1, 3, 0, 4])
-        bev_mask = ttnn.permute(bev_mask, [2, 1, 3, 0, 4])
-        bev_mask = ttnn.squeeze(bev_mask, dim=-1)
-        ttnn.deallocate(y_gt_0)
-        ttnn.deallocate(y_lt_1)
-        ttnn.deallocate(x_gt_0)
-        ttnn.deallocate(x_lt_1)
-        ttnn.deallocate(a)
-        ttnn.deallocate(b)
-        ttnn.deallocate(x)
-        ttnn.deallocate(y)
-        ttnn.deallocate(ref)
-
+        reference_points_cam[..., 0] /= img_shape[1]
+        reference_points_cam[..., 1] /= img_shape[0]
+        bev_mask = (
+            bev_mask
+            & (reference_points_cam[..., 1:2] > 0.0)
+            & (reference_points_cam[..., 1:2] < 1.0)
+            & (reference_points_cam[..., 0:1] < 1.0)
+            & (reference_points_cam[..., 0:1] > 0.0)
+        )
+        reference_points_cam = reference_points_cam.permute(2, 1, 3, 0, 4)
+        bev_mask = bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1)
         return reference_points_cam, bev_mask
 
     def __call__(
@@ -264,35 +161,31 @@ class TtBEVFormerEncoder:
         bev_pos=None,
         valid_ratios=None,
         prev_bev=None,
-        shift=0.0,
+        shift=None,
         **kwargs,
     ):
+        """shift: the ego translation in BEV fractions, float32 ROW_MAJOR (bs, 1, 1, 2)."""
         output = bev_query
         intermediate = []
 
         assert (bev_h, bev_w) == (self.bev_h, self.bev_w)
         assert bev_query.shape[1] == 1, "reference points are built for bs=1"
-        ref_3d = self.ref_3d
         ref_2d = self.ref_2d
-
-        shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
-        shift_ref_2d = shift_ref_2d + shift
 
         bev_query = ttnn.permute(bev_query, (1, 0, 2))
         bev_pos = ttnn.permute(bev_pos, (1, 0, 2))
-        bs, len_bev, num_bev_level, _ = ref_2d.shape
+        bs, len_bev, _ = bev_query.shape
+        # Every BEV map's float32 reference points, previous BEV first: the previous one's moved
+        # by the ego shift, (bs, Q, 2, 2), as the temporal self-attention samples the two maps.
         if prev_bev is not None:
             prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             prev_bev = ttnn.stack([prev_bev, bev_query], 1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, len_bev, -1))
-            hybird_ref_2d = ttnn.stack([shift_ref_2d, ref_2d], 1)
-            hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
+            shifted_ref_2d = ttnn.add(ref_2d, shift)
+            hybird_ref_2d = ttnn.concat([shifted_ref_2d, ref_2d], dim=2)
+            ttnn.deallocate(shifted_ref_2d)
         else:
-            hybird_ref_2d = ttnn.stack([ref_2d, ref_2d], 1)
-            hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
-        ttnn.deallocate(shift)
-        ttnn.deallocate(shift_ref_2d)
+            hybird_ref_2d = ttnn.concat([ref_2d, ref_2d], dim=2)
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
@@ -301,7 +194,6 @@ class TtBEVFormerEncoder:
                 *args,
                 bev_pos=bev_pos,
                 ref_2d=hybird_ref_2d,
-                ref_3d=ref_3d,
                 bev_h=bev_h,
                 bev_w=bev_w,
                 prev_bev=prev_bev,
