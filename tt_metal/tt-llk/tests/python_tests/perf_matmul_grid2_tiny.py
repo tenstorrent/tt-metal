@@ -131,7 +131,6 @@ def test_perf_matmul_grid2_tiny(case, perf_report):
             k.keep_flip = False
             k.unfused_post = False
             k.force_form = ""
-            k.pack_src_from_output = False
     # a cell that keeps main's form runs main's unpack and math bodies (llk_matmul_forms.h resolves the form key to 0)
     main_templates = [MATMUL_OPERAND_SIZES(), *form_keys]
 
