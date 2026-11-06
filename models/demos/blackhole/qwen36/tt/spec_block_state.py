@@ -277,6 +277,8 @@ class SpecBlockBook:
         # chained state moves of the staged verify: {engine row: ([G] start blocks [T], [G] windows [T, T])}, indexed by
         # the pending verify's accepted count - 1; the rows' window maps follow once that count is known (resolve_moves)
         self.moves = {}
+        # head pages of each moved row's start blocks [G, T, Nv] and windows [G, T, T, Nv], computed once in set_moves
+        self._move_pages = {}
         self._moves_dropped = False  # forget_row dropped a row's unresolved moves: its device window rows are unknown
         self.pending_blocks = []  # (row, column, group, block) conv writes that name their block (chained rows)
 
@@ -304,7 +306,7 @@ class SpecBlockBook:
         self.init = [p[self._rows, self.step_start] for p in self._pages]
         self.pending = [(int(u), int(t)) for u, t in boundary]
         self.pending_blocks = []
-        self.moves = {}
+        self.moves, self._move_pages = {}, {}
         live = tuple(int(u) for u in live_rows)
         if changed or self._map_dirty or live != self._map_live:
             for u in live:
@@ -351,13 +353,17 @@ class SpecBlockBook:
             u, c = int(u), int(c)
             self.step_start[u] = c
             mv = self.moves.pop(u, None)
+            mp = self._move_pages.pop(u, None)
             if mv is not None:
-                self._adopt_window(u, c + 1, mv[1])
+                self._adopt_window(u, c + 1, mv[1], mp)
                 changed.update(range(self.G))
                 if start_pos is not None and self._at_boundary(int(start_pos[u])):
                     self.pending.append((u, 0))
             for g in range(self.G):
-                self.init[g][u] = self._pages[g][u, c] if mv is None else self.layout.head_pages(mv[0][g][c])
+                if mv is None:
+                    self.init[g][u] = self._pages[g][u, c]
+                else:
+                    self.init[g][u] = self.layout.head_pages(mv[0][g][c]) if mp is None else mp[0][g][c]
         return sorted(changed)
 
     def _at_boundary(self, pos):
@@ -368,7 +374,14 @@ class SpecBlockBook:
         ``windows`` [G] int64 [B, T, T] state windows, entry [u, c - 1] for accepted count c of the pending verify;
         ``rows``: the chained engine rows (the others keep the staged window). The boundary conv writes set_step
         derived for these rows from provisional positions are dropped (chain_boundaries / set_start set them)."""
-        self.moves = {int(u): ([s[int(u)].clone() for s in starts], [w[int(u)].clone() for w in windows]) for u in rows}
+        rows = [int(u) for u in rows]
+        self.moves = {u: ([s[u].clone() for s in starts], [w[u].clone() for w in windows]) for u in rows}
+        self._move_pages = {}
+        if rows:  # two vectorized head_pages calls instead of one per row, group and count
+            sel = torch.tensor(rows)
+            sp = self.layout.head_pages(torch.stack([torch.as_tensor(s)[sel] for s in starts]))  # [G, U, T, Nv]
+            wp = self.layout.head_pages(torch.stack([torch.as_tensor(w)[sel] for w in windows]))  # [G, U, T, T, Nv]
+            self._move_pages = {u: (sp[:, i], wp[:, i]) for i, u in enumerate(rows)}
         self.pending = [(u, t) for u, t in self.pending if u not in self.moves]
 
     def chain_boundaries(self, start_lo):
@@ -385,16 +398,18 @@ class SpecBlockBook:
         """The pending verify of the staged chained rows accepted ``counts[u]`` (engine rows): their window maps and
         staged pages become those of that count."""
         moves, self.moves = self.moves, {}
+        pages, self._move_pages = self._move_pages, {}
         for u, (_, win) in moves.items():
-            self._adopt_window(u, int(counts[u]), win)
+            self._adopt_window(u, int(counts[u]), win, pages.get(u))
 
-    def _adopt_window(self, u, c, win):
+    def _adopt_window(self, u, c, win, pages=None):
+        """Row u takes the window of accepted count c (``pages``: its precomputed (start, window) head pages)."""
         self.forget_row(u)
         mapped = []
         for g in range(self.G):
             w = win[g][c - 1]
             self.step_blocks[g][u] = w
-            self._pages[g][u] = self.layout.head_pages(w)
+            self._pages[g][u] = self.layout.head_pages(w) if pages is None else pages[1][g][c - 1]
             self.idx_host[g][u] = self._pages[g][u].reshape(-1).to(torch.int32)
             for t, b in enumerate(w.tolist()):
                 if b > 0:
@@ -418,8 +433,9 @@ class SpecBlockBook:
             return self._pages
         pages = [p.clone() for p in self._pages]
         for u, (st, _) in self.moves.items():
+            mp = self._move_pages.get(u)
             for g in range(self.G):
-                pages[g][u] = self.layout.head_pages(st[g])
+                pages[g][u] = self.layout.head_pages(st[g]) if mp is None else mp[0][g]
         return pages
 
     def windows_cat(self):
@@ -430,7 +446,11 @@ class SpecBlockBook:
         nv = self.layout.nv
         out = torch.stack(self._pages, dim=1).unsqueeze(1).expand(self.B, self.T, self.G, self.T, nv).clone()
         for u, (_, win) in self.moves.items():
-            out[u] = torch.stack([self.layout.head_pages(win[g]) for g in range(self.G)], dim=1)
+            mp = self._move_pages.get(u)
+            if mp is None:
+                out[u] = torch.stack([self.layout.head_pages(win[g]) for g in range(self.G)], dim=1)
+            else:
+                out[u] = mp[1].permute(1, 0, 2, 3)  # [G, count, T, Nv] -> [count, G, T, Nv]
         return out.reshape(self.B, -1).to(torch.float32)
 
     def step_start_blocks(self, u):
@@ -496,6 +516,7 @@ class SpecBlockBook:
         again). Resolving them later would map the old request's window to the row again, and a block copy from one of
         those ids, by then another request's state block, would take its conv rows from the old verify window."""
         self._map_dirty = True
+        self._move_pages.pop(int(u), None)
         if self.moves.pop(int(u), None) is not None:
             self._moves_dropped = True
         for b in self.row_blocks.pop(int(u), ()):
