@@ -82,7 +82,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: tenstorrent/.github/actions/cachew-checkout@0000000000000000000000000000000000000000 # cachew checkout
+        uses: asattaurTT/tt-github-actions/.github/actions/cachew-checkout@66fab509e2c11f6d518f82d16d3409041432877c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -135,7 +135,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: tenstorrent/.github/actions/cachew-checkout@0000000000000000000000000000000000000000 # cachew checkout
+        uses: asattaurTT/tt-github-actions/.github/actions/cachew-checkout@66fab509e2c11f6d518f82d16d3409041432877c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -189,7 +189,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: tenstorrent/.github/actions/cachew-checkout@0000000000000000000000000000000000000000 # cachew checkout
+        uses: asattaurTT/tt-github-actions/.github/actions/cachew-checkout@66fab509e2c11f6d518f82d16d3409041432877c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive

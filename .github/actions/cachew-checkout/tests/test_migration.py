@@ -16,8 +16,8 @@ migration = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(migration)
 
 PLAIN = "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2"
-PINNED = f"tenstorrent/.github/actions/cachew-checkout@{migration.ACTION_SHA} # cachew checkout"
-STALE = "tenstorrent/.github/actions/cachew-checkout@" + "f" * 40 + " # cachew checkout"
+PINNED = f"{migration.ACTION_REPO}@{migration.ACTION_SHA} # cachew checkout"
+STALE = migration.ACTION_REPO + "@" + "f" * 40 + " # cachew checkout"
 LEGACY = "tenstorrent/tt-metal/.github/actions/cachew-checkout@" + "8" * 40 + " # cachew checkout"
 
 

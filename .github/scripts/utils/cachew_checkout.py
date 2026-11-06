@@ -32,15 +32,20 @@ ACTION_DIR = Path(".github/actions/cachew-checkout")
 # Consumers run a published copy of ACTION_DIR from the small tenstorrent/.github
 # repository. A remote `uses:` makes the runner download the whole host repository
 # for every job, so hosting it in tt-metal cost a full tt-metal tarball per job.
-HOST_REPO = "tenstorrent/.github"
+# TEST ONLY (MINFRA-2477): hosted on a personal fork of tenstorrent/tt-github-actions to
+# prove the fix before the upstream PR lands. Switch to tenstorrent/tt-github-actions
+# before merging.
+HOST_REPO = "asattaurTT/tt-github-actions"
 HOST_URL = f"https://github.com/{HOST_REPO}"
-HOST_DIR = "actions/cachew-checkout"
+HOST_DIR = ".github/actions/cachew-checkout"
 ACTION_REPO = f"{HOST_REPO}/{HOST_DIR}"
-# TODO(MINFRA-2477): set to the tenstorrent/.github commit that publishes this tree's runtime files.
-ACTION_SHA = "0000000000000000000000000000000000000000"
+ACTION_SHA = "66fab509e2c11f6d518f82d16d3409041432877c"
 ACTION = f"{ACTION_REPO}@{ACTION_SHA}"
 # Earlier pins hosted the action in tt-metal itself; --write moves them to ACTION.
-LEGACY_ACTION_REPOS = ("tenstorrent/tt-metal/.github/actions/cachew-checkout",)
+LEGACY_ACTION_REPOS = (
+    "tenstorrent/tt-metal/.github/actions/cachew-checkout",
+    "tenstorrent/.github/actions/cachew-checkout",
+)
 PIN_REPOS = (ACTION_REPO, *LEGACY_ACTION_REPOS)
 UPSTREAM_WRAPPER = ACTION_DIR / "action.yml"
 FORWARDED_CHECKOUT = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
