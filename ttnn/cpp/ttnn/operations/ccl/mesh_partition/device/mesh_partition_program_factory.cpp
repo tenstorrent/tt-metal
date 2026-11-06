@@ -153,9 +153,8 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     // Partition attributes, tensor specs and coordinates are in the cache key. Each coordinate
     // owns its program, so its slice geometry and work split stay fixed across calls. Metal 2.0
     // updates both tensor accessor bindings and any borrowed sharded DFBs through this API.
-    const tt::tt_metal::experimental::
-        Table<tt::tt_metal::experimental::TensorParamName, tt::tt_metal::experimental::TensorArgument>
-            bindings{{INPUT, tensor_args.input_tensor.mesh_tensor()}, {OUTPUT, tensor_return_value.mesh_tensor()}};
+    const tt::tt_metal::Table<tt::tt_metal::TensorParamName, tt::tt_metal::TensorArgument> bindings{
+        {INPUT, tensor_args.input_tensor.mesh_tensor()}, {OUTPUT, tensor_return_value.mesh_tensor()}};
     // All coordinate programs declare the same tensor specs. Validate fresh buffers once per call.
     bool validated = false;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {

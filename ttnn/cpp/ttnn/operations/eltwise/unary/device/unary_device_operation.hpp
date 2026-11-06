@@ -47,7 +47,7 @@ struct UnaryDeviceOperation {
 
         // Cache-hit re-apply of all per-dispatch state (per-core args + tensor bindings, which also back the
         // sharded-path DFB addresses), since the hash excludes volume. See the .cpp.
-        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,

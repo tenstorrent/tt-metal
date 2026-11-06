@@ -10,8 +10,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -19,7 +19,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts FillRMProgramFactory::create_program_artifacts(
     const FillRmParams& operation_attributes, const FillRmInputs& tensor_args, Tensor& tensor_return_value) {

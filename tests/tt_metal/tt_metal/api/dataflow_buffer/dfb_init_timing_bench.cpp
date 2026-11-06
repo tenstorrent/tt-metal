@@ -32,8 +32,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
@@ -86,21 +86,19 @@ DfbInitTimingBenchContext create_dfb_init_timing_bench_context() {
     return ctx;
 }
 
-inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
+inline TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
     const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
-    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
-    auto memory_config =
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
-    return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::UINT32, page_config, memory_config);
+    return TensorSpec(Shape{total_entries, entry_size_words}, tensor_layout);
 }
 
 namespace {
 constexpr tt::DataFormat kDfbBenchDataFormat = tt::DataFormat::Float16_b;
 
-experimental::DataflowBufferSpec MakeBenchDfbSpec(
-    experimental::DFBSpecName id, uint32_t entry_size, uint32_t num_entries) {
-    return experimental::DataflowBufferSpec{
+DataflowBufferSpec MakeBenchDfbSpec(DFBSpecName id, uint32_t entry_size, uint32_t num_entries) {
+    return DataflowBufferSpec{
         .unique_id = std::move(id),
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -296,22 +294,22 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
     constexpr uint32_t NUM_ENTRIES_PER_PRODUCER = NUM_ENTRIES;
     constexpr uint32_t NUM_ENTRIES_PER_CONSUMER = NUM_ENTRIES;
 
-    const experimental::DFBSpecName DFB{"dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const DFBSpecName DFB{"dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{};
+    const DataMovementHardwareConfig dm_producer_cfg = DataMovementHardwareConfig{};
 
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES));
 
-    experimental::DataflowBufferSpec dfb_spec = MakeBenchDfbSpec(DFB, ENTRY_SIZE, NUM_ENTRIES);
+    DataflowBufferSpec dfb_spec = MakeBenchDfbSpec(DFB, ENTRY_SIZE, NUM_ENTRIES);
 
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = NUM_PRODUCERS,
-        .dfb_bindings = {experimental::ProducerOf(DFB, "out")},
+        .dfb_bindings = {ProducerOf(DFB, "out")},
         .tensor_bindings = {{
             .tensor_parameter_name = IN_TENSOR,
             .accessor_name = "src_tensor",
@@ -326,22 +324,22 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
         .hw_config = dm_producer_cfg,
     };
 
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
         .num_threads = NUM_CONSUMERS,
-        .dfb_bindings = {experimental::StridedConsumerOf(DFB, "in")},
+        .dfb_bindings = {StridedConsumerOf(DFB, "in")},
         .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES_PER_CONSUMER}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "bench_base_wu",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = core_range_set,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "bench_base",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
@@ -351,16 +349,15 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
-    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    ProgramRunArgs run_args;
+    ProgramRunArgs::KernelRunArgs producer_params{};
     producer_params.kernel = PRODUCER;
-    producer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-        experimental::NodeCoord{0, 0},
-        {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}});
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    producer_params.runtime_arg_values =
+        MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}});
+    ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;
     run_args.kernel_run_args = {producer_params, consumer_params};
-    run_args.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{in_tensor});
+    run_args.tensor_args.emplace(IN_TENSOR, TensorArgument{in_tensor});
     experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseBase");
@@ -374,62 +371,62 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
     constexpr uint8_t  NUM_IN_THREADS = 4;
     constexpr uint8_t  NUM_OUT_THREADS = 2;
 
-    const experimental::DFBSpecName DFB_SS{"dfb_ss"};   // 4Sx4S DM→Tensix
-    const experimental::DFBSpecName DFB_SA{"dfb_sa"};   // 4Sx4A DM→Tensix
-    const experimental::DFBSpecName DFB_T6{"dfb_t6"};   // 4Sx4S Tensix→DM
-    const experimental::KernelSpecName READER{"reader_dm"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::KernelSpecName WRITER{"writer_dm"};
+    const DFBSpecName DFB_SS{"dfb_ss"};  // 4Sx4S DM→Tensix
+    const DFBSpecName DFB_SA{"dfb_sa"};  // 4Sx4A DM→Tensix
+    const DFBSpecName DFB_T6{"dfb_t6"};  // 4Sx4S Tensix→DM
+    const KernelSpecName READER{"reader_dm"};
+    const KernelSpecName COMPUTE{"compute"};
+    const KernelSpecName WRITER{"writer_dm"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
+    const DataMovementHardwareConfig gen2_dm_hw = DataMovementHardwareConfig{};
 
-    experimental::DataflowBufferSpec dfb_ss_spec = MakeBenchDfbSpec(DFB_SS, ENTRY_SIZE, NUM_ENTRIES);
-    experimental::DataflowBufferSpec dfb_sa_spec = MakeBenchDfbSpec(DFB_SA, ENTRY_SIZE, NUM_ENTRIES);
-    experimental::DataflowBufferSpec dfb_t6_spec = MakeBenchDfbSpec(DFB_T6, ENTRY_SIZE, NUM_ENTRIES);
+    DataflowBufferSpec dfb_ss_spec = MakeBenchDfbSpec(DFB_SS, ENTRY_SIZE, NUM_ENTRIES);
+    DataflowBufferSpec dfb_sa_spec = MakeBenchDfbSpec(DFB_SA, ENTRY_SIZE, NUM_ENTRIES);
+    DataflowBufferSpec dfb_t6_spec = MakeBenchDfbSpec(DFB_T6, ENTRY_SIZE, NUM_ENTRIES);
 
     // Reader DM: producer on DFB_SS (STRIDED) and DFB_SA (STRIDED)
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_reader_dm.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_reader_dm.cpp",
         .num_threads = NUM_IN_THREADS,
-        .dfb_bindings = {
-            experimental::ProducerOf(DFB_SS, "ss_out"),
-            experimental::ProducerOf(DFB_SA, "sa_out"),
-        },
+        .dfb_bindings =
+            {
+                ProducerOf(DFB_SS, "ss_out"),
+                ProducerOf(DFB_SA, "sa_out"),
+            },
         .hw_config = gen2_dm_hw,
     };
 
     // Compute: STRIDED consumer on DFB_SS, ALL consumer on DFB_SA, STRIDED producer on DFB_T6
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg_compute.cpp",
         .num_threads = NUM_IN_THREADS,
         .dfb_bindings =
             {
-                experimental::StridedConsumerOf(DFB_SS, "ss_in"),
-                experimental::AllConsumerOf(DFB_SA, "sa_in"),
-                experimental::ProducerOf(DFB_T6, "t6_out"),
+                StridedConsumerOf(DFB_SS, "ss_in"),
+                AllConsumerOf(DFB_SA, "sa_in"),
+                ProducerOf(DFB_T6, "t6_out"),
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
     // Writer DM: STRIDED consumer on DFB_T6
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_writer_dm.cpp",
         .num_threads = NUM_OUT_THREADS,
-        .dfb_bindings = {experimental::StridedConsumerOf(DFB_T6, "t6_in")},
+        .dfb_bindings = {StridedConsumerOf(DFB_T6, "t6_in")},
         .hw_config = gen2_dm_hw,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "bench_avg_wu",
         .kernels = {READER, COMPUTE, WRITER},
         .target_nodes = core_range_set,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "bench_avg",
         .kernels = {reader_spec, compute_spec, writer_spec},
         .dataflow_buffers = {dfb_ss_spec, dfb_sa_spec, dfb_t6_spec},
@@ -438,11 +435,11 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
 
     Program program = experimental::MakeProgramFromSpec(*ctx.mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = WRITER},
+        ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = WRITER},
     };
     experimental::SetProgramRunArgs(program, run_args);
 
@@ -476,64 +473,66 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
     constexpr uint8_t  NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
     constexpr uint8_t  NUM_CONSUMERS = 4;  // Tensix ALL consumers per DFB
 
-    const experimental::DFBSpecName DFB0{"dfb0"};
-    const experimental::DFBSpecName DFB1{"dfb1"};
-    const experimental::DFBSpecName DFB2{"dfb2"};
-    const experimental::KernelSpecName READER{"reader_dm"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName DFB0{"dfb0"};
+    const DFBSpecName DFB1{"dfb1"};
+    const DFBSpecName DFB2{"dfb2"};
+    const KernelSpecName READER{"reader_dm"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
+    const DataMovementHardwareConfig gen2_dm_hw = DataMovementHardwareConfig{};
 
     // Reader DM: 4 STRIDED producers on all three DFBs
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp",
         .num_threads = NUM_PRODUCERS,
-        .dfb_bindings = {
-            experimental::ProducerOf(DFB0, "out0"),
-            experimental::ProducerOf(DFB1, "out1"),
-            experimental::ProducerOf(DFB2, "out2"),
-        },
+        .dfb_bindings =
+            {
+                ProducerOf(DFB0, "out0"),
+                ProducerOf(DFB1, "out1"),
+                ProducerOf(DFB2, "out2"),
+            },
         .hw_config = gen2_dm_hw,
     };
 
     // Compute: 4 ALL consumers on all three DFBs (each Neo gets a full copy via remapper)
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp",
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings =
             {
-                experimental::AllConsumerOf(DFB0, "in0"),
-                experimental::AllConsumerOf(DFB1, "in1"),
-                experimental::AllConsumerOf(DFB2, "in2"),
+                AllConsumerOf(DFB0, "in0"),
+                AllConsumerOf(DFB1, "in1"),
+                AllConsumerOf(DFB2, "in2"),
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "bench_worst_wu",
         .kernels = {READER, COMPUTE},
         .target_nodes = core_range_set,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "bench_worst",
         .kernels = {reader_spec, compute_spec},
-        .dataflow_buffers = {
-            MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
-            MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
-            MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
-        },
+        .dataflow_buffers =
+            {
+                MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
+                MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
+                MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
+            },
         .work_units = {wu},
     };
 
     Program program = experimental::MakeProgramFromSpec(*ctx.mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, run_args);
 
@@ -563,64 +562,66 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
     constexpr uint8_t  NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
     constexpr uint8_t  NUM_CONSUMERS = 4;  // Tensix STRIDED consumers per DFB
 
-    const experimental::DFBSpecName DFB0{"avg2_dfb0"};
-    const experimental::DFBSpecName DFB1{"avg2_dfb1"};
-    const experimental::DFBSpecName DFB2{"avg2_dfb2"};
-    const experimental::KernelSpecName READER{"reader_dm"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName DFB0{"avg2_dfb0"};
+    const DFBSpecName DFB1{"avg2_dfb1"};
+    const DFBSpecName DFB2{"avg2_dfb2"};
+    const KernelSpecName READER{"reader_dm"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
+    const DataMovementHardwareConfig gen2_dm_hw = DataMovementHardwareConfig{};
 
     // Reader DM: 4 STRIDED producers on all three DFBs.
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg2_reader_dm.cpp",
         .num_threads = NUM_PRODUCERS,
-        .dfb_bindings = {
-            experimental::ProducerOf(DFB0, "out0"),
-            experimental::ProducerOf(DFB1, "out1"),
-            experimental::ProducerOf(DFB2, "out2"),
-        },
+        .dfb_bindings =
+            {
+                ProducerOf(DFB0, "out0"),
+                ProducerOf(DFB1, "out1"),
+                ProducerOf(DFB2, "out2"),
+            },
         .hw_config = gen2_dm_hw,
     };
 
     // Compute: 4 STRIDED consumers on all three DFBs.
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg2_compute.cpp",
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings =
             {
-                experimental::StridedConsumerOf(DFB0, "in0"),
-                experimental::StridedConsumerOf(DFB1, "in1"),
-                experimental::StridedConsumerOf(DFB2, "in2"),
+                StridedConsumerOf(DFB0, "in0"),
+                StridedConsumerOf(DFB1, "in1"),
+                StridedConsumerOf(DFB2, "in2"),
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "bench_avg2_wu",
         .kernels = {READER, COMPUTE},
         .target_nodes = core_range_set,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "bench_avg2",
         .kernels = {reader_spec, compute_spec},
-        .dataflow_buffers = {
-            MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
-            MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
-            MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
-        },
+        .dataflow_buffers =
+            {
+                MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
+                MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
+                MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
+            },
         .work_units = {wu},
     };
 
     Program program = experimental::MakeProgramFromSpec(*ctx.mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, run_args);
 
@@ -660,11 +661,11 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
     constexpr uint32_t ENTRY_SIZE  = 1024;
     constexpr uint32_t NUM_ENTRIES = 16;
 
-    auto dfb_id = [](char group, int i) -> experimental::DFBSpecName {
-        return experimental::DFBSpecName{std::string("dfb_") + group + std::to_string(i)};
+    auto dfb_id = [](char group, int i) -> DFBSpecName {
+        return DFBSpecName{std::string("dfb_") + group + std::to_string(i)};
     };
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
+    const DataMovementHardwareConfig gen2_dm_hw = DataMovementHardwareConfig{};
 
     // Each reader: single DM, 1Sx4A, 16 reads per DFB (full ring).
     const char* READER_SRC =
@@ -673,31 +674,30 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
         "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst2_compute.cpp";
 
     // Each reader: 1 DM thread, STRIDED producer on 3 DFBs.
-    auto make_reader_bindings = [&](char group) -> std::vector<experimental::DFBBinding> {
-        std::vector<experimental::DFBBinding> bindings;
+    auto make_reader_bindings = [&](char group) -> std::vector<DFBBinding> {
+        std::vector<DFBBinding> bindings;
         bindings.reserve(3);
         for (int i = 0; i < 3; i++) {
-            bindings.push_back(experimental::ProducerOf(dfb_id(group, i), "out" + std::to_string(i)));
+            bindings.push_back(ProducerOf(dfb_id(group, i), "out" + std::to_string(i)));
         }
         return bindings;
     };
 
     // Single compute kernel: 4 Neo threads, ALL consumer on all 12 DFBs.
-    std::vector<experimental::DFBBinding> compute_bindings;
+    std::vector<DFBBinding> compute_bindings;
     {
         int in_idx = 0;
         for (char g : {'a', 'b', 'c', 'd'}) {
             for (int i = 0; i < 3; i++) {
-                compute_bindings.push_back(
-                    experimental::AllConsumerOf(dfb_id(g, i), "in" + std::to_string(in_idx++)));
+                compute_bindings.push_back(AllConsumerOf(dfb_id(g, i), "in" + std::to_string(in_idx++)));
             }
         }
     }
 
-    std::vector<experimental::KernelSpec> kernels;
+    std::vector<KernelSpec> kernels;
     for (char g : {'a', 'b', 'c', 'd'}) {
         kernels.push_back({
-            .unique_id = experimental::KernelSpecName{std::string("reader_") + g},
+            .unique_id = KernelSpecName{std::string("reader_") + g},
             .source = READER_SRC,
             .num_threads = 1,
             .dfb_bindings = make_reader_bindings(g),
@@ -705,36 +705,36 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
         });
     }
     kernels.push_back({
-        .unique_id = experimental::KernelSpecName{"compute_all"},
+        .unique_id = KernelSpecName{"compute_all"},
         .source = COMPUTE_SRC,
         .num_threads = 4,
         .dfb_bindings = compute_bindings,
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     });
 
     // 12 DFB specs: 3 per group × 4 groups.
-    std::vector<experimental::DataflowBufferSpec> dfb_specs;
+    std::vector<DataflowBufferSpec> dfb_specs;
     for (char g : {'a', 'b', 'c', 'd'}) {
         for (int i = 0; i < 3; i++) {
             dfb_specs.push_back(MakeBenchDfbSpec(dfb_id(g, i), ENTRY_SIZE, NUM_ENTRIES));
         }
     }
 
-    std::vector<experimental::KernelSpecName> all_kernel_ids = {
-        experimental::KernelSpecName{"reader_a"},
-        experimental::KernelSpecName{"reader_b"},
-        experimental::KernelSpecName{"reader_c"},
-        experimental::KernelSpecName{"reader_d"},
-        experimental::KernelSpecName{"compute_all"},
+    std::vector<KernelSpecName> all_kernel_ids = {
+        KernelSpecName{"reader_a"},
+        KernelSpecName{"reader_b"},
+        KernelSpecName{"reader_c"},
+        KernelSpecName{"reader_d"},
+        KernelSpecName{"compute_all"},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "bench_worst2_wu",
         .kernels = all_kernel_ids,
         .target_nodes = core_range_set,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "bench_worst2",
         .kernels = kernels,
         .dataflow_buffers = dfb_specs,
@@ -743,9 +743,9 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
 
     Program program = experimental::MakeProgramFromSpec(*ctx.mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     for (const auto& kid : all_kernel_ids) {
-        run_args.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = kid});
+        run_args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = kid});
     }
     experimental::SetProgramRunArgs(program, run_args);
 
@@ -935,40 +935,40 @@ void run_benchmark_case_eight(DfbInitTimingBenchContext& ctx) {
     constexpr uint8_t NUM_PRODUCER_THREADS = 2;
     constexpr uint8_t NUM_CONSUMER_THREADS = 4;
 
-    const experimental::KernelSpecName PROD_K{"case_eight_prod"};
-    const experimental::KernelSpecName CONS_K{"case_eight_cons"};
+    const KernelSpecName PROD_K{"case_eight_prod"};
+    const KernelSpecName CONS_K{"case_eight_cons"};
     // Body only constructs accessors; the init walk is driven by the host config blob, not by what
     // the kernel does, so no data movement is needed to measure it.
     const char* DM_SRC = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_case8_dm.cpp";
 
-    std::vector<experimental::DataflowBufferSpec> dfb_specs;
-    std::vector<experimental::KernelSpec::DFBBinding> prod_bindings, cons_bindings;
+    std::vector<DataflowBufferSpec> dfb_specs;
+    std::vector<KernelSpec::DFBBinding> prod_bindings, cons_bindings;
     for (uint32_t i = 0; i < NUM_DFBS; ++i) {
-        const experimental::DFBSpecName name{fmt::format("d{}", i)};
+        const DFBSpecName name{fmt::format("d{}", i)};
         dfb_specs.push_back(MakeBenchDfbSpec(name, ENTRY_SIZE, NUM_ENTRIES));
-        prod_bindings.push_back(experimental::ProducerOf(name, fmt::format("d{}", i)));
+        prod_bindings.push_back(ProducerOf(name, fmt::format("d{}", i)));
         // Strided, not All: AllConsumerOf caps num_consumers at 4 and scales its consumer TC count
         // with num_producers, which drops this shape to 2 DFBs.
-        cons_bindings.push_back(experimental::StridedConsumerOf(name, fmt::format("d{}", i)));
+        cons_bindings.push_back(StridedConsumerOf(name, fmt::format("d{}", i)));
     }
 
-    experimental::KernelSpec prod_spec{
+    KernelSpec prod_spec{
         .unique_id = PROD_K,
         .source = DM_SRC,
         .num_threads = NUM_PRODUCER_THREADS,
         .dfb_bindings = prod_bindings,
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
-    experimental::KernelSpec cons_spec{
+    KernelSpec cons_spec{
         .unique_id = CONS_K,
         .source = DM_SRC,
         .num_threads = NUM_CONSUMER_THREADS,
         .dfb_bindings = cons_bindings,
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu{.name = "case_eight_wu", .kernels = {PROD_K, CONS_K}, .target_nodes = core_range_set};
-    experimental::ProgramSpec spec{
+    WorkUnitSpec wu{.name = "case_eight_wu", .kernels = {PROD_K, CONS_K}, .target_nodes = core_range_set};
+    ProgramSpec spec{
         .name = "case_eight",
         .kernels = {prod_spec, cons_spec},
         .dataflow_buffers = dfb_specs,
@@ -976,7 +976,7 @@ void run_benchmark_case_eight(DfbInitTimingBenchContext& ctx) {
     };
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-    experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseEight");
@@ -1339,22 +1339,22 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
     constexpr uint8_t NUM_PRODUCERS = 1;
     constexpr uint8_t NUM_CONSUMERS = 1;
 
-    const experimental::DFBSpecName DFB{"dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const DFBSpecName DFB{"dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{};
+    const DataMovementHardwareConfig dm_producer_cfg = DataMovementHardwareConfig{};
 
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES));
 
-    experimental::DataflowBufferSpec dfb_spec = MakeBenchDfbSpec(DFB, ENTRY_SIZE, NUM_ENTRIES);
+    DataflowBufferSpec dfb_spec = MakeBenchDfbSpec(DFB, ENTRY_SIZE, NUM_ENTRIES);
 
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = NUM_PRODUCERS,
-        .dfb_bindings = {experimental::ProducerOf(DFB, "out")},
+        .dfb_bindings = {ProducerOf(DFB, "out")},
         .tensor_bindings = {{
             .tensor_parameter_name = IN_TENSOR,
             .accessor_name = "src_tensor",
@@ -1369,22 +1369,22 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
         .hw_config = dm_producer_cfg,
     };
 
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
         .num_threads = NUM_CONSUMERS,
-        .dfb_bindings = {experimental::AllConsumerOf(DFB, "in")},
+        .dfb_bindings = {AllConsumerOf(DFB, "in")},
         .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "bench_case6_program_spec_wu",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = core_range_set,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "bench_case6_program_spec",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
@@ -1394,16 +1394,15 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
-    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    ProgramRunArgs run_args;
+    ProgramRunArgs::KernelRunArgs producer_params{};
     producer_params.kernel = PRODUCER;
-    producer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-        experimental::NodeCoord{0, 0},
-        {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}});
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    producer_params.runtime_arg_values =
+        MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}});
+    ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;
     run_args.kernel_run_args = {producer_params, consumer_params};
-    run_args.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{in_tensor});
+    run_args.tensor_args.emplace(IN_TENSOR, TensorArgument{in_tensor});
     experimental::SetProgramRunArgs(program, run_args);
 
     LaunchAndLogDfbInitTiming(ctx, std::move(program), CoreCoord(0, 0), "BenchmarkCaseSixDebugImplicitSyncProgramSpec");

@@ -550,58 +550,58 @@ static Program build_quasar_program(
     const DevicePrintDestTestConfig& config,
     const DramBuffer& input_dram_buffer,
     const DramBuffer& output_dram_buffer) {
-    constexpr experimental::NodeCoord node{0, 0};
-    const experimental::DFBSpecName IN_DFB{"in_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    constexpr NodeCoord node{0, 0};
+    const DFBSpecName IN_DFB{"in_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
     const auto tile_bytes = static_cast<uint32_t>(config.get_tile_size());
     const auto num_tiles = static_cast<uint32_t>(config.num_tiles);
 
     // The compute kernel waits on the whole batch at once, so the buffers hold every tile.
-    experimental::DataflowBufferSpec in_dfb_spec{
+    DataflowBufferSpec in_dfb_spec{
         .unique_id = IN_DFB,
         .entry_size = tile_bytes,
         .num_entries = num_tiles,
         .data_format_metadata = config.data_format,
     };
-    experimental::DataflowBufferSpec out_dfb_spec{
+    DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = tile_bytes,
         .num_entries = num_tiles,
         .data_format_metadata = config.data_format,
     };
 
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
+        .dfb_bindings = {ProducerOf(IN_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
     // A 32-bit dest fed by a 32-bit buffer has to state how the unpacker routes it. Float32 and Int32
     // datacopy need UnpackToDest: SrcA cannot carry a full 32-bit datum, so going via Src would lose bits.
     const bool enable_32_bit_dest =
         config.data_format == tt::DataFormat::Float32 || config.data_format == tt::DataFormat::Int32;
-    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
     if (enable_32_bit_dest) {
         unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{config.compute_kernel},
         .num_threads = 1,
@@ -609,53 +609,51 @@ static Program build_quasar_program(
             {{
                  .dfb_spec_name = IN_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args =
             {{"per_core_tile_cnt", num_tiles}, {"dest_data_format", static_cast<uint32_t>(config.get_dest_format())}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{.enable_32_bit_dest = enable_32_bit_dest, .unpack_modes = unpack_modes},
+        .hw_config = ComputeHardwareConfig{.enable_32_bit_dest = enable_32_bit_dest, .unpack_modes = unpack_modes},
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dprint_tensix_dest",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
-        .work_units = {experimental::WorkUnitSpec{
-            .name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     const uint32_t per_tile_stride =
         num_tiles == 0 ? 0 : static_cast<uint32_t>(input_dram_buffer->device_local_size() / num_tiles);
-    experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src_addr", static_cast<uint32_t>(input_dram_buffer->address())},
                  {"src_bank_id", 0u},
                  {"num_tiles", num_tiles},
                  {"dram_page_stride", per_tile_stride}})},
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", static_cast<uint32_t>(output_dram_buffer->address())},
                  {"dst_bank_id", 0u},
                  {"num_tiles", num_tiles},
                  {"dram_page_stride", per_tile_stride}})},
     };
-    experimental::SetProgramRunArgs(program, run_args);
+    tt_metal::experimental::SetProgramRunArgs(program, run_args);
     return program;
 }
 

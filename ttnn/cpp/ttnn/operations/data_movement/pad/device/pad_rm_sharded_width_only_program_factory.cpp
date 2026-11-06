@@ -4,15 +4,14 @@
 
 #include "pad_rm_sharded_width_only_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
