@@ -15,7 +15,6 @@
 
 #include <algorithm>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <set>
 #include <cstdlib>
@@ -271,35 +270,6 @@ struct RingSemaphores {
 // tt::tt_metal::NUM_SEMAPHORES, which no public header exposes to a ttnn op.
 constexpr uint32_t kSemaphoresPerCore = 16;
 
-struct OwnRingSemaphores {
-    tt::tt_metal::GlobalSemaphore credit_done;
-    std::vector<tt::tt_metal::GlobalSemaphore> vc_arrived, vc_freed, vc_outbox;
-};
-
-// The mesh's one set of the op's own ring semaphores (every MoE layer runs one after another and leaves the counts as
-// it found them, as the caller's fwd_arrived / final_arrived), made on the full worker grid at the first call.
-const OwnRingSemaphores& ring_semaphores(ttnn::MeshDevice* mesh) {
-    static std::mutex mu;
-    static std::map<int, OwnRingSemaphores> cache;
-    std::lock_guard<std::mutex> lock(mu);
-    auto it = cache.find(mesh->id());
-    if (it == cache.end()) {
-        const auto grid = mesh->compute_with_storage_grid_size();
-        const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
-        auto make = [&] {
-            return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
-        };
-        OwnRingSemaphores own{make(), {}, {}, {}};
-        for (uint32_t v = 0; v < cmbf2d::MAX_VCS; v++) {
-            own.vc_arrived.push_back(make());
-            own.vc_freed.push_back(make());
-            own.vc_outbox.push_back(make());
-        }
-        tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
-        it = cache.emplace(mesh->id(), std::move(own)).first;
-    }
-    return it->second;
-}
 // credit_done, then arrived / freed / outbox a channel. Named off the channel count rather than the ring so
 // the public entry point and the allocation below are the same arithmetic.
 constexpr uint32_t channel_semaphore_count_for_vcs(uint32_t vcs) { return 1 + 3 * vcs; }
@@ -330,26 +300,26 @@ RingSemaphores allocate_ring_semaphores(
         }
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
-    // The channels in the order channel_semaphore_count documents. Handed over by the caller (upstream), or else
-    // the op's own: made once per mesh and kept (ring_semaphores), not per program build - a build runs under the
-    // caller's per-call L1 arena, which can hold every free byte of L1 (GLM-5.3: "Out of Memory ... free: 0 B"
-    // making them), and it may run during a trace capture.
-    const OwnRingSemaphores* own = provided.channels == nullptr ? &ring_semaphores(mesh) : nullptr;
+    auto make = [&] {
+        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
+    };
+    // The channels in the order channel_semaphore_count documents, taken one at a time so the walk below reads
+    // the same whether they were handed over or made here.
     uint32_t next_channel = 0;
-    auto channel = [&] { return (*provided.channels)[next_channel++]; };
+    auto channel = [&] { return provided.channels != nullptr ? (*provided.channels)[next_channel++] : make(); };
     RingSemaphores sems{
         make_or_take(provided.fwd_arrived),
         make_or_take(provided.final_arrived),
-        own != nullptr ? own->credit_done : channel(),
+        channel(),
         {},
         {},
         {},
         untilizers_per_group,
         num_links};
     for (uint32_t v = 0; v < vcs; v++) {
-        sems.vc_arrived.push_back(own != nullptr ? own->vc_arrived[v] : channel());
-        sems.vc_freed.push_back(own != nullptr ? own->vc_freed[v] : channel());
-        sems.vc_outbox.push_back(own != nullptr ? own->vc_outbox[v] : channel());
+        sems.vc_arrived.push_back(channel());
+        sems.vc_freed.push_back(channel());
+        sems.vc_outbox.push_back(channel());
     }
     TT_FATAL(
         sems.num_program_semaphores() <= kSemaphoresPerCore,
@@ -359,9 +329,7 @@ RingSemaphores allocate_ring_semaphores(
         kSemaphoresPerCore,
         untilizers_per_group,
         num_links);
-    if (provided.fwd_arrived == nullptr) {  // (made fwd_arrived / final_arrived here: zeroed before a neighbour bumps)
-        tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
-    }
+    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
     return sems;
 }
 
@@ -721,7 +689,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 }
 }  // namespace
 
-void prepare_ring_semaphores(ttnn::MeshDevice* mesh) { (void)ring_semaphores(mesh); }
 uint32_t channel_semaphore_count(uint32_t ring_extent) {
     return channel_semaphore_count_for_vcs(num_vcs(ring_extent));
 }
