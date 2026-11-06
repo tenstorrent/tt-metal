@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import torch2tt_tensor, run_for_blackhole
+from tt_py_test_utils_common.utility_functions import torch2tt_tensor, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm,

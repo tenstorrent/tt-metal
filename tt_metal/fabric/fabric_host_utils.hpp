@@ -5,14 +5,17 @@
 #pragma once
 
 #include <cstdint>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/core_coordinates.hpp>          // CoreType
 #include <llrt/tt_cluster.hpp>
 #include <tt_stl/assert.hpp>
 #include <map>
+#include <set>
 #include <vector>
 #include <unordered_map>
 #include <optional>
@@ -28,6 +31,7 @@ class PhysicalSystemDescriptor;
 namespace tt::tt_fabric {
 
 class TopologyMapper;
+class FabricContext;
 
 class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
@@ -73,6 +77,33 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     RoutingDirection direction);
+
+// Context-explicit form of the public get_forwarding_link_indices: resolves the forwarding direction and the link
+// indices from `control_plane` instead of the default MetalContext's. Returns {} when there is no forwarding direction.
+std::vector<uint32_t> get_forwarding_link_indices(
+    const ControlPlane& control_plane, const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+
+// Context-explicit form of the public append_fabric_connection_rt_args: reads the control plane and cluster from
+// `fabric_context` instead of the default MetalContext's. Instantiated for Program and ProgramDescriptor.
+template <typename ProgramOrDescriptor>
+void append_fabric_connection_rt_args(
+    const FabricContext& fabric_context,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    ProgramOrDescriptor& worker_program_or_desc,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type);
+
+// Wormhole non-Galaxy only. For each MMIO chip, the fabric dispatch-link channels toward its directly connected remote
+// (non-MMIO) chips, i.e. the link FabricBuilder::discover_channels configures for dispatch. That router polls for base
+// firmware often enough to keep UMD's remote transfers responsive; the other fabric routers can hold the core for tens
+// of seconds per transfer while fabric is active. MMIO chips without a one-hop remote chip are left out. Needs the
+// fabric routing tables (MetalContext::initialize_fabric_config()). Each entry is meant for
+// tt::Cluster::configure_ethernet_cores_for_remote_transfers.
+std::map<ChipId, std::set<chan_id_t>> get_remote_transfer_dispatch_channels(
+    const ControlPlane& control_plane, const tt::Cluster& cluster);
 
 // Helper: Build adjacency map and discover corners/edges using BFS
 using AdjacencyMap = std::unordered_map<ChipId, std::vector<ChipId>>;

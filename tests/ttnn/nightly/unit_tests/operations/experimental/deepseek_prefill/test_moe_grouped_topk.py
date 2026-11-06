@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, is_blackhole
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_gate_output,
     build_padding_config,

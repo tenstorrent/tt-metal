@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import (
     assert_with_ulp,
     assert_equal,
 )
-from models.common.utility_functions import is_blackhole, is_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_slow_dispatch
 
 
 @pytest.mark.parametrize(
@@ -57,6 +57,32 @@ def test_binary_atan2_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype, ulp_threshold",
+    ((ttnn.float32, torch.float32, 4), (ttnn.bfloat16, torch.bfloat16, 3)),
+    ids=["float32", "bfloat16"],
+)
+@pytest.mark.parametrize("exponent", [0, 125, 126, 127])
+def test_binary_atan2_large_magnitude(ttnn_dtype, torch_dtype, ulp_threshold, exponent, device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    larger = (1 + 0.99 * torch.rand(shape)) * 2.0**exponent
+    smaller = larger * (2 * torch.rand(shape) - 1)
+    larger = larger * torch.where(torch.rand(shape) < 0.5, -1.0, 1.0)
+    swap = torch.rand(shape) < 0.5
+    torch_input_y = torch.where(swap, smaller, larger).to(torch_dtype)
+    torch_input_x = torch.where(swap, larger, smaller).to(torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.atan2)
+    golden_tensor = golden_function(torch_input_y, torch_input_x)
+
+    tt_input_y = ttnn.from_torch(torch_input_y, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input_x = ttnn.from_torch(torch_input_x, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.atan2(tt_input_y, tt_input_x))
+
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=ulp_threshold)
 
 
 @pytest.mark.parametrize(

@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "tensor_shape.h"
 
 // === L1 layout for perf tests ===
 //
@@ -278,3 +279,13 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
+
+// Functional builds take the dimensions from runtime params, so the shape is const.
+// Speed-of-light compiles those dimensions in, so the same declaration is constexpr.
+#ifdef SPEED_OF_LIGHT
+#define TEST_TENSOR_SHAPE(name, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim) \
+    constexpr ckernel::TensorShape name = ckernel::make_tensor_shape(face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+#else
+#define TEST_TENSOR_SHAPE(name, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim) \
+    const ckernel::TensorShape name = ckernel::make_tensor_shape(face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+#endif

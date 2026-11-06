@@ -10,7 +10,7 @@ pytestmark = [pytest.mark.use_module_device]
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(

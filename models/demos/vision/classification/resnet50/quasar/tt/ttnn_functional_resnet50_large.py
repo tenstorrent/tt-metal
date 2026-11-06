@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, nearest_32
+from models.common.utility_functions import is_quasar, is_wormhole_b0, nearest_32
 
 
 def ResnetLinear(
@@ -22,17 +22,21 @@ def ResnetLinear(
     Returns a function for linear operation in resnet with bias.
     """
 
-    matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=2,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=1,
-        per_core_N=1,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
+    if is_quasar():
+        # Quasar runs the unified matmul, which picks the fc's placement, C slice and K chunk.
+        matmul_config = None
+    else:
+        matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
     weight = weight.reshape(weight.shape.to_rank(4))
     bias = bias.reshape(bias.shape.to_rank(4))
 

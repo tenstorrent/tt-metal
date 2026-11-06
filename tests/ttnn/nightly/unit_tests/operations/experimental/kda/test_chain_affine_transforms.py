@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -42,7 +42,7 @@ _STEPS = 1
 _PRODUCTION_PERF_MARGIN = 0.05
 _SMALL_CASE = _Case("bh2-k32-v64", batch_heads=2, key_dim=32, value_dim=64)
 _PRODUCTION_PERF_CASE = _Case("p1-bh24-k128-v128", batch_heads=24, key_dim=128, value_dim=128)
-_PRODUCTION_PERF_EXPECTED_DURATION_NS = 26_700
+_PRODUCTION_PERF_EXPECTED_DURATION_NS = 25_000
 
 
 def _chain_affine_transforms_ops(

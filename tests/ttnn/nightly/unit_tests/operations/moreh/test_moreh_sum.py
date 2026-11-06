@@ -8,7 +8,7 @@ from loguru import logger
 
 
 import ttnn
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     comp_allclose_and_pcc,
 )
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -391,6 +391,13 @@ def test_moreh_sum_backward(input_shape, dim, keepdim, compute_kernel_options, d
     if dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b is not supported")
     passing = moreh_sum_backward(input_shape, dim, keepdim, True, compute_kernel_options, device, dtype=dtype)
+    assert passing
+
+
+@pytest.mark.parametrize("dim", [0, None])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_moreh_sum_backward_rank1(dim, keepdim, device):
+    passing = moreh_sum_backward([5], dim, keepdim, True, False, device)
     assert passing
 
 

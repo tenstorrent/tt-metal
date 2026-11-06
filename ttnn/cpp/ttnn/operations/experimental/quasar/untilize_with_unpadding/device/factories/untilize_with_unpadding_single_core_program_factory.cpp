@@ -173,9 +173,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
 
     // ---- Compute kernel ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (float32_dtype) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_config);

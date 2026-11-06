@@ -14,8 +14,15 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
-template <bool kDecodeMode, uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
-ALWI void mul_tiles_chain(DataflowBuffer& cb_in0, DataflowBuffer& cb_in1, DataflowBuffer& cb_out, uint32_t in1_idx) {
+template <
+    bool kDecodeMode,
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2>
+ALWI void mul_tiles_chain(DFB0& cb_in0, DFB1& cb_in1, DFB2& cb_out, uint32_t in1_idx) {
     using namespace compute_kernel_lib;
     if constexpr (kDecodeMode) {
         eltwise_chain(

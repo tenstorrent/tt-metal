@@ -45,6 +45,13 @@ on:
         required: false
         default: "false"
         type: string
+      stage2_baseline_artifact:
+        description: >-
+          Merge gate: the artifact in which llk-perf-impl's stage-2 baseline job saved the merge
+          baseline, so the gate and stage 2 compare against the same read. Missing: the warehouse.
+        required: false
+        default: ""
+        type: string
       baseline_artifact_pattern:
         description: >-
           Take the baseline from THIS run's artifacts matching this pattern
@@ -78,6 +85,13 @@ on:
         description: "Fail the job on a regression. False only reports it."
         required: false
         default: true
+        type: boolean
+      fail_without_baseline:
+        description: >-
+          Fail the job when no baseline is found, because the gate then compares nothing.
+          False skips the gate with a warning.
+        required: false
+        default: false
         type: boolean
       slack:
         description: "Post the verdict to the LLK regressions channel"
@@ -133,10 +147,15 @@ jobs:
       gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
+        # Only the scripts, with no history and no blobs. The full clone took up to 13 of
+        # the 15 minutes an ubuntu-slim job gets. The warehouse step fetches the history it needs.
         with:
-          fetch-depth: 0
+          sparse-checkout: |
+            .github/scripts
+            tt_metal/tt-llk/perf
+          filter: blob:none
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
@@ -184,6 +203,8 @@ jobs:
                   LINE="${NAME##*/ }: ${CONCLUSION}${MINUTES:+ after ${MINUTES} min}"
                   # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
                   if [ "$CONCLUSION" = cancelled ]; then LINE="${LINE}, most likely at its timeout"; fi
+                  # The suite stops at the first failing test (-x), so a failed leg is a test or the runner.
+                  if [ "$CONCLUSION" = failure ]; then LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"; fi
                   REASON="${REASON:+${REASON}; }${LINE}"
                 done <<< "$BAD"
                 REASON="A ${ARCH} measuring leg did not complete: ${REASON}."
@@ -198,8 +219,28 @@ jobs:
             echo "::error::${REASON} The gate compares nothing."
           fi
 
+      - name: Download the baseline stage 2 read
+        if: inputs.stage2_baseline_artifact != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.stage2_baseline_artifact }}
+          path: stage2_baseline
+
+      - name: Take the baseline stage 2 read
+        if: ${{ hashFiles(format('stage2_baseline/{0}/baseline.csv', inputs.arch)) != '' }}
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          mkdir -p baseline_perf
+          cp "stage2_baseline/${ARCH}/baseline.csv" baseline_perf/baseline.csv
+          cp "stage2_baseline/${ARCH}/baseline_metadata.json" baseline_metadata.json
+          echo "true" > have_baseline.txt
+
       - name: Read the baseline from the warehouse
-        if: inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
+        if: >-
+          ${{ inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
+          && hashFiles(format('stage2_baseline/{0}/baseline.csv', inputs.arch)) == '' }}
         env:
           SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
           SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
@@ -216,6 +257,8 @@ jobs:
         run: |
           COMMITS_ARG=()
           if [ -n "$MATCH_REF" ]; then
+            # Commits and trees only: enough for the merge base and the 200 commits before it.
+            git fetch --no-tags --filter=blob:none --depth=250 origin "$(git rev-parse HEAD)"
             # An empty list is passed on, so the reader skips instead of taking any run.
             COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF") \
               || { echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."; COMMITS=""; }
@@ -233,8 +276,28 @@ jobs:
             --out baseline_perf/baseline.csv \
             --metadata baseline_metadata.json
 
+      # The REST budget belongs to the installation and is shared by every
+      # workflow in the repository, so a busy hour can refuse a download although
+      # the data is there. It resets on the hour, and the refusal we saw cleared
+      # 41 seconds later, so one wait and one more attempt are enough.
       - name: Download the baseline from a workflow run
+        id: baseline_run_download
         if: inputs.baseline_run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-${{ inputs.arch }}-*
+          merge-multiple: true
+          path: baseline_perf
+          run-id: ${{ inputs.baseline_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait, then download the baseline again
+        if: steps.baseline_run_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Download the baseline from a workflow run, second attempt
+        if: steps.baseline_run_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: perf-data-${{ inputs.arch }}-*
@@ -272,7 +335,21 @@ jobs:
           echo "Baseline commit: ${BASELINE_SHA:-unknown}"
 
       - name: Take the baseline from this run's artifacts
+        id: baseline_artifact_download
         if: inputs.baseline_artifact_pattern != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.baseline_artifact_pattern }}
+          merge-multiple: true
+          path: baseline_perf
+
+      - name: Wait, then take the baseline again
+        if: steps.baseline_artifact_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Take the baseline from this run's artifacts, second attempt
+        if: steps.baseline_artifact_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: ${{ inputs.baseline_artifact_pattern }}
@@ -298,6 +375,22 @@ jobs:
           echo "true" > have_baseline.txt
 
       - name: Download the PR's perf data
+        id: current_download
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}
+          merge-multiple: true
+          path: current_perf
+          run-id: ${{ inputs.perf_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait, then download the PR's perf data again
+        if: steps.current_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Download the PR's perf data, second attempt
+        if: steps.current_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}
@@ -387,6 +480,33 @@ jobs:
           fi
           exit 0  # Don't fail the step; let the verdict step decide
 
+      - name: Download the merge gate's stage 2
+        if: ${{ !cancelled() && inputs.baseline_pipeline == 'merge_baseline' }}
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-stage2-${{ inputs.arch }}-*
+          path: stage2
+
+      - name: Add stage 2 to the report
+        if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
+        env:
+          ARCH: ${{ inputs.arch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --jq runs once per page, so count lines rather than taking a length per page.
+          LEGS=$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
+            --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
+          GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
+          # Report-only: stage 2 adds to the report and does not change the verdict.
+          python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
+            --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
+            --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
+            --arch "$ARCH" --report stage2.md || true
+          printf '\n' >> perf_gate_report.md
+          cat stage2.md >> perf_gate_report.md
+
       - name: Comment on PR
         if: >-
           ${{ !cancelled() && github.event_name == 'pull_request'
@@ -417,6 +537,7 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
       - name: Upload the gate report
+        id: report
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
@@ -448,6 +569,9 @@ jobs:
           ARCH: ${{ inputs.arch }}
           RUN_TYPES: ${{ inputs.run_types }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The merge gate run has many jobs; the anchor scrolls to this job's summary.
+          REPORT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#summary-${{ job.check_run_id }}
+          ARTIFACT_URL: ${{ steps.report.outputs.artifact-url }}
           COMMIT_SHA: ${{ github.sha }}
           MODE: >-
             ${{ inputs.speed_of_light == 'true'
@@ -459,6 +583,8 @@ jobs:
                 || github.event_name }}
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
+          THRESHOLD: ${{ inputs.threshold }}
+          MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
@@ -510,6 +636,8 @@ jobs:
             --arch "$ARCH" \
             --run-types "$RUN_TYPES" \
             --run-url "$RUN_URL" \
+            --report-url "$REPORT_URL" \
+            --artifact-url "$ARTIFACT_URL" \
             --baseline-sha "$BASELINE_SHA" \
             --commit "$COMMIT_SHA" \
             --mode "$MODE" \
@@ -517,10 +645,22 @@ jobs:
             --trigger "$TRIGGER" \
             --note "$NOTE" \
             --post-pass "$SLACK_ON_PASS" \
+            --threshold "$THRESHOLD" \
+            --module-thresholds "$MODULE_THRESHOLDS" \
+            --part-out slack_part.json \
             --out slack_payload.json && exit 0
 
           echo "::error::The gate could not build its Slack notification."
           echo "should_post=false" >> $GITHUB_OUTPUT
+
+      # The caller can post one message for all arches from these (gate_slack_combine.py).
+      - name: Upload the Slack part
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-slack-${{ inputs.arch }}
+          path: slack_part.json
+          if-no-files-found: ignore
 
       - name: Notify Slack
         if: ${{ !cancelled() && inputs.slack && steps.slack.outputs.should_post == 'true' }}
@@ -554,34 +694,54 @@ jobs:
       - name: Gate verdict
         if: always()
         env:
+          ARCH: ${{ inputs.arch }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
+          COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
+          FAIL_WITHOUT_BASELINE: ${{ inputs.fail_without_baseline }}
         run: |
+          # The exit code and what kind of verdict it is: pass, regression, incomplete or no-compare.
+          KIND=no-compare
+          trap 'echo "$? $KIND" > "gate_verdict-${ARCH}.txt"' EXIT
           # Only the merge gate posts to Slack, so the run page is where the other gates show their verdict.
           if [ -f perf_gate_report.md ]; then
             cat perf_gate_report.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          HAVE_BASELINE=$(cat have_baseline.txt)
+          HAVE_BASELINE=$(cat have_baseline.txt 2>/dev/null || echo false)
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
+            KIND=incomplete
             echo "::error::${MEASURE_REASON:-The measurement did not complete.} The gate compared nothing."
-            echo "This is an infrastructure fault, not a performance result."
+            echo "This is not a performance result: a perf test failed, or a runner or board did."
             exit 1
           fi
 
+          if [ ! -f have_baseline.txt ]; then
+            echo "::error::The baseline read did not finish, so the gate has no verdict."
+            echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
           if [ "$HAVE_BASELINE" != "true" ]; then
+            if [ "$FAIL_WITHOUT_BASELINE" = "true" ]; then
+              echo "::error::No baseline found, so the gate compared nothing."
+              echo "This is a missing baseline in the warehouse, not a performance result."
+              exit 1
+            fi
+            KIND=pass
             echo "⚠️  No baseline found; gate skipped (first run or data missing)"
             exit 0
           fi
 
-          if [ "${{ steps.compare.outputs.comparison_finished }}" = "false" ]; then
+          # Not "false" only: a skipped comparison leaves it empty, and that is no verdict either.
+          if [ "$COMPARISON_FINISHED" != "true" ]; then
             echo "::error::The comparison did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
             exit 1
           fi
 
           if [ "$EXIT_CODE" != "0" ]; then
+            KIND=regression
             echo "❌ Performance regressions detected"
             cat perf_gate_report.md
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
@@ -591,5 +751,14 @@ jobs:
             exit 0
           fi
 
+          KIND=pass
           echo "✅ No regressions detected"
           cat perf_gate_report.md
+
+      - name: Upload the gate verdict
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-verdict-${{ inputs.arch }}
+          path: gate_verdict-${{ inputs.arch }}.txt
+          if-no-files-found: ignore

@@ -29,15 +29,8 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 
     const std::uint8_t bfd_id = llk_pack_program_bfd(output_id);
     _llk_pack_init_(bfd_id, tensor_shape);
-
-    // 32-bit unpack-to-dest path: PACR addresses dest via SEC{TRISC_ID}_Offset (pack thread).
-    // Initialize the section base to bank 0 for SyncHalf so the first PACR reads bank 0.
-    if constexpr (UnpackToDestEn) {
-        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _reset_dest_register_offset_();
-            _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
-        }
-    }
+    // DEST bank tracking is deliberately not touched here: this per-op init may run inside a tile loop (pack_init,
+    // binary_op_init_common etc). The once-per-program bank-0 reset lives in llk_pack_dest_init.
 }
 
 /**
@@ -58,7 +51,7 @@ template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t l1_tile_index;
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
-    const std::uint32_t wr_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx;
+    const std::uint32_t wr_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx;
     const std::uint32_t stride_size_tiles = local_dfb_interface.stride_size_tiles;
 
     if constexpr (out_of_order_output) {

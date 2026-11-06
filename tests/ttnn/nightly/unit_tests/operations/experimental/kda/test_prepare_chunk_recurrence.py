@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -43,10 +43,13 @@ class _TestCase:
 
 _PERFORMANCE_MARGIN = 0.05
 _PRODUCTION_OUTPUT_BF16_MASK = 0x26
-_PRODUCTION_EXPECTED_DURATION_NS = 816_534
+_PRODUCTION_EXPECTED_DURATION_NS = 165_095
 _T_INV_MAX_ABS = 0.01
 _UNIT_TEST_CASE = _TestCase("unit-h2-n4-k32-v64", 2, 4, 32, 64)
-_PRODUCTION_CASE = _TestCase("sp2-tp4-h24-n80-k128-v128", 24, 80, 128, 128)
+# Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
+_PRODUCTION_CASE = _TestCase("h24-n20-k128-v128", 24, 20, 128, 128)
+# Keys wider than one FP32 DST acquire (four tiles), so the gate's prefix sum runs in column groups.
+_WIDE_KEY_CASE = _TestCase("wide-h2-n2-k160-v32", 2, 2, 160, 32)
 
 
 def _prepare_chunk_recurrence_ops(
@@ -355,7 +358,7 @@ def _assert_t_inv_strict_lower_accurate(
 
 @pytest.mark.parametrize(
     "case",
-    [_UNIT_TEST_CASE, _PRODUCTION_CASE],
+    [_UNIT_TEST_CASE, _PRODUCTION_CASE, _WIDE_KEY_CASE],
     ids=lambda case: case.case_id,
 )
 def test_prepare_chunk_recurrence_contract_accuracy_and_determinism(
@@ -798,3 +801,25 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     # adjacent storage, which surfaced here as a final_decay mismatch.
     assert torch.isfinite(actual).all()
     torch.testing.assert_close(actual, expected, rtol=0, atol=0.004)
+
+
+@pytest.mark.parametrize("work_items_per_core,short", [(4, 1), (8, 13), (32, 61)])
+@pytest.mark.parametrize("output_bf16_mask", [0x00, 0x26], ids=["all-fp32", "production"])
+def test_prepare_chunk_recurrence_uneven_split_inverse(
+    device: ttnn.Device, work_items_per_core: int, short: int, output_bf16_mask: int
+) -> None:
+    """Cores with fewer work items than the largest share still invert in whole-buffer transactions."""
+    grid = device.compute_with_storage_grid_size()
+    chunks = grid.x * grid.y * work_items_per_core - short
+    chunk = _t_inv_numerical_stress_inputs()
+    outputs = _run(
+        _device_inputs(tuple(x.repeat(1, chunks, 1) for x in chunk), device),
+        1,
+        output_bf16_mask=output_bf16_mask,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    # Every chunk has the same inputs, so every chunk's T_inv must match the first: an inverse transaction that
+    # crossed a ring end corrupted the items of the cores with a smaller share.
+    t_inv = ttnn.to_torch(outputs[6]).float().reshape(chunks, -1)
+    assert torch.isfinite(t_inv).all()
+    torch.testing.assert_close(t_inv, t_inv[:1].expand_as(t_inv), rtol=0, atol=0)

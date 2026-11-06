@@ -34,7 +34,7 @@
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
-#include "umd/device/utils/semver.hpp"
+#include <tt-umd/utils/semver.hpp>
 
 namespace tt::scaleout_tools {
 

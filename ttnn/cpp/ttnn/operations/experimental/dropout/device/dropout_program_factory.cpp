@@ -13,6 +13,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -49,8 +50,9 @@ uint32_t per_device_seed(
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
     const ttnn::Tensor& input_tensor) {
     auto* device = input_tensor.device();
-    return args.seed +
-           (mesh_dispatch_coordinate.has_value() ? device->get_device(*mesh_dispatch_coordinate)->id() : device->id());
+    return args.seed + (mesh_dispatch_coordinate.has_value()
+                            ? tt::tt_metal::internal::get_device(*device, *mesh_dispatch_coordinate)->id()
+                            : device->id());
 }
 
 }  // namespace
