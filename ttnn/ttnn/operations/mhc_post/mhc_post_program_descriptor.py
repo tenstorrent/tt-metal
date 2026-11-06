@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""mhc_post — ProgramDescriptor (Phase 0: plain-2d regime).
+"""mhc_post — ProgramDescriptor (plain-2d and stats-2d-tree regimes).
 
 Work split (op_design.md → Work Distribution): the (token-tile row × column tile) plane is
 block-split 2-D into R row groups × Q column groups by `choose_split`; each core's per-pass
@@ -28,10 +28,11 @@ FP32_TILE_BYTES = 4096
 
 L1_CB_BUDGET = 900 * 1024
 MIN_PIPELINE_BLOCKS = 4
-W_RESIDENT_BUDGET = 384 * 1024  # fused regimes (deferred)
-COMBINE_FANIN = 16  # fused regimes (deferred)
-COMBINE_DEPTH = 2  # fused regimes (deferred)
-COMBINE_LAG = 1  # fused regimes (deferred)
+W_RESIDENT_BUDGET = 384 * 1024  # fused: resident W slice bound (choose_split constraint)
+COMBINE_FANIN = 16  # fused: partials per leader (> FANIN column groups -> two-level tree)
+COMBINE_DEPTH = 2  # fused: gather slot sets in flight per consumer
+COMBINE_LAG = 1  # fused: a row is combined after the mix of row + LAG (root: + 2*LAG)
+MAX_SEMAPHORES = 16  # per-core semaphore ids available to one program
 IO_DEPTH = 2  # cb_f_tiles / cb_x_tiles depth, in blocks
 OUT_DEPTH = 2  # cb_out_tiles depth, in blocks (design: 1; 2 measured -8..10% on DM-bound shapes)
 COEF_DEPTH = 1  # cb_coef_cols depth, in rows
@@ -43,6 +44,19 @@ CB_COEF_COLS = 1
 CB_F_TILES = 2
 CB_X_TILES = 3
 CB_OUT_TILES = 4
+# fused (stats / collapse) only
+CB_XPRIME_MM = 5
+CB_W_SLICE = 6
+CB_PROJ_BLOCK = 7
+CB_PROJ_RUN = 8
+CB_SS_RUN = 9
+CB_SS_ROW = 10
+CB_PARTIAL = 11
+CB_GATHER = 12
+CB_ROOT_GATHER = 13
+CB_LEAD_OUT = 14
+CB_COMB_ACC = 15
+CB_STATS_ROW = 16
 
 
 def _tile_bytes(dtype):
@@ -92,6 +106,43 @@ def plain_per_c_bytes(f_tile, x_tile, n=N_STREAMS):
     return IO_DEPTH * f_tile + IO_DEPTH * n * x_tile + OUT_DEPTH * n * x_tile
 
 
+def combine_geometry(Q):
+    """(slots, num_groups): leader gather slots and the number of leader groups (tree width)."""
+    return min(COMBINE_FANIN, Q), -(-Q // COMBINE_FANIN)
+
+
+def fused_fixed_bytes(core_c_max, Q, n=N_STREAMS):
+    """Fused-mode constant CBs, sized against the COLLAPSE inventory for both fused modes so
+    (R, Q, block_c) — and therefore the stats summation order — is mode-invariant."""
+    slots, ng = combine_geometry(Q)
+    n_src_max = _n_src("collapse", "separate")
+    tiles = (
+        n_src_max  # cb_coef_src
+        + _n_coef_cols("collapse") * COEF_DEPTH  # cb_coef_cols
+        + n * core_c_max  # cb_w_slice (resident)
+        + 1  # cb_proj_block
+        + 2  # cb_proj_run
+        + 2  # cb_ss_run
+        + 1  # cb_ss_row
+        + 1  # cb_partial
+        + slots * COMBINE_DEPTH  # cb_gather
+        + (ng * COMBINE_DEPTH if ng > 1 else 0)  # cb_root_gather
+        + 1  # cb_lead_out
+        + 2  # cb_comb_acc
+        + 1  # cb_stats_row
+        + 3
+        + 2
+        + 1  # collapse: hc lanes, hc out, hc row
+    )
+    return tiles * FP32_TILE_BYTES
+
+
+def fused_per_c_bytes(f_tile, x_tile, n=N_STREAMS):
+    """Per c-tile of block_c: F, X (IO_DEPTH), X' out (OUT_DEPTH), cb_xprime_mm (bf16), y (collapse)."""
+    bf16 = 2048
+    return plain_per_c_bytes(f_tile, x_tile, n) + n * bf16 + bf16
+
+
 def choose_block_c(core_c_max, core_rows_max, *, fixed_bytes, per_c_bytes):
     block_c_cap = max(1, (L1_CB_BUDGET - fixed_bytes) // per_c_bytes)
     nb = max(-(-core_c_max // block_c_cap), min(core_c_max, -(-MIN_PIPELINE_BLOCKS // core_rows_max)))
@@ -123,6 +174,15 @@ def _cb(index, dtype, page_size, num_pages, core_ranges):
     )
 
 
+def _same_buffer(a, b):
+    if a is b:
+        return True
+    try:
+        return a.buffer_address() == b.buffer_address()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def create_program_descriptor(
     input_tensor,
     residual,
@@ -134,9 +194,14 @@ def create_program_descriptor(
     post_col=0,
     comb_col=0,
     max_grid=None,
+    stats_weight=None,
+    stats_output=None,
 ):
     n = N_STREAMS
-    mode, coef_source = "plain", "separate"
+    mode = "stats" if stats_weight is not None else "plain"
+    fused = mode != "plain"
+    packed = _same_buffer(post, comb)
+    coef_source = "packed" if packed else "separate"
     x_shape = list(residual.shape)
     T, nC = x_shape[-2], x_shape[-1]
     C = nC // n
@@ -156,46 +221,119 @@ def create_program_descriptor(
 
     f_tile = _tile_bytes(input_tensor.dtype)
     x_tile = _tile_bytes(residual.dtype)
-    n_src = _n_src(mode, coef_source)
+    # Coefficient source pages actually read per row: a packed mixes tensor whose post and comb
+    # windows share one tile column is a single page (read once, never sliced).
+    same_page = packed and (post_col // TILE == comb_col // TILE)
+    n_src_read = 1 if same_page else 2
     n_coef_cols = _n_coef_cols(mode)
 
-    R, Q = choose_split(Rt, Ct, f_tile=f_tile, x_tile=x_tile, n_src=n_src, G=G, fused=(mode != "plain"))
+    # Split / block sizing: the fused modes cost and size against the stats/collapse inventory
+    # (mode-invariant), plain against its own.
+    R, Q = choose_split(
+        Rt, Ct, f_tile=f_tile, x_tile=x_tile, n_src=_n_src("stats" if fused else mode, coef_source), G=G, fused=fused
+    )
     core_rows_max = -(-Rt // R)
     core_c_max = -(-Ct // Q)
-    block_c = choose_block_c(
-        core_c_max,
-        core_rows_max,
-        fixed_bytes=plain_fixed_bytes(n_src, n_coef_cols),
-        per_c_bytes=plain_per_c_bytes(f_tile, x_tile),
-    )
+    if fused:
+        fixed_bytes = fused_fixed_bytes(core_c_max, Q)
+        per_c_bytes = fused_per_c_bytes(f_tile, x_tile)
+    else:
+        fixed_bytes = plain_fixed_bytes(_n_src(mode, coef_source), n_coef_cols)
+        per_c_bytes = plain_per_c_bytes(f_tile, x_tile)
+    block_c = choose_block_c(core_c_max, core_rows_max, fixed_bytes=fixed_bytes, per_c_bytes=per_c_bytes)
     num_cores = R * Q
     core_ranges = _core_ranges(num_cores, gx)
 
+    slots, num_groups = combine_geometry(Q)
+    n_sems = 2 * COMBINE_DEPTH + 1 + num_groups
+    if fused and n_sems > MAX_SEMAPHORES:
+        raise RuntimeError(f"mhc_post: Q={Q} needs {n_sems} semaphores (> {MAX_SEMAPHORES})")
+    SEM_GATHER = 0  # [COMBINE_DEPTH] leader gather arrivals, per slot set
+    SEM_ROOT_GATHER = COMBINE_DEPTH  # [COMBINE_DEPTH] root gather arrivals, per slot set
+    SEM_LEAD_CREDIT = 2 * COMBINE_DEPTH  # grants from my group's leader
+    SEM_ROOT_CREDIT = 2 * COMBINE_DEPTH + 1  # [num_groups] grants from each root
+
     # --- circular buffers (capacities derive from the knobs above) ---
     cbs = [
-        _cb(CB_COEF_SRC, ttnn.float32, FP32_TILE_BYTES, n_src, core_ranges),
+        _cb(CB_COEF_SRC, ttnn.float32, FP32_TILE_BYTES, n_src_read, core_ranges),
         _cb(CB_COEF_COLS, ttnn.float32, FP32_TILE_BYTES, n_coef_cols * COEF_DEPTH, core_ranges),
         _cb(CB_F_TILES, input_tensor.dtype, f_tile, block_c * IO_DEPTH, core_ranges),
         _cb(CB_X_TILES, residual.dtype, x_tile, n * block_c * IO_DEPTH, core_ranges),
         _cb(CB_OUT_TILES, output_tensor.dtype, x_tile, n * block_c * OUT_DEPTH, core_ranges),
     ]
+    fp32_copy_cbs = []  # Float32 CBs read only by CopyTile -> UnpackToDestFp32
+    if fused:
+        f32 = lambda idx, pages: _cb(idx, ttnn.float32, FP32_TILE_BYTES, pages, core_ranges)  # noqa: E731
+        cbs += [
+            _cb(CB_XPRIME_MM, ttnn.bfloat16, ttnn.tile_size(ttnn.bfloat16), n * block_c, core_ranges),
+            f32(CB_W_SLICE, n * core_c_max),
+            f32(CB_PROJ_BLOCK, 1),
+            f32(CB_PROJ_RUN, 2),
+            f32(CB_SS_RUN, 2),
+            f32(CB_SS_ROW, 1),
+            f32(CB_PARTIAL, 2),
+            f32(CB_GATHER, slots * COMBINE_DEPTH),
+            f32(CB_LEAD_OUT, 1),
+            f32(CB_COMB_ACC, 2),
+            f32(CB_STATS_ROW, 1),
+        ]
+        if num_groups > 1:
+            cbs.append(f32(CB_ROOT_GATHER, num_groups * COMBINE_DEPTH))
+        fp32_copy_cbs = [CB_PROJ_BLOCK, CB_PROJ_RUN, CB_SS_RUN, CB_GATHER, CB_ROOT_GATHER, CB_COMB_ACC]
+
+    fused_ct = [
+        int(fused),
+        CB_XPRIME_MM,
+        CB_W_SLICE,
+        CB_PROJ_BLOCK,
+        CB_PROJ_RUN,
+        CB_SS_RUN,
+        CB_SS_ROW,
+        CB_PARTIAL,
+        CB_GATHER,
+        CB_ROOT_GATHER,
+        CB_LEAD_OUT,
+        CB_COMB_ACC,
+        CB_STATS_ROW,
+        Q,
+        COMBINE_FANIN,
+        COMBINE_DEPTH,
+        COMBINE_LAG,
+        SEM_GATHER,
+        SEM_ROOT_GATHER,
+        SEM_LEAD_CREDIT,
+        SEM_ROOT_CREDIT,
+        core_c_max,
+    ]
+    w_tensor = stats_weight if fused else residual  # placeholder accessor when not fused
+    s_tensor = stats_output if fused else output_tensor
 
     # --- compile-time args ---
     reader_ct = [CB_COEF_SRC, CB_COEF_COLS, CB_F_TILES, CB_X_TILES, n, block_c, Ct, n_coef_cols, post_wt, comb_wt]
+    reader_ct += [n_src_read] + fused_ct
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(residual).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(post).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(comb).get_compile_time_args())
+    reader_ct.extend(ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args())
 
-    writer_ct = [CB_OUT_TILES, n, block_c, Ct]
+    writer_ct = [CB_OUT_TILES, n, block_c, Ct] + fused_ct
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct.extend(ttnn.TensorAccessorArgs(s_tensor).get_compile_time_args())
 
-    compute_ct = [CB_COEF_COLS, CB_F_TILES, CB_X_TILES, CB_OUT_TILES, n, block_c, n_coef_cols]
+    compute_ct = [CB_COEF_COLS, CB_F_TILES, CB_X_TILES, CB_OUT_TILES, n, block_c, n_coef_cols] + fused_ct
+
+    # --- physical coordinates of every core of the program (combine transport) ---
+    def phys(k):
+        c = device.worker_core_from_logical_core(ttnn.CoreCoord(k % gx, k // gx))
+        return [c.x, c.y]
 
     # --- runtime args (balanced contiguous 2-D split) ---
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
+    w_addr = stats_weight.buffer_address() if fused else 0
+    s_addr = stats_output.buffer_address() if fused else 0
     for k in range(num_cores):
         x, y = k % gx, k // gx
         g_r, g_c = k // Q, k % Q
@@ -215,9 +353,18 @@ def create_program_descriptor(
             comb_col,
             g_r,
             g_c,
+            w_addr,
         ]
-        writer_rt[x][y] = [output_tensor.buffer_address(), row_start, num_rows, c_start, num_c, g_r, g_c]
-        compute_rt[x][y] = [num_rows, num_c]
+        writer_rt[x][y] = [output_tensor.buffer_address(), row_start, num_rows, c_start, num_c, g_r, g_c, s_addr]
+        compute_rt[x][y] = [num_rows, num_c, g_c]
+        if fused:
+            base = g_r * Q
+            grp = g_c // COMBINE_FANIN
+            g0 = grp * COMBINE_FANIN
+            members = [v for q in range(g0, min(Q, g0 + COMBINE_FANIN)) for v in phys(base + q)]
+            leaders = [v for g in range(num_groups) for v in phys(base + g * COMBINE_FANIN)]
+            reader_rt[x][y] += members + leaders  # grants: to my group (leader) / to every leader (root)
+            writer_rt[x][y] += leaders  # my leader = leaders[grp]; roots = leaders[r % num_groups]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
@@ -234,10 +381,12 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    # fp32 operands enter DEST exactly: every Float32 CB unpacked by the mix chain is tagged
-    # UnpackToDestFp32 — CopyTile(F / X) and the UnaryBcast<Col> coefficient tiles. unary_bcast keys
-    # its unpack-to-dest branch on the CB's unpack *dst* format, which is TF32 unless the CB is tagged
-    # (measured: an untagged cb_coef_cols truncates every coefficient by ~2^-11).
+    # fp32 operands enter DEST exactly: every Float32 CB read by CopyTile / UnaryBcast is tagged
+    # UnpackToDestFp32 — F / X when fp32, the coefficient columns, and the fused fp32 running /
+    # gather tiles. unary_bcast keys its unpack-to-dest branch on the CB's unpack *dst* format,
+    # which is TF32 unless the CB is tagged (measured: an untagged cb_coef_cols truncates every
+    # coefficient by ~2^-11). bf16 CBs (exact through srcA), cb_xprime_mm and cb_w_slice (matmul
+    # operands, FPU) stay Default.
     unpack_modes = [ttnn.UnpackToDestMode.Default] * 64
     for cb_idx, dtype in (
         (CB_F_TILES, input_tensor.dtype),
@@ -246,6 +395,8 @@ def create_program_descriptor(
     ):
         if dtype == ttnn.float32:
             unpack_modes[cb_idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    for cb_idx in fp32_copy_cbs:
+        unpack_modes[cb_idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     kernel_cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=compute_config.math_fidelity,
         fp32_dest_acc_en=True,
@@ -261,4 +412,7 @@ def create_program_descriptor(
         config=kernel_cfg,
     )
 
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    semaphores = []
+    if fused:
+        semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=core_ranges, initial_value=0) for i in range(n_sems)]
+    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)

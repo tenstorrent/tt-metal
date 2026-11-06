@@ -7,12 +7,16 @@
 
 computed in fp32 (SFPU, DEST) and rounded once to X.dtype, in ONE device program.
 
-Phase 0 builds the `plain-2d` regime (op_design.md → Blocking Model → Regimes):
-float32 streams + float32 sublayer, separate post / comb tensors, any T.
-The fused modes (stats / collapse), bf16 and the packed mixes are refinements.
+Regimes built (op_design.md → Blocking Model → Regimes):
+  plain-2d       X' only; float32 / bfloat16 streams and sublayer; separate or packed mixes.
+  stats-2d-tree  + stats = X' @ W (col 24 = sum of the unrounded mix squared), bf16/bf16,
+                 cross-core deterministic two-level combine.
+collapse is a later refinement.
 """
 
 from __future__ import annotations
+
+import math
 
 import ttnn
 
@@ -57,12 +61,12 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
-    "sublayer_dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat16],
+    "sublayer_dtype": [ttnn.float32, ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True],
-    "mode": ["plain"],
-    "coef_source": ["separate"],
+    "mode": ["plain", "stats"],
+    "coef_source": ["separate", "packed"],
     "alignment": ["tile_aligned", "h_non_aligned"],
 }
 
@@ -135,6 +139,7 @@ def validate(
     hc_scale=None,
     hc_base=None,
     output_tensor=None,
+    stats_output=None,
 ):
     n = N_STREAMS
     # --- (1) structural errors (ValueError) ---
@@ -173,7 +178,18 @@ def validate(
     for name, t in (("input_tensor", input_tensor), ("residual", residual), ("post", post), ("comb", comb)):
         if t.memory_config().is_sharded():
             raise ValueError(f"mhc_post: {name} must be interleaved (sharded inputs are not in the contract)")
-    _check_caller_buffer("output_tensor", output_tensor, x_shape, residual.dtype, (input_tensor, residual, post, comb))
+    inputs = (input_tensor, residual, post, comb, stats_weight, collapse_pre)
+    if stats_weight is not None:
+        w_shape = list(stats_weight.shape)
+        if len(w_shape) < 2 or w_shape[-2:] != [n * C, 32] or math.prod(w_shape[:-2]) != 1:
+            raise ValueError(f"mhc_post: stats_weight shape {w_shape} must be (1.., n*C={n * C}, 32)")
+        if stats_weight.dtype != ttnn.float32 or stats_weight.layout != ttnn.TILE_LAYOUT:
+            raise ValueError("mhc_post: stats_weight must be float32 TILE")
+        if stats_weight.memory_config().is_sharded():
+            raise ValueError("mhc_post: stats_weight must be interleaved")
+    _check_caller_buffer("output_tensor", output_tensor, x_shape, residual.dtype, inputs)
+    if mode != "plain":
+        _check_caller_buffer("stats_output", stats_output, x_shape[:-1] + [32], ttnn.float32, inputs)
 
     # --- (2) per-axis SUPPORTED, in TARGET order ---
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
@@ -228,7 +244,8 @@ def mhc_post(
     y_output=None,
     max_grid=None,
 ):
-    """Write the n = 4 new residual streams X' (plain mode). See module docstring."""
+    """Write the n = 4 new residual streams X' (plain) and, with `stats_weight`, the next hc
+    step's stats row (stats mode). See module docstring."""
     validate(
         input_tensor,
         residual,
@@ -242,6 +259,7 @@ def mhc_post(
         hc_scale=hc_scale,
         hc_base=hc_base,
         output_tensor=output_tensor,
+        stats_output=stats_output,
     )
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
 
@@ -250,6 +268,15 @@ def mhc_post(
         output_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape(list(residual.shape)),
             residual.dtype,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+    fused = stats_weight is not None
+    if fused and stats_output is None:
+        stats_output = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(list(residual.shape)[:-1] + [32]),
+            ttnn.float32,
             ttnn.TILE_LAYOUT,
             device,
             ttnn.DRAM_MEMORY_CONFIG,
@@ -265,6 +292,11 @@ def mhc_post(
         post_col=post_col,
         comb_col=comb_col,
         max_grid=max_grid,
+        stats_weight=stats_weight,
+        stats_output=stats_output,
     )
-    # Output tensor MUST be last in the list.
-    return ttnn.generic_op([input_tensor, residual, post, comb, output_tensor], program_descriptor)
+    if not fused:
+        # Output tensor MUST be last in the list.
+        return ttnn.generic_op([input_tensor, residual, post, comb, output_tensor], program_descriptor)
+    ttnn.generic_op([input_tensor, residual, post, comb, stats_weight, stats_output, output_tensor], program_descriptor)
+    return output_tensor, stats_output
