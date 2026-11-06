@@ -48,9 +48,19 @@ void kernel_main() {
     MuxTerminationManager<HAS_MUX_CONNECTIONS, NUM_MUXES_TO_TERMINATE> mux_termination_manager(
         local_args_idx, common_memory_map.mux_termination_sync_address);
 
+    // The host's start release word follows the mux termination args.
+    auto* start_release_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_arg_val<uint32_t>(local_args_idx++));
+
     // Clear test results area and mark as started
     clear_test_results(sync_config->get_result_buffer_address(), sync_config->get_result_buffer_size());
     write_test_status(sync_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
+
+    // Senders start when this core's syncs release them, so hold the syncs until every receiver of the test is
+    // running: the host sets the release word once all of them, on every host, have started
+    // (TestContext::launch_programs). The global sync spans only this mesh, and a receiver on another host can start
+    // after its sender has sent more packets than its buffer holds.
+    noc_semaphore_wait_min(start_release_ptr, 1);
 
     // Perform global sync (master sync core) for start of sync
     uint8_t local_sync_iter = 0, global_sync_iter = 0;

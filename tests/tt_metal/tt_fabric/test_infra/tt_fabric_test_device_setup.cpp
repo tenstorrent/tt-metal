@@ -782,6 +782,25 @@ void TestDevice::add_sender_traffic_config(tt::tt_metal::CoreCoord logical_core,
     this->senders_.at(logical_core).add_config(std::move(config));
 }
 
+void TestDevice::set_sender_stream(tt::tt_metal::CoreCoord logical_core, const StreamProgram& stream) {
+    TT_FATAL(this->senders_.contains(logical_core), "Stream set for core {} before its traffic configs", logical_core);
+    auto& sender = this->senders_.at(logical_core);
+    TT_FATAL(!sender.stream_.has_value(), "Core {} already carries a stream", logical_core);
+    TT_FATAL(
+        sender.configs_.size() == stream.counts.size(),
+        "Core {} has {} traffic configs but its stream has {} segments; a stream sender's core can't be shared",
+        logical_core,
+        sender.configs_.size(),
+        stream.counts.size());
+    TT_FATAL(
+        stream.idle_after.empty() || stream.idle_after.size() == stream.counts.size(),
+        "Core {}: stream has {} idle entries for {} segments",
+        logical_core,
+        stream.idle_after.size(),
+        stream.counts.size());
+    sender.stream_ = stream;
+}
+
 void TestDevice::add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
     if (!this->sync_workers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SYNC, logical_core);
@@ -961,6 +980,9 @@ void TestDevice::create_sync_kernel() {
         sync_connection_manager.generate_mux_termination_local_args_for_core(sync_core, device_info_provider_);
     local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
+    // Start release word, set by the host once every receiver is running (TestContext::launch_programs)
+    local_args.push_back(sender_memory_map_->get_sync_start_release_address());
+
     std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
 
     // Only clear result buffer from host if progress monitoring is enabled
@@ -969,6 +991,7 @@ void TestDevice::create_sync_kernel() {
             {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()});
     }
 
+    // Also clears the start release and the receivers-ready count
     addresses_and_size_to_clear.push_back(
         {sender_memory_map_->get_global_sync_address(), sender_memory_map_->get_global_sync_region_size()});
     addresses_and_size_to_clear.push_back(
@@ -1020,6 +1043,21 @@ void TestDevice::create_sender_kernels() {
         bool has_mux_connections = connection_manager_.is_mux_client(core);
         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
 
+        if (sender.stream_.has_value()) {
+            TT_FATAL(
+                num_connections == 1,
+                "Stream sender core {} on {} needs {} fabric connections; a stream feeds one router",
+                core.str(),
+                fabric_node_id_,
+                num_connections);
+            // Backstop for validate_test: the benchmark stream path drives the router adapter directly.
+            TT_FATAL(
+                !(benchmark_mode_ && has_mux_connections),
+                "Stream sender core {} on {} is a mux client, which the benchmark stream path doesn't support",
+                core.str(),
+                fabric_node_id_);
+        }
+
         // All configs on a core must share the same vc_id: the kernel is compiled with a single
         // VC_ID template arg and all EDM connection runtime args are interpreted using that adapter
         // type. Mixing VC0 and VC2 configs on the same core would silently corrupt connection parsing.
@@ -1047,8 +1085,10 @@ void TestDevice::create_sender_kernels() {
             sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
             has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
             num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
-            sender_vc_id                                         /* VC_ID */
-        };
+            sender_vc_id,                                        /* VC_ID */
+            !sender.stream_.has_value()          ? 0u             /* STREAM_MODE: 0 none, 1 stream, */
+            : sender.stream_->idle_after.empty() ? 1u             /* 2 stream with idle segments */
+                                                 : 2u};
 
         // Runtime args with connection type information
         std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
@@ -1100,6 +1140,15 @@ void TestDevice::create_sender_kernels() {
         for (const auto& [config, _] : sender.configs_) {
             auto traffic_config_args = config.get_args(false);  // false = not a sync config
             local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
+        }
+
+        // Stream program: lap count, then packets per lap for each traffic config in order, then (idle segments
+        // only) the cycles to wait after each traffic config's packets.
+        if (sender.stream_.has_value()) {
+            local_args.push_back(sender.stream_->repeat);
+            local_args.insert(local_args.end(), sender.stream_->counts.begin(), sender.stream_->counts.end());
+            local_args.insert(
+                local_args.end(), sender.stream_->idle_after.begin(), sender.stream_->idle_after.end());
         }
 
         // Add mux termination local args (empty vector if not a mux client)
@@ -1156,6 +1205,19 @@ void TestDevice::create_receiver_kernels() {
     TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
     TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
 
+    // In a sync test every receiver counts itself in this chip's sync core on entry (the start gate,
+    // TestContext::launch_programs). A sync test runs one sync kernel on every chip (create_sync_kernel requires it).
+    const bool signal_ready = global_sync_ && !receivers_.empty();
+    uint32_t sync_core_noc_encoding = 0;
+    if (signal_ready) {
+        TT_FATAL(
+            sync_workers_.size() == 1,
+            "Sync test: device {} has receivers but {} sync cores (expected 1)",
+            fabric_node_id_,
+            sync_workers_.size());
+        sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sync_workers_.begin()->first);
+    }
+
     for (const auto& [core, receiver] : this->receivers_) {
         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
@@ -1172,7 +1234,8 @@ void TestDevice::create_receiver_kernels() {
             receiver_memory_map_->common.get_kernel_config_size(), /* KERNEL_CONFIG_BUFFER_SIZE */
             (uint32_t)num_connections,                             /* NUM_CREDIT_CONNECTIONS */
             has_mux_connections ? 1u : 0u,                         /* HAS_MUX_CONNECTIONS */
-            num_muxes_to_terminate                                 /* NUM_MUXES_TO_TERMINATE */
+            num_muxes_to_terminate,                                /* NUM_MUXES_TO_TERMINATE */
+            signal_ready ? 1u : 0u                                 /* SIGNAL_READY */
         };
 
         // Runtime args: memory map args + credit connection args + traffic-to-connection mapping
@@ -1247,6 +1310,12 @@ void TestDevice::create_receiver_kernels() {
             addresses_and_size_to_clear.push_back(
                 {receiver_memory_map_->get_mux_termination_sync_address(),
                  receiver_memory_map_->get_mux_termination_sync_size()});
+        }
+
+        // Where the receiver counts itself on entry (SIGNAL_READY): the chip's sync core
+        if (signal_ready) {
+            local_args.push_back(sync_core_noc_encoding);
+            local_args.push_back(sender_memory_map_->get_sync_receivers_ready_address());
         }
 
         receiver.create_kernel(

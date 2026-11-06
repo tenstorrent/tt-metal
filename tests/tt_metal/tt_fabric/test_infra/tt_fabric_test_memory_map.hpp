@@ -21,6 +21,13 @@ struct PerConfigResult {
 // Words 0-31 are reserved for existing aggregate fields (status, word_cnt, cycles, iter, etc.).
 static constexpr uint32_t PER_CONFIG_RESULT_BASE_WORD_INDEX = 32;
 
+// Word indices of a benchmark stream sender's counters: packets that copied a header into their
+// router slot, packets that found no free router slot, and the send loop's cycles minus its slot waits. Must match the
+// kernel-side definitions in kernels/tt_fabric_test_kernels_utils.hpp.
+static constexpr uint32_t STREAM_HEADER_COPIES_WORD_INDEX = 8;
+static constexpr uint32_t STREAM_SLOT_WAITS_WORD_INDEX = 10;
+static constexpr uint32_t STREAM_BUSY_CYCLES_WORD_INDEX = 12;  // two words
+
 static_assert(sizeof(PerConfigResult) == 8, "PerConfigResult must be 8 bytes (2 words)");
 
 struct BaseMemoryRegion {
@@ -271,9 +278,15 @@ struct SenderMemoryMap {
         current_addr += PACKET_HEADER_BUFFER_SIZE;
         packet_headers = BaseMemoryRegion(packet_header_base, PACKET_HEADER_BUFFER_SIZE);
 
-        // global sync region
+        // global sync region, words: the sync core's global sync counter, the host's start release, and the count of
+        // this chip's receivers that have started
         uint32_t global_sync_region_base = current_addr;
         uint32_t global_sync_region_size = l1_alignment;
+        TT_FATAL(
+            global_sync_region_size >= 3 * sizeof(uint32_t),
+            "The global sync region ({} bytes) must hold the sync counter, the start release and the receivers-ready "
+            "count",
+            global_sync_region_size);
         current_addr += global_sync_region_size;
         global_sync_region = BaseMemoryRegion(global_sync_region_base, global_sync_region_size);
 
@@ -317,6 +330,12 @@ struct SenderMemoryMap {
 
     uint32_t get_global_sync_address() const { return global_sync_region.start; }
     uint32_t get_local_sync_address() const { return local_sync_region.start; }
+    // Start gate of a sync test (TestContext::launch_programs), both words on the chip's sync core and cleared with the
+    // global sync region before launch. Each receiver kernel of the chip increments the receivers-ready count on entry;
+    // the host reads it, and once every receiver of the test, on every host, has started, it sets the release, which
+    // the sync kernel waits for before its first global sync.
+    uint32_t get_sync_start_release_address() const { return global_sync_region.start + sizeof(uint32_t); }
+    uint32_t get_sync_receivers_ready_address() const { return global_sync_region.start + 2 * sizeof(uint32_t); }
 
     uint32_t get_global_sync_region_size() const { return global_sync_region.size; }
     uint32_t get_local_sync_region_size() const { return local_sync_region.size; }

@@ -27,6 +27,7 @@ using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
 using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
 using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
 using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
+using TrafficSummaryLabel = tt::tt_fabric::fabric_tests::TrafficSummaryLabel;
 using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;

@@ -15,6 +15,8 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(3);
 constexpr uint8_t NUM_CREDIT_CONNECTIONS = get_compile_time_arg_val(4);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(5);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(6);
+// Sync tests: on entry, count this receiver in its chip's sync core (the start gate, TestContext::launch_programs)
+constexpr bool SIGNAL_READY = get_compile_time_arg_val(7);
 
 using ReceiverKernelConfigType = ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS, NUM_CREDIT_CONNECTIONS, IS_2D_FABRIC>;
 
@@ -46,6 +48,14 @@ void kernel_main() {
     // Clear test results area and mark as started
     clear_test_results(receiver_config->get_result_buffer_address(), receiver_config->get_result_buffer_size());
     write_test_status(receiver_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
+
+    // Senders start only once every receiver of the test is running: count this one in the chip's sync core (its NoC
+    // encoding and the receivers-ready address follow the mux termination args). Before any packet is read.
+    if constexpr (SIGNAL_READY) {
+        const uint32_t sync_core_noc_encoding = get_local_arg_val<uint32_t>(local_args_idx++);
+        const uint32_t receivers_ready_address = get_local_arg_val<uint32_t>(local_args_idx++);
+        noc_semaphore_inc(get_noc_addr_helper(sync_core_noc_encoding, receivers_ready_address), 1);
+    }
 
     // Open credit connections (no-op if NUM_CREDIT_CONNECTIONS == 0)
     receiver_config->open_credit_connections();

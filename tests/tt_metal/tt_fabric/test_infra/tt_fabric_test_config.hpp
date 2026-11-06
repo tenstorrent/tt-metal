@@ -259,8 +259,14 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.size = specific.size.has_value() ? specific.size : base.size;
     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
+    merged.flush = specific.flush.has_value() ? specific.flush : base.flush;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
     merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
+    if constexpr (requires { merged.stream; }) {
+        // Segments are not merged here; expand_streams merges each one over the final pattern.
+        merged.stream = specific.stream.has_value() ? specific.stream : base.stream;
+        merged.repeat = specific.repeat.has_value() ? specific.repeat : base.repeat;
+    }
 
     // Special handling for nested destination
     if (specific.destination.has_value()) {
@@ -309,6 +315,7 @@ private:
     DeviceIdentifier parse_device_identifier(const YAML::Node& node);
     ParsedDestinationConfig parse_destination_config(const YAML::Node& dest_yaml);
     ParsedTrafficPatternConfig parse_traffic_pattern_config(const YAML::Node& pattern_yaml);
+    std::vector<ParsedStreamSegment> parse_stream(const YAML::Node& stream_yaml);
     ParsedSenderConfig parse_sender_config(const YAML::Node& sender_yaml, const ParsedTrafficPatternConfig& defaults);
     TestFabricSetup parse_fabric_setup(const YAML::Node& fabric_setup_yaml);
     ParsedTestConfig parse_test_config(const YAML::Node& test_yaml);
@@ -600,6 +607,12 @@ private:
     bool expand_link_duplicates(ParsedTestConfig& test);
 
     void resolve_missing_params(ParsedTestConfig& test);
+
+    // Turns each stream segment into its own pattern and records the send order on the sender.
+    void expand_streams(ParsedTestConfig& test);
+
+    // Build-time checks for senders that carry a stream.
+    void validate_stream_senders(const TestConfig& test) const;
 
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;

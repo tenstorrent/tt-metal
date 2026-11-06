@@ -85,6 +85,22 @@ inline void write_test_packets(uint32_t result_buffer_base, uint64_t packets) {
     result_buffer[TT_FABRIC_WORD_CNT_INDEX + 1] = static_cast<uint32_t>(packets >> 32);
 }
 
+// Word indices of a benchmark stream sender's counters: packets that rewrote their router slot's
+// header, packets that found no free router slot, and the send loop's cycles minus the cycles spent
+// waiting for a slot (two words). Must match tt_fabric_test_memory_map.hpp.
+static constexpr uint32_t STREAM_HEADER_COPIES_WORD_INDEX = 8;
+static constexpr uint32_t STREAM_SLOT_WAITS_WORD_INDEX = 10;
+static constexpr uint32_t STREAM_BUSY_CYCLES_WORD_INDEX = 12;
+
+inline void write_stream_counters(
+    uint32_t result_buffer_base, uint32_t header_copies, uint32_t slot_waits, uint64_t busy_cycles) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[STREAM_HEADER_COPIES_WORD_INDEX] = header_copies;
+    result_buffer[STREAM_SLOT_WAITS_WORD_INDEX] = slot_waits;
+    result_buffer[STREAM_BUSY_CYCLES_WORD_INDEX] = static_cast<uint32_t>(busy_cycles);
+    result_buffer[STREAM_BUSY_CYCLES_WORD_INDEX + 1] = static_cast<uint32_t>(busy_cycles >> 32);
+}
+
 inline void clear_test_results(uint32_t result_buffer_base, uint32_t result_buffer_size) {
     auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
     uint32_t num_words = result_buffer_size / sizeof(uint32_t);
@@ -317,23 +333,47 @@ struct NocUnicastWriteFields {
 };
 
 struct NocUnicastAtomicIncFields {
+    // The host packs an optional flush override into the increment word's top two bits (see the host-side
+    // NocUnicastAtomicIncFields::get_args): bit 31 = override present, bit 30 = its value.
+    static constexpr uint32_t kFlushSetBit = 1u << 31;
+    static constexpr uint32_t kFlushValueBit = 1u << 30;
+
     template <bool IS_SOURCE>
     static NocUnicastAtomicIncFields build_from_args(size_t& arg_idx) {
-        uint32_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
+        const uint32_t inc_word = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_noc_encoding = 0;
         if constexpr (IS_SOURCE) {
             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
-        return NocUnicastAtomicIncFields(atomic_inc_val, dst_address, dst_noc_encoding);
+        return NocUnicastAtomicIncFields(
+            inc_word & ~(kFlushSetBit | kFlushValueBit),
+            dst_address,
+            dst_noc_encoding,
+            (inc_word & kFlushSetBit) != 0,
+            (inc_word & kFlushValueBit) != 0);
     }
 
-    NocUnicastAtomicIncFields(uint32_t atomic_inc_val, uint32_t dst_address, uint32_t dst_noc_encoding) :
-        atomic_inc_val(atomic_inc_val), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
+    NocUnicastAtomicIncFields(
+        uint32_t atomic_inc_val,
+        uint32_t dst_address,
+        uint32_t dst_noc_encoding,
+        bool flush_set = false,
+        bool flush_value = false) :
+        atomic_inc_val(atomic_inc_val),
+        dst_address(dst_address),
+        dst_noc_encoding(dst_noc_encoding),
+        flush_set(flush_set),
+        flush_value(flush_value) {}
+
+    // Flush flag for the packet header: the override when present, otherwise the given per-type default.
+    bool flush_or(bool default_flush) const { return flush_set ? flush_value : default_flush; }
 
     uint32_t atomic_inc_val;
     uint32_t dst_address;
     uint32_t dst_noc_encoding;
+    bool flush_set;
+    bool flush_value;
 };
 
 struct NocUnicastWriteAtomicIncFields {
@@ -1086,37 +1126,6 @@ struct SenderKernelTrafficConfig {
 
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
-    FORCE_INLINE void setup_credit_update_noc_state(const EdmSenderT& adapter, uint8_t noc) {
-        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-        const uint64_t noc_sem_addr =
-            get_noc_addr(adapter.edm_noc_x, adapter.edm_noc_y, adapter.edm_buffer_remote_free_slots_update_addr, noc);
-        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
-            noc_sem_addr, packed_val, 0xf, adapter.sync_noc_cmd_buf, noc);
-    }
-
-    template <bool BENCHMARK_MODE>
-    FORCE_INLINE void send_packets_stateful(const uint32_t num_packets, const uint32_t num_warmup) {
-        ASSERT(connection_ptr_ != nullptr);
-        // The stateful path holds NOC state for one connection, so it cannot fan a packet out to
-        // several. Only benchmark flows take it, and those are unicast.
-        ASSERT(num_connections_ == 1);
-        auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
-
-        // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
-        // Phase 1: Warmup — send actual headers to fill all buffer slots
-        const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
-        for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
-            this->template send_one_packet<BENCHMARK_MODE, false>();
-        }
-
-        setup_credit_update_noc_state(*conn, get_fabric_worker_noc());
-
-        // Phase 2: Steady state — credit-only sends with stateful NOC
-        for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
-            this->template send_one_packet<BENCHMARK_MODE, true>();
-        }
-    }
-
     // Send exactly one packet per call (round-robin scheduling)
     // Returns: true if packet was sent, false if blocked (no credits)
     template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false>
@@ -1273,7 +1282,8 @@ inline void NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl(
     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-    config->packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
+    config->packet_header->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.flush_or(true)});
 
     config->noc_fields_.atomic_inc_fields = fields;
     config->payload_size_bytes = 0;
@@ -1290,7 +1300,8 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
     auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
 
     // Test infra allocates the payload and atomic counter on the same core, so NOC ordering preserves
-    // write-before-atomic without flushing the write pipeline (the ntype option `flush` flushes anyway).
+    // write-before-atomic without flushing the write pipeline. The ntype option `flush` flushes anyway, and a
+    // pattern or stream segment's `flush` overrides both (to measure the router's flushed path).
     ASSERT(fields.write_fields.dst_noc_encoding == fields.atomic_inc_fields.dst_noc_encoding);
 
     uint64_t write_noc_addr =
@@ -1300,7 +1311,10 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{
-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, fields.flush},
+            write_noc_addr,
+            atomic_noc_addr,
+            fields.atomic_inc_fields.atomic_inc_val,
+            fields.atomic_inc_fields.flush_or(fields.flush)},
         fields.write_fields.payload_size_bytes);
 
     config->noc_fields_.write_atomic_inc_fields = fields;
@@ -1318,7 +1332,10 @@ inline void NocFusedSenderOperations<EdmSenderT>::update_header_impl(SenderKerne
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{
-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, fields.flush},
+            write_noc_addr,
+            atomic_noc_addr,
+            fields.atomic_inc_fields.atomic_inc_val,
+            fields.atomic_inc_fields.flush_or(fields.flush)},
         fields.write_fields.payload_size_bytes);
 }
 

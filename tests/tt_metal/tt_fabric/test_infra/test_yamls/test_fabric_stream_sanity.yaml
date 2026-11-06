@@ -1,0 +1,106 @@
+# Traffic streams, data-validated (not benchmark mode).
+#
+# A stream is an ordered list of segments (packet shapes) that a sender sends in laps:
+#   stream:                                  # a bare ntype string is shorthand for {ntype: ...}
+#     - {ntype: unicast_write, count: 7}     # count: packets of this segment per lap (default 1)
+#     - fused_atomic_inc
+#   repeat: 100                              # laps (default 1); a stream pattern can't set num_packets
+# Segments set ntype, size and atomic_inc_val, inheriting the rest from the pattern. ftype and the
+# destination apply to the whole stream, so a stream uses one router.
+#
+# Every test uses a high-level pattern that gives each sender one flow, which a stream needs.
+# Long runs use flow control so a sender can't overwrite data its receiver hasn't checked yet.
+
+Tests:
+  # All four command types in one stream
+  - name: "StreamCommandTypesMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      num_links: [1, 2]
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      repeat: 500
+      stream: [unicast_write, unicast_scatter_write, fused_atomic_inc, atomic_inc]
+    patterns:
+      - type: full_device_random_pairing
+
+  # Sizes from 16 B to 4 KB in one stream
+  - name: "StreamSizesMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      repeat: 300
+      stream:
+        - {size: 4096, count: 2}
+        - {size: 2048}
+        - {size: 256, count: 3}
+        - {size: 16, count: 4}
+    patterns:
+      - type: full_device_random_pairing
+
+  # A collective's chunk: seven page writes, then a write that also signals
+  - name: "StreamCollectiveChunkMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      size: 4096
+      atomic_inc_val: 2
+      repeat: 200
+      stream:
+        - {ntype: unicast_write, count: 7}
+        - fused_atomic_inc
+    patterns:
+      - type: full_device_random_pairing
+
+  # Line multicast down each axis, every command type
+  - name: "StreamMulticastMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: mcast
+      size: 2048
+      repeat: 200
+      stream: [unicast_write, unicast_scatter_write, fused_atomic_inc, atomic_inc]
+    patterns:
+      - type: unidirectional_linear
+
+  # 1D fabric, unicast and multicast
+  - name: "StreamLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ftype: [unicast, mcast]
+    defaults:
+      size: 2048
+      repeat: 200
+      stream:
+        - {ntype: unicast_write, count: 2}
+        - unicast_scatter_write
+        - {ntype: fused_atomic_inc, size: 512}
+    patterns:
+      - type: unidirectional_linear
+
+  # Without flow control: short enough that no sender laps its receiver's buffer
+  - name: "StreamNoFlowControlMesh"
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      repeat: 8
+      stream:
+        - {size: 4096, count: 2}
+        - {size: 1024}
+        - {size: 16, count: 2}
+    patterns:
+      - type: full_device_random_pairing

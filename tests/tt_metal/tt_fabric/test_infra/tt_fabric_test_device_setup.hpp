@@ -248,6 +248,9 @@ public:
 
     // Multi-output 2D multicast configs carry one key per canonical root output.
     std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>> configs_;
+
+    // Set when this core's configs come from a stream; counts index configs_ in order.
+    std::optional<StreamProgram> stream_;
 };
 
 struct TestReceiver : TestWorker {
@@ -301,6 +304,7 @@ public:
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id() const;
     void add_sender_traffic_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSenderConfig config);
+    void set_sender_stream(tt::tt_metal::CoreCoord logical_core, const StreamProgram& stream);
     void add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config);
     void add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void add_mux_worker_config(
@@ -369,6 +373,17 @@ public:
     // Method to access sender and receiver configurations for traffic analysis
     const std::unordered_map<tt::tt_metal::CoreCoord, TestSender>& get_senders() const { return senders_; }
     const std::unordered_map<tt::tt_metal::CoreCoord, TestReceiver>& get_receivers() const { return receivers_; }
+
+    // Cores running the sync kernel (one per device in a sync test, none otherwise)
+    std::vector<tt::tt_metal::CoreCoord> get_sync_kernel_cores() const {
+        std::vector<tt::tt_metal::CoreCoord> cores;
+        if (global_sync_) {
+            for (const auto& [core, _] : sync_workers_) {
+                cores.push_back(core);
+            }
+        }
+        return cores;
+    }
 
     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_connections() const {
         return connection_manager_.get_used_fabric_links();

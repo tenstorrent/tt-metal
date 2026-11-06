@@ -120,6 +120,24 @@ struct ParsedDestinationConfig {
     std::optional<uint32_t> atomic_inc_address;
 };
 
+// One entry of a traffic stream: a packet shape and how many packets of it each lap sends, or an idle gap.
+// Unset fields are inherited from the pattern that carries the stream.
+struct ParsedStreamSegment {
+    std::optional<NocSendTypeSpec> ntype;
+    std::optional<uint32_t> size;
+    std::optional<uint32_t> atomic_inc_val;
+    // atomic_inc / fused_atomic_inc segments: whether the receiving router flushes earlier writes before the atomic.
+    // Unset keeps the per-type default (atomic_inc: true, fused_atomic_inc: false).
+    std::optional<bool> flush;
+    uint32_t count = 1;
+    // An idle segment ({idle: <cycles>}) sends nothing: the worker waits this many cycles before its next packet,
+    // which models compute between bursts. It sets no other field.
+    std::optional<uint32_t> idle;
+};
+
+// Upper bound on segments in one stream. Each segment becomes its own traffic config on the sender.
+inline constexpr uint32_t kMaxStreamSegments = 64;
+
 struct ParsedTrafficPatternConfig {
     std::optional<ChipSendType> ftype;
     std::optional<NocSendTypeSpec> ntype;
@@ -127,8 +145,21 @@ struct ParsedTrafficPatternConfig {
     std::optional<uint32_t> num_packets;
     std::optional<ParsedDestinationConfig> destination;
     std::optional<uint32_t> atomic_inc_val;
+    std::optional<bool> flush;  // see ParsedStreamSegment::flush
     std::optional<uint32_t> mcast_start_hops;
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
+    // Ordered packet shapes sent in laps; expand_streams turns each segment into its own pattern.
+    std::optional<std::vector<ParsedStreamSegment>> stream;
+    std::optional<uint32_t> repeat;  // Number of laps through the stream (default 1)
+};
+
+// Send order for a sender built from a stream: each lap sends counts[i] packets of pattern i, in
+// pattern order, and the sender runs `repeat` laps. With idle segments, idle_after[i] is how many cycles the worker
+// waits after pattern i's packets in each lap (empty when the stream has no idle segments).
+struct StreamProgram {
+    uint32_t repeat = 1;
+    std::vector<uint32_t> counts;
+    std::vector<uint32_t> idle_after;
 };
 
 struct ParsedSenderConfig {
@@ -136,8 +167,9 @@ struct ParsedSenderConfig {
     std::optional<CoreConfig> core;
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<ParsedTrafficPatternConfig> patterns;
-    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
-    std::optional<uint8_t> vc_id;     // VC selection: 0=VC0 (default), 2=VC2
+    std::optional<uint32_t> link_id;      // Link ID for multi-link tests
+    std::optional<uint8_t> vc_id;         // VC selection: 0=VC0 (default), 2=VC2
+    std::optional<StreamProgram> stream;  // Set by expand_streams
 };
 
 // Resolved structures (after resolution) - use FabricNodeId
@@ -163,6 +195,7 @@ struct TrafficPatternConfig {
     std::optional<uint32_t> num_packets;
     std::optional<DestinationConfig> destination;
     std::optional<uint32_t> atomic_inc_val;
+    std::optional<bool> flush;  // see ParsedStreamSegment::flush
     std::optional<uint32_t> mcast_start_hops;
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
 
@@ -188,6 +221,7 @@ struct SenderConfig {
     uint32_t link_id = 0;          // Link ID for multi-link tests
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
     bool use_vc2() const { return vc_id.value_or(0) == 2; }
+    std::optional<StreamProgram> stream;  // Present when the patterns were built from a stream
 };
 
 // Sync configuration for a single device
@@ -440,5 +474,16 @@ uint32_t fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_para
 uint32_t fetch_pattern_num_packets(const TrafficPatternConfig& pattern);
 
 uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern);
+
+// Labels a test's traffic for result rows, from its first sender. A plain sender reports its first
+// pattern. A stream sender reports the whole stream: ntype is "STREAM" when the segments differ,
+// num_packets is the stream's total, and packet_size is the mean payload per packet.
+struct TrafficSummaryLabel {
+    std::string ftype;
+    std::string ntype;
+    uint32_t num_packets = 0;
+    uint32_t packet_size = 0;
+};
+TrafficSummaryLabel fetch_traffic_summary_label(const TestConfig& config);
 
 }  // namespace tt::tt_fabric::fabric_tests

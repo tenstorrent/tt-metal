@@ -151,6 +151,12 @@ struct NocUnicastAtomicIncFields {
         dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
 
     void set_atomic_inc_val(uint32_t value) { this->atomic_inc_val = value; }
+    void set_flush(bool value) { this->flush = value; }
+
+    // The increment's argument word also carries the optional flush override in its top two bits
+    // (kFlushSetBit: an override is present, kFlushValueBit: its value); the kernel decodes and masks them.
+    static constexpr uint32_t kFlushSetBit = 1u << 31;
+    static constexpr uint32_t kFlushValueBit = 1u << 30;
 
     template <bool IS_SOURCE>
     std::vector<uint32_t> get_args() const {
@@ -160,7 +166,15 @@ struct NocUnicastAtomicIncFields {
                 throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
             }
         }
-        std::vector<uint32_t> args = {atomic_inc_val.value_or(default_atomic_inc_val), dst_address};
+        uint32_t inc_word = atomic_inc_val.value_or(default_atomic_inc_val);
+        if (inc_word & (kFlushSetBit | kFlushValueBit)) {
+            log_fatal(tt::LogTest, "atomic_inc_val {} does not fit in 30 bits", inc_word);
+            throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
+        }
+        if (flush.has_value()) {
+            inc_word |= kFlushSetBit | (flush.value() ? kFlushValueBit : 0u);
+        }
+        std::vector<uint32_t> args = {inc_word, dst_address};
         if (dst_noc_encoding.has_value()) {
             args.push_back(dst_noc_encoding.value());
         }
@@ -168,6 +182,7 @@ struct NocUnicastAtomicIncFields {
     }
 
     std::optional<uint32_t> atomic_inc_val;
+    std::optional<bool> flush;
     uint32_t dst_address;
     std::optional<uint32_t> dst_noc_encoding;
 };
@@ -272,6 +287,7 @@ struct TrafficParameters {
     size_t payload_size_bytes;
     size_t num_packets;
     std::optional<uint32_t> atomic_inc_val;
+    std::optional<bool> flush;
     std::optional<uint32_t> mcast_start_hops;
     bool enable_flow_control = false;
     std::vector<uint32_t> scatter_chunk_sizes;  // NOC_UNICAST_SCATTER_WRITE: size of each write chunk
@@ -443,6 +459,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
+            if (this->parameters.flush.has_value()) {
+                atomic_inc_fields.set_flush(this->parameters.flush.value());
+            }
             const auto atomic_inc_args = atomic_inc_fields.get_args<true>();
             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
         } break;
@@ -453,6 +472,10 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
                 NocUnicastAtomicIncFields(this->atomic_inc_address.value(), this->dst_noc_encoding);
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+            }
+            // The ntype option `flush` is the default; a pattern or stream segment's `flush` overrides it.
+            if (this->parameters.flush.has_value()) {
+                atomic_inc_fields.set_flush(this->parameters.flush.value());
             }
             auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
             fused_fields.flush = this->parameters.noc_send_type.options_or_default<FusedAtomicIncOptions>().flush;
@@ -522,6 +545,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
+            if (this->parameters.flush.has_value()) {
+                atomic_inc_fields.set_flush(this->parameters.flush.value());
+            }
             const auto atomic_inc_args = atomic_inc_fields.get_args<false>();
             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
             break;
@@ -531,6 +557,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             auto atomic_inc_fields = NocUnicastAtomicIncFields(this->atomic_inc_address.value());
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+            }
+            if (this->parameters.flush.has_value()) {
+                atomic_inc_fields.set_flush(this->parameters.flush.value());
             }
             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
             const auto fused_args = fused_fields.get_args<false>();

@@ -119,10 +119,10 @@ void BandwidthResultsManager::add_summary(const TestConfig& config, const Bandwi
 }
 
 void BandwidthResultsManager::append_to_csv(const TestConfig& config, const BandwidthResult& result) {
-    // Extract representative ftype and ntype from first sender's first pattern
-    const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
-    std::string ftype_str = fetch_pattern_ftype(first_pattern);
-    std::string ntype_str = fetch_pattern_ntype(first_pattern);
+    // Representative ftype and ntype from the first sender (its first pattern, or its whole stream)
+    const TrafficSummaryLabel label = fetch_traffic_summary_label(config);
+    const std::string& ftype_str = label.ftype;
+    const std::string& ntype_str = label.ntype;
 
     // Open CSV file in append mode
     std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::app);
