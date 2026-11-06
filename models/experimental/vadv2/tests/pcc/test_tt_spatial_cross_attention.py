@@ -137,10 +137,6 @@ def test_vadv2_sca(
     query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16)
     key = ttnn.from_torch(key, device=device, dtype=ttnn.bfloat16)
     value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16)
-    reference_points_cam = ttnn.from_torch(
-        reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-    bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16)
     tt_model.prepare(reference_points_cam, bev_mask)
 
     tt_output = tt_model(

@@ -4,7 +4,7 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, fold_sampling_offsets
+from models.experimental.vadv2.tt.tt_utils import fused_msda, msda_operands
 from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
@@ -56,7 +56,11 @@ class TtTemporalSelfAttention:
 
         assert len(spatial_shapes_hw) == num_levels, f"need {num_levels} (H, W) pairs, got {spatial_shapes_hw}"
         self.spatial_shapes_hw = [(int(h), int(w)) for h, w in spatial_shapes_hw]
-        self._so_w, self._so_b = fold_sampling_offsets(params.sampling_offsets, self.spatial_shapes_hw, device)
+        # The fused op samples the previous BEV and the queries as num_bev_queue levels of one
+        # value, map-major, and sums over them; the mean's 1 / num_bev_queue goes into the
+        # output projection's weight.
+        self.map_spatial_shapes_hw = self.spatial_shapes_hw * num_bev_queue
+        self.output_proj_mean_weight = ttnn.mul(params.output_proj.weight, 1.0 / num_bev_queue)
 
     def __call__(
         self,
@@ -70,111 +74,56 @@ class TtTemporalSelfAttention:
         flag="decoder",
         **kwargs,
     ):
+        """reference_points: (bs, Q, num_bev_queue * num_levels, 2), every map's own, the
+        previous BEV's shifted by the ego motion; value: the previous BEV and the queries
+        stacked per sample, (bs * num_bev_queue, Q, C), or None without a previous BEV."""
         params = self.params
-        if value is None:
-            assert self.batch_first
-            bs, len_bev, c = query.shape
-            value = ttnn.stack([query, query], dim=1)
-            value = ttnn.reshape(value, (bs * 2, len_bev, c))
-
+        assert self.num_bev_queue == 2
         if identity is None:
             identity = query
-        if query_pos is not None:
-            query = ttnn.add(query, query_pos)
         if not self.batch_first:
             query = ttnn.permute(query, (1, 0, 2))
-            value = ttnn.permute(value, (1, 0, 2))
-
-        bs, num_query, embed_dims = query.shape
-        _, num_value, _ = value.shape
-        assert self.num_bev_queue == 2
-        assert sum(h * w for h, w in self.spatial_shapes_hw) == num_value
-
-        query = ttnn.concat([value[:bs], query], dim=-1)
-
-        value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = linear_flatten_batch(value, params.value_proj.weight, bias=params.value_proj.bias)
-        if key_padding_mask is not None:
-            mask = key_padding_mask[..., None]
-            value = ttnn.where(mask, ttnn.zeros_like(value), value)
-
-        value = ttnn.reshape(value, (bs * self.num_bev_queue, num_value, self.num_heads, -1))
+            if value is not None:
+                value = ttnn.permute(value, (1, 0, 2))
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
+        bs, num_query, embed_dims = query.shape
+        queue = self.num_bev_queue
+        assert sum(h * w for h, w in self.spatial_shapes_hw) == num_query
 
-        sampling_offsets = linear_flatten_batch(query, self._so_w, bias=self._so_b)
-        sampling_offsets = ttnn.reshape(
-            sampling_offsets, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points, 2)
-        )
-        sampling_offsets = ttnn.reallocate(sampling_offsets)
-
-        attention_weights = linear_flatten_batch(
-            query, params.attention_weights.weight, bias=params.attention_weights.bias
-        )
-        ttnn.deallocate(query)
-        attention_weights = ttnn.reshape(
-            attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
-        )
-
-        attention_weights = ttnn.softmax(attention_weights, -1)
-        attention_weights = ttnn.reallocate(attention_weights)
-        attention_weights = ttnn.reshape(
-            attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points)
-        )
-
-        attention_weights = ttnn.permute(attention_weights, (0, 3, 1, 2, 4, 5))
-        attention_weights = ttnn.reallocate(attention_weights)
-        attention_weights = ttnn.reshape(
-            attention_weights, (bs * self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points)
-        )
-
-        sampling_offsets = ttnn.permute(sampling_offsets, (0, 3, 1, 2, 4, 5, 6))
-        sampling_offsets = ttnn.reallocate(sampling_offsets)
-        sampling_offsets = ttnn.reshape(
-            sampling_offsets, (bs * self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points, 2)
-        )
-
-        if reference_points.shape[-1] == 2:
-            bs_r, num_query, num_levels, _ = reference_points.shape
-            reference_points_shape = reference_points.shape
-            reference_points = ttnn.reshape(reference_points, (bs_r, num_query, 1, num_levels, 1, 2))
-            sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
-            # sampling_offsets is already divided by offset_normalizer (folded into
-            # the sampling_offsets Linear weight), so add reference directly.
-            sampling_locations = reference_points + sampling_offsets
-            reference_points = ttnn.reshape(reference_points, reference_points_shape)
-        elif reference_points.shape[-1] == 4:
-            # 4-D (box-refine) reference path. Its formula
-            # (reference + sampling_offsets / num_points * reference * 0.5) consumes
-            # sampling_offsets WITHOUT the offset_normalizer division — but offsets
-            # are now pre-scaled by 1/[W,H] folded into the sampling_offsets Linear
-            # weights, so this path would silently miscompute. It is unused in VADv2
-            # (callers pass 2-D reference_points); guard loudly for future enablement.
-            raise NotImplementedError(
-                "4-D reference_points is incompatible with the folded offset_normalizer "
-                "(see build_folded_sampling_offsets); this path needs unscaled sampling_offsets."
-            )
+        if value is None:
+            projected = linear_flatten_batch(query, params.value_proj.weight, bias=params.value_proj.bias)
+            maps = ttnn.concat([projected] * queue, dim=1)
+            first_map = query
         else:
-            raise ValueError(
-                f"Last dim of reference_points must be 2 or 4, but got {reference_points.shape[-1]} instead."
+            value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
+            # Each sample's maps one after another, previous BEV first, as the encoder stacks them.
+            maps = ttnn.reshape(
+                linear_flatten_batch(value, params.value_proj.weight, bias=params.value_proj.bias),
+                (bs, queue * num_query, embed_dims),
             )
-        output = multi_scale_deformable_attn(
-            value, self.spatial_shapes_hw, sampling_locations, attention_weights, self.device
+            first_map = value[:bs]
+
+        offsets_query = ttnn.add(query, query_pos) if query_pos is not None else query
+        offsets_query = ttnn.concat([first_map, offsets_query], dim=-1)
+        offsets_query = ttnn.to_layout(offsets_query, ttnn.TILE_LAYOUT)
+        sampling_offsets, attention_weights = msda_operands(
+            offsets_query, params, self.num_heads, self.num_levels * self.num_points
         )
-        ttnn.deallocate(attention_weights)
-        ttnn.deallocate(sampling_locations)
-        ttnn.deallocate(sampling_offsets)
-        ttnn.deallocate(value)
-        output = ttnn.permute(output, (1, 2, 0))
-        output = ttnn.reshape(output, (num_query, embed_dims, bs * self.num_bev_queue))
+        ttnn.deallocate(offsets_query)
+
+        assert tuple(reference_points.shape) == (bs, num_query, queue * self.num_levels, 2), (
+            f"reference points must be every map's ({bs}, {num_query}, {queue * self.num_levels}, 2), "
+            f"got {tuple(reference_points.shape)}"
+        )
+        output = fused_msda(
+            maps, reference_points, sampling_offsets, attention_weights, self.map_spatial_shapes_hw, "level"
+        )
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-        output = ttnn.mean(output, dim=-1, keepdim=True)
-        output = ttnn.permute(output, (2, 0, 1))
-        output = linear_flatten_batch(output, params.output_proj.weight, bias=params.output_proj.bias)
+        output = linear_flatten_batch(output, self.output_proj_mean_weight, bias=params.output_proj.bias)
 
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
         output = ttnn.add(output, identity)
-        ttnn.deallocate(identity)
         return output

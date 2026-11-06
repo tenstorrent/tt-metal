@@ -122,7 +122,13 @@ def test_vadv2_tsa(
 
     query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16)
     query_pos = ttnn.from_torch(query_pos, device=device, dtype=ttnn.bfloat16)
-    reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.bfloat16)
+    # The reference stacks the two maps' points along the batch; TT takes each map's per query.
+    reference_points = ttnn.from_torch(
+        reference_points[:, :, 0].permute(1, 0, 2).unsqueeze(0),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
 
     ttnn_output = ttnn_model(
         query,

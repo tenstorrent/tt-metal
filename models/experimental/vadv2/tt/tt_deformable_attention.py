@@ -4,7 +4,7 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, fold_sampling_offsets
+from models.experimental.vadv2.tt.tt_utils import fused_msda, msda_operands
 from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
@@ -55,7 +55,6 @@ class TtCustomMSDeformableAttention:
 
         assert len(spatial_shapes_hw) == num_levels, f"need {num_levels} (H, W) pairs, got {spatial_shapes_hw}"
         self.spatial_shapes_hw = [(int(h), int(w)) for h, w in spatial_shapes_hw]
-        self._so_w, self._so_b = fold_sampling_offsets(params.sampling_offsets, self.spatial_shapes_hw, device)
 
     def __call__(
         self,
@@ -91,60 +90,21 @@ class TtCustomMSDeformableAttention:
         if key_padding_mask is not None:
             mask = key_padding_mask[..., None]
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
-        value = ttnn.reshape(value, (bs, num_value, self.num_heads, -1))
-
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        sampling_offsets = linear_flatten_batch(query, self._so_w, bias=self._so_b)
-        sampling_offsets = ttnn.reshape(
-            sampling_offsets, (bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
-        )
-        attention_weights = linear_flatten_batch(
-            query, params.attention_weights.weight, bias=params.attention_weights.bias
+        sampling_offsets, attention_weights = msda_operands(
+            query, params, self.num_heads, self.num_levels * self.num_points
         )
         ttnn.deallocate(query)
-        attention_weights = ttnn.reshape(
-            attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
-        )
-        attention_weights = ttnn.softmax(attention_weights, -1)
 
-        attention_weights = ttnn.reshape(
-            attention_weights, (bs, num_query, self.num_heads, self.num_levels, self.num_points)
-        )
-
-        if reference_points.shape[-1] == 2:
-            bs_r, num_query, num_levels, _ = reference_points.shape
-            reference_xy = ttnn.reshape(reference_points, (bs_r, num_query, 1, num_levels, 1, 2))
-            sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
-            sampling_offsets = ttnn.squeeze(sampling_offsets, 0)
-            sampling_offsets = ttnn.squeeze(sampling_offsets, 2)
-            # sampling_offsets is already divided by offset_normalizer (folded into
-            # the sampling_offsets Linear weight).
-            sampling_locations = sampling_offsets
-
-            sampling_locations = ttnn.unsqueeze(sampling_locations, 2)
-            sampling_locations = ttnn.unsqueeze(sampling_locations, 0)
-            sampling_locations = ttnn.add(reference_xy, sampling_locations)
-
-        elif reference_points.shape[-1] == 4:
-            # 4-D (box-refine) reference path. Its formula
-            # (reference + sampling_offsets / num_points * reference * 0.5) consumes
-            # sampling_offsets WITHOUT the offset_normalizer division — but offsets
-            # are now pre-scaled by 1/[W,H] folded into the sampling_offsets Linear
-            # weights, so this path would silently miscompute. It is unused in VADv2
-            # (callers pass 2-D reference_points); guard loudly for future enablement.
+        if reference_points.shape[-1] != 2:
             raise NotImplementedError(
-                "4-D reference_points is incompatible with the folded offset_normalizer "
-                "(see build_folded_sampling_offsets); this path needs unscaled sampling_offsets."
+                f"only 2-D reference points are supported, got {reference_points.shape[-1]} coordinates"
             )
-        else:
-            raise ValueError(
-                f"Last dim of reference_points must be" f" 2 or 4, but get {reference_points.shape[-1]} instead."
-            )
-
-        output = multi_scale_deformable_attn(
-            value, self.spatial_shapes_hw, sampling_locations, attention_weights, self.device
+        reference_points = ttnn.reshape(reference_points, (bs, num_query, self.num_levels, 2))
+        output = fused_msda(
+            value, reference_points, sampling_offsets, attention_weights, self.spatial_shapes_hw, "level"
         )
-
+        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
         output = linear_flatten_batch(output, params.output_proj.weight, bias=params.output_proj.bias)
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))

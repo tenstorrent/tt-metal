@@ -603,6 +603,8 @@ def test_vadv2(
     tensor = torch.randn(1, 6, 3, 384, 640)
     img = []
     img.append(tensor)
+    # Absolute CAN bus of the first frame, before the forward makes it relative.
+    first_frame_metas = copy.deepcopy(input_dict["img_metas"])
     with torch.no_grad():
         model_outputs = torch_model(
             return_loss=False,
@@ -675,7 +677,7 @@ def test_vadv2(
     # prepare_frame mutates img_metas[*]["can_bus"] in place and the forward
     # updates tt_model.prev_frame_info. Snapshot both so each
     # warm iteration sees the same first-frame input as the cold call.
-    pristine_img_metas = copy.deepcopy(input_dict["img_metas"])
+    pristine_img_metas = copy.deepcopy(first_frame_metas)
     pristine_prev_frame_info = copy.deepcopy(tt_model.prev_frame_info)
 
     def _forward():
@@ -731,26 +733,47 @@ def test_vadv2(
         "ego_fut_preds",
     ]
 
-    # Per-key PCC floors against the PyTorch reference. Earlier these were pinned
-    # to a degenerate ~0.14-0.6 regime caused by two coupled bugs: ttnn.div(bf16,
-    # uint32) returning inf (fixed upstream by #47203) and ttnn.nonzero's 4*W
-    # sparse output being mis-extracted in TtSpatialCrossAttention (fixed here).
-    # With both fixed the model genuinely matches the reference, so the floors are
-    # re-pinned to the real correlations (observed value in the comment, floor set
-    # ~0.02-0.04 below to absorb BF16 run-to-run noise).
-    pcc_floors = {
-        "bev_embed": 0.96,  # observed 0.980
-        "all_cls_scores": 0.92,  # observed 0.956
-        "all_bbox_preds": 0.99,  # observed 0.999
-        "all_traj_preds": 0.93,  # observed 0.960
-        "all_traj_cls_scores": 0.93,  # observed 0.965
-        "map_all_cls_scores": 0.92,  # observed 0.960
-        "map_all_bbox_preds": 0.98,  # observed 0.996
-        "map_all_pts_preds": 0.99,  # observed 0.998
-        "ego_fut_preds": 0.99,  # observed 0.999
-    }
+    # Both frames, the second through each model's own previous BEV, reach at least 0.992
+    # on every output.
+    pcc_floors = {key: 0.99 for key in keys_to_check}
     for key in keys_to_check:
         a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
         b = tt_model._last_outs[key]
         _, msg = assert_with_pcc(a, b, pcc_floors[key])
         logger.info(f"{key}: {msg}")
+
+    # A second frame of the same scene, after the ego moved and turned: both
+    # models now take the previous BEV, rotated by the heading change, and a
+    # relative CAN bus, which the first frame never exercises.
+    second_metas = copy.deepcopy(first_frame_metas)
+    second_meta = second_metas[0][0][0]
+    second_meta["can_bus"][:2] += np.array([1.5, 0.4])
+    second_meta["can_bus"][-2] += np.deg2rad(4.0)
+    second_meta["can_bus"][-1] += 4.0
+    tt_second_metas = copy.deepcopy(second_metas)
+    second_img = torch.randn(1, 6, 3, 384, 640)
+    frame_inputs = dict(
+        gt_bboxes_3d=input_dict["gt_bboxes_3d"],
+        gt_labels_3d=input_dict["gt_labels_3d"],
+        fut_valid_flag=input_dict["fut_valid_flag"],
+        ego_his_trajs=input_dict["ego_his_trajs"],
+        ego_fut_trajs=input_dict["ego_fut_trajs"],
+        ego_fut_cmd=input_dict["ego_fut_cmd"],
+        ego_lcf_feat=input_dict["ego_lcf_feat"],
+        gt_attr_labels=input_dict["gt_attr_labels"],
+    )
+    with torch.no_grad():
+        torch_model(return_loss=False, img=[second_img], img_metas=second_metas, **frame_inputs)
+    assert tt_model.prev_frame_info["prev_bev"] is not None
+    tt_model.prepare_frame(tt_second_metas)
+    tt_model(
+        return_loss=False,
+        img=[ttnn.from_torch(second_img, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)],
+        img_metas=tt_second_metas,
+        **frame_inputs,
+    )
+    for key in keys_to_check:
+        a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
+        b = tt_model._last_outs[key]
+        _, msg = assert_with_pcc(a, b, pcc_floors[key])
+        logger.info(f"second frame {key}: {msg}")

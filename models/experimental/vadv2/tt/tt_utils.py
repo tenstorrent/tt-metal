@@ -3,166 +3,73 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
+from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
-def fold_offset_normalizer_into_weight(weight, bias, W, H, device):
-    """Pre-scale a deformable-attention `sampling_offsets` Linear so its output is
-    already divided by the offset_normalizer [W, H], eliminating the per-call
-    broadcast SFPU DIV (`sampling_offsets / [W, H]`).
+def grouped_softmax(logits, group_size):
+    """Softmax over each group of group_size columns of TILE logits (..., num_groups * group_size).
 
-    The Linear output is laid out (..., num_points, 2) with the x/y pair
-    innermost, so even output channels are x (÷W) and odd are y (÷H). Folding the
-    static division into the weight is mathematically exact:
-    `s · (Wx + b) == (Wx + b) / normalizer`. Computed once (offset_normalizer is
-    static) and cached by the caller.
+    Each group gets its own row so other groups' logits cannot change its distribution.
     """
-    out_features = weight.shape[-1]  # preprocess_linear_weight stores (in, out)
-    # The x/y pair is the innermost output dim, so out_features must be even for
-    # the even=x / odd=y channel split below to align. Guard the layout contract.
-    assert out_features % 2 == 0, f"sampling_offsets out_features must be even (x/y pairs), got {out_features}"
-    sc = torch.ones(out_features, dtype=torch.float32)
-    sc[0::2] = 1.0 / float(W)
-    sc[1::2] = 1.0 / float(H)
-    sc_t = ttnn.from_torch(sc.reshape(1, out_features), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    w2 = ttnn.mul(weight, sc_t)
-    b2 = ttnn.mul(bias, sc_t) if bias is not None else None
-    ttnn.deallocate(sc_t)
-    return w2, b2
+    grouped = ttnn.reshape(logits, (-1, group_size), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # softmax's additive -inf pad mask cannot clear NaN or +inf left in the tile padding.
+    grouped = ttnn.fill_implicit_tile_padding(grouped, 0.0)
+    weights = ttnn.softmax(grouped, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.reshape(weights, logits.shape)
 
 
-def fold_sampling_offsets(sampling_offsets, spatial_shapes_hw, device):
-    """Return the sampling_offsets Linear (weight, bias) pre-scaled by 1/[W, H].
+def heads_packed_offsets(rows, num_heads):
+    """Row-major sampling offsets (bs, Q, num_heads * L*P*2) as the fused op reads them: as they are
+    when each head's values fill whole alignment units of the buffer, else a page per head."""
+    per_head = rows.shape[-1] // num_heads
+    in_l1 = rows.memory_config().buffer_type == ttnn.BufferType.L1
+    alignment = ttnn.get_l1_alignment() if in_l1 else ttnn.get_dram_alignment()
+    if (per_head * rows.element_size()) % alignment == 0:
+        return rows
+    return ttnn.reshape(rows, (rows.shape[0], rows.shape[1], num_heads, per_head))
 
-    One [W, H] pair per output channel only works with a single feature level.
+
+def msda_operands(query, params, num_heads, samples_per_group):
+    """The fused op's sampling offsets and attention weights from TILE query (bs, Q, C).
+
+    The offsets stay raw, in feature-map pixels: the op scales them per level and adds them to
+    the reference points in float32. The softmax runs over each group of samples_per_group
+    attention logits, the (level, point) samples one head reads from one map.
     """
-    assert len(spatial_shapes_hw) == 1, f"folded offset normalizer needs one level, got {spatial_shapes_hw}"
-    H, W = spatial_shapes_hw[0]
-    return fold_offset_normalizer_into_weight(sampling_offsets.weight, sampling_offsets.bias, W, H, device)
-
-
-# Switch the num_levels==1 path over to the fused
-# `ttnn.experimental.multi_scale_deformable_attn` op (grid_sample + weighted
-# sum in one kernel) once there is enough batched work to amortize its launch.
-# The kernel packs 32 queries per tile, so it only wins for large N*Q
-# (N = bs*num_heads, Q = num_queries); below this the decomposed grid_sample +
-# sum chain is faster. Threshold from the UniAD microbench sweep.
-_MSDA_FUSED_MIN_NQ = 1024
-
-
-def multi_scale_deformable_attn(value, spatial_shapes_hw, sampling_locations, attention_weights, device):
-    """multi_scale_deformable_attn.
-
-    Args:
-        spatial_shapes_hw: list of (H, W) Python ints per level, fixed at
-            module construction so the forward never reads shapes back from device.
-    """
-    bs, _, num_heads, embed_dims = value.shape
-    _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
-    value_list = []
-    value_list.append(value)
-    sampling_locations = ttnn.to_layout(sampling_locations, layout=ttnn.ROW_MAJOR_LAYOUT)
-    sampling_grids = 2 * sampling_locations - 1
-
-    # Fused fast path: when num_levels==1 and there's enough batched work,
-    # replace the grid_sample + reshape + weighted-sum chain with the single
-    # fused `multi_scale_deformable_attn` device op. The op packs grid_sample +
-    # weighted sum in one kernel and matches mmcv (align_corners=False).
-    if num_levels == 1 and (bs * num_heads) * num_queries >= _MSDA_FUSED_MIN_NQ:
-        H_int, W_int = spatial_shapes_hw[0]
-
-        # value (bs, num_value=H*W, num_heads, D) -> (bs*num_heads, H, W, D) ROW_MAJOR bf16.
-        # A single permute moving num_heads next to bs, then (in ROW_MAJOR, where the
-        # reshape is a free view) split H*W into H,W. Equivalent bit-for-bit to the old
-        # reshape/permute/reshape/permute dance but two fewer materialising ops.
-        value_l = ttnn.permute(value, (0, 2, 1, 3))  # (bs, num_heads, H*W, D)
-        value_l = ttnn.to_layout(value_l, layout=ttnn.ROW_MAJOR_LAYOUT)
-        value_l = ttnn.reshape(value_l, [bs * num_heads, H_int, W_int, embed_dims])
-
-        # sampling_grids (bs, Q, num_heads, 1, num_points, 2) -> (N, Q*P, 1, 2)
-        grid = sampling_grids[:, :, :, 0]  # (bs, Q, num_heads, num_points, 2)
-        grid = ttnn.permute(grid, (0, 2, 1, 3, 4))  # (bs, num_heads, Q, num_points, 2)
-        grid = ttnn.reshape(grid, [bs * num_heads, num_queries * num_points, 1, 2])
-
-        # attention_weights (bs, Q, num_heads, 1, num_points) -> (N, Q, P)
-        attn = attention_weights[:, :, :, 0, :]  # (bs, Q, num_heads, num_points)
-        attn = ttnn.permute(attn, (0, 2, 1, 3))  # (bs, num_heads, Q, num_points)
-        attn = ttnn.reshape(attn, [bs * num_heads, num_queries, num_points])
-        attn = ttnn.to_layout(attn, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        # The fused op requires all three inputs in bf16.
-        if value_l.dtype != ttnn.bfloat16:
-            value_l = ttnn.typecast(value_l, ttnn.bfloat16)
-        if grid.dtype != ttnn.bfloat16:
-            grid = ttnn.typecast(grid, ttnn.bfloat16)
-        if attn.dtype != ttnn.bfloat16:
-            attn = ttnn.typecast(attn, ttnn.bfloat16)
-
-        output = ttnn.experimental.multi_scale_deformable_attn(value_l, grid, attn)  # (N, Q, D)
-        ttnn.deallocate(value)
-        ttnn.deallocate(sampling_grids)
-
-        output = ttnn.reshape(output, [bs, num_heads, num_queries, embed_dims])
-        output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
-        output = ttnn.permute(output, (0, 2, 1, 3))
-        output = ttnn.reshape(output, [bs, num_queries, num_heads * embed_dims])
-        return output
-
-    sampling_value_list = []
-
-    for level, (H_int, W_int) in enumerate(spatial_shapes_hw):
-        value_l_ = value_list[level]
-        value_l_ = ttnn.reshape(value_l_, [value_l_.shape[0], value_l_.shape[1], value_l_.shape[2] * value_l_.shape[3]])
-        value_l_ = ttnn.permute(value_l_, (0, 2, 1))
-        value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, H_int, W_int])
-
-        sampling_grid_l_ = sampling_grids[:, :, :, level]
-        sampling_grid_l_ = ttnn.permute(sampling_grid_l_, (0, 2, 1, 3, 4))
-
-        sampling_grid_l_ = ttnn.reshape(
-            sampling_grid_l_,
-            [
-                sampling_grid_l_.shape[0] * sampling_grid_l_.shape[1],
-                sampling_grid_l_.shape[2],
-                sampling_grid_l_.shape[3],
-                sampling_grid_l_.shape[4],
-            ],
-        )
-
-        value_l_ = ttnn.permute(value_l_, (0, 2, 3, 1))
-        value_l_ = ttnn.to_layout(value_l_, layout=ttnn.ROW_MAJOR_LAYOUT)
-        sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
-        ttnn.deallocate(value_l_)
-        ttnn.deallocate(sampling_grid_l_)
-        sampling_value_l_ = ttnn.permute(sampling_value_l_, (0, 3, 1, 2))
-
-        sampling_value_list.append(sampling_value_l_)
-
-        attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))
-
-        attention_weights = ttnn.reshape(attention_weights, [bs * num_heads, 1, num_queries, num_levels * num_points])
-
-    output = ttnn.stack(sampling_value_list, -2)
-    ttnn.deallocate(sampling_grids)
-    output = ttnn.reshape(
-        output, [output.shape[0], output.shape[1], output.shape[2], output.shape[3] * output.shape[4]]
+    bs, num_queries, _ = query.shape
+    sampling_offsets = linear_flatten_batch(query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias)
+    sampling_offsets = heads_packed_offsets(
+        ttnn.to_layout(sampling_offsets, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG), num_heads
     )
+    attention_weights = linear_flatten_batch(query, params.attention_weights.weight, bias=params.attention_weights.bias)
+    num_samples = attention_weights.shape[-1] // num_heads
+    attention_weights = grouped_softmax(attention_weights, samples_per_group)
+    attention_weights = ttnn.reshape(
+        ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        (bs, num_queries, num_heads, num_samples),
+    )
+    return sampling_offsets, attention_weights
 
-    output = output * attention_weights
-    output = ttnn.reallocate(output)
-    for val in sampling_value_list:
-        ttnn.deallocate(val)
-    output = ttnn.sum(output, 3)
-    output = ttnn.reallocate(output)
-    output = ttnn.reshape(output, [bs, num_heads * embed_dims, num_queries])
-    output = ttnn.reallocate(output)
-    output = ttnn.permute(output, (0, 2, 1))
 
-    ttnn.deallocate(attention_weights)
-    ttnn.deallocate(sampling_value_l_)
-    ttnn.deallocate(value)
+def fused_msda(value, reference_points, sampling_offsets, attention_weights, spatial_shapes_hw, reference_mode):
+    """Multi-scale deformable attention as one device op, sampling locations formed in float32.
 
-    return output
+    value (bs, S, C) is the projected value; reference_points (bs, Q, R, 2) in [0, 1]. Returns
+    (bs, Q, C) ROW_MAJOR with the heads concatenated.
+    """
+    value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+    if reference_points.dtype != ttnn.float32:
+        reference_points = ttnn.typecast(reference_points, ttnn.float32)
+    return ttnn.experimental.fused_msda_from_offsets(
+        value,
+        reference_points,
+        sampling_offsets,
+        attention_weights,
+        [(int(h), int(w)) for h, w in spatial_shapes_hw],
+        reference_mode=reference_mode,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def inverse_sigmoid(x, eps: float = 1e-5):

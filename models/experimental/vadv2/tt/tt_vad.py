@@ -326,6 +326,8 @@ class TtVAD:
     ):
         x[0] = ttnn.to_layout(x[0], layout=ttnn.TILE_LAYOUT)
         outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
+        # The next frame's temporal self-attention reads this BEV on device.
+        new_prev_bev = outs["bev_embed"]
 
         _keys9 = [
             "bev_embed",
@@ -364,7 +366,7 @@ class TtVAD:
             rescale,
         )
 
-        return outs["bev_embed"], bbox_results
+        return new_prev_bev, bbox_results
 
     def post_process_with_metrics(
         self,
