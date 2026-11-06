@@ -47,6 +47,11 @@ import torch
 
 import ttnn
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 # Cube-balanced 3-pass is dominated by the per-row recurrence in the XL
 # twiddle (≈ P · ε_fp32 per row) and the per-pass FFT error (≈ √N · ε).
 # Empirically that lands well inside 5e-4 for fp32 and 5e-2 for bf16.

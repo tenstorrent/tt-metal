@@ -58,7 +58,7 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
     const Tensor& input_tensor_b = tensor_args.input_b;
 
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to bcast need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.device() != nullptr and input_tensor_b.device() != nullptr,

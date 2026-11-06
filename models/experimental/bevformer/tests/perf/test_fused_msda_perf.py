@@ -52,10 +52,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
-from models.experimental.bevformer.tests.test_utils import check_with_pcc
+from models.experimental.bevformer.tests.common import PRESETS, assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
 from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
@@ -87,12 +86,9 @@ def _build(device, config_name, batch_size, num_queries):
     Deliberately the same construction as the PCC file: a perf number measured
     on a different shape than the correctness gate is not comparable to it.
     """
-    preset_config = get_preset_config(config_name)
-    assert preset_config is not None, f"Configuration '{config_name}' not found"
-
-    model_config = preset_config.model_config
+    model_config = PRESETS[config_name]
     num_levels = model_config.num_levels
-    spatial_shapes = torch.tensor(preset_config.dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
+    spatial_shapes = torch.tensor(model_config.spatial_shapes, dtype=torch.long)
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
 
     config = DeformableAttentionConfig(
@@ -109,9 +105,7 @@ def _build(device, config_name, batch_size, num_queries):
     ref_model = MSDeformableAttention(config)
     ref_model.eval()
 
-    tt_parameters = create_ms_deformable_attention_parameters(
-        torch_model=ref_model, device=device, config=config, dtype=ttnn.float32
-    )
+    tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
     logger.info(
         f"{config_name}: Q={num_queries} heads={config.num_heads} D={config.embed_dims // config.num_heads} "
@@ -326,7 +320,7 @@ def test_fused_msda_module_perf(
         if value_memory == "l1" and "value_memory='l1' is unsafe" in str(error):
             pytest.skip(f"forced L1 placement is unavailable: {error}")
         raise
-    passed, message = check_with_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
+    passed, message = assert_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
     assert passed, f"PCC check failed: {message}"
     logger.info(f"PCC gate: {message}")
     ttnn.deallocate(tt_output)
@@ -388,7 +382,7 @@ def test_fused_msda_kernel_perf(
     assert (
         list(warmup.shape) == expected_shape
     ), f"variant {variant} produced {list(warmup.shape)}, want {expected_shape}"
-    passed, message = check_with_pcc(
+    passed, message = assert_pcc(
         ttnn.to_torch(golden, dtype=torch.float32),
         ttnn.to_torch(warmup, dtype=torch.float32),
         pcc=0.999,
