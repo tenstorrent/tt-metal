@@ -77,6 +77,7 @@ class TtVAD:
             "prev_angle": 0,
         }
         self.with_img_neck = True
+        self._pending_frame = None
         self.planning_metric = None
         self.img_backbone = TtResnet50(params.conv_args["img_backbone"], params.img_backbone, device)
         self.img_neck = TtFPN(params.conv_args["img_neck"], params.img_neck, device)
@@ -202,6 +203,32 @@ class TtVAD:
     def __call__(self, return_loss=True, **kwargs):
         return self.forward_test(**kwargs)
 
+    def prepare_frame(self, img_metas):
+        """Host-side work for one frame; call it before every forward.
+
+        Resets the temporal state on a new scene, makes img_metas' CAN-bus
+        pose relative to the previous frame (in place, as the reference model
+        does), and writes the frame's shift and CAN-bus signals to the device.
+        """
+        meta = img_metas[0][0][0]
+        if meta["scene_token"] != self.prev_frame_info["scene_token"]:
+            self.prev_frame_info["prev_bev"] = None
+        self.prev_frame_info["scene_token"] = meta["scene_token"]
+
+        if not self.video_test_mode:
+            self.prev_frame_info["prev_bev"] = None
+
+        tmp_pos = copy.deepcopy(meta["can_bus"][:3])
+        tmp_angle = copy.deepcopy(meta["can_bus"][-1])
+        if self.prev_frame_info["prev_bev"] is not None:
+            meta["can_bus"][:3] -= self.prev_frame_info["prev_pos"]
+            meta["can_bus"][-1] -= self.prev_frame_info["prev_angle"]
+        else:
+            meta["can_bus"][-1] = 0
+            meta["can_bus"][:3] = 0
+        self.pts_bbox_head.prepare_frame(img_metas[0][0])
+        self._pending_frame = (tmp_pos, tmp_angle)
+
     def forward_test(
         self,
         img_metas,
@@ -220,21 +247,9 @@ class TtVAD:
                 raise TypeError("{} must be a list, but got {}".format(name, type(var)))
         img = [img] if img is None else img
 
-        if img_metas[0][0][0]["scene_token"] != self.prev_frame_info["scene_token"]:
-            self.prev_frame_info["prev_bev"] = None
-        self.prev_frame_info["scene_token"] = img_metas[0][0][0]["scene_token"]
-
-        if not self.video_test_mode:
-            self.prev_frame_info["prev_bev"] = None
-
-        tmp_pos = copy.deepcopy(img_metas[0][0][0]["can_bus"][:3])
-        tmp_angle = copy.deepcopy(img_metas[0][0][0]["can_bus"][-1])
-        if self.prev_frame_info["prev_bev"] is not None:
-            img_metas[0][0][0]["can_bus"][:3] -= self.prev_frame_info["prev_pos"]
-            img_metas[0][0][0]["can_bus"][-1] -= self.prev_frame_info["prev_angle"]
-        else:
-            img_metas[0][0][0]["can_bus"][-1] = 0
-            img_metas[0][0][0]["can_bus"][:3] = 0
+        assert self._pending_frame is not None, "call prepare_frame(img_metas) before every forward"
+        tmp_pos, tmp_angle = self._pending_frame
+        self._pending_frame = None
         img = ttnn.unsqueeze(img[0][0], 0)
         new_prev_bev, bbox_results = self.simple_test(
             img_metas=img_metas[0][0],
