@@ -8,7 +8,7 @@ import json
 import os
 import signal
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from typing import Optional
 
 import torch
@@ -25,6 +25,7 @@ from models.demos.common.prefill.prefill_chunk import (
     decode_forward_metadata,
     decode_media_refs,
     forward_metadata_words,
+    max_media_refs,
     metadata_size_bytes,
     packed_forward_capabilities,
     sentinel_words,
@@ -196,9 +197,11 @@ assert (
     not MEDIA_MAX_REFS or ADAPTER.supports_media
 ), f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: model {ADAPTER.name!r} does not take media refs"
 assert not (MEDIA_MAX_REFS and USE_TRACE), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_USE_TRACE=1 yet"
-assert not (
-    MEDIA_MAX_REFS and PER_CHUNK_FORWARDS
-), f"PREFILL_MEDIA_MAX_REFS>0 with {FORWARD_CHUNKS} chunks per forward needs the adapter's prefill_forward"
+_H2D_PAGE_BYTES = int(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS).shape[-1]) * TOKEN_ID_BYTES
+assert MEDIA_MAX_REFS <= max_media_refs(FORWARD_CHUNKS, _H2D_PAGE_BYTES), (
+    f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: the H2D metadata must fit one {_H2D_PAGE_BYTES} B socket page, "
+    f"which holds at most {max_media_refs(FORWARD_CHUNKS, _H2D_PAGE_BYTES)} refs"
+)
 
 check_packed_forward_support(
     FORWARD_CHUNKS,
@@ -239,7 +242,9 @@ def _meta_from_words(words) -> dict:
 
 
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False, with_media: bool = False) -> dict:
-    # One D2H read; the word after the chunk metadata is MTP provided_levels on D2D, the media refs on H2D.
+    """The forward's metadata from one D2H read: the word after the chunk metadata is MTP provided_levels on D2D,
+    the media refs on H2D. A malformed ref is a protocol error and stops the runner. A missing or wrong-size
+    embedding also stops it: failing only that request needs a per-request error path to the engine."""
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     n = CHUNK_METADATA_SIZE_BYTES // 4
     meta = _meta_from_words(m[:n].tolist())
@@ -822,16 +827,25 @@ def _write_chunk(bufs: PerChunkBuffers, act: ttnn.Tensor, k: int, rows: int, for
 
 
 def _prefill_chunks(
-    runtime, kv_caches, inp, chunks: list, request_id: int, bufs: PerChunkBuffers, d2h_service=None, free_input=True
+    runtime,
+    kv_caches,
+    inp,
+    chunks: list,
+    request_id: int,
+    bufs: PerChunkBuffers,
+    d2h_service=None,
+    free_input=True,
+    media_refs=(),
 ):
-    """A packed forward run one non-empty chunk at a time through prefill_chunk, chunk k as request_id + k.
-    Returns None on the last rank, else ``bufs.out``: the activation in the packed layout, empty chunks as
-    zero rows. ``bufs.out`` is rewritten by the next forward, so the caller must not free it."""
+    """A packed forward run one non-empty chunk at a time through prefill_chunk, chunk k as request_id + k, with
+    its own media refs as chunk 0. Returns None on the last rank, else ``bufs.out``: the activation in the packed
+    layout, empty chunks as zero rows. ``bufs.out`` is rewritten by the next forward, so the caller must not free it."""
     rows = CHUNK_SIZE // _sp
     dev = inp.device()
     last = runtime.config.is_last_rank
     real = [c for c in chunks if not c.is_empty]
     for k, chunk in enumerate(real):
+        refs = [replace(r, chunk_index=0) for r in media_refs if r.chunk_index == k]
         out = runtime.prefill_chunk(
             _chunk_rows(inp, k, rows),
             kv_caches,
@@ -841,6 +855,7 @@ def _prefill_chunks(
             request_id=request_id + k,
             d2h_service=d2h_service,
             metadata_msg=_chunk_record(bufs, k, chunk, dev),
+            **({"media_refs": refs} if refs else {}),
         )
         if last:
             assert out is None, f"the last rank's prefill_chunk returned an activation for chunk {k}"
@@ -895,6 +910,7 @@ def _compute_and_send(
                 sockets.per_chunk,
                 d2h_service=d2h_service,
                 free_input=sockets.tokens is None,
+                media_refs=meta.get("media_refs", ()),
             )
             if sockets.persistent_metadata() is None:
                 ttnn.deallocate(sockets.metadata)
