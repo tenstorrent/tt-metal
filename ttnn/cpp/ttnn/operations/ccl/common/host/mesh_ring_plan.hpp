@@ -101,17 +101,6 @@ std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     std::string_view operation_name = "mesh ring",
     bool allow_open_path = false);
 
-// Prove the full-mesh (cluster_axis=None) route over the tensor's mesh from each axis's fabric topology, allowing an
-// open path where no cycle closes. TT_FATALs if there is no direct-neighbor route or it does not cover the
-// mesh_rows x mesh_cols mesh the caller planned for. Walks the fabric control plane, so callers prove it on a
-// program-cache miss, not per call.
-ResolvedMeshRoute prove_full_mesh_route(
-    const ttnn::Tensor& tensor,
-    uint32_t num_links,
-    std::string_view operation_name,
-    uint32_t mesh_rows,
-    uint32_t mesh_cols);
-
 // topology is the route the caller's schedule assumes: Ring gives every rank both neighbors, Linear
 // leaves the two end ranks dead one way, as an axis line does.
 MeshRingPosition get_mesh_ring_position(
