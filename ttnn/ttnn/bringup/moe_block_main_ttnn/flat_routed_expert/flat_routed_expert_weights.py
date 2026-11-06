@@ -57,15 +57,21 @@ def _hg_units(Wg, Wu):
     return torch.cat([Wg.reshape(H, I // 16, 16), Wu.reshape(H, I // 16, 16)], dim=2).reshape(H, 2 * I)
 
 
-def flat_weight_regions(W_l, lay):
+def flat_weight_regions(W_l, lay, nk=False):
     """One device's weights in the plan's per-core bank regions. W_l: per local expert (Wg [H, I], Wu [H, I],
-    Wd [I, H]); lay: the plan's as_dict(). Returns (gate/up regions per weight slot, down regions per bank and down
-    core), each a list of equal-size [tiles, 32, 32]:
+    Wd [I, H]); lay: the plan's as_dict(). nk (FlatLayoutOptions.weights_nk, bring-up): W_l holds nn.Linear's [N, K]
+    matrices (W1 [I, H], W3 [I, H], W2 [H, I]) and every tile is laid out transposed (the x @ W tile at its place,
+    transposed: its rows along K), the kernels' SE_W_NK matmuls transpose it back. Returns (gate/up regions per weight
+    slot, down regions per bank and down core), each a list of equal-size [tiles, 32, 32]:
     * slot r: per expert, per K-block of KBLK tiles, its RG column groups' blocks (group (r % n_rd_sg) * RG + pl):
       [KBLK x (gate, up) x NP] tile pairs, or with 16-column units (nu) NU unit tiles [gate | up] of 16 columns each;
     * down core d: per expert, per K-block of kd_of(pcds[d]) tiles, its [kd x pcds[d]] columns from col0s[d], rotated
       over the banks (block k in bank (d + k) % banks) and zero-padded to the widest core's region."""
-    tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)  # noqa: E731
+    tiles = lambda w: w.reshape(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)  # noqa: E731
+    if nk:  # ([N, K] in: the x @ W orientation is its transpose; each tile then transposed back to [N, K] rows)
+        W_l = [(a.T, b.T, c.T) for a, b, c in W_l]
+        tiles_kn = tiles
+        tiles = lambda w: tiles_kn(w).transpose(-1, -2)  # noqa: E731
     nu = lay.get("nu") or 0
     if nu:  # 16-column units: unit u's tile = [gate | up] of columns 16 u..; a column group's NU units in order
         U_l = [tiles(_hg_units(a, b)) for a, b, _ in W_l]
@@ -167,7 +173,7 @@ class PackedFlatWeights(NamedTuple):
     w_d: ttnn.Tensor
 
 
-def pack_flat_weights(W_l, lay, dtype) -> PackedFlatWeights:
+def pack_flat_weights(W_l, lay, dtype, nk=False) -> PackedFlatWeights:
     """One device's experts (Wg [H, I], Wu [H, I], Wd [I, H] each) -> PackedFlatWeights on the host."""
     banks = lay["banks"]
 
@@ -177,7 +183,7 @@ def pack_flat_weights(W_l, lay, dtype) -> PackedFlatWeights:
             h, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=_bank_memory_config(h.shape[0], banks)
         )
 
-    regions, dregs = flat_weight_regions(W_l, lay)
+    regions, dregs = flat_weight_regions(W_l, lay, nk=nk)
     return PackedFlatWeights(lay, host(regions), host(dregs))
 
 
@@ -197,13 +203,14 @@ def uninitialized_bank_sharded(n_regions, region_tiles, banks, dtype, mesh_devic
 
 
 def flat_weight_shapes(H, I, E, lay):
-    """(regions, tiles per region) of each laid-out weight tensor, from flat_weight_regions on shape-only tensors."""
+    """(regions, tiles per region) of each laid-out weight tensor, from flat_weight_regions on shape-only tensors (the
+    same for weights_nk)."""
     meta = lambda r, c: torch.empty(r, c, device="meta")  # noqa: E731
     regions, dregs = flat_weight_regions([(meta(H, I), meta(H, I), meta(I, H))] * E, lay)
     return {"w_gu": (len(regions), regions[0].shape[0]), "w_d": (len(dregs), dregs[0].shape[0])}
 
 
-FLAT_LAYOUT_FIELDS = ("pin_ratio", "arena_bytes", "gu_read_pieces")
+FLAT_LAYOUT_FIELDS = ("pin_ratio", "arena_bytes", "gu_read_pieces", "weights_nk")
 
 
 def flat_layout(layout=None, **kw):
@@ -223,7 +230,8 @@ class FlatRoutedExpert:
     ``"uninitialized"`` (perf runs: weight tensors of the right spec, no packing / upload, garbage outputs). ``gids``: per device, the local experts' global ids (rows of the routing's counts / regions).
     ``keep_packed``: the same experts on every device are kept packed on the host as ``self.packed`` (a
     PackedFlatWeights another FlatRoutedExpert on the same plan takes, e.g. after the mesh is reopened).
-    ``layout``: FlatLayoutOptions fields (dict) or a FlatLayoutOptions. ``done_buffer_type``: L1 or L1_SMALL."""
+    ``layout``: FlatLayoutOptions fields (dict) or a FlatLayoutOptions. ``done_buffer_type``: L1 or L1_SMALL.
+    layout.weights_nk (bring-up): ``weights`` are nn.Linear's [N, K] matrices (W1 [I, H], W3 [I, H], W2 [H, I])."""
 
     def __init__(
         self,
@@ -271,10 +279,11 @@ class FlatRoutedExpert:
             # every device the same experts (e.g. a test's one expert set everywhere): pack once, replicate
             same = n_dev > 1 and all(all(a is b for a, b in zip(w_, weights[0])) for w_ in weights[1:])
             if same and keep_packed:
-                self.packed = pack_flat_weights(weights[0], lay, dtype)
+                self.packed = pack_flat_weights(weights[0], lay, dtype, nk=self.layout.weights_nk)
                 self.w_gu, self.w_d = upload_flat_weights(self.packed, mesh_device)
             else:
-                packed = [flat_weight_regions(W_l, lay) for W_l in (weights[:1] if same else weights)]
+                nk = self.layout.weights_nk
+                packed = [flat_weight_regions(W_l, lay, nk=nk) for W_l in (weights[:1] if same else weights)]
                 self.w_gu = bank_sharded([p[0] for p in packed], banks, dtype, mesh_device, replicate=same)
                 self.w_d = bank_sharded([p[1] for p in packed], banks, dtype, mesh_device, replicate=same)
         gid_host = torch.tensor(gids, dtype=torch.int32).reshape(n_dev, 1, E)

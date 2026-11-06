@@ -10,11 +10,20 @@ namespace ttnn::operations::bringup::moe_block_main::flat_routed_expert {
 
 std::vector<uint32_t> FlatLayoutOptions::key() const {
     const auto u = [](int32_t v) { return static_cast<uint32_t>(v); };
-    return {pin_ratio, u(arena_bytes), u(gu_read_pieces)};
+    std::vector<uint32_t> k{pin_ratio, u(arena_bytes), u(gu_read_pieces)};
+    if (weights_nk) {  // (bring-up option: off keeps the source's key)
+        k.push_back(1);
+    }
+    return k;
 }
 
 std::string FlatLayoutOptions::str() const {
-    return fmt::format("pin_ratio {} arena_bytes {} gu_read_pieces {}", pin_ratio, arena_bytes, gu_read_pieces);
+    return fmt::format(
+        "pin_ratio {} arena_bytes {} gu_read_pieces {}{}",
+        pin_ratio,
+        arena_bytes,
+        gu_read_pieces,
+        weights_nk ? " weights_nk" : "");
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main::flat_routed_expert

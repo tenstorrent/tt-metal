@@ -282,6 +282,9 @@ FlatProgramHandles add_flat_routed_expert_program(
         if (cfg.down_fp32) {
             d = with(d, {{"SE_DN_FP32", "1"}, {"SE_DN_FULL_SYNC", "1"}});
         }
+        if (cfg.layout.weights_nk) {  // (bring-up: [N, K] weight tiles, transposed back in the matmul)
+            d["SE_W_NK"] = "1";
+        }
         return d;
     };
 
@@ -473,6 +476,9 @@ FlatProgramHandles add_flat_routed_expert_program(
         if (p.nu) {  // 16-column units per core (RT 1: the core's first unit odd)
             cdef["SE_HG_NU"] = std::to_string(p.nu);
             cdef["SE_HPC"] = std::to_string(p.hpc);
+        }
+        if (cfg.layout.weights_nk) {  // (bring-up: [N, K] weight tiles, transposed back in the matmul)
+            cdef["SE_W_NK"] = "1";
         }
         const auto kc =
             cp("gate_up_compute.cpp", p.gu, {kKBlk, MT, p.nk_gu, p.slot, NP, p.ring_g}, cdef, true, p.gu_full_sync);

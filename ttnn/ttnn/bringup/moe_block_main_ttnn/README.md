@@ -47,7 +47,12 @@ no OWN_ROWS head / tail mode, no `max_grid` (see Limits).
 
 The ops' arguments are the source's (each op's README, `common/moe_block_config.hpp`), plus what this branch adds,
 each default off (= the source's program):
-- (none yet; the CHANGELOG lists every change)
+- `FlatLayoutOptions(weights_nk=False)`: the routed experts' weights laid out from nn.Linear's [N, K] matrices, every
+  weight tile transposed and transposed back by the gate/up and down matmuls (`SE_W_NK`), so a bfp tile shares its
+  exponents along K: DeepSeek-V4.1's e2m1 x ue8m0 experts keep the checkpoint's 32-wide K groups (bfp8 exact, bfp4 in
+  them) - the `ttnn.bringup.flat_routed_expert` fork's weights_nk (DS41-35). `flat_routed_expert_weights.py`:
+  `flat_weight_regions(..., nk=)`, FlatRoutedExpert with `layout.weights_nk` takes [N, K] matrices. Off: the source's
+  program and key.
 
 ## Measured
 

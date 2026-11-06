@@ -20,6 +20,13 @@
 #include "api/compute/pack_untilize.h"
 #endif
 
+// (bring-up, FlatLayoutOptions.weights_nk) every weight tile is the transpose of the x @ W tile: the matmul transposes
+// it back
+#ifdef SE_W_NK
+constexpr bool kWT = true;
+#else
+constexpr bool kWT = false;
+#endif
 constexpr uint32_t in1_cb = tt::CBIndex::c_1;
 constexpr uint32_t h_all_cb = tt::CBIndex::c_2;
 constexpr uint32_t out_cb = tt::CBIndex::c_16;
@@ -84,7 +91,7 @@ void kernel_main() {
 #ifdef SE_PACK_SRND  // stochastic rounding in the packer (the default rounds bf16 -> bfp8 ties away from zero)
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
 #endif
-    matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
+    matmul_block_init(h_all_cb, in1_cb, kWT, cpw, 1, hk);
 #ifdef SE_Y_RM
     pack_untilize_dest_init<cpw, pcd>(out_cb);
 #endif
@@ -125,7 +132,7 @@ void kernel_main() {
                 const uint32_t cw = pcd - c0 < cpw ? pcd - c0 : cpw;
                 const bool final_pass = c0 + cw == pcd;
                 if constexpr (pcd > cpw) {
-                    matmul_block_init(h_all_cb, in1_cb, false, cw, 1, hk);
+                    matmul_block_init(h_all_cb, in1_cb, kWT, cw, 1, hk);
                 }
                 tile_regs_acquire();
                 uint32_t w = 0;
@@ -137,7 +144,7 @@ void kernel_main() {
                         w = wblock(e * nblk + kk / kblk_d);
 #endif
                     }
-                    matmul_block(h_all_cb, in1_cb, r + kk * mt, w + (kk % kblk_d) * pcd + c0, 0, false, cw, 1, hk);
+                    matmul_block(h_all_cb, in1_cb, r + kk * mt, w + (kk % kblk_d) * pcd + c0, 0, kWT, cw, 1, hk);
                     // The expert's last row (final column pass): each weight block goes as soon as it is used, so
                     // the next expert's blocks stream into the ring while this row still runs.
                     if (last_sub && final_pass && r == rows - 1 && kk % kblk_d == kblk_d - 1) {
