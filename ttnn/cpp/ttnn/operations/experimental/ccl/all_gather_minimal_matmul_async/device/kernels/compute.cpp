@@ -71,9 +71,12 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 #endif  // FUSE_SWIGLU
 
 void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    copy_init(in_cb.get_cb_id());
+    // Data formats must be reconfigured before the op init: llk_unpack_A_init asserts that the
+    // unpacker is already configured for in_cb (see #55052), and the preceding matmul left it
+    // configured for its own operands.
     reconfig_data_format_srca(in_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
+    copy_init(in_cb.get_cb_id());
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
@@ -109,9 +112,9 @@ void add_bias_block(
     CircularBuffer& out_cb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
-    add_bcast_rows_init(in_cb.get_cb_id(), bias_cb.get_cb_id());
     reconfig_data_format(in_cb.get_cb_id(), bias_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
+    add_bcast_rows_init(in_cb.get_cb_id(), bias_cb.get_cb_id());
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
@@ -155,9 +158,9 @@ void add_bias_and_addcmul_block(
     // Read from intermediate_cb and write back to intermediate_cb
     // ============================================
 
-    add_bcast_rows_init(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
     reconfig_data_format(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
     pack_reconfig_data_format(intermediate_cb.get_cb_id());
+    add_bcast_rows_init(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
 
     // Wait for ALL input data ONCE at the beginning
     bias_cb.wait_front(N_block_tiles);
@@ -205,20 +208,17 @@ void add_bias_and_addcmul_block(
         // === BROADCAST: single row, wait/pop once ===
         ternary_b_cb.wait_front(N_block_tiles);
 
+        reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        pack_reconfig_data_format(intermediate_cb.get_cb_id());
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #else
-        // Full re-arm (hw_configure + pack_dest/math_pack_sync), matching the pre-cleanup
-        // 2-arg unary_bcast_init(ternary_b_cb, intermediate_cb); this runs after matmul_blocks
-        // regardless of FUSE_BIAS, so a plain reconfig would drop the MATH<->PACK DST re-arm.
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
+        // ternary_b_cb is bound UnpackToSrc, so unary_bcast reads it through SrcB, which the
+        // reconfig above sets.
         unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id());
 #endif  // TERNARY_B_IS_FLOAT32
 
         binop_with_scalar_tile_init();
-        reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
-        pack_reconfig_data_format(intermediate_cb.get_cb_id());
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -237,11 +237,11 @@ void add_bias_and_addcmul_block(
                     intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-                compute_kernel_hw_startup(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
+                // copy_init below retargets the unpacker, so re-init per tile.
                 unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id());
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 
+                reconfig_data_format_srca(intermediate_cb.get_cb_id());
                 copy_init(intermediate_cb.get_cb_id());
                 copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
 
@@ -262,12 +262,12 @@ void add_bias_and_addcmul_block(
         ternary_b_cb.pop_front(N_block_tiles);
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
+        reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        pack_reconfig_data_format(intermediate_cb.get_cb_id());
 #ifndef TERNARY_B_IS_FLOAT32
         mul_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #endif
         binop_with_scalar_tile_init();
-        reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
-        pack_reconfig_data_format(intermediate_cb.get_cb_id());
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -279,9 +279,11 @@ void add_bias_and_addcmul_block(
                 mul_tiles(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
+                reconfig_data_format_srca(ternary_b_cb.get_cb_id());
                 copy_init(ternary_b_cb.get_cb_id());
                 copy_tile(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 
+                reconfig_data_format_srca(intermediate_cb.get_cb_id());
                 copy_init(intermediate_cb.get_cb_id());
                 copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
 
@@ -309,9 +311,9 @@ void add_bias_and_addcmul_block(
 
     intermediate_cb.wait_front(out_block_num_tiles);
 
-    add_init(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
     reconfig_data_format(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
+    add_init(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
 
     tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -436,11 +438,13 @@ void kernel_main() {
     CircularBuffer ternary_a_cb(ternary_a_cb_id);
     CircularBuffer ternary_b_cb(ternary_b_cb_id);
 
+    // compute_kernel_hw_startup must be the first compute API call (before SFPU/op inits).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
+
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
@@ -469,6 +473,10 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
+            // Reconfig before init: on all but the first block the unpackers are still
+            // configured for the previous output stage's operands (see #55052).
+            reconfig_data_format(in1_cb_id, in0_cb_id);
+            pack_reconfig_data_format(intermediate_cb_id);
             matmul_block_init(
                 in0_cb_id,
                 in1_cb_id,
@@ -476,8 +484,6 @@ void kernel_main() {
                 current_subblock_w /*ct_dim*/,
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
-            reconfig_data_format(in1_cb_id, in0_cb_id);
-            pack_reconfig_data_format(intermediate_cb_id);
             // Accumulation buffer
             intermediate_cb.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {

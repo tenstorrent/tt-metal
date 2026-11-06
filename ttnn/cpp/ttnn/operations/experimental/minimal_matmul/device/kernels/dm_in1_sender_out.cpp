@@ -58,14 +58,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
-#ifdef FUSE_TERNARY
-    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
-    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t broadcast_ternary_b = get_arg_val<uint32_t>(argidx++);
-#endif  // FUSE_TERNARY
-
-    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
+    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here
 
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<21>();
@@ -83,27 +76,6 @@ void kernel_main() {
     const auto in2_reader = TensorAccessor(in2_args, in2_addr);
 #endif
 
-#ifdef FUSE_TERNARY
-// Calculate offset for ternary_a_args
-#ifdef FUSE_BIAS
-    constexpr uint32_t ternary_a_args_cta_offset = in2_args.next_compile_time_args_offset();
-#else
-    constexpr uint32_t ternary_a_args_cta_offset =
-        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
-#endif
-    constexpr uint32_t cb_ternary_a_id = tt::CBIndex::c_5;
-    constexpr uint32_t cb_ternary_b_id = tt::CBIndex::c_6;
-
-    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_ternary_a_id);
-    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_ternary_b_id);
-
-    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
-    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
-    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr);
-    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
-
-#endif  // FUSE_TERNARY
-
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
 #ifdef MM_WINDOW_BLOCKS
     // The output tensor holds only the window, so its height is the host-computed
@@ -119,18 +91,6 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
-#ifdef FUSE_SWIGLU
-    // SwiGLU emits one output tile per interleaved gate/up pair, so the output along N
-    // is half the matmul (weight) N. Compute the halved output geometry once here; the
-    // weight-space n ranges (n_tile, N_tiles, ...) are halved at each write call site.
-    constexpr uint32_t out_N_block_tiles = N_block_tiles / 2;
-    constexpr uint32_t out_block_num_tiles_swiglu = M_block_tiles * out_N_block_tiles;
-    const TensorShape2D out_shape_swiglu(M_tiles, N_tiles / 2, padded_M_tiles, padded_N_tiles / 2);
-    // Split (chunks>1): each output chunk is half the weight per-chunk width.
-    constexpr uint32_t out_N_tiles_per_chunk = N_tiles_per_chunk / 2;
-    const TensorShape2D out0_shape_swiglu(M_tiles, out_N_tiles_per_chunk, padded_M_tiles, out_N_tiles_per_chunk);
-#endif
-
     constexpr uint32_t cb_in1_id = tt::CBIndex::c_1;
     constexpr uint32_t cb_out_id = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
@@ -143,35 +103,9 @@ void kernel_main() {
     CircularBuffer cb_in2(cb_in2_id);
 #endif
 
-#ifdef FUSE_AG
-    // Receiver for ccl fusing
-    MinimalMatmulOpReceiver fused_op_receiver;
-    uint32_t fused_op_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
-    uint32_t num_devices = get_arg_val<uint32_t>(fused_op_rt_args_idx);
-    uint32_t num_k_blocks = get_arg_val<uint32_t>(fused_op_rt_args_idx + 1);
-    uint8_t k_block_device_expected[num_k_blocks]{};
-    uint8_t k_block_device_received[num_k_blocks]{};
-    uint32_t device_k_block_counts[num_devices]{};
-    uint32_t device_k_block_start_ids[num_devices]{};
-    uint32_t forward_k_block_schedule[num_k_blocks]{};
-    if constexpr (is_injector_core) {
-        fused_op_receiver = MinimalMatmulOpReceiver(
-            false,
-            fused_op_rt_args_idx,
-            k_block_device_expected,
-            k_block_device_received,
-            device_k_block_counts,
-            device_k_block_start_ids,
-            forward_k_block_schedule);
-    }
-#endif
-
 #ifdef SRS_FUSE_OP_SIGNALER
-    // OpSignaler runtime args start after output addresses and optional FUSE_AG args
+    // OpSignaler runtime args start after output addresses
     uint32_t srs_fuse_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
-#ifdef FUSE_AG
-    srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
-#endif
     OpSignaler srs_fuse_signaler;
     uint32_t mm_progress_counters_base = 0;
 #ifdef MM_WINDOW_BLOCKS
@@ -240,11 +174,6 @@ void kernel_main() {
             m_tile_end = m_tile + rows_in_block;
         }
 #endif
-#ifdef FUSE_AG
-        if constexpr (is_injector_core) {
-            fused_op_receiver.reset();
-        }
-#endif
 
         k_forward = true;
 
@@ -258,32 +187,6 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-#ifdef FUSE_SWIGLU
-                        cb_out.wait_front(out_block_num_tiles_swiglu);
-                        uint32_t out_read_ptr = cb_out.get_read_ptr();
-                        if constexpr (N_chunks == 1) {
-                            write_block_sync<M_block_tiles, out_N_block_tiles>(
-                                std::get<0>(outputs_tuple),
-                                out_shape_swiglu,
-                                out_read_ptr,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                defer_write_n_tile / 2,
-                                defer_write_n_tile_end / 2);
-                        } else {
-                            write_block_sync_split<M_block_tiles, out_N_block_tiles, N_chunks, out_N_tiles_per_chunk>(
-                                outputs_tuple,
-                                out0_shape_swiglu,
-                                out_read_ptr,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                defer_write_n_tile / 2,
-                                defer_write_n_tile_end / 2);
-                        }
-                        cb_out.pop_front(out_block_num_tiles_swiglu);
-#else
                         cb_out.wait_front(out_block_num_tiles);
                         uint32_t out_read_ptr = cb_out.get_read_ptr();
 
@@ -311,7 +214,6 @@ void kernel_main() {
                                 defer_write_n_tile_end);
                         }
                         cb_out.pop_front(out_block_num_tiles);
-#endif  // FUSE_SWIGLU
                     }
                 }
 
@@ -320,12 +222,6 @@ void kernel_main() {
 
                 uint32_t in1_start_address = cb_in1.get_write_ptr();
                 if constexpr (is_injector_core) {
-#ifdef FUSE_AG
-                    if (is_injector_core) {
-                        k_block =
-                            fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
-                    }
-#endif
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
@@ -402,24 +298,6 @@ void kernel_main() {
             }
 #endif
 
-#ifdef FUSE_TERNARY
-            if constexpr (!is_output_writer) {
-                read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(
-                    ternary_a_reader,
-                    ternary_b_reader,
-                    out_shape,
-                    cb_ternary_a_id,
-                    cb_ternary_b_id,
-                    ternary_a_tile_size,
-                    ternary_b_tile_size,
-                    broadcast_ternary_b,
-                    m_tile,
-                    m_tile_end,
-                    n_tile,
-                    n_tile_end);
-            }
-#endif  // FUSE_TERNARY
-
             k_forward = !k_forward;
             // We have an output block to write out
 
@@ -436,33 +314,6 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-#ifdef FUSE_SWIGLU
-                    if constexpr (N_chunks == 1) {
-                        write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
-                            std::get<0>(outputs_tuple),
-                            out_shape_swiglu,
-                            cb_out_id,
-                            out_tile_size,
-                            m_tile,
-                            m_tile_end,
-                            n_tile / 2,
-                            n_tile_end / 2);
-                    } else {
-                        write_block_sync_granular_split<
-                            M_block_tiles,
-                            out_N_block_tiles,
-                            N_chunks,
-                            out_N_tiles_per_chunk>(
-                            outputs_tuple,
-                            out0_shape_swiglu,
-                            cb_out_id,
-                            out_tile_size,
-                            m_tile,
-                            m_tile_end,
-                            n_tile / 2,
-                            n_tile_end / 2);
-                    }
-#else
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
@@ -486,7 +337,6 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
-#endif  // FUSE_SWIGLU
 #ifdef SRS_FUSE_OP_SIGNALER
                     if (is_last_block) {
                         noc.async_write_barrier();

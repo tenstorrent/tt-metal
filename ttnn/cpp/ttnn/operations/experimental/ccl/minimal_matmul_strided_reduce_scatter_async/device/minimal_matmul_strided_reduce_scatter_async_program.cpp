@@ -352,8 +352,6 @@ FusedProgram minimal_matmul_strided_reduce_scatter_async_program(
     // contains the RS reader cores' NOC coordinates and semaphore ID. The
     // matmul kernels use this to signal the RS when output blocks are ready.
     // =========================================================================
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_mm_fused_op_signaler;
-
     std::vector<Tensor> mm_output_tensors = {matmul_output_tensor};
     auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper_common(
         program,
@@ -364,13 +362,8 @@ FusedProgram minimal_matmul_strided_reduce_scatter_async_program(
         config,
         mm_output_tensors,  // MM output (= RS input)
         compute_kernel_config,
-        empty_mm_fused_op_signaler,  // No AG -> MM signaling
-        1,                           // N_chunks = 1
-        std::nullopt,                // ternary fused in RS, not MM
-        std::nullopt,
-        std::nullopt,
-        srs_fused_op_signaler,  // MM -> RS signaling (populated from step 1)
-        false,                  // fuse_swiglu
+        1,                      // N_chunks = 1
+        srs_fused_op_signaler,  // MM -> RS signaling (populated from step 1); ternary is fused in RS, not MM
         mm_optional_input_tensor);
 
     (void)mm_shared_variables;
