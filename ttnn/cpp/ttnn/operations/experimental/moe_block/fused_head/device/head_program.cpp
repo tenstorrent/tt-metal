@@ -1011,27 +1011,106 @@ std::vector<uint32_t> values(const Args& a) {
     return out;
 }
 
-// se_engine3._common_span: (per-core lists without [start, start + n), the common args) when every core holds the
-// same span; else (the full lists, [0, 0])
-std::pair<std::vector<std::pair<CoreCoord, Args>>, Args> common_span(
-    const std::vector<std::pair<CoreCoord, Args>>& lists, size_t start, size_t n) {
-    bool shared = n > 0;
-    for (const auto& [_, a] : lists) {
-        shared = shared && a.size() >= start + n &&
-                 std::equal(a.begin() + start, a.begin() + start + n, lists[0].second.begin() + start);
+// The slot map of a kernel's per-core arg lists (each core's runtime args go on every launch: only what really differs
+// between its cores stays per core). Slot i of the full lists is one of
+//   shared: every core holding it has the same arg (the same value and, for an address, the same source and offset: a
+//     cache hit patches it where it lands) - one common arg;
+//   per row / per column: every core of a row (column) has the same arg - one common table indexed by the core's row
+//     (column); identical tables are stored once;
+//   else per core.
+// Common args: [prefix..., N, map[N], the shared args and the tables]; map[i] = kind << 30 | index: kind 2 shared
+// (common index), 1 a row table (common index of row 0), 3 a column table (of column 0), 0 per core (index in the
+// core's own args past its [column, row]). Per core: [column, row, the per-core slots...], padded to one length (a
+// kernel's own args must have one count on every core: kernel_lib's Mcast appends its own after them). The kernels read
+// slot i through se_ra / se_arg; every index stays the full list's. Slots past a core's own list are never read.
+constexpr uint32_t kSlotOwn = 0u, kSlotRow = 1u << 30, kSlotCommon = 2u << 30, kSlotCol = 3u << 30;
+std::pair<std::vector<std::pair<CoreCoord, Args>>, Args> slot_map(
+    const std::vector<std::pair<CoreCoord, Args>>& lists, const Args& prefix) {
+    size_t n = 0, nx = 0, ny = 0;
+    for (const auto& [c, a] : lists) {
+        n = std::max(n, a.size());
+        nx = std::max<size_t>(nx, c.x + 1);
+        ny = std::max<size_t>(ny, c.y + 1);
     }
-    if (!shared) {
-        return {lists, Args{0u, 0u}};
+    // a slot's arg on every core holding it, by column / row (nullopt: no core of that column / row holds it)
+    enum class Kind { Shared, Row, Col, Own };
+    std::vector<Kind> kind(n, Kind::Own);
+    std::vector<std::vector<Arg>> table(n);
+    auto by = [&](size_t i, bool row) -> std::optional<std::vector<Arg>> {
+        std::vector<std::optional<Arg>> t(row ? ny : nx);
+        for (const auto& [c, a] : lists) {
+            if (a.size() <= i) {
+                continue;
+            }
+            auto& e = t[row ? c.y : c.x];
+            if (e.has_value() && !(*e == a[i])) {
+                return std::nullopt;
+            }
+            e = a[i];
+        }
+        std::vector<Arg> out;
+        for (const auto& e : t) {
+            out.push_back(e.value_or(Arg(0u)));
+        }
+        return out;
+    };
+    for (size_t i = 0; i < n; ++i) {
+        std::optional<Arg> first;
+        bool same = true;
+        for (const auto& [_, a] : lists) {
+            if (a.size() > i) {
+                if (first.has_value() && !(*first == a[i])) {
+                    same = false;
+                    break;
+                }
+                first = a[i];
+            }
+        }
+        if (same) {
+            kind[i] = Kind::Shared;
+            table[i] = {first.value_or(Arg(0u))};
+        } else if (auto t = by(i, true)) {
+            kind[i] = Kind::Row;
+            table[i] = std::move(*t);
+        } else if (auto t = by(i, false)) {
+            kind[i] = Kind::Col;
+            table[i] = std::move(*t);
+        }
+    }
+    Args common = prefix;
+    common.emplace_back(u32(n));
+    const size_t map0 = common.size();
+    common.resize(map0 + n);
+    std::map<std::pair<int, std::vector<std::tuple<uint32_t, int32_t, uint32_t>>>, uint32_t> stored;  // (tables once)
+    uint32_t own = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (kind[i] == Kind::Own) {
+            common[map0 + i] = Arg(kSlotOwn | own++);
+            continue;
+        }
+        std::vector<std::tuple<uint32_t, int32_t, uint32_t>> key;
+        for (const auto& x : table[i]) {
+            key.emplace_back(x.v, x.src, x.off);
+        }
+        auto [it, fresh] = stored.try_emplace({int(kind[i]), std::move(key)}, u32(common.size()));
+        if (fresh) {
+            common.insert(common.end(), table[i].begin(), table[i].end());
+        }
+        const uint32_t k = kind[i] == Kind::Shared ? kSlotCommon : kind[i] == Kind::Row ? kSlotRow : kSlotCol;
+        common[map0 + i] = Arg(k | it->second);
     }
     std::vector<std::pair<CoreCoord, Args>> per;
     for (const auto& [c, a] : lists) {
-        Args b(a.begin(), a.begin() + start);
-        b.insert(b.end(), a.begin() + start + n, a.end());
-        per.emplace_back(c, b);
+        Args b = {u32(c.x), u32(c.y)};
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (kind[i] == Kind::Own) {
+                b.push_back(a[i]);
+            }
+        }
+        b.resize(2 + own, Arg(0u));
+        per.emplace_back(c, std::move(b));
     }
-    Args common = {u32(start), u32(n)};
-    common.insert(common.end(), lists[0].second.begin() + start, lists[0].second.begin() + start + n);
-    return {per, common};
+    return {std::move(per), std::move(common)};
 }
 
 tt::DataFormat w_format(tt::tt_metal::DataType t) {
@@ -1563,7 +1642,6 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     const auto dests = engine_dests();
     const uint32_t nbank = u32(h.mesh->dram_grid_size().x);
     std::vector<std::pair<CoreCoord, Args>> bl, nl;
-    size_t b_span0 = 0, b_spann = 0, n_span0 = 0, n_spann = 0;
     for (uint32_t c = 0; c < GX; ++c) {
         const uint32_t i0 = e.in_fam0(c) ? u32(std::find(e.fam0.begin(), e.fam0.end(), c) - e.fam0.begin()) : GX;
         const uint32_t i1 = e.in_fam1(c) ? u32(std::find(e.fam1.begin(), e.fam1.end(), c) - e.fam1.begin()) : GX;
@@ -1632,17 +1710,11 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
             add(n, prep_ncrisc(c, cy));
             bl.emplace_back(CoreCoord(c, cy), b);
             nl.emplace_back(CoreCoord(c, cy), n);
-            b_span0 = 7;
-            b_spann = 9 + 2 + GX + so.size() + tail.size() + 1;
-            n_span0 = 5 + rtr_a.size() + e.wg[c].size() + e.wd[c].size();
-            n_spann = 7 + GY + so.size() + tail.size();
         }
     }
-    auto [b_rt, b_crt] = common_span(bl, b_span0, b_spann);
-    auto [n_rt, n_crt] = common_span(nl, n_span0, n_spann);
     const Arg ew = word("ewords");
-    b_crt.emplace_back(ew);  // (SE_EW: common[2 + n])
-    n_crt.emplace_back(ew);
+    auto [b_rt, b_crt] = slot_map(bl, Args{ew});  // (SE_EW: common[0]; the slot map from common[1])
+    auto [n_rt, n_crt] = slot_map(nl, Args{ew});
 
     const std::vector<uint32_t> bct = {GX, MT, e.KB, e.NSG, e.NPG, e.NCH, e.POMAX, e.S0, e.S1, kXready};
     const std::vector<uint32_t> nct = {
@@ -1778,38 +1850,30 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
         pre.insert(pre.end(), key.second.begin(), key.second.end());
         pre.insert(pre.end(), e.h0.begin(), e.h0.end());
         pre.push_back(e.HT);
-        std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> ras;
+        // each core's full list: pre + its own (se_arg's indices), through the slot map (common args [N, map, shared])
+        std::vector<std::pair<CoreCoord, Args>> ras;
         for (uint32_t c : cols) {
             for (uint32_t cy = 0; cy < GY; ++cy) {
-                ras.emplace_back(CoreCoord(c, cy), prep_compute(rs.compute_args(p, c, cy), pre.size(), c, cy));
+                Args full;
+                add(full, pre);
+                add(full, prep_compute(rs.compute_args(p, c, cy), pre.size(), c, cy));
+                ras.emplace_back(CoreCoord(c, cy), std::move(full));
             }
         }
-        size_t shared = 0;
-        const auto& first = ras[0].second;
-        while (shared < first.size() &&
-               std::all_of(
-                   ras.begin(),
-                   ras.end(),
-                   [&](const auto& r) { return r.second.size() > shared && r.second[shared] == first[shared]; })) {
-            ++shared;
-        }
-        std::vector<uint32_t> common_c = pre;
-        common_c.insert(common_c.end(), first.begin(), first.begin() + shared);
+        const auto [c_rt, c_crt] = slot_map(ras, Args{});
         auto compute = kernel("compute/se_compute.cpp", CoreRangeSet(rr), comp);
+        // (CT 12 unused since the slot map: kept 0 so the CT layout stays)
         compute.compile_time_args = {
-            MT, e.KB, e.NPG, e.NCH, e.POMAX, e.KBD, e.NSD, e.NPD, e.WSLOT, so[1], so[0], GX, u32(common_c.size())};
+            MT, e.KB, e.NPG, e.NCH, e.POMAX, e.KBD, e.NSD, e.NPD, e.WSLOT, so[1], so[0], GX, 0u};
         define(compute, "SE_GLU", iv(glu_code));
         for (const auto& [k, v] : glu_vals) {
             define(compute, k, float_literal(v));
         }
         compute.defines.insert(compute.defines.end(), nd.begin(), nd.end());
-        for (const auto& [c, ra_] : ras) {
-            compute.runtime_args.emplace_back(
-                c,
-                ra_.size() > shared ? std::vector<uint32_t>(ra_.begin() + shared, ra_.end())
-                                    : std::vector<uint32_t>{0});
+        for (const auto& [c, a] : c_rt) {
+            set_rt(compute, c, a);
         }
-        compute.common_runtime_args = common_c;
+        set_common(compute, c_crt);
         push(ks, compute);
     }
     return ks;

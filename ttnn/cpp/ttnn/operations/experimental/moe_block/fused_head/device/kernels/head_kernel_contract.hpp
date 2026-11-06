@@ -137,7 +137,7 @@ enum SeComputeCt : uint32_t {
     SE_C_CT_G,    // len(so): the K shards
     SE_C_CT_SPS,  // NSG / len(so)
     SE_C_CT_GX,
-    SE_C_CT_NC,  // len(common_c): the common args' count (SE_NC)
+    SE_C_CT_NC,  // unused (0) since the slot map
     SE_C_CT_COUNT,
 };
 // Defines (all three kernels; SeEngine3.pieces `nd`):
@@ -159,14 +159,14 @@ enum SeComputeCt : uint32_t {
 //     SE_PREP_CT0, SE_LRDY 16 (with a latent);
 //   compute only, first: SE_GLU (glu code: silu 1, situ 2, clamped_silu 3, swiglu_oai 4) and SE_GLU_BETA,
 //     SE_GLU_LBETA, SE_GLU_LIMIT, SE_GLU_ALPHA (float literals `...f`, se_engine3.glu_defines).
-// Runtime args: BRISC / NCRISC per core the lists of SeEngine3.pieces (`bl`, `nl`), with the span every core of the
-// chip shares moved to the common args by _common_span (b_span = (7, 12 + GX + len(sor) + len(tail)), n_span =
-// (5 + len(rtr_a) + len(wg[c]) + len(wd[c]), 7 + GY + len(sor) + len(tail))): per core [args before the span] +
-// [args after it]; common args [span start, span length n, the n shared words] (or [0, 0] and the full lists per
-// core), then at common index 2 + n: the ewords address (SE_EW).
-// Compute: common args = wg + wd + h0 + [HT] + the RS / prep args every core of the group shares; per core the rest
-// ([0] if none) - SE_NC = len(common).
-constexpr uint32_t kSeEwordsCommonArgAfterSpan = 2;  // SE_EW = common[2 + common[1]]
+// Runtime args: BRISC / NCRISC per core the lists of SeEngine3.pieces (`bl`, `nl`) through the slot map
+// (head_program.cpp slot_map): a slot every core shares goes once as a common arg, a slot that only depends on the
+// core's row / column as a common table; the rest per core. Common args [ewords (SE_EW), N, map[N], shared args and
+// tables]; map[i] = kind << 30 | index (0 per core, 1 row table, 2 shared, 3 column table); per core [column, row, the
+// per-core slots] (one length on every core). The kernels read slot i through se_ra.
+// Compute: the full list = wg + wd + h0 + [HT] + the core's RS / prep args, through the same slot map with common args
+// [N, map[N], shared args and tables] (se_arg).
+constexpr uint32_t kSeEwordsCommonArg = 0;  // SE_EW = common[0]
 
 // ---------------------------------------------------------------------------------------------------------------------
 // router_stream router-core kernels: compile-time args `ct`, then per kernel the accessors:

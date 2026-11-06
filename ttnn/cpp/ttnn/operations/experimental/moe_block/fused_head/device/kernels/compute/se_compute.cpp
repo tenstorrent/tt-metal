@@ -41,12 +41,19 @@ constexpr uint32_t POMAX = get_compile_time_arg_val(4), KBD = get_compile_time_a
 constexpr uint32_t NPD = get_compile_time_arg_val(7), WSLOT = get_compile_time_arg_val(8);
 constexpr uint32_t G = get_compile_time_arg_val(9), SPS = get_compile_time_arg_val(10);  // (shards, steps a shard)
 constexpr uint32_t GX = get_compile_time_arg_val(11), HA = GX * MT * POMAX;              // (h-all: [column][MT][POMAX])
-// Words [0, NC) - the per-group block (gate / down tables, h column offsets, HT) and the RS / prep tables' prefix every
-// core of the group shares - are this kernel's common args (sent once a chip, not once a core); the rest of a core's
-// tables are its runtime args from NC on. Indices stay absolute (the host's tables point at them).
-constexpr uint32_t SE_NC = get_compile_time_arg_val(12);
+// The full list: the per-group block (gate / down tables, h column offsets, HT), then the core's RS / prep tables; the
+// slots every core of the group shares go once as common args, the rest per core. Indices stay absolute (the host's
+// tables point at them). (arg i of the full list through the slot map, head_program.cpp slot_map: common args [N,
+// map[N], the slots every core of the group shares]; map[i] = 0x80000000 | common index of a shared slot, else the
+// slot's index in this core's args)
 FORCE_INLINE uint32_t se_arg(uint32_t i) {
-    return i < SE_NC ? get_common_arg_val<uint32_t>(i) : get_arg_val<uint32_t>(i - SE_NC);
+    const uint32_t m = get_common_arg_val<uint32_t>(1 + i), v = m & 0x3FFFFFFFu;
+    switch (m >> 30) {
+        case 0: return get_arg_val<uint32_t>(2 + v);                                 // per core
+        case 1: return get_common_arg_val<uint32_t>(v + get_arg_val<uint32_t>(1));   // a row table
+        case 2: return get_common_arg_val<uint32_t>(v);                              // shared
+        default: return get_common_arg_val<uint32_t>(v + get_arg_val<uint32_t>(0));  // a column table
+    }
 }
 constexpr uint32_t XIN = 0, WIN = 1, HOWN = 2, HALL = 3, OUT = 4, ACC = 5;
 // (runtime args: the column's gate / up pass widths [NPG], then down pass widths [NPD])

@@ -24,25 +24,28 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* ew(uint32_t o) {
 }
 constexpr auto rx_args = TensorAccessorArgs<SE_RTR_CT0>();  // (the chip's x shard [rows, H / TP], DRAM)
 constexpr auto rw_args = TensorAccessorArgs<rx_args.next_compile_time_args_offset()>();  // (W_r^T [E, H / TP])
-constexpr uint32_t CB_WIN = 1, NB = NPG * NSG + NPD * NSD;  // (W blocks a chunk)
+constexpr uint32_t CB_WIN = 1, NB = NPG * NSG + NPD * NSD;                               // (W blocks a chunk)
 #ifdef SE_NIT
 constexpr uint32_t NIT = SE_NIT;  // (router iterations: the router phase over SE_MTR of my rows at a time)
 #else
 constexpr uint32_t NIT = 1;
 #endif
-constexpr uint32_t NSD1 = NSD ? NSD : 1;                    // (never divided by 0)
+constexpr uint32_t NSD1 = NSD ? NSD : 1;  // (never divided by 0)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i));
 }
 // the column's W stream: block b of a chunk (gate / up pass b / NSG, step b % NSG; then down) held by row b % GY,
 // multicast down the column into W slot (round % NWS); every core pushes what lands and credits the slot's next holder
-// (the args equal on every core of the chip go once, as common args [S, NC, those NC values]: arg i is the core's
-// own arg i below S, common below S + NC, the core's arg i - NC past them - every index stays the full list's)
+// (arg i of the full list through the slot map, head_program.cpp slot_map: common args [ewords, N, map[N], the shared
+// args and the row / column tables]; this core's own args [its column, its row, the per-core slots])
 FORCE_INLINE uint32_t se_ra(uint32_t i) {
-    const uint32_t s = get_common_arg_val<uint32_t>(0), nc = get_common_arg_val<uint32_t>(1);
-    return i < s        ? get_arg_val<uint32_t>(i)
-           : i < s + nc ? get_common_arg_val<uint32_t>(2 + i - s)
-                        : get_arg_val<uint32_t>(i - nc);
+    const uint32_t m = get_common_arg_val<uint32_t>(2 + i), v = m & 0x3FFFFFFFu;
+    switch (m >> 30) {
+        case 0: return get_arg_val<uint32_t>(2 + v);                                 // per core
+        case 1: return get_common_arg_val<uint32_t>(v + get_arg_val<uint32_t>(1));   // a row table
+        case 2: return get_common_arg_val<uint32_t>(v);                              // shared
+        default: return get_common_arg_val<uint32_t>(v + get_arg_val<uint32_t>(0));  // a column table
+    }
 }
 void kernel_main() {
     size_t a = 0;
@@ -50,7 +53,7 @@ void kernel_main() {
     const uint32_t cy = se_ra(a++), cxv = se_ra(a++);
     const uint32_t wbase = se_ra(a++), n0d = se_ra(a++);
     const uint32_t wbank = se_ra(a++);  // (the DRAM bank holding my W-own region)
-    const uint32_t R0 = a;  // (the router logits' args)
+    const uint32_t R0 = a;              // (the router logits' args)
     a += 10 + SE_RD * SE_MTR * NIT;
     const uint32_t wg0 = a, wd0 = wg0 + NPG;  // pass widths (gate / up, down)
     a = wd0 + NPD;
@@ -267,8 +270,8 @@ void kernel_main() {
             ++pending;
         }
     };
-    const uint32_t NR = NCH * NB;                                // (W rounds a call)
-    uint32_t ws = 0, woff = 0, wr = 0, wc = NWS;                 // (send, my offset, pushed, credited)
+    const uint32_t NR = NCH * NB;                 // (W rounds a call)
+    uint32_t ws = 0, woff = 0, wr = 0, wc = NWS;  // (send, my offset, pushed, credited)
     uint32_t nf[NWS] = {};
     while (ws < NR && blk(ws) % GY != cy) {
         ++ws;  // (skip rounds I do not hold)
