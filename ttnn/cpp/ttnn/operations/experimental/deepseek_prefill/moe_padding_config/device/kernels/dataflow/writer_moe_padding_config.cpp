@@ -10,8 +10,8 @@
 
 // Builds this chip's [local_real_tokens, pad_side] MoE padding-config row entirely on-device.
 //
-// The per-chunk values arrive as two 1-element uint32 DRAM tensors (raw addresses in common args 3
-// and 4) — `actual_start` (absolute KV position of this chunk's first real token) and `actual_end`
+// The per-chunk values arrive as two 1-element uint32 DRAM tensors (addresses in common args 3 and 4)
+// — `actual_start` (absolute KV position of this chunk's first real token) and `actual_end`
 // (one past its last real token). Reading them on-device keeps them off the host dispatch path, so
 // this op is trace-safe: one captured program recomputes the correct config on every replay.
 //
@@ -24,7 +24,8 @@
 // accessor (the two 1-element tensors share an identical layout, so one accessor serves both reads).
 //
 // Common runtime args: [0]=my_sp_coord, [1]=sp_factor, [2]=tokens_per_chip,
-//                      [3]=actual_start tensor DRAM addr, [4]=actual_end tensor DRAM addr.
+//                      [3]=actual_start tensor DRAM addr, [4]=actual_end tensor DRAM addr
+//                      (both Buffer* bindings, re-pointed by the framework on cache hits).
 // Per-core runtime args: [0]=config output buffer address (Buffer* binding).
 
 namespace {
@@ -73,10 +74,10 @@ void kernel_main() {
     const auto s_start = TensorAccessor(meta_args, actual_start_addr);
     noc.async_read(s_start, cb_meta, kMetadataReadBytes, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    // The metadata tensors sit at FIXED DRAM addresses reused every chunk, so the RISC data cache may
-    // still hold the previous chunk's value for this L1 line (the barrier orders the DMA; volatile
-    // still reads through the cache). Force a refetch, else a stale read silently produces the prior
-    // chunk's config.
+    // Every call lands the metadata in the same L1 scratch slot, so the RISC data cache may still hold
+    // the previous call's value for this line (the barrier orders the DMA; volatile still reads through
+    // the cache). This matters most on the trace path, where the same metadata tensors are refreshed in
+    // place every chunk. Force a refetch, else a stale read silently produces the prior chunk's config.
     invalidate_l1_cache();
     const uint32_t actual_start = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
 

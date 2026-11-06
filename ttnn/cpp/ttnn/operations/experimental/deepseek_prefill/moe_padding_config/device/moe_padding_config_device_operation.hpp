@@ -8,12 +8,10 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_padding_config {
@@ -44,6 +42,9 @@ struct MoePaddingConfigDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
+    // One program per mesh coordinate (each chip's program differs only in its SP position). Every
+    // tensor address reaches the kernel as a Buffer* binding, so the framework re-points all of them
+    // on a cache hit.
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& args,
@@ -52,36 +53,7 @@ struct MoePaddingConfigDeviceOperation {
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     };
 
-    // Minimal operation-shaped helper so the descriptor factory can be adapted into a mesh workload.
-    struct DescriptorAdapterOperation {
-        using operation_attributes_t = MoePaddingConfigDeviceOperation::operation_attributes_t;
-        using tensor_args_t = MoePaddingConfigDeviceOperation::tensor_args_t;
-        using spec_return_value_t = MoePaddingConfigDeviceOperation::spec_return_value_t;
-        using tensor_return_value_t = MoePaddingConfigDeviceOperation::tensor_return_value_t;
-    };
-
-    // Wraps the ProgramDescriptor factory so the default adapter patches buffer bindings on cache
-    // hits, and override_runtime_arguments additionally refreshes the two metadata tensors' raw DRAM
-    // addresses (common runtime args, which the buffer-binding fast path would leave stale).
-    struct MeshWorkloadFactory {
-        using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
-            DescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
-        using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
-
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& args,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& args,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-    };
-
-    using program_factory_t = std::variant<MeshWorkloadFactory>;
+    using program_factory_t = std::variant<ProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
