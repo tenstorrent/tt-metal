@@ -14,5 +14,9 @@
     "reason": "Obsolete mandatory nonempty accuracy conflicts with operator decision5. Generic correction is prepared; read-only exception requested, not granted.",
     "evidence": "../setup/resumed-outer-check.log"
   },
-  "accuracy_verdict": null
+  "accuracy_verdict": null,
+  "post_evidence_commit_check": {
+    "status": "passed",
+    "source_commit": "ac3ee99f47fe947e72cb3c351893464d379003aa"
+  }
 }

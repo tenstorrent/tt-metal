@@ -117,4 +117,4 @@ Verification: the corrected evidence gate and full-context check pass. The uncha
 
 Raw log/event originals remain locally under run/. Large originals and command logs are also preserved byte-for-byte in gzip archives for Git; [raw_archives.json](raw_archives.json) maps filenames and SHA256 values. After a fresh checkout, restore originals with `python tools/archive_benchmark_raw.py doc/benchmark/run --restore` from the model directory before replaying evidence checks.
 
-Client stage through this final report: 1399.538s / 7200s, including launch/reload, warmup, verification, inference, collection and reporting. Upstream runner elapsed: 1175.322s.
+Client stage through this final report: 1473.426s / 7200s, including launch/reload, warmup, verification, inference, collection and reporting. Upstream runner elapsed: 1175.322s.

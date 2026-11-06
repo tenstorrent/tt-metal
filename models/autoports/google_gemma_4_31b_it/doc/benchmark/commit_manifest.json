@@ -1,8 +1,10 @@
 {
-  "runtime_source_commit": "9ef69179548ad879b35cdb5edc17a0138cdfbc23",
+  "runtime_source_commit": "27ea28bafd0195ba8ce89dd36da722b15fa6fa24",
   "stage10_handoff_commit": "6d7f2481460e4f48ec21a4d92ee84fa588936157",
   "plugin_local_commit": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
   "plugin_runtime_base": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
   "publication": "none; local only",
-  "final_evidence_commit_log": "bringup/artifacts/benchmark-evidence-commit.log"
+  "final_evidence_commit_log": "bringup/artifacts/benchmark-final-evidence-commit.log",
+  "final_evidence_commit": "ac3ee99f47fe947e72cb3c351893464d379003aa",
+  "server_vllm_python_source_commit": "db9527a46873454610df6dbedf79a36d6bf1a7f6"
 }
