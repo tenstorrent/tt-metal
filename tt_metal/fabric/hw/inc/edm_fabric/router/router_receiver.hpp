@@ -620,14 +620,14 @@ FORCE_INLINE bool vc0_register_empty() { return read_stream_count<ReceiverChanne
 // Where the channel states live, and the loop
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Every serviced VC's channel state. The loop-local VC's progress is copied into a local of run()'s loop, so it can
-// stay in registers; every other VC's state is stepped in memory (a one-ERISC router steps all of them in memory).
+// Every serviced VC's channel state. The loop-local VC's progress is copied into a local of the receiver loop (run()'s,
+// or the single-ERISC router's), so it can stay in registers; every other VC's state is stepped in memory.
 // The accessors are templates on VC so an absent channel's state is named only in template-dependent code.
 struct ReceiverChannelStates : Each<receiver_vcs, ReceiverChannelState> {
     // The lowest serviced VC (a trimmed router can run VC1's and not VC0's); 0 where none runs.
     static constexpr size_t loop_local_vc = receiver_vcs != 0 ? lowest_bit(receiver_vcs) : 0;
 
-    // What run() copies at its start; without a receiver channel, the states themselves (no step uses it).
+    // What the receiver loop copies at its start; without a receiver channel, the states themselves (no step uses it).
     template <size_t VC = loop_local_vc>
     FORCE_INLINE auto& loop_local_progress() {
         if constexpr (runs_vc(VC)) {
