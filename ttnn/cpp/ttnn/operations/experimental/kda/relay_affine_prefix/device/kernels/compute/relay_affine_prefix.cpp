@@ -7,7 +7,6 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
 constexpr uint32_t cb_e = get_compile_time_arg_val(0);
 constexpr uint32_t cb_b = get_compile_time_arg_val(1);
@@ -21,8 +20,8 @@ constexpr uint32_t cb_identity = get_compile_time_arg_val(6);
 constexpr uint32_t state_tiles = kt * kt;
 constexpr uint32_t dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-// Output tiles per DST pass.
-constexpr uint32_t rows = kda::largest_divisor_at_most(kt, dst_tiles);
+// A tile column of the next state is formed in one DST pass (the op checks K against the DST).
+static_assert(kt <= dst_tiles);
 
 // The next entry state S_out = A S_in + B for one head, from the complement form E = A - I: S_out = S_in + E S_in + B,
 // summed in the FP32 DST. The exact copy of S_in unpacks to DST losslessly; E S_in accumulates on top at the affine
@@ -40,30 +39,28 @@ void kernel_main() {
         cb_reserve_back(cb_eout, kt);
         cb_wait_front(cb_ein, (j + 1) * kt);
         cb_wait_front(cb_ein_exact, (j + 1) * kt);
-        for (uint32_t first_row = 0; first_row < kt; first_row += rows) {
-            tile_regs_acquire();
-            reconfig_data_format_srca(cb_ein_exact);
-            copy_init(cb_ein_exact);
-            for (uint32_t r = 0; r < rows; ++r) {
-                copy_tile(cb_ein_exact, j * kt + first_row + r, r);
-            }
-            reconfig_data_format<SrcOrder::Reverse>(cb_e, cb_ein);
-            matmul_block_init(cb_e, cb_ein, false, 1, rows, kt);
-            for (uint32_t k = 0; k < kt; ++k) {
-                matmul_block(cb_e, cb_ein, first_row * kt + k, j * kt + k, 0, false, 1, rows, kt);
-            }
-            reconfig_data_format<SrcOrder::Reverse>(cb_identity, cb_b);
-            matmul_block_init(cb_identity, cb_b, false, 1, 1, 1);
-            for (uint32_t r = 0; r < rows; ++r) {
-                matmul_block(cb_identity, cb_b, 0, (first_row + r) * kt + j, r, false, 1, 1, 1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t r = 0; r < rows; ++r) {
-                pack_tile(r, cb_eout);
-            }
-            tile_regs_release();
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_ein_exact);
+        copy_init(cb_ein_exact);
+        for (uint32_t r = 0; r < kt; ++r) {
+            copy_tile(cb_ein_exact, j * kt + r, r);
         }
+        reconfig_data_format<SrcOrder::Reverse>(cb_e, cb_ein);
+        matmul_block_init(cb_e, cb_ein, false, 1, kt, kt);
+        for (uint32_t k = 0; k < kt; ++k) {
+            matmul_block(cb_e, cb_ein, k, j * kt + k, 0, false, 1, kt, kt);
+        }
+        reconfig_data_format<SrcOrder::Reverse>(cb_identity, cb_b);
+        matmul_block_init(cb_identity, cb_b, false, 1, 1, 1);
+        for (uint32_t r = 0; r < kt; ++r) {
+            matmul_block(cb_identity, cb_b, 0, r * kt + j, r, false, 1, 1, 1);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t r = 0; r < kt; ++r) {
+            pack_tile(r, cb_eout);
+        }
+        tile_regs_release();
         cb_push_back(cb_eout, kt);
     }
     cb_pop_front(cb_e, state_tiles);
