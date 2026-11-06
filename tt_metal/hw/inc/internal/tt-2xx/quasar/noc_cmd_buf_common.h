@@ -543,10 +543,12 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(u
 #endif
 }
 
+// Always true on a Keraunos CCE: a write with a transaction id awaits its own copy (ncrisc_noc_fast_write) and the
+// stateful one halts, so none is outstanding. No hardware read.
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_sent(
     uint32_t noc, uint32_t transcation_id) {
 #ifdef KERAUNOS_CCE
-    return internal_::cce_noc::copies_done();
+    return true;
 #else
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent_trid(transcation_id) == 0;
 #endif
@@ -562,10 +564,11 @@ inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint3
     return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, NOC_OVERLAY_TRID_STATIC);
 }
 
+// Always true on a Keraunos CCE, as ncrisc_noc_nonposted_write_with_transaction_id_sent().
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
 #ifdef KERAUNOS_CCE
-    return internal_::cce_noc::copies_done();
+    return true;
 #else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(transcation_id) == 0;
 #endif
