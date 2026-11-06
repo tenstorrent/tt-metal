@@ -30,8 +30,11 @@ from .common import DRAM, SP_AXIS, TP_AXIS
 from .cores import from_torch, max_grid, sub_cores
 
 
-def alloc_served(mesh, width: int, rows: int, shard_rows: int, batches: int, dedup: bool) -> ttnn.Tensor:
-    """[batches, 1, rows, width] bf16 ROW_MAJOR per chip, zeroed, DRAM ND-sharded [1, 1, shard_rows, width]
+def alloc_served(
+    mesh, width: int, rows: int, shard_rows: int, batches: int, dedup: bool, dtype=ttnn.bfloat16
+) -> ttnn.Tensor:
+    """[batches, 1, rows, width] ``dtype`` (bf16; uint8 for the 192-byte fp8 index-key rows, INDEX_K_SERVED=
+    fp8_row192, P.39) ROW_MAJOR per chip, zeroed, DRAM ND-sharded [1, 1, shard_rows, width]
     ROUND_ROBIN_1D over every DRAM bank. ``dedup``: TP-dedup (rows hold the chip's own sp x tp stripes; topology
     sharded on dim 2 over both axes, as init_kvpe_cache(tp_axis=1)); else SP-sharded and TP-replicated (replicated
     topology, as init_kvpe_cache(tp_axis=None))."""
@@ -48,9 +51,7 @@ def alloc_served(mesh, width: int, rows: int, shard_rows: int, batches: int, ded
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     )
     mc = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
-    t = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([batches, 1, rows, width]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, mc
-    )
+    t = ttnn.allocate_tensor_on_device(ttnn.Shape([batches, 1, rows, width]), dtype, ttnn.ROW_MAJOR_LAYOUT, mesh, mc)
     if max_grid(mesh) is None:
         DRAMZeroFill.op(t)
     else:

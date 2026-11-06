@@ -3337,3 +3337,54 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   it now fails that assert (diagnostic test, not in this gate; the owner's 2026-11-06 default supersedes it).
 - Re-run: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_kv_window_bf16.py`;
   `python -m models.demos.common.bringup.orchestrator measure --task P.38 --spec <spec>`.
+
+## P.39 perf (8x4, 2026-11-06): served index keys as Blaze decode's 192-byte fp8 rows (INDEX_K_SERVED=fp8_row192)
+- Owner-authorized contract change (PD migration first cut). Setting `INDEX_K_SERVED` (tt/settings.py): `fp8_row192`
+  (default) / `bf16` (the old contract). A/B: on `DS41_INDEX_K_SERVED=fp8_row192`, off `DS41_INDEX_K_SERVED=bf16`
+  (both with `DS41_ENGRAM_TABLE=resident`).
+- Row: uint8 [.., 192] a compressed position: e4m3 of key / scale (128 B) | scale fp32 LE (4 B) | 60 zero B; pad rows
+  (groups past actual_end) all zero. Records 16 x 192 = 3072 B (2_index_k_r2), 32 x 192 = 6144 B (4_index_k_r1); same
+  ND shard / bank / SP placement / TP replication as before.
+- Write path (tt/compressor.py `fp8_rows`, `TtServedRows._put`): the chunk's server-order bf16 key slab (as before) ->
+  to_layout TILE (capped) -> stock `ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(round_scale_to_power_of_two
+  =False)` (TILE path: one core per 32 x 128 block, no grid option: 10 / 20 cores on 8x4, asserted <= MAX_WORKER_CORES)
+  -> new Python op `ttnn.bringup.pack_fp8_rows` (fp8_rows_ttnn: data movement only, prepared, max_grid; 20 / 40 cores)
+  -> `ttnn.bringup.update_padded_kv_cache` into the served uint8 slab (the copy path takes uint8 as is) and into each
+  re-index mirror. Same slab feeds the bf16 compute copy as before.
+- Re-index layers: tt-blaze's REINDEX stage (csa_attention/op.py:1126-1161) quantizes the stage payload's
+  `index_cache_row` = the producer's post-norm post-RoPE bf16 key (stage_payload.py:29-32); the only producer before
+  24-36 is the candidate-source stage, layer 20 (csa_candidate_pool_stage/op.py:271-281). So 4_index_k_r1 covers
+  [20, 24, 28, 32, 36] under fp8_row192 (`compressor.reindex_layers`, kv_contract / caches `of` map); layer 20's
+  TtServedRows writes the same rows into the mirrors (`mirrors`: the engine slabs, or own tensors in the ladder) in
+  the same chunk, before layer 20's ack.
+- Indexer choice: a persistent bf16 compute copy (the old served slab, now private, `TtServedRows.slab`), so the
+  indexer's numerics are those of the old path (INDEX_K_FORMAT=bfp4 rounds it as before). Cost: memory (8x4, 1M, a
+  slot, a chip: compute copy 80 MiB; served 60 MiB vs 80 MiB bf16; mirrors 96 MiB; total 236 vs 80 MiB) and per chunk
+  a source: tilize + cast + pack + 1 (r2) / 5 (r1) extra update_padded_kv_cache on W / r rows. Reading the fp8 rows
+  instead would dequantize the whole capacity each chunk (the stock per_token_cast_back takes a core a row: > 110).
+- Byte checks (OV: the brief's "exact torch recipe" does not hold on this device, DS41-213): served bytes == the stock
+  cast packed (test_kv_layout: every index layer incl. mirrors, 0 rows differ; RM-input cast = TILE-input cast); tt-
+  blaze's `_quantize_scaled_keys`: scales byte-equal, ~1.1 % of values one e4m3 step away (the cast lands one step
+  higher at truncation edges and keeps subnormals), never more. tt-blaze's own test compares its writer with the cast
+  (`_glm_quantized_key`), not the recipe. Raw fp8 bytes must be read from the host buffer (DS41-214).
+- Test readers: caches.decode / fp8_decode (independent of tt/), fp8_row_failures (zero padding, positive scale, the
+  row's largest |e4m3| 416 or 448, all-zero pad rows), bytes_equal on raw rows; acks: a re-index layer's records
+  byte-equal to layer 20's; golden comparison of decoded rows at the unchanged limits (re-index layers against their
+  source's golden and limit, server_rules.state_threshold). kv_contract.read_rows decodes for the producer read-back.
+  `state.served` / `to_torch` decode the served rows (load_served of decoded rows re-encodes: d2p is off).
+- Rules: 18 (cast asserted <= cap, pack / tilize / update capped); OV-23 pack_fp8_rows prepared (patch_count 3);
+  OV-3 nothing padded to fit an op (the 60 zero bytes are the contract's row); OV-25 only the new op's unit test run.
+- Re-run: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/test_pack_fp8_rows.py`;
+  `python -m models.demos.common.bringup gate P.39 --spec <spec> --check --unit P.39#test_kv_layout`;
+  `python -m models.demos.common.bringup.orchestrator measure --task P.39 --spec <spec>`.
+- Measured (`orchestrator measure --task P.39`, change on, ab/P.39/new; vs P.38's change-on run = this task's off path
+  before the code changed, ab/P.38/new; the orchestrator measures the real off side): quick: no metric over its limit,
+  host_transfers_per_layer 0; every err_layer_L* identical to P.38 to the last digit (the indexer scores the same bf16
+  compute copy); err_state_index_k (the served rows decoded) L02 0.0525 (bf16 0.0156, limit 0.236), L08 0.0612 (0.0340,
+  0.260), L14 0.0997 (0.0876, 0.292), L20 0.0856 (0.0707, 0.276): the fp8 rounding's cost, far inside the limits
+  (calib x the reference's own fp4 drift). p51200: chunk wall 200.8 vs 203.7 ms (noise), device 182.97 vs 183.57 ms,
+  compressor section 1.98 vs 1.90 ms (+0.08: tilize + cast + pack + the extra writes), indexer 6.98 vs 6.99,
+  profiled host dispatch 175.1 vs 186.4 ms (run noise). pack_fp8_rows host 74 us a call (32 chips, prepared).
+- Gate units passed here on the final code: test_kv_layout (byte-exact), test_adapter_acks (0 failures; 4 chunks x 40
+  acks), test_contract (producer index_k PCC 0.9927, limit 0.9465; contract_checks_failed 0, acks_early 0). Left to
+  the orchestrator: test_ladder, test_profile, test_short_turn.

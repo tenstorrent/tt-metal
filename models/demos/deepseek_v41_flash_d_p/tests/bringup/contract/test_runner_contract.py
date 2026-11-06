@@ -289,11 +289,15 @@ def kv_checks(
             finals[(s, cfg["name"])] = d
             for layer in cfg["layers"]:
                 got, pad = C.valid_and_pad(d, cfg, layer, 0, e)
-                if cfg["rows"] == 32:  # the server's own reassembly agrees with ours on a 32-row record
+                if cfg["rows"] == 32 and not cfg.get("fp8"):  # the server's own reassembly agrees with ours on a
+                    # 32-row bf16 record (P.39: kv_dump_compare has no fp8 192-byte rows)
                     ref = kvc.reassemble(d, layer, 0, e, dtype="bf16", width=cfg["width"], storage="row-major")
                     if not np.array_equal(ref, got):
                         fails.append(f"{cfg['name']} slot {s} layer {layer}: kv_dump_compare.reassemble disagrees")
                 fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, e, thr, f"slot {s} [0, {e})")
+                if cfg.get("fp8"):  # P.39: Blaze's 192-byte rows (caches.fp8_row_failures)
+                    rb, pb = C.valid_and_pad(d, cfg, layer, 0, e, raw_rows=True)
+                    fails += C.fp8_row_failures(rb, pb, cfg, layer, f"slot {s} [0, {e})")
                 if pad.size and not (pad == 0).all():
                     fails.append(f"{cfg['name']} slot {s} layer {layer}: pad rows after {e} not zero")
     if snaps.get("snap_s0_t0", {}).get("taken"):

@@ -15,6 +15,11 @@ configs in sorted name order, DS41-6):
     3_compress_kv_r1  served KV sources of ratio 1     32                x 512   TP-dedup
     4_index_k_r1      the same layers                  32                x 128   TP-replicated
 
+INDEX_K_SERVED=fp8_row192 (P.39, the default; owner 2026-11-06): the index configs hold Blaze decode's 192-byte rows
+(uint8 [.., rows, 192]: e4m3 of key / scale | fp32 scale | zeros; records 16 x 192 / 32 x 192 B) and also cover the
+re-index layers that read the source's keys (4_index_k_r1: 20, 24, 28, 32, 36; every one the same rows, written
+with the source's: tt/compressor.reindex_layers). INDEX_K_SERVED=bf16: bf16 rows of 128, KV sources only.
+
 Each tensor: [slots x Lc, 1, local rows, width] bf16 ROW_MAJOR, DRAM ND-sharded [1, 1, 32 / r, width] ROUND_ROBIN_1D
 over every DRAM bank (tt/served.alloc_served); batch row b = slot x Lc + the layer's row among the config's Lc
 layers. Placement (the window path, tt/attention.py; the plan): token g on mesh row (g / W) % SP (W = chunk / SP),
@@ -39,6 +44,7 @@ import torch
 import ttnn
 
 from ..attention import WindowGeometry
+from ..compressor import FP8_ROW_BYTES, fp8_rows_decode, index_k_fp8, reindex_layers
 from ..served import CacheSlab, alloc_served
 
 RECORD = 32  # tokens per record (tools/launch_harness/tables.py: chunk_n_tokens)
@@ -54,14 +60,22 @@ def served_configs(cfg, layer_ids: list[int], window: bool = True) -> list[dict]
         if window
         else []
     )
+    fp8 = index_k_fp8()
     for r, (cn, ik) in ((2, CONFIG_ORDER[1:3]), (1, CONFIG_ORDER[3:5])):
         src = [i for i in layer_ids if cfg.is_kv_source(i) and cfg.ratio(i) == r]
         if src:
             out.append(dict(name=cn, kind="compress_kv", ratio=r, width=cfg.head_dim, dedup=True, layers=src))
-            out.append(dict(name=ik, kind="index_k", ratio=r, width=cfg.index_dim, dedup=False, layers=src))
+            idx = dict(name=ik, kind="index_k", ratio=r, width=cfg.index_dim, dedup=False, layers=src)
+            if fp8:  # P.39: Blaze's rows, also under the re-index layers reading these keys (source of each: "of")
+                mirrors = {j: i for i in src for j in reindex_layers(cfg, layer_ids, i)}
+                idx.update(fp8=True, layers=sorted(src + list(mirrors)), of=mirrors)
+            out.append(idx)
     for c in out:
         c["rows"] = RECORD // c["ratio"]  # rows per record
-        c["record_bytes"] = c["rows"] * c["width"] * 2
+        c["row_bytes"] = FP8_ROW_BYTES if c.get("fp8") else c["width"] * 2
+        c["alloc_width"] = FP8_ROW_BYTES if c.get("fp8") else c["width"]  # elements a row of the tensor
+        c["dtype"] = ttnn.uint8 if c.get("fp8") else ttnn.bfloat16
+        c["record_bytes"] = c["rows"] * c["row_bytes"]
         c["engine"] = [layer_ids.index(i) for i in c["layers"]]
     return out
 
@@ -88,7 +102,13 @@ class DS41ContractKV:
             c["tok_rows"] = (self.max_seq // self.chunk) * stripe  # local token rows per chip
             assert c["tok_rows"] % RECORD == 0 and stripe % RECORD == 0, (c["name"], stripe)
             self.by_config[c["name"]] = alloc_served(
-                mesh, c["width"], c["tok_rows"] // c["ratio"], c["rows"], self.num_users * len(c["layers"]), c["dedup"]
+                mesh,
+                c["alloc_width"],
+                c["tok_rows"] // c["ratio"],
+                c["rows"],
+                self.num_users * len(c["layers"]),
+                c["dedup"],
+                dtype=c["dtype"],
             )
 
     def slabs(self, slot: int) -> dict:
@@ -178,9 +198,12 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a @ b) / den) if den > 0 else float(torch.equal(a, b))
 
 
-def read_rows(table, device_map: dict, config_id: int, layer: int, slot: int, length: int, width: int) -> torch.Tensor:
+def read_rows(
+    table, device_map: dict, config_id: int, layer: int, slot: int, length: int, width: int, fp8: bool = False
+) -> torch.Tensor:
     """Natural-order rows of the records covering token positions [0, ceil32(length)) of one table layer (bf16
-    ROW_MAJOR records; a record of 32 / r rows), as the KV Manager reads them."""
+    ROW_MAJOR records; a record of 32 / r rows), as the KV Manager reads them. ``fp8`` (an index config under
+    INDEX_K_SERVED=fp8_row192): 192-byte rows, decoded to the values they hold (tt/compressor.fp8_rows_decode)."""
     from models.demos.common.prefill.runners import prefill_producer as P
 
     D = ttnn.experimental.disaggregation
@@ -190,7 +213,10 @@ def read_rows(table, device_map: dict, config_id: int, layer: int, slot: int, le
         assert loc.size_bytes, f"config {config_id}: no record for layer {layer} position {pos} slot {slot}"
         uid = P._resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
         raw = bytes(D.read_dram_umd(uid, loc.noc_addr, loc.size_bytes))
-        out.append(torch.frombuffer(bytearray(raw), dtype=torch.bfloat16).reshape(-1, width))
+        if fp8:
+            out.append(fp8_rows_decode(torch.frombuffer(bytearray(raw), dtype=torch.uint8).reshape(-1, FP8_ROW_BYTES)))
+        else:
+            out.append(torch.frombuffer(bytearray(raw), dtype=torch.bfloat16).reshape(-1, width))
     return torch.cat(out).float() if out else torch.zeros(0, width)
 
 
@@ -210,7 +236,8 @@ def golden_rows(golden, c: dict, layer: int, length: int) -> tuple[torch.Tensor,
         n = min(ring.shape[0], length)
         pos = torch.arange(length - n, length)
         return ring[pos % ring.shape[0]].float(), length - n, "last-window"
-    return golden.state(layer)[c["kind"]][: length // c["ratio"]].float(), 0, "full"
+    src = c.get("of", {}).get(layer, layer)  # (P.39: a re-index layer serves its KV source's index keys)
+    return golden.state(src)[c["kind"]][: length // c["ratio"]].float(), 0, "full"
 
 
 def read_slot_kv_and_check_pcc(table, device_map, slot_id: int, real_len: int, trace_dir, cfg, layer_ids) -> dict:
@@ -228,7 +255,8 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id: int, real_len: int, t
         cid = names.index(c["name"])
         for k, layer in zip(c["engine"], c["layers"]):
             want, lo, mode = golden_rows(golden, c, layer, real_len)
-            got = read_rows(table, device_map, cid, k, slot_id, real_len, c["width"])[lo : lo + want.shape[0]]
+            got = read_rows(table, device_map, cid, k, slot_id, real_len, c["width"], c.get("fp8", False))
+            got = got[lo : lo + want.shape[0]]
             assert got.shape == want.shape, (c["name"], layer, got.shape, want.shape)
             p = _pcc(got, want)
             mins[c["kind"]] = min(mins.get(c["kind"], 1.0), p)

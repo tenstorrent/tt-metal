@@ -1,0 +1,106 @@
+{
+ "used": [
+  {
+   "id": "K-77",
+   "how": "update_padded_kv_cache needs cache and input dtype equal: the fp8 rows are packed into a uint8 [.., 192] tensor before the write into the uint8 served slab (no fp8/bf16 relabel)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-54",
+   "how": "the ratio-2 served writes (served slab and every re-index mirror) go through the metadata path, slot scalars sized for the largest slab (TtServedRows._put_into)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "pack_fp8_rows takes common runtime args only (each core derives its rows from its coordinates), no per-core args",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-176",
+   "how": "the key slab's tilize before the cast runs with sub_core_grids (capped), the cast's TILE path asserted <= MAX_WORKER_CORES",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-177",
+   "how": "test_kv_layout's stock-cast oracle uploads keys with tt/cores.from_torch (no whole-grid device conversion)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-143",
+   "evidence": "out of date after P.39: under INDEX_K_SERVED=fp8_row192 (the default) the served index-key caches hold Blaze's e4m3 rows (tt/compressor.py fp8_rows), no longer unrounded bf16; the window-KV half still holds",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the brief's 'exact torch recipe' (tt-blaze _quantize_scaled_keys) is not what the stock per_token_cast_to_fp8 writes on this tree: 8x4, 1.1 % of values one e4m3 step higher and subnormals kept, scales equal (DS41-213); tt-blaze's test compares its writer with per_token_cast_to_fp8 (_glm_quantized_key), never with the recipe",
+  "fp8 tensors' raw bytes: to_dtype(float32) flushes e4m3 subnormals and a chip's host shard is at its own MeshCoordinate (DS41-214)",
+  "tt-probe.sh saves probes under tests/ttnn/unit_tests/operations/<op>/probes, outside a perf step's allowed paths, and on the Galaxy each probe resets the whole box (~3 min): run probes as pytest files in the step's own test paths instead"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated to fit an op: the cast and the pack run on the exact W / r key rows; the 60 zero bytes are the contract's row format (Blaze's SCALED_ROW_BYTES 192), the re-index copies are Blaze's own caches (contract), not a workaround"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the one Python-built op added, ttnn.bringup.pack_fp8_rows, dispatches through prepare_program / run_prepared (patch_count 3 asserted); host 74.0 us a call on 32 chips (test_pack_fp8_rows_host_time); the cast is the stock C++ op"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run: only the new op's tests/unit/test_pack_fp8_rows.py (6 passed) and the model's gate units"
+  }
+ ],
+ "cited_only": [
+  "DS41-213",
+  "DS41-214"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.39",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-06T21:38:59",
+  "head": "53832f4caac",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.39.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.39.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/server_rules.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/kv_contract.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/README.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/fp8_rows.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/pack_fp8_rows.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/tests/__init__.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/test_pack_fp8_rows.py"
+  ]
+ }
+}
