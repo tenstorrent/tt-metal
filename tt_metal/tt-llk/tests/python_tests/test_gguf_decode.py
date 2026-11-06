@@ -156,7 +156,8 @@ def _mvmul_golden(
     computes it into a 32-bit DEST: tt-isa-documentation's MatrixUnitArithmetic.md, finite values. Per in1 tile, per
     fidelity phase, per 16-deep K half, one MVMUL: each lane of 8 products sums them in fixed point with 10 fractional
     bits of its largest exponent; the two lane sums and the DEST value are aligned to their common exponent, added,
-    and rounded to Float32 in DEST."""
+    and rounded to Float32 in DEST; a result exponent of 255 or more is an infinity of the result's sign.
+    """
     sa, ea, ma = _src_fields(in1)
     sb, eb, mb = _src_fields(in0)
     shape = (in0.shape[0], in1.shape[1])
@@ -196,9 +197,10 @@ def _mvmul_golden(
                 carry = rounded >> 24
                 result_exp = exp + msb - 23 + carry
                 live = (exp > 0) & (mag > 0) & (result_exp > 0)
+                finite = result_exp < 255
                 d_sign = np.where(live, acc < 0, 0)
-                d_exp = np.where(live, result_exp, 0)
-                d_man = np.where(live, (rounded >> carry) & 0x7FFFFF, 0)
+                d_exp = np.where(live, np.minimum(result_exp, 255), 0)
+                d_man = np.where(live & finite, (rounded >> carry) & 0x7FFFFF, 0)
     bits = (d_sign << 31) | (d_exp << 23) | d_man
     return torch.from_numpy(bits.astype(np.uint32).view(np.float32))
 
@@ -336,3 +338,34 @@ def test_dest_srca_mm(fidelity, rows, kt):
     )
     _assert_matmul(device, in0.to(torch.float32), in1, fidelity)
 
+
+@parametrize(fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4])
+def test_dest_srca_mm_overflow(fidelity):
+    """Finite operands whose sums overflow Float32: infinities of the result's sign, also with an infinity in DEST."""
+    (fidelity,) = fidelity
+    nt = 2
+    in1 = torch.empty(TILE, nt * TILE)
+    # 32 products of 2**124 overflow in the first K half; 2**123 at the second (2**127, then 2**128); 2**120 stays finite.
+    for c, v in enumerate([2.0**124, -(2.0**124), 2.0**123, 2.0**120]):
+        in1[:, 16 * c : 16 * (c + 1)] = v
+    in0 = torch.ones(TILE, TILE, dtype=torch.bfloat16)
+    image = b"".join(
+        _tilize(in1[:, TILE * t : TILE * (t + 1)].numpy()).tobytes() for t in range(nt)
+    )
+    device = _run(
+        0,
+        1,
+        nt,
+        image,
+        DataFormat.Float32,
+        nt,
+        matmul=True,
+        in0_image=_in0_tiles(in0.to(torch.float32).numpy()),
+        fidelity=fidelity,
+    )
+    golden = _mvmul_golden(in0.to(torch.float32), in1, fidelity)
+    assert (
+        torch.isposinf(golden[:, :16]).all() and torch.isneginf(golden[:, 16:32]).all()
+    )
+    assert torch.isposinf(golden[:, 32:48]).all() and (golden[:, 48:] == 2.0**125).all()
+    _assert_matmul(device, in0.to(torch.float32), in1, fidelity)
