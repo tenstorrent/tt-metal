@@ -160,6 +160,8 @@ ttnn::Tensor untilize(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "untilize: input tensor must be on device");
+
     using ttnn::operations::data_movement::untilize_codegen::codegen_cb_plan_fits_live_l1;
     using ttnn::operations::data_movement::untilize_codegen::is_demoted;
     using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;

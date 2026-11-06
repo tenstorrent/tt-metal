@@ -86,6 +86,7 @@ ttnn::Tensor clone(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::data_movement::clone::CloneOperation;
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             dtype.value_or(input.dtype()),

@@ -596,6 +596,22 @@ def test_empty_like(device, input_shapes):
     ), f"memory_config mismatch: input={input_tensor.memory_config()}, output={output_tensor.memory_config()}"
 
 
+def test_empty_like_host():
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # A host tensor must not crash and returns a host tensor with the same shape/dtype/layout.
+    output_tensor = ttnn.empty_like(input_tensor)
+
+    assert list(input_tensor.shape) == list(output_tensor.shape)
+    assert output_tensor.dtype == input_tensor.dtype
+    assert output_tensor.layout == input_tensor.layout
+
+    # A dtype override on a host tensor must also not crash and be honoured.
+    output_tensor = ttnn.empty_like(input_tensor, dtype=ttnn.float32)
+    assert output_tensor.dtype == ttnn.float32
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     [

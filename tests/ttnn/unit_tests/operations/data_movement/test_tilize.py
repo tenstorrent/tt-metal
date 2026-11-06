@@ -1286,3 +1286,11 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
 
     assert entries == 1, "tilize should build exactly one program for a fixed config"
     device.disable_and_clear_program_cache()
+
+
+def test_tilize_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with expect_error(RuntimeError, "tilize: input tensor must be on device"):
+        ttnn.tilize(input_tensor)

@@ -3487,3 +3487,11 @@ def test_untilize_dtype_uint8(device, tensor_shape):
     t = ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
     got = ttnn.to_torch(ttnn.untilize(t))
     assert torch.equal(got, x)
+
+
+def test_untilize_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
+
+    with expect_error(RuntimeError, "untilize: input tensor must be on device"):
+        ttnn.untilize(input_tensor)

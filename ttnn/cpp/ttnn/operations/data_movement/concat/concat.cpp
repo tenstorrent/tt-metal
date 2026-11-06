@@ -525,6 +525,9 @@ ttnn::Tensor concat(
     namespace dm = operations::data_movement;
     namespace cc = dm::concat_codegen;
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
+    for (const auto& input_tensor : input_tensors) {
+        TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Input tensor must be on device");
+    }
     auto prepared = dm::detail::prepare_concat(input_tensors, dim, memory_config, groups);
     if (input_tensors.size() == 1) {
         return ttnn::to_memory_config(input_tensors.at(0), prepared.mem_config, std::nullopt);
