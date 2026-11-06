@@ -109,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_rows  = params.num_faces * params.TEST_FACE_R_DIM;
     constexpr bool interleave_fpu = MATH_TRANSPOSE_FACES;
 
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
     _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
 
     llk_math_ema_sfpu_init();
@@ -127,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Datacopy and transpose_dest share bank 0's MOP, so each re-inits before running.
                 // EMA's bank-1 body, weights and carry survive both: no EMA re-init.
-                _configure_default_alu_data_format_state_<false, is_fp32_dest_acc_en>(src_format, src_format);
+                _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(src_format, src_format);
                 _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
             }
             _llk_math_eltwise_unary_datacopy_(EMA_SECTION_IN_TILE);
