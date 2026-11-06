@@ -32,7 +32,7 @@ struct AllGatherDescriptorArtifacts {
 uint32_t all_gather_input_Ht(const Tensor& input);
 
 // Worker count per direction the default factory resolves: the explicit num_workers_per_link, else the
-// byte-based heuristic. The program hash folds it in because it fixes the core set.
+// byte-based heuristic. It fixes the core set.
 uint32_t all_gather_async_num_workers_per_direction(
     const AllGatherAsyncParams& operation_attributes, const Tensor& input, uint32_t output_data_size_bytes);
 

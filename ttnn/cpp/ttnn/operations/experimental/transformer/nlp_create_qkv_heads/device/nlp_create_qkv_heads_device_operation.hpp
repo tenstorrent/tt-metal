@@ -27,8 +27,8 @@ struct NlpCreateHeadsDeviceOperation {
         bool kv_tied;
         MemoryConfig output_mem_config;
         std::optional<uint32_t> q_head_split;  // Q-only: output 0/1 hold the two channel regions.
-        // Interleaved input only: the row count is a runtime word, so one program serves every sequence
-        // length of a given width and dtype. Ignored for sharded input. Default: the row count is hashed.
+        // Interleaved input only: the row count is a runtime arg and one program serves every sequence
+        // length of a given width and dtype. Ignored for sharded input. Default: one program per row count.
         bool runtime_rows = false;
     };
 
