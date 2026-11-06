@@ -79,6 +79,10 @@ def _vae_kwargs(mesh_device, parallel_config, ccl_manager) -> dict:
     )
 
 
+# a decoder conv whose height-sharded config finds no valid DRAM slice (per-device input at 4096)
+UNSHARDABLE_DECODER_CONVS = frozenset({(258, 2048, 512, 512)})
+
+
 def _configure(module, *, decoder: bool) -> None:
     if isinstance(module, Conv2d):
         # keeps the sliding-window config tensors out of L1_SMALL at 2K and 4K
@@ -86,6 +90,10 @@ def _configure(module, *, decoder: bool) -> None:
         module.act_block_h_override = 64
         module.double_buffer = True
         module.full_inner_dim = decoder
+        if decoder:
+            # height-sharded activations; shapes that do not fit next to the resident DiT fall back per conv
+            module.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            module.no_shard = UNSHARDABLE_DECODER_CONVS
     if isinstance(module, VaeAttention):
         module.local_queries = True
     for _, child in module.named_children():
