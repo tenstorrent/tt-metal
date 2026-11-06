@@ -600,6 +600,7 @@ class TtNomicBertAttention(LightweightModule):
         attn_mask: Optional[ttnn.Tensor] = None,
         fused_tables=None,
         key_lengths: Optional[list[int]] = None,
+        segments: Optional[list] = None,
     ) -> ttnn.Tensor:
         """Project, rotate, attend and project back.
 
@@ -635,7 +636,9 @@ class TtNomicBertAttention(LightweightModule):
         rotated_query, rotated_key, value, program_config, heads_memory, floor, qkv_bank = heads
         head_bank = l1_head_bank_bytes(batch, seqlen, self.num_heads, self.head_dim, self.tt_config.l1_banks)
 
-        context = self._generated_sdpa(rotated_query, rotated_key, value, attn_mask, key_lengths, heads_memory)
+        context = self._generated_sdpa(
+            rotated_query, rotated_key, value, attn_mask, key_lengths, heads_memory, segments=segments
+        )
         if context is None:
             context = self._stock_sdpa(
                 x,
@@ -673,13 +676,18 @@ class TtNomicBertAttention(LightweightModule):
         ttnn.deallocate(context)
         return out
 
-    def _generated_sdpa(self, query, key, value, attn_mask, key_lengths, heads_memory) -> ttnn.Tensor | None:
+    def _generated_sdpa(
+        self, query, key, value, attn_mask, key_lengths, heads_memory, segments=None
+    ) -> ttnn.Tensor | None:
         """Attention on the generated nomic_sdpa (ttnn.operations): q, k, v and the (B, 1, S, 768) output interleaved
         in heads_memory, at the op's own precision (HiFi2, fp32 DEST, its exp). A right-padded batch passes its
         key_lengths in place of the additive mask. None where the flag is off, a mask comes without key_lengths (not a
         right padding) or the op refuses the call (SupportRefusal: S not whole tiles, S > 512, its circular buffers
-        not fitting below the live L1); stock SDPA runs then, with the mask."""
-        if not self.tt_config.generated_sdpa or (attn_mask is not None and key_lengths is None):
+        not fitting below the live L1); stock SDPA runs then, with the mask. Packed rows (tt.packing) pass their texts
+        as segments: each text attends only its own keys."""
+        if not self.tt_config.generated_sdpa:
+            return None
+        if attn_mask is not None and key_lengths is None and segments is None:
             return None
         from ttnn.operations._op_contract import SupportRefusal
         from ttnn.operations.nomic_sdpa import nomic_sdpa
@@ -690,7 +698,8 @@ class TtNomicBertAttention(LightweightModule):
                 key,
                 value,
                 scale=1.0,
-                key_lengths=key_lengths if attn_mask is not None else None,
+                key_lengths=key_lengths if attn_mask is not None and segments is None else None,
+                segments=segments,
                 memory_config=heads_memory,
             )
         except SupportRefusal:

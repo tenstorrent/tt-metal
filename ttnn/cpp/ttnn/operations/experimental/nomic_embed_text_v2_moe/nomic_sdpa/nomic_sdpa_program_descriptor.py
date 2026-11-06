@@ -37,6 +37,7 @@ CB_PROBS = 8  # exp_overlap only: P of one row group (the scores ring keeps only
 # Slots in the cached descriptor that bind_call() patches per call
 READER_SLOT = 0
 WRITER_SLOT = 1
+COMPUTE_SLOT = 2
 # Common-RT layout: the io addresses first, then the core_row_start table. The table offset is handed to every kernel
 # as the named CT arg `table_arg` (single source: these constants).
 READER_ADDRESS_ARGS = 3  # common RT args 0..2: q, k, v addresses
@@ -179,13 +180,14 @@ def _block_named_args(p):
     ]
 
 
-def _lengths_args(p, key_lengths):
-    return [] if key_lengths is None else [int(length) for length in key_lengths]
+def _tail_args(tail):
+    return [] if tail is None else [int(word) for word in tail]
 
 
-def bind_call(descriptor, query, key, value, output, key_lengths=None):
-    """Rebind a cached descriptor to this call's tensors and key lengths: only the buffer addresses and, under
-    key_padding, the per-sequence valid key counts change between calls of a key."""
+def bind_call(descriptor, query, key, value, output, tail=None):
+    """Rebind a cached descriptor to this call's tensors and per-call words: only the buffer addresses and the words
+    after the core table (key_padding's per-sequence real keys, or segmented mode's unit table, which compute reads
+    too) change between calls of a key."""
     kernels = descriptor.kernels
     reader_common = kernels[READER_SLOT].common_runtime_args
     addresses = (query, key, value)
@@ -197,20 +199,33 @@ def bind_call(descriptor, query, key, value, output, key_lengths=None):
     writer_common[1] = query.buffer_address()
     writer_common[2] = value.buffer_address()
     writer_common[3] = key.buffer_address()
-    if key_lengths is not None:
-        for common, offset in ((reader_common, READER_ADDRESS_ARGS), (writer_common, WRITER_ADDRESS_ARGS)):
-            first = len(common) - len(key_lengths)
-            assert first > offset, "a key_padding descriptor ends with the key lengths"
-            for b, length in enumerate(key_lengths):
-                common[first + b] = int(length)
+    if tail is not None:
+        commons = [(reader_common, READER_ADDRESS_ARGS), (writer_common, WRITER_ADDRESS_ARGS)]
+        # The reader holds its addresses, the core table, then the words; compute holds them after its table only in
+        # segmented mode.
+        table_len = len(reader_common) - READER_ADDRESS_ARGS - len(tail)
+        compute_common = kernels[COMPUTE_SLOT].common_runtime_args
+        if len(compute_common) == COMPUTE_ADDRESS_ARGS + table_len + len(tail):
+            commons.append((compute_common, COMPUTE_ADDRESS_ARGS))
+        for common, offset in commons:
+            first = len(common) - len(tail)
+            assert first > offset, "a key_padding / segmented descriptor ends with its per-call words"
+            for i, word in enumerate(tail):
+                common[first + i] = int(word)
 
 
-def create_program_descriptor(p, query, key, value, output, compute_config, scale, key_lengths=None):
+def create_program_descriptor(p, query, key, value, output, compute_config, scale, tail=None):
+    """tail: the per-call words after the core table: key_padding's per-sequence real keys, or segmented mode's
+    unit table (p.segmented; then compute reads it too, and the masking of key_padding is on)."""
     cores = p.cores
     cbs = [_cb(cores, index, pages, page_bytes) for index, pages, page_bytes in circular_buffer_specs(p)]
     table = list(p.core_row_start)
-    block_args = [*_block_named_args(p), ("key_padding", int(key_lengths is not None))]
-    lengths = _lengths_args(p, key_lengths)
+    block_args = [
+        *_block_named_args(p),
+        ("key_padding", int(tail is not None)),
+        ("segmented", int(p.segmented)),
+    ]
+    lengths = _tail_args(tail)
 
     # ---------------- reader: K (K^T order), V (+ ones column), Q blocks ----------------
     reader_ct = []
@@ -309,7 +324,7 @@ def create_program_descriptor(p, query, key, value, output, compute_config, scal
             *block_args,
         ],
         defines=_ablation_defines(),
-        common_runtime_args=table,
+        common_runtime_args=[*table, *(lengths if p.segmented else [])],
         config=config,
     )
 

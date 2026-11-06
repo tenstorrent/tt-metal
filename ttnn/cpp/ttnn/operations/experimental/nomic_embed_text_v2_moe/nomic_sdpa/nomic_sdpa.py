@@ -37,6 +37,9 @@ HEADS = 12
 HEAD_DIM = 64
 TILE = 32
 MAX_SEQLEN = 512  # residency predicate: a pair's K, V and one score row-block fit one core
+# segmented (packed rows of several texts): a row up to this many tokens; each text is still at most MAX_SEQLEN, whose
+# K / V is what a core holds (key_block_tiles = MAX_SEQLEN / TILE)
+SEGMENTED_MAX_SEQLEN = 1024
 MAX_TOKENS = 4096  # B * S_t * 32 (the domain: 12 * B * S_t <= 1536 query rows)
 GRID = (11, 10)  # Blackhole p300c compute grid
 BF16_TILE_BYTES = 2 * TILE * TILE
@@ -180,7 +183,7 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "buffer": ["l1", "dram"],
-    "mask_mode": ["none", "key_padding"],
+    "mask_mode": ["none", "key_padding", "segments"],
     "alignment": ["tile_aligned"],
 }
 
@@ -236,6 +239,7 @@ class Plan:
     kv_mcast: bool
     exp_overlap: bool  # Refinement 3 row-group schedule with the pack-thread exp
     row_group_rows: int  # G: rows a group (exp_overlap only)
+    segmented: bool = False  # packed rows of several texts: units from the per-call unit table (unit_table)
 
     @property
     def split_reads(self):
@@ -326,10 +330,16 @@ def _widest(starts) -> int:
 
 @cache  # a pure function of its arguments returning a frozen Plan: the per-call host cost was ~80 us a call
 def plan(
-    batch: int, seqlen: int, kv_depth: int | None = None, exp_overlap: bool | None = None, q_depth: int | None = None
+    batch: int,
+    seqlen: int,
+    kv_depth: int | None = None,
+    exp_overlap: bool | None = None,
+    q_depth: int | None = None,
+    segmented: bool = False,
 ) -> Plan:
     """kv_depth / q_depth: the K/V ring-depth cap and the cb_query depth (default: the deepest any placement uses).
-    exp_overlap: the row-group schedule (default: what the default compute config runs)."""
+    exp_overlap: the row-group schedule (default: what the default compute config runs). segmented: packed rows of
+    several texts (key extent MAX_SEQLEN / TILE tiles, one K/V slot, no multicast)."""
     if exp_overlap is None:
         exp_overlap = exp_overlap_for(default_compute_kernel_config())
     kv_depth_cap = max(KV_DEPTH_L1, KV_DEPTH_DRAM) if kv_depth is None else kv_depth
@@ -351,7 +361,7 @@ def plan(
         num_cores=num_cores,
         core_row_start=tuple(starts),
         q_block_rows=q_block_rows,
-        key_block_tiles=seq_tiles,
+        key_block_tiles=min(seq_tiles, MAX_SEQLEN // TILE) if segmented else seq_tiles,
         head_dim_tiles=HEAD_DIM_TILES,
         pv_out_tiles=pv_out_tiles,
         q_depth=max(Q_DEPTH_L1, Q_DEPTH_DRAM) if q_depth is None else q_depth,
@@ -359,11 +369,12 @@ def plan(
         q_lead_rows=(
             min(Q_LEAD_GROUPS * row_group_rows, q_block_rows) if Q_LEAD_GROUPS and exp_overlap_on else q_block_rows
         ),
-        kv_depth=min(kv_depth_cap, max_segments),
+        kv_depth=1 if segmented else min(kv_depth_cap, max_segments),
         out_depth=OUT_DEPTH,
-        kv_mcast=bool(KV_MCAST) and seq_tiles >= KV_MCAST_MIN_SEQ_TILES,
+        kv_mcast=bool(KV_MCAST) and seq_tiles >= KV_MCAST_MIN_SEQ_TILES and not segmented,
         exp_overlap=exp_overlap_on,
         row_group_rows=row_group_rows,
+        segmented=segmented,
     )
 
 
@@ -398,7 +409,51 @@ def _is_interleaved(config):
     return config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
 
 
-def _check_malformed(query, key, value, key_lengths):
+def _check_segments(segments, batch, seqlen):
+    """segments: one list a row of (start, length) texts, starts on a tile, in order, not overlapping as tiles."""
+    if len(segments) != batch:
+        raise ValueError(f"nomic_sdpa: len(segments) = {len(segments)} != B = {batch}")
+    for row, texts in enumerate(segments):
+        end = 0
+        for start, length in texts:
+            start, length = int(start), int(length)
+            if start % TILE or start < end:
+                raise ValueError(f"nomic_sdpa: row {row}: a text at {start} must start on a tile at or after {end}")
+            if not (1 <= length <= MAX_SEQLEN) or start + length > seqlen:
+                raise ValueError(f"nomic_sdpa: row {row}: text ({start}, {length}) outside 1 .. {MAX_SEQLEN} / the row")
+            end = start + math.ceil(length / TILE) * TILE
+
+
+def unit_table(segments, seqlen) -> list:
+    """The per-call unit table of segmented mode (kernels/nomic_sdpa_schedule.hpp): for row r and tile st, at
+    r * S_t + st, the unit holding the tile as first tile | (end tile << 8) | (real keys << 16). A text is a unit;
+    each run of tiles no text fills is cut into units of at most MAX_SEQLEN / TILE tiles, all of whose keys count, so
+    those slots attend among themselves and stay finite."""
+    seq_tiles = seqlen // TILE
+    key_tiles = MAX_SEQLEN // TILE
+    words = []
+    for texts in segments:
+        owner = [None] * seq_tiles
+        for start, length in texts:
+            first, end = int(start) // TILE, int(start) // TILE + math.ceil(int(length) / TILE)
+            for tile in range(first, end):
+                owner[tile] = (first, end, int(length))
+        tile = 0
+        while tile < seq_tiles:
+            if owner[tile] is not None:
+                tile += 1
+                continue
+            end = tile
+            while end < seq_tiles and owner[end] is None and end - tile < key_tiles:
+                end += 1
+            for filler in range(tile, end):
+                owner[filler] = (tile, end, (end - tile) * TILE)
+            tile = end
+        words += [first | (end << 8) | (valid << 16) for first, end, valid in owner]
+    return words
+
+
+def _check_malformed(query, key, value, key_lengths, segments=None):
     """ValueError for malformed calls; runs before any support check so the error is stable across refinements."""
     for name, tensor in (("query", query), ("key", key), ("value", value)):
         if len(tensor.shape) != 4:
@@ -415,6 +470,10 @@ def _check_malformed(query, key, value, key_lengths):
         for length in key_lengths:
             if not (1 <= int(length) <= seqlen):
                 raise ValueError(f"nomic_sdpa: key length {length} outside 1 .. {seqlen}")
+    if segments is not None:
+        if key_lengths is not None:
+            raise ValueError("nomic_sdpa: key_lengths and segments are exclusive")
+        _check_segments(segments, shape[0], shape[2])
 
 
 def _compute_key(config):
@@ -428,19 +487,20 @@ def validate(
     *,
     scale=1.0,
     key_lengths=None,
+    segments=None,
     memory_config=None,
     compute_kernel_config=None,
 ):
     """The runtime gate (op_design.md § Support Contract and Validation, steps 1-7; the live-L1 step 8 runs in the
     entry point around the output allocation). Returns the call's Plan."""
     # 1. malformed calls
-    _check_malformed(query, key, value, key_lengths)
+    _check_malformed(query, key, value, key_lengths, segments)
 
     # 2. the registry cell
     axes = {
         "dtype": query.dtype,
         "buffer": _buffer_axis(query),
-        "mask_mode": "none" if key_lengths is None else "key_padding",
+        "mask_mode": "segments" if segments is not None else "none" if key_lengths is None else "key_padding",
     }
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((tuple(query.shape),), axes)
@@ -470,7 +530,10 @@ def validate(
     batch, heads, seqlen, head_dim = (int(d) for d in query.shape)
     if heads != HEADS or head_dim != HEAD_DIM:
         _refuse(f"needs {HEADS} heads of {HEAD_DIM}, got {heads} x {head_dim}")
-    if seqlen > MAX_SEQLEN:
+    if segments is not None:
+        if seqlen % TILE or seqlen > SEGMENTED_MAX_SEQLEN:
+            _refuse(f"segments: rows of whole tiles up to {SEGMENTED_MAX_SEQLEN} tokens, got S = {seqlen}")
+    elif seqlen > MAX_SEQLEN:
         _refuse(f"S = {seqlen} > {MAX_SEQLEN}: a (b, h) pair's K and V no longer fit one core (use stock SDPA)")
     if batch * math.ceil(seqlen / TILE) * TILE > MAX_TOKENS:
         _refuse(f"B * S_t * 32 = {batch * math.ceil(seqlen / TILE) * TILE} > {MAX_TOKENS}")
@@ -488,7 +551,8 @@ def validate(
     compute = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     if compute.math_fidelity == ttnn.MathFidelity.LoFi:
         _refuse("LoFi is refused (precision)")
-    if not compute.fp32_dest_acc_en and compute.math_approx_mode and seqlen > BF16_DEST_APPROX_EXP_MAX_SEQLEN:
+    key_extent = max((int(n) for texts in segments for _, n in texts), default=0) if segments is not None else seqlen
+    if not compute.fp32_dest_acc_en and compute.math_approx_mode and key_extent > BF16_DEST_APPROX_EXP_MAX_SEQLEN:
         _refuse(
             f"a bfloat16 DEST with the approximate exp misses the precision bar at S = {seqlen} > "
             f"{BF16_DEST_APPROX_EXP_MAX_SEQLEN} (use fp32_dest_acc_en=True or math_approx_mode=False)"
@@ -501,6 +565,7 @@ def validate(
         KV_DEPTH_L1 if l1 else KV_DEPTH_DRAM,
         exp_overlap_for(compute),
         Q_DEPTH_L1 if l1 else Q_DEPTH_DRAM,
+        segments is not None,
     )
 
 
@@ -543,15 +608,19 @@ def nomic_sdpa(
     *,
     scale=1.0,
     key_lengths=None,
+    segments=None,
     memory_config=None,
     compute_kernel_config=None,
 ):
+    """segments: packed rows of several texts, one list a row of (start, length) with starts on a tile; each text
+    attends only its own keys (segmented mode, kernels/nomic_sdpa_schedule.hpp). Exclusive with key_lengths."""
     p = validate(
         query,
         key,
         value,
         scale=scale,
         key_lengths=key_lengths,
+        segments=segments,
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
     )
@@ -570,7 +639,7 @@ def nomic_sdpa(
     candidates = [p]
     for kv_depth, q_depth in ((1, p.q_depth), (1, 1)):
         if (kv_depth, q_depth) != (candidates[-1].kv_depth, candidates[-1].q_depth):
-            candidates.append(plan(p.batch, p.seqlen, kv_depth, p.exp_overlap, q_depth))
+            candidates.append(plan(p.batch, p.seqlen, kv_depth, p.exp_overlap, q_depth, p.segmented))
     free = _l1_free_below_live(device)
     fitting = [c for c in candidates if _plan_cb_bytes(c) <= free]
     if not fitting:
@@ -600,7 +669,7 @@ def nomic_sdpa(
         p.q_depth,
         query.memory_config().buffer_type,
         repr(out_config),
-        "none" if key_lengths is None else "key_padding",
+        "segments" if p.segmented else "none" if key_lengths is None else "key_padding",
         _scale_bits(scale),
         _compute_key(compute),
         device.id(),
@@ -610,9 +679,9 @@ def nomic_sdpa(
         state = _CallState(plan=p, compute=compute)
         _CALL_CACHE[cache_key] = state
 
+    # the per-call words after the core table: key_padding's lengths, or segmented mode's unit table
+    tail = unit_table(segments, p.seqlen) if p.segmented else key_lengths
     if state.descriptor is None:
-        state.descriptor = create_program_descriptor(
-            state.plan, query, key, value, output, state.compute, scale, key_lengths
-        )
-    bind_call(state.descriptor, query, key, value, output, key_lengths)
+        state.descriptor = create_program_descriptor(state.plan, query, key, value, output, state.compute, scale, tail)
+    bind_call(state.descriptor, query, key, value, output, tail)
     return ttnn.generic_op([query, key, value, output], state.descriptor)

@@ -327,6 +327,9 @@ class TtModelConfig:
     # attention masked to each text's own slots (tt/packing.py), where tt.packing's device time model puts the
     # packing below the length-sorted chunks. Off: the length-sorted chunks only.
     packed_sequences: bool = True
+    # Packed rows' attention on nomic_sdpa's segmented mode (each text on its own keys, at an unpacked pass's speed);
+    # off: stock SDPA with the block-diagonal mask, and packing chosen with that cost (tt.packing).
+    generated_sdpa_segments: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     min_chunk_tokens: int = MIN_CHUNK_TOKENS  # a smaller last chunk is merged with the one before and split
     layout: ttnn.Layout = LAYOUT

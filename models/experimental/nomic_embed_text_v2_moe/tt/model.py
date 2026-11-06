@@ -62,9 +62,12 @@ from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.chunking import _padded, plan_chunks, plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.packing import (
     PackedPass,
+    PACKED_ATTENTION_US,
+    STOCK_PACKED_ATTENTION_US,
     cheaper_packing,
     packed_inputs,
     pooling_rows,
+    row_segments,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     FUSED_ATTENTION_MAX_TILES,
@@ -197,13 +200,26 @@ class TtNomicBertModel(LightweightModule):
         # tt_config.activation_dtype moves the mask's fill value with it.
         mask = None
         key_lengths = None
+        segments = None
         if segment_ids is not None:
-            mask = segment_attention_mask(
-                segment_ids,
-                self.device,
-                dtype=self.tt_config.activation_dtype,
-                mask_dtype=self.tt_config.attention_mask_dtype,
-            )
+            # Packed rows: nomic_sdpa takes each row's texts (segmented mode); the block-diagonal mask is built only
+            # if a call falls back to stock SDPA.
+            segments = row_segments(segment_ids) if self.tt_config.generated_sdpa_segments else None
+
+            def build_segment_mask():
+                return segment_attention_mask(
+                    segment_ids,
+                    self.device,
+                    dtype=self.tt_config.activation_dtype,
+                    mask_dtype=self.tt_config.attention_mask_dtype,
+                )
+
+            if self.tt_config.lazy_attention_mask:
+                mask = LazyAttentionMask(
+                    build_segment_mask, self.tt_config.attention_mask_dtype or self.tt_config.activation_dtype
+                )
+            else:
+                mask = build_segment_mask()
         elif attention_mask is not None and not bool(attention_mask.all()):
             key_lengths = right_padded_lengths(attention_mask)
 
@@ -243,6 +259,7 @@ class TtNomicBertModel(LightweightModule):
             rot_mats,
             mask,
             key_lengths=key_lengths if self.tt_config.generated_sdpa_key_padding else None,
+            segments=segments,
             free_input=True,
             hidden_sharded=normalized_sharded,
             fused_tables=fused_tables,
@@ -336,7 +353,8 @@ def embed(
     )
     # A padded batch whose padding costs it a pass: pack whole texts side by side instead (tt.packing).
     if model.tt_config.packed_sequences and len(chunks) > 1:
-        packed = cheaper_packing(lengths.tolist(), model.tt_config.max_chunk_tokens, chunks)
+        attention_us = PACKED_ATTENTION_US if model.tt_config.generated_sdpa_segments else STOCK_PACKED_ATTENTION_US
+        packed = cheaper_packing(lengths.tolist(), model.tt_config.max_chunk_tokens, chunks, attention_us)
         if packed is not None:
             return _embed_packed(model, input_ids, packed, matryoshka_dim, kernel_config)
     pieces = []
@@ -406,7 +424,7 @@ def _embed_packed(
     flattened rows) and L2-normalized; the rows come back in input order."""
     pieces = []
     for packed in passes:
-        ids, segments = packed_inputs(input_ids, packed, model.config.pad_token_id)
+        ids, segments = packed_inputs(input_ids, packed, model.config.pad_token_id, model.tt_config.fill_padding_ids)
         hidden = model.backbone(ids, None, ttnn.L1_MEMORY_CONFIG, segment_ids=segments)
         texts = pooling_rows(packed)
         rows = -(-texts.shape[0] // ttnn.TILE_SIZE) * ttnn.TILE_SIZE

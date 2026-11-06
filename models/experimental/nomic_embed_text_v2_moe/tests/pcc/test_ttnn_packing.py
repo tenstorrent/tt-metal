@@ -20,9 +20,12 @@ from models.experimental.nomic_embed_text_v2_moe.tt.model_config import MAX_CHUN
 from models.experimental.nomic_embed_text_v2_moe.tt.packing import (
     best_packing,
     cheaper_packing,
+    chunked_cost_us,
     pack,
+    packed_cost_us,
     packed_inputs,
     pooling_rows,
+    row_segments,
 )
 
 COSINE_TOLERANCE = 0.01
@@ -65,64 +68,32 @@ def test_packing_is_chosen_only_where_its_modelled_time_is_lower():
     assert cheaper_packing(REAL_BATCH, MAX_CHUNK_TOKENS, chunks) is not None  # 2 chunked passes -> 1 packed
     full = [512] * 16  # full-length rows: packing saves nothing and pays the masked attention
     assert cheaper_packing(full, MAX_CHUNK_TOKENS, plan_sorted_chunks(full, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)) is None
-    # 51 real documents (a 16384-token budget, nomic-opt): 1024-wide packing saves 1 pass in 5 but measured slower
-    # (27.6 against 24.0 ms), and the model keeps the chunks.
-    docs = [
-        512,
-        400,
-        419,
-        260,
-        287,
-        398,
-        112,
-        246,
-        352,
-        262,
-        512,
-        487,
-        123,
-        360,
-        223,
-        463,
-        164,
-        358,
-        390,
-        459,
-        512,
-        284,
-        168,
-        340,
-        380,
-        185,
-        180,
-        409,
-        166,
-        128,
-        268,
-        207,
-        166,
-        512,
-        278,
-        308,
-        163,
-        257,
-        340,
-        232,
-        198,
-        512,
-        187,
-        386,
-        380,
-        495,
-        263,
-        247,
-        441,
-        345,
-        367,
-    ]
+    # 51 real documents (a 16384-token budget, nomic-opt): on stock SDPA, 4 unaligned packed passes lost to 5 chunked
+    # ones (27.6 against 24.0 ms). Aligned to tiles the texts need 17 rows of 1024 (16,091 real tokens plus each
+    # text's tile padding), so 5 passes either way, and packing wins only by computing fewer padded slots.
+    docs = [512, 400, 419, 260, 287, 398, 112, 246, 352, 262, 512, 487, 123, 360, 223, 463, 164, 358, 390, 459, 512]
+    docs += [284, 168, 340, 380, 185, 180, 409, 166, 128, 268, 207, 166, 512, 278, 308, 163, 257, 340, 232, 198]
+    docs += [512, 187, 386, 380, 495, 263, 247, 441, 345, 367]
     chunks = plan_sorted_chunks(sorted(docs, reverse=True), MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
-    assert len(best_packing(docs, MAX_CHUNK_TOKENS)) < len(chunks)
-    assert cheaper_packing(docs, MAX_CHUNK_TOKENS, chunks) is None
+    packed = cheaper_packing(docs, MAX_CHUNK_TOKENS, chunks)
+    assert packed is not None and len(packed) == len(chunks) == 5
+    assert packed_cost_us(packed) < chunked_cost_us(chunks)
+
+
+def test_texts_start_on_tiles():
+    for width in (512, 1024):
+        for p in pack(REAL_BATCH + [1, 31, 33, 5], width, MAX_CHUNK_TOKENS):
+            assert all(seg.offset % 32 == 0 for seg in p.segments)
+
+
+def test_row_segments_reads_back_the_packing():
+    (packed,) = best_packing(REAL_BATCH, MAX_CHUNK_TOKENS)
+    _, segment_ids = packed_inputs(torch.zeros(len(REAL_BATCH), 512, dtype=torch.long), packed, pad_token_id=1)
+    rows = row_segments(segment_ids)
+    want = [[] for _ in range(packed.rows)]
+    for seg in sorted(packed.segments, key=lambda s: (s.row, s.offset)):
+        want[seg.row].append((seg.offset, seg.length))
+    assert rows == want
 
 
 def test_packed_inputs_and_pooling_rows_mark_each_text_slots():
@@ -179,3 +150,16 @@ def test_packed_embed_matches_the_reference_on_a_real_padded_batch(
     assert bool(
         (agree > 1.0 - COSINE_TOLERANCE).all()
     ), f"worst text cosine to the chunked path {float(agree.min()):.6f}"
+
+
+def test_texts_for_full_passes_leaves_the_spill_for_the_next_batch():
+    from models.experimental.nomic_embed_text_v2_moe.tt.packing import planned_passes, texts_for_full_passes
+
+    queue = [512] * 10  # 10 full-length texts: 8 fill one pass, 2 would spill into a quarter-full second
+    take = texts_for_full_passes(queue, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
+    assert take == 8
+    assert planned_passes(queue[:take], MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS) == (1, 4096)
+    assert texts_for_full_passes([512] * 3, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS) == 0  # wait: 3 rows fill no pass
+    assert texts_for_full_passes([512] * 3, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS, flush=True) == 3
+    passes, computed = planned_passes(REAL_BATCH, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)  # 11 real documents packed
+    assert passes == 1 and computed == 4096

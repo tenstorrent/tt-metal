@@ -434,6 +434,9 @@ void kernel_main() {
     constexpr uint32_t HD = get_named_compile_time_arg_val("head_dim_tiles");
     constexpr uint32_t PV = get_named_compile_time_arg_val("pv_out_tiles");
     constexpr uint32_t seq_tiles = get_named_compile_time_arg_val("seq_tiles");
+    constexpr bool segmented = get_named_compile_time_arg_val("segmented") == 1;
+    constexpr uint32_t heads = get_named_compile_time_arg_val("heads");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t grid_x = get_named_compile_time_arg_val("grid_x");
     constexpr uint32_t kv_depth = get_named_compile_time_arg_val("kv_depth");
     constexpr bool apply_scale = get_named_compile_time_arg_val("apply_scale") == 1;
@@ -655,7 +658,7 @@ void kernel_main() {
         pad_push(out_buf, (Q - r) * HD);
     };
 
-    nomic_sdpa::for_each_block<seq_tiles, Q>(row_begin, row_end, [&](const nomic_sdpa::Block& blk) {
+    auto block = [&](const nomic_sdpa::Block& blk) {
         const uint32_t r = blk.rows;
         const uint32_t live_scores = r * N;
 #ifdef ABLATE_COMPUTE
@@ -782,5 +785,7 @@ void kernel_main() {
         }
         pack_sfpu_fence();  // the pack-thread normalizes off the SFPU before the next block's math-thread exp
         pad_push(out_buf, (Q - r) * HD);
-    });
+    };
+    // segmented (packed rows of several texts): segments follow the unit table after the core table (schedule header)
+    nomic_sdpa::for_each_block<seq_tiles, Q, segmented, heads>(row_begin, row_end, block, kTableArg + num_cores + 1);
 }

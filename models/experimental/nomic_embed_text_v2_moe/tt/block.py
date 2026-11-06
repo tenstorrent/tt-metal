@@ -107,6 +107,7 @@ class TtNomicBertBlock(LightweightModule):
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         attn_mask: Optional[ttnn.Tensor] = None,
         key_lengths: Optional[list[int]] = None,
+        segments: Optional[list] = None,
         free_input: bool = False,
         x_sharded: ttnn.Tensor | None = None,
         keep_sharded: bool = False,
@@ -120,6 +121,7 @@ class TtNomicBertBlock(LightweightModule):
             rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
             attn_mask: (B, 1, S, S) additive mask, or None.
             key_lengths: each sequence's real length where attn_mask is a right padding, else None.
+            segments: packed rows' texts (tt.packing.row_segments), or None.
             free_input: free x once norm1 has read it, the last use, rather than leave it to the caller.
                 In L1 that keeps the residual stream near the top: x freed after the whole block leaves
                 a hole above the block's output, which then lands deeper, and every later op plans its
@@ -133,7 +135,7 @@ class TtNomicBertBlock(LightweightModule):
             ttnn.Tensor: (B, 1, S, H), shape unchanged; with keep_sharded=True, (output, its split-norm
             layout copy or None above the split limit).
         """
-        attn_out = self.attn(x, rot_mats, attn_mask, fused_tables, key_lengths=key_lengths)
+        attn_out = self.attn(x, rot_mats, attn_mask, fused_tables, key_lengths=key_lengths, segments=segments)
         if x_sharded is not None and free_input:
             ttnn.deallocate(x)
         residual = x if x_sharded is None else x_sharded

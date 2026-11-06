@@ -137,6 +137,9 @@ void kernel_main() {
     constexpr bool kv_bank_stagger = get_named_compile_time_arg_val("kv_bank_stagger") == 1;
     constexpr bool split_reads = get_named_compile_time_arg_val("split_reads") == 1;
     constexpr bool key_padding = get_named_compile_time_arg_val("key_padding") == 1;
+    // segmented: packed rows of several texts, each segment one text's tiles (nomic_sdpa_schedule.hpp); key_padding is
+    // on with it, each text's real keys coming from the unit table instead of a per-sequence length.
+    constexpr bool segmented = get_named_compile_time_arg_val("segmented") == 1;
     constexpr uint32_t heads = get_named_compile_time_arg_val("heads");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr bool own_q = !split_reads;  // cb_query producer: this RISC, or the writer under split_reads
@@ -156,14 +159,27 @@ void kernel_main() {
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t kTableArg = get_named_compile_time_arg_val("table_arg");  // after the io addresses
-    constexpr uint32_t kLengthsArg = kTableArg + num_cores + 1;  // key_padding: L_b of every sequence, after the table
-    // key_padding: a pair's real keys L_b, and its key tile-rows that hold any (reads and multicasts skip the rest)
-    auto valid_keys_of = [&](uint32_t pair) -> uint32_t {
-        return get_common_arg_val<uint32_t>(kLengthsArg + pair / heads);
+    // After the table: key_padding's L_b of every sequence, or in segmented mode the unit table (schedule header).
+    constexpr uint32_t kLengthsArg = kTableArg + num_cores + 1;
+    // The keys of a (b, h) pair (its whole range; key_padding: its sequence's L_b), or of a block's unit
+    auto unit_of_pair = [&](uint32_t pair) -> nomic_sdpa::Unit {
+        uint32_t valid = N * nomic_sdpa::kTileRows;
+        if constexpr (key_padding && !segmented) {
+            valid = get_common_arg_val<uint32_t>(kLengthsArg + pair / heads);
+        }
+        return {pair * seq_tiles * HD, valid};
     };
-    auto key_rows_of = [&](uint32_t pair) -> uint32_t {
+    auto unit_of = [&](const nomic_sdpa::Block& blk) -> nomic_sdpa::Unit {
+        if constexpr (segmented) {
+            return {(blk.pair * seq_tiles + blk.key_tile0) * HD, blk.key_valid};
+        } else {
+            return unit_of_pair(blk.pair);
+        }
+    };
+    // key_padding: the key tile-rows that hold any real key (reads and multicasts skip the rest)
+    auto key_rows_of = [&](const nomic_sdpa::Unit& unit) -> uint32_t {
         if constexpr (key_padding) {
-            return nomic_sdpa::valid_tile_rows(valid_keys_of(pair));
+            return nomic_sdpa::valid_tile_rows(unit.valid);
         } else {
             return N;
         }
@@ -250,11 +266,11 @@ void kernel_main() {
         *flag = 0;
     };
     // first_segment: segment 0 under split_k — this RISC reads key rows [0, k_split_rows), then waits for the writer's.
-    auto read_key = [&](uint32_t pair, uint32_t k_base, bool first_segment) {
-        const uint32_t pair_first_page = pair * seq_tiles * HD;
+    auto read_key = [&](const nomic_sdpa::Unit& unit, uint32_t k_base, bool first_segment) {
+        const uint32_t pair_first_page = unit.first_page;
         const uint32_t rows = split_k && first_segment ? k_split_rows : N;
         const uint32_t rotation = kv_row_rotation % rows;
-        const uint32_t key_rows = key_rows_of(pair);
+        const uint32_t key_rows = key_rows_of(unit);
         {
             MaybeDeviceZoneScope("reader_kv_issue");
             for (uint32_t i = 0; i < rows; ++i) {
@@ -280,29 +296,30 @@ void kernel_main() {
         }
     };
     // value rows [0, rows) (N: all of them; N / 2: this RISC's half of a split segment-0 V) of segment `segment`
-    auto read_value = [&](uint32_t pair, uint32_t v_base, uint32_t rows, uint32_t segment, auto&& under_reads) {
-        const uint32_t pair_first_page = pair * seq_tiles * HD;
-        const uint32_t rotation = kv_row_rotation % rows;
-        const uint32_t key_rows = key_rows_of(pair);
-        {
-            MaybeDeviceZoneScope("reader_kv_issue");
-            for (uint32_t i = 0; i < rows; ++i) {
-                const uint32_t st = i + rotation < rows ? i + rotation : i + rotation - rows;
-                if constexpr (key_padding) {
-                    if (st >= key_rows) {
-                        continue;  // wholly padded: zeroed in L1 instead (mask_value_slot)
+    auto read_value =
+        [&](const nomic_sdpa::Unit& unit, uint32_t v_base, uint32_t rows, uint32_t segment, auto&& under_reads) {
+            const uint32_t pair_first_page = unit.first_page;
+            const uint32_t rotation = kv_row_rotation % rows;
+            const uint32_t key_rows = key_rows_of(unit);
+            {
+                MaybeDeviceZoneScope("reader_kv_issue");
+                for (uint32_t i = 0; i < rows; ++i) {
+                    const uint32_t st = i + rotation < rows ? i + rotation : i + rotation - rows;
+                    if constexpr (key_padding) {
+                        if (st >= key_rows) {
+                            continue;  // wholly padded: zeroed in L1 instead (mask_value_slot)
+                        }
+                    }
+                    for (uint32_t dt = 0; dt < HD; ++dt) {
+                        READ_PAGE(pair_first_page + st * HD + dt, v_acc, v_base + (st * PV + dt) * tile_bytes);
+                        throttle(segment == 0);
                     }
                 }
-                for (uint32_t dt = 0; dt < HD; ++dt) {
-                    READ_PAGE(pair_first_page + st * HD + dt, v_acc, v_base + (st * PV + dt) * tile_bytes);
-                    throttle(segment == 0);
-                }
             }
-        }
-        under_reads();  // work that overlaps the reads in flight (the ones fill of a READ segment)
-        MaybeDeviceZoneScope("reader_kv_barrier");
-        noc_async_read_barrier();
-    };
+            under_reads();  // work that overlaps the reads in flight (the ones fill of a READ segment)
+            MaybeDeviceZoneScope("reader_kv_barrier");
+            noc_async_read_barrier();
+        };
 
     // ---- pre-send: every pair this core multicasts is read into its fresh slot and sent ahead of the schedule (the
     // slot is pushed later, in schedule order, without a re-read). Writing a slot before its reserve is safe: segment
@@ -320,12 +337,13 @@ void kernel_main() {
     auto presend_keys = [&]() {
         for_each_send([&](uint32_t k, uint32_t pair, uint32_t slot) {
             const uint32_t k_base = key_ring_base + slot * key_slot_bytes;
-            read_key(pair, k_base, k == 0);
+            const auto unit = unit_of_pair(pair);  // multicast is off in segmented mode (host)
+            read_key(unit, k_base, k == 0);
             const auto args = sender_args(k);
             with_slot<kv_depth>(slot, [&](auto s) {
                 KvSender<kv_sem_base + 2 * decltype(s)::value, max_rects> sender(noc, args);
                 if constexpr (key_padding) {  // only the valid key tile-rows of each dt (receivers zero the rest)
-                    const uint32_t key_rows = key_rows_of(pair);
+                    const uint32_t key_rows = key_rows_of(unit);
                     for (uint32_t dt = 0; dt < HD; ++dt) {
                         const uint32_t run = k_base + dt * N * tile_bytes;
                         sender.send_payload(run, run, key_rows * tile_bytes);
@@ -340,17 +358,18 @@ void kernel_main() {
     auto presend_values = [&]() {
         for_each_send([&](uint32_t k, uint32_t pair, uint32_t slot) {
             const uint32_t v_base = value_ring_base + slot * value_slot_bytes;
+            const auto unit = unit_of_pair(pair);
             if (split_v && k == 0) {  // segment 0: rows [0, N / 2) here, the writer's [N / 2, N) on its flag
-                read_value(pair, v_base, N / 2, k, [] {});
+                read_value(unit, v_base, N / 2, k, [] {});
                 MaybeDeviceZoneScope("reader_v_wait_half");
                 wait_flag(sem_v_half);
             } else {
-                read_value(pair, v_base, N, k, [] {});
+                read_value(unit, v_base, N, k, [] {});
             }
             const auto args = sender_args(k);
             with_slot<kv_depth>(slot, [&](auto s) {
                 KvSender<kv_sem_base + 2 * decltype(s)::value + 1, max_rects> sender(noc, args);
-                const uint32_t key_rows = key_rows_of(pair);  // key_padding: the valid rows (receivers zero the rest)
+                const uint32_t key_rows = key_rows_of(unit);  // key_padding: the valid rows (receivers zero the rest)
                 for (uint32_t st = 0; st < key_rows;
                      ++st) {  // the HD value tiles of each row, contiguous; never the ones tile
                     const uint32_t row = v_base + st * PV * tile_bytes;
@@ -392,8 +411,7 @@ void kernel_main() {
     // rest) and the first key tile-row of each slot from which its [V | 1] is known zero (nomic_sdpa_key_mask.hpp)
     uint32_t ones_keys[kv_depth] = {};
     uint32_t value_known_zero[kv_depth] = {};
-    auto mask_padded_keys = [&](uint32_t pair, uint32_t slot, uint32_t v_base, bool ones_now) {
-        const uint32_t valid = valid_keys_of(pair);
+    auto mask_padded_keys = [&](uint32_t valid, uint32_t slot, uint32_t v_base, bool ones_now) {
         if (ones_now) {  // the slot's first use: all ones, nothing known zero
             ones_keys[slot] = N * nomic_sdpa::kTileRows;
             value_known_zero[slot] = N;
@@ -407,9 +425,10 @@ void kernel_main() {
     };
     uint32_t key_known_zero[kv_depth] = {};
 
-    nomic_sdpa::for_each_block<seq_tiles, Q>(row_begin, row_end, [&](const nomic_sdpa::Block& blk) {
+    auto block = [&](const nomic_sdpa::Block& blk) {
         const uint32_t role = blk.segment < kv_depth ? roles[blk.segment] : kRoleRead;
-        const uint32_t slot = blk.pair % kv_depth;
+        const uint32_t slot = blk.pair % kv_depth;  // segmented mode runs kv_depth 1 (host): slot 0
+        const auto unit = unit_of(blk);
         // load_query_block: rows [row0, row0 + rows) are pages [2*row0, 2*(row0 + rows)). The first `lead` rows go
         // ahead of the segment's K / V, the rest after them (compute consumes Q a row at a time, so it starts on the
         // lead rows; the rest is not on the startup's critical path). Pushes are cumulative within the one reserve.
@@ -446,14 +465,14 @@ void kernel_main() {
                     KvReceiver<kv_sem_base + 2 * decltype(s)::value>(noc, no_sender_coords).receive();
                 });
             } else if (role == kRoleRead) {
-                read_key(blk.pair, k_base, blk.segment == 0);
+                read_key(unit, k_base, blk.segment == 0);
             }
             if constexpr (key_padding) {  // after the slot's K landed (read barrier / multicast receive / pre-send)
                 MaybeDeviceZoneScope("reader_k_mask");
                 if (blk.segment < kv_depth) {
                     key_known_zero[slot] = N;  // the slot's first use: nothing known zero
                 }
-                nomic_sdpa::mask_key_slot<N, HD, tile_bytes>(k_base, valid_keys_of(blk.pair), key_known_zero[slot]);
+                nomic_sdpa::mask_key_slot<N, HD, tile_bytes>(k_base, unit.valid, key_known_zero[slot]);
             }
             cb_push_back(cb_key_t, N * HD);
         }
@@ -468,7 +487,7 @@ void kernel_main() {
                 // value rows [0, N / 2) of the fresh slot (no reserve: the writer owns cb_value_aug and pushes the slot
                 // once its half is in too), then the slot's V flag
                 MaybeDeviceZoneScope("reader_v_half");
-                read_value(blk.pair, value_ring_base + slot * value_slot_bytes, N / 2, blk.segment, [] {});
+                read_value(unit, value_ring_base + slot * value_slot_bytes, N / 2, blk.segment, [] {});
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(kv_sem_base + 2 * kv_depth + slot)) = 1;
             }
         }
@@ -490,7 +509,7 @@ void kernel_main() {
                     KvReceiver<kv_sem_base + 2 * decltype(s)::value + 1>(noc, no_sender_coords).receive();
                 });
             } else if (role == kRoleRead) {
-                read_value(blk.pair, v_base, N, blk.segment, [&] {
+                read_value(unit, v_base, N, blk.segment, [&] {
                     if (ones_now) {
                         write_ones_column(v_base);
                     }
@@ -498,7 +517,7 @@ void kernel_main() {
             }
             if constexpr (key_padding) {
                 MaybeDeviceZoneScope("reader_v_mask");
-                mask_padded_keys(blk.pair, slot, v_base, ones_now);
+                mask_padded_keys(unit.valid, slot, v_base, ones_now);
             }
             cb_push_back(cb_value_aug, N * PV);
         }
@@ -511,6 +530,7 @@ void kernel_main() {
             }
             cb_push_back(cb_query, (Q - lead) * HD);
         }
-    });
+    };
+    nomic_sdpa::for_each_block<seq_tiles, Q, segmented, heads>(row_begin, row_end, block, kLengthsArg);
     noc_async_write_barrier();
 }

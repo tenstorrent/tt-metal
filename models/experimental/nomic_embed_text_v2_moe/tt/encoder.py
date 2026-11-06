@@ -55,6 +55,7 @@ class TtNomicBertEncoder(LightweightModule):
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         attn_mask: Optional[ttnn.Tensor] = None,
         key_lengths: Optional[list[int]] = None,
+        segments: Optional[list] = None,
         free_input: bool = False,
         hidden_sharded: Optional[ttnn.Tensor] = None,
         fused_tables=None,
@@ -68,6 +69,8 @@ class TtNomicBertEncoder(LightweightModule):
             attn_mask: (B, 1, S, S) additive mask, or None.
             key_lengths: each sequence's real length where attn_mask is a right padding, else None (tt.model:
                 right_padded_lengths); attention hands it to the generated nomic_sdpa in place of the mask.
+            segments: packed rows' texts, one list a row of (start, length) (tt.packing.row_segments), or None; the
+                generated nomic_sdpa runs each text's attention on its own keys (segmented mode).
             free_input: free hidden_states once the first block is done with it; otherwise it stays
                 the caller's.
             hidden_sharded: hidden_states in the split norms' layout (tt.common.layer_norm), handed to
@@ -91,6 +94,7 @@ class TtNomicBertEncoder(LightweightModule):
                     rot_mats,
                     attn_mask,
                     key_lengths=key_lengths,
+                    segments=segments,
                     free_input=free,
                     x_sharded=hidden_sharded,
                     fused_tables=fused_tables,
@@ -102,6 +106,7 @@ class TtNomicBertEncoder(LightweightModule):
                     rot_mats,
                     attn_mask,
                     key_lengths=key_lengths,
+                    segments=segments,
                     free_input=free,
                     x_sharded=hidden_sharded,
                     keep_sharded=True,

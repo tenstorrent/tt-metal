@@ -512,3 +512,23 @@ Medians of 5; the focus is a median of 11; the configs are medians of 3.
   the `no_sdpa_key_padding` variant: device time 2x512 2.583 -> 2.351 ms (-9.0%), 4x512 3.786 -> 3.330 (-12.1%),
   8x512 6.155 -> 5.486 (-10.9%); attention over the 12 layers 481 -> 250, 833 -> 374, 1310 -> 652 us. Model tests
   (`tests/pcc/test_ttnn_model.py`, padded and not) 49 passed.
+
+## Segmented mode: packed rows of several texts (by hand, outside the pipeline)
+- **Date**: 2026-11-06. Blackhole p300c, 1350 MHz. SUPPORTED: `mask_mode` gains `segments`.
+- **What**: `nomic_sdpa(q, k, v, segments=...)` takes rows that hold several texts side by side (the model's sequence
+  packing, tt/packing.py): one list a row of (start, length), each start on a tile, rows up to 1024 tokens, each text
+  up to 512. Each text attends only its own keys.
+- **Mechanism**: a text starting on a tile owns whole query tiles, so the kernels only need a different unit: the
+  shared block schedule (kernels/nomic_sdpa_schedule.hpp) ends a segment at a text's end as well as at a (b, h) pair's,
+  from a per-call unit table (per row and tile: first tile | end tile << 8 | real keys << 16; tiles no text fills form
+  filler units of at most 16 tiles that attend among themselves). Reader and writer address K / V by the unit's first
+  page (`nomic_sdpa::Unit`) and reuse key padding's zeroing for the text's tail; the key extent stays 16 tiles (a text
+  is at most 512 tokens) and the compute kernel is unchanged. Packed mode runs one K / V slot and no multicast.
+- **Perf** (per call, L1, 12 heads, median of 5; test_nomic_sdpa_segments_perf.py): 8 x 512 unpadded 52.4 us
+  (unchanged), with key_lengths 54.2, 8 x 512 packed 57.0, 4 x 1024 packed 55.8; stock SDPA with the block-diagonal
+  mask on the same 4 x 1024 layout 242.2.
+- **Accuracy**: PCC 0.9998, relative RMS 0.024 against a float64 per-text softmax (the op's usual precision), with NaN
+  in every text's tile padding; whole-row attention on the same inputs is 0.99 to 1.44 off, so the test discriminates.
+- **Tests**: test_nomic_sdpa_segments.py (8 x 512, 4 x 1024 and 2 x 1024 in L1, 4 x 1024 and 16 x 256 in DRAM, per-call
+  layouts, malformed calls; passes with --dev). Acceptance 43 and golden 76 passed / 13 xfailed as before (the ragged
+  3 x 400 case still refused).

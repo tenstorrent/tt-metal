@@ -72,6 +72,13 @@ inline __attribute__((always_inline)) void zero_tile_rows_async(uint32_t tile, u
     }
 }
 
+// The keys a segment reads: the first page of its key tile-rows in the K / V tensors and its real keys (the rows
+// past them are zeroed). A (b, h) pair's whole key range, or in segmented mode one text of a packed row.
+struct Unit {
+    uint32_t first_page;
+    uint32_t valid;
+};
+
 constexpr uint32_t kZeroSeedBytes = 2048;
 
 // Zero [addr, addr + bytes) of this core's L1 (bytes a multiple of 32): 2 KiB from MEM_ZEROS, then doubling local
