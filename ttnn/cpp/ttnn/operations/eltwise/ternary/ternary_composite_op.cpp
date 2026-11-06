@@ -64,23 +64,43 @@ Tensor _addcdiv(
 
     Tensor t_factor = ttnn::multiply(input_b, value, std::nullopt, output_mem_config);
     Tensor t_div = ttnn::div(t_factor, input_c, false, std::nullopt, std::nullopt, output_mem_config);
-    Tensor result = ttnn::add(input_a, t_div, std::nullopt, output_mem_config);
+    t_factor.deallocate();
 
-    if (result.dtype() == DataType::FLOAT32) {
-        return write_output(result);
+    if (t_div.dtype() != DataType::FLOAT32) {
+        // For non-FP32 (BF16 / BFLOAT8_B): t_factor can underflow to 0 in BF16 when |value * input_b| is small,
+        // and non-FP32 division at input_c == 0 does not preserve IEEE 0/0 -> NaN or signed-zero divisor signs.
+        // Fix up the quotient t_div at input_c == 0 before adding input_a so that:
+        //   1. value == 0, input_b == 0, or isnan(input_b) at input_c == 0 yields NaN,
+        //   2. input_c == -0.0 flips the pole infinity sign via signbit(input_c), and
+        //   3. adding input_a afterwards preserves input_a = NaN and (-inf) + (+inf) = NaN.
+        const float t_nan = std::nanf("");
+        if (value == 0.0f) {
+            t_div = ttnn::where(ttnn::eqz(input_c, output_mem_config), t_nan, t_div, output_mem_config);
+        } else {
+            const float signed_inf = std::copysign(std::numeric_limits<float>::infinity(), value);
+            Tensor sign_b = ttnn::sign(input_b, output_mem_config);
+            Tensor c_zero_sign =
+                ttnn::where(ttnn::signbit(input_c, output_mem_config), -1.0f, 1.0f, output_mem_config);
+            Tensor pole_sign = ttnn::multiply(sign_b, c_zero_sign, std::nullopt, output_mem_config);
+            sign_b.deallocate();
+            c_zero_sign.deallocate();
+            Tensor t_inf = ttnn::multiply(pole_sign, signed_inf, std::nullopt, output_mem_config);
+            pole_sign.deallocate();
+            Tensor is_nan_pole = ttnn::logical_or(
+                ttnn::eqz(input_b, output_mem_config),
+                ttnn::isnan(input_b, output_mem_config),
+                std::nullopt,
+                output_mem_config);
+            Tensor pole_val = ttnn::where(is_nan_pole, t_nan, t_inf, output_mem_config);
+            is_nan_pole.deallocate();
+            t_inf.deallocate();
+            t_div = ttnn::where(ttnn::eqz(input_c, output_mem_config), pole_val, t_div, output_mem_config);
+            pole_val.deallocate();
+        }
     }
 
-    // For non-FP32: 0.5 * inf != inf but 1.7014e+3 and 0/0 = 0
-    // To match Torch behavior after golden normalization, we explicitly
-    // inject an "infinite term" whenever input_c == 0:
-    //   (value * input_b) / 0  ->  sign(input_b) * (value * inf)
-    // If input_b == 0 and input_c ==0: force sign = +1 so the result becomes (value * inf)
-    // Note: We intentionally avoid using sign(t_factor) here, since (value * input_b) can underflow to 0 in BF16.
-    const float signed_inf = value * std::numeric_limits<float>::infinity();  // value * torch.tensor(float("inf"))
-    Tensor sign_b = ttnn::sign(input_b, output_mem_config);
-    Tensor sign_or_one = ttnn::where(ttnn::eqz(input_b, output_mem_config), 1.0f, sign_b, output_mem_config);
-    Tensor t_inf = ttnn::multiply(sign_or_one, signed_inf, std::nullopt, output_mem_config);
-    result = ttnn::where(ttnn::eqz(input_c, output_mem_config), t_inf, result, output_mem_config);
+    Tensor result = ttnn::add(input_a, t_div, std::nullopt, output_mem_config);
+    t_div.deallocate();
     return write_output(result);
 }
 
