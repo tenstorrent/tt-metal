@@ -2161,7 +2161,9 @@ class ttMLA:
         if plan.dense_below:
             # In dense mode the push above sent nothing and this gather fills the buffer, in the layout
             # plan.compact_indices address; otherwise the gather copies nothing. Every chip reads the same chunk
-            # start, so they agree.
+            # start, so they agree. It signals through the model's shared gather counters: without them every
+            # program of it allocates its own pair in L1_SMALL on its cache miss, which runs out across layers.
+            ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
             ttnn.experimental.high_bw_all_gather(
                 storage,
                 dim=2,
@@ -2172,6 +2174,8 @@ class ttMLA:
                 gathered_prefix_tensor=metadata[1],
                 gathered_slab_global=seq_len_local * self.sp_factor,
                 gathered_active_below=plan.dense_below,
+                ready_semaphore=ready_semaphore,
+                data_valid_semaphore=data_valid_semaphore,
             )
         return self._finish_sparse_chunked_attn(
             tt_q=tt_q,
