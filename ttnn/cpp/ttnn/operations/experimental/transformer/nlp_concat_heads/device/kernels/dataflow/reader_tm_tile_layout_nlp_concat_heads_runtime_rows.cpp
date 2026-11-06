@@ -15,7 +15,7 @@
 void kernel_main() {
     Noc noc;
 
-    // Static core index plus the common row count in tiles; the (row, head) block range comes from the two.
+    // RUNTIME ARGS: the core index and the common row count in tiles
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t in0_h_tiles = get_arg(args::h_tiles);
 

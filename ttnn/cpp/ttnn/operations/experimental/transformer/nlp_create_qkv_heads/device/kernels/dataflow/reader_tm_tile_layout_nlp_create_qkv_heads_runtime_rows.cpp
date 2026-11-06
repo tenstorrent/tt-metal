@@ -14,8 +14,7 @@
 void kernel_main() {
     Noc noc;
 
-    // Static core index plus the common sequence length in tiles: each core derives its own block
-    // range from the two, so a new length needs no per-core host work.
+    // RUNTIME ARGS: the core index and the common sequence length in tiles
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t seq_tiles = get_arg(args::h_tiles);
 

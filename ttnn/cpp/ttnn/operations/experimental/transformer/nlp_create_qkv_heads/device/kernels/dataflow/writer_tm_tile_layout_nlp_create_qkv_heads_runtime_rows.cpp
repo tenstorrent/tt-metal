@@ -15,8 +15,7 @@
 void kernel_main() {
     Noc noc;
 
-    // Static core index plus the common sequence length in tiles; the block range and the output
-    // tile ids are derived from the two (same split as the reader).
+    // RUNTIME ARGS: the core index and the common sequence length in tiles (same split as the reader)
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t q_out_h_tiles = get_arg(args::h_tiles);
 

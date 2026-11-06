@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Interleaved factory for runtime_rows: the program owns the full grid, the row count is one common
-// runtime word and every per-core range is derived from it on device, so one program serves every
+// Interleaved factory for runtime_rows. The program owns the full grid; the row count is one common
+// runtime arg, and each core derives its own range from it on device. One program serves every
 // sequence length of a given width and dtype. The default Interleaved factory is untouched.
 
 #include <tt-metalium/buffer.hpp>
@@ -28,8 +28,8 @@ using namespace tt::tt_metal::experimental;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Static part of the head-parallel decision; the dynamic part (fewer tile rows than cores) is taken
-// on device from the common sequence length, so one program serves every length.
+// Static part of the head-parallel decision. The dynamic part (fewer tile rows than cores) is decided
+// on device from the common sequence length.
 bool head_parallel_allowed(
     const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes, bool input_tensor_kv_present) {
     const bool q_only = operation_attributes.num_kv_heads == 0;
@@ -39,10 +39,9 @@ bool head_parallel_allowed(
 }
 
 // The five tensor arguments both factories bind: the Q input, the optional separate KV input and the three
-// outputs.  The names must match the TensorParameter unique_ids the factories declare.  Shared by
-// create_program_artifacts and override_runtime_arguments of both factories so a renamed or added tensor
-// parameter cannot drift between them.
-using TensorRunArgs = decltype(tt::tt_metal::experimental::ProgramRunArgs::tensor_args);
+// outputs. The names must match the TensorParameter unique_ids the factories declare. Shared by
+// create_program_artifacts and override_runtime_arguments of both factories.
+using TensorRunArgs = Table<TensorParamName, ProgramRunArgs::TensorArgument>;
 TensorRunArgs build_qkv_tensor_run_args(
     const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args,
     NlpCreateHeadsDeviceOperation::tensor_return_value_t& output) {
@@ -115,9 +114,7 @@ NlpCreateHeadsDeviceOperation::InterleavedRuntimeRows::create_program_artifacts(
         TT_ASSERT(input_tensor_kv->buffer()->size() % single_tile_size == 0);
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      TM Parameters Setup
-    ////////////////////////////////////////////////////////////////////////////
+    // Tile counts
     uint32_t in0_w_tiles = input_shape[3] / TILE_WIDTH;
     uint32_t in1_w_tiles = 0;
     if (read_from_input_tensor_kv) {
@@ -152,9 +149,7 @@ NlpCreateHeadsDeviceOperation::InterleavedRuntimeRows::create_program_artifacts(
     const std::vector<CoreCoord> cores = corerange_to_cores(all_cores, std::nullopt, true);
     const uint32_t num_cores = cores.size();
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
+    // Outputs
     ttnn::Tensor& q = std::get<0>(output);
     ttnn::Tensor& k = std::get<1>(output);
     ttnn::Tensor& v = std::get<2>(output);
@@ -169,7 +164,7 @@ NlpCreateHeadsDeviceOperation::InterleavedRuntimeRows::create_program_artifacts(
 
     // Tensor parameters: the Q input, the optional separate KV input, and the three outputs.  The kernels
     // reach them through TensorAccessor(tensor::<name>); the base addresses ride the bindings.
-    // Every one of them is as tall as the sequence, which the hash drops and the kernels take at runtime.
+    // Every one of them is as tall as the sequence, which varies per call.
     const TensorSpecRelaxations rows_vary{.dynamic_tensor_shape = true};
     Group<TensorParameter> tensor_parameters = {
         TensorParameter{.unique_id = INPUT_Q, .spec = input_tensor.tensor_spec(), .relaxations = rows_vary},
@@ -414,8 +409,6 @@ NlpCreateHeadsDeviceOperation::InterleavedRuntimeRows::create_program_artifacts(
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// The hash drops the row count, so a hit rewrites the one common length word of every kernel (the
-// per-core split is derived on device from it) and re-binds the five tensors.
 tt::tt_metal::experimental::ProgramRunArgs
 NlpCreateHeadsDeviceOperation::InterleavedRuntimeRows::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,

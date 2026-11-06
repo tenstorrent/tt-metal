@@ -13,7 +13,7 @@
 namespace ttnn::operations::experimental::transformer {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-// The InterleavedRuntimeRows factory serves the call: the flag is ignored for sharded input.
+// Runtime rows apply to interleaved Q only; a sharded Q keeps the sharded factory.
 bool runtime_rows_selected(
     const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
     const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args) {
@@ -228,7 +228,6 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-// Only the row-dependent invariants of the row-free program; the other factories hash the full specs.
 void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (!CMAKE_UNIQUE_NAMESPACE::runtime_rows_selected(operation_attributes, tensor_args)) {
