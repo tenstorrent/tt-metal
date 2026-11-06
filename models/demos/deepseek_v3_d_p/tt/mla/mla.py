@@ -636,6 +636,10 @@ class ttMLA:
             self.joint_kv = ring_buffers["joint_kv"]
             self.joint_v = ring_buffers["joint_v"]
 
+        # Normalize each chip's q_a slice with the fused distributed RMSNorm before the TP all-gather, when the block
+        # norms use it (use_fused_rmsnorm). This needs q_a split over TP: TP > 1, a Q path (not kv_only), and q_a
+        # apart from kv_a (not _merge_qkv_a). _llama4_beta is Mistral's query temperature (rope_scaling): _q_stem
+        # frees the latent after it scales it, and on this path the latent is the persistent gather buffer.
         self._q_distnorm = (
             self.tp_factor > 1
             and not kv_only
