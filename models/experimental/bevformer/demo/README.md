@@ -53,18 +53,20 @@ on Blackhole only.
 
 These runs used the commands above:
 
-| Variant | BEV size | Encoder layers | p150b Device FPS | p150b 13x10 Device FPS |
+| Variant | BEV size | Encoder layers | Device FPS (Snapshot #1) | Device FPS (Snapshot #2) |
 | --- | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 53.46 | 54.58 |
-| small | 150 | 3 | 14.69 | 15.70 |
-| base | 200 | 6 | 6.04 | 6.44 |
+| tiny | 50 | 3 | 53.19 | 54.58 |
+| small | 150 | 3 | 14.72 | 15.70 |
+| base | 200 | 6 | 5.88 | 6.44 |
 
-| Card | Enabled Tensix cores | Compute grid | DRAM channels | Commit |
-| --- | ---: | ---: | ---: | --- |
-| p150b | 120 | 11x10 | 8 | [`7c65f14a237`](https://github.com/tenstorrent/tt-metal/commit/7c65f14a23715e8ef85bfba537f088f30bf7a969) |
-| p150b 13x10 | 140 | 13x10 | 8 | [`7c65f14a237`](https://github.com/tenstorrent/tt-metal/commit/7c65f14a23715e8ef85bfba537f088f30bf7a969) |
+Each snapshot is one card and compute grid, measured at one commit:
 
-The p150b 13x10 runs used firmware 19.12.0 with the Tensix column disable count patched from 2 to 0,
+| Snapshot | Card | Enabled Tensix cores | Compute grid | DRAM channels | Commit |
+| --- | --- | ---: | ---: | ---: | --- |
+| #1 | P100 | 120 | 11x10 | 7 | [`6c9f2f50bde`](https://github.com/tenstorrent/tt-metal/commit/6c9f2f50bdec70d5551c0c3db83824c88f5b52ba) |
+| #2 | P150 | 140 | 13x10 | 8 | [`7c65f14a237`](https://github.com/tenstorrent/tt-metal/commit/7c65f14a23715e8ef85bfba537f088f30bf7a969) |
+
+Snapshot #2 used firmware 19.12.0 with the Tensix column disable count patched from 2 to 0,
 which enables all 14 columns. One column goes to dispatch, which leaves a 13x10 compute grid.
 
 Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
