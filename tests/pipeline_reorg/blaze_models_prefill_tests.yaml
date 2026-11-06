@@ -428,7 +428,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
       # K3.1 sparse MLA host-time gate: warm and long, each untraced (fastest of 10 after 10 warm-up) and traced (one replay).
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_kimi_k31_sparse_mla_perf -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
     '
   test_type: k3_mla_perf
   test_tags: [kimi_k3, kda, mla, k3_kda_perf, sparse_mla, k31_sparse_mla_perf]
@@ -740,7 +740,7 @@
 # comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
 # replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
 # time than its untraced twin.
-- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced"
+- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced + sparse MLA perf 5k@50k, 5k@500k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -751,11 +751,14 @@
     export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
+      # GLM-5.3 sparse MLA host-time gate, full-indexer and shared (no indexer) layers: warm and long, each untraced
+      # (fastest of 10 after 10 warm-up) and traced (one replay). Before DS_PREFILL_REUSE_MODEL, as its targets were taken.
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '
   test_type: glm_chunked_perf_suite
-  test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf]
+  test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf, sparse_mla, glm_sparse_mla_perf]
   test_group: module
   skus:
     bh_sc1_high_power:

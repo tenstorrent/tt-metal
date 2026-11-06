@@ -10,11 +10,12 @@ Scenarios (Galaxy sizes; smaller boxes scale the chunk and cache by SP/8 so each
   * cold: every chunk from an empty cache up to the warm step, with real forwards that fill the caches.
   * long: one 5k chunk over a 500k cache.
 
-test_kimi_k31_sparse_mla_perf: the CI gate (Galaxy, LoudBox). K3.1 warm and long with the production scaled-FP8
-KVPE cache (SPxTP-sharded, 24 slots, last DSA layer's slot), torus XY on Galaxy and Fabric2D on LoudBox at K3.1's
-packet size. Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one replay
-of the captured trace. Each (box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode],
-and the traced output must match the untraced one.
+test_sparse_mla_perf: the CI gate (Galaxy, LoudBox). Warm and long with the production scaled-FP8 KVPE cache
+(SPxTP-sharded), torus XY on Galaxy and Fabric2D on LoudBox, for GATE_CASES: K3.1 (last DSA layer's slot of 24, at
+K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's
+top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one replay of the
+captured trace. Each (case, box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode], and
+the traced output must match the untraced one.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
@@ -58,18 +59,26 @@ UNTRACED_WARMUP = 10
 UNTRACED_SAMPLES = 10
 SCENARIO_CACHE_TOKENS = {"warm": WARM_CACHE_TOKENS, "long": LONG_CACHE_TOKENS}
 MODES = ("untraced", "traced")
+# Gate cases: (variant, shared_layer). GLM-5.3 also gates a shared layer, which reuses a full layer's top-k and runs
+# no indexer.
+GATE_CASES = {
+    "kimi_k3_1": ("kimi_k3_1", False),
+    "glm_5_3": ("glm_5_3", False),
+    "glm_5_3-no_indexer": ("glm_5_3", True),
+}
 # Host time of one chunk forward through device synchronization, in ms, measured as CI runs perf jobs:
-# LOGURU_LEVEL=ERROR and TT_METAL_SHM_TRACKING_DISABLED=1. Galaxy: bh-glx-120-c02u02, 14kw, 2026-11-06, middle of
-# 3 runs (unpinned CPUs); run-to-run spread 1.3% untraced, 2.3% traced.
+# LOGURU_LEVEL=ERROR and TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per variant (-k kimi_k3_1, -k glm_5_3)
+# as the jobs run them. Galaxy: bh-glx-120-c02u02, 14kw, 2026-11-06, median of 3 runs. LoudBox: not measured yet.
+_GALAXY_TARGETS_MS = {
+    # case: (warm untraced, warm traced, long untraced, long traced)
+    "kimi_k3_1": (4.20, 3.24, 7.57, 6.93),
+    "glm_5_3": (4.25, 2.87, 7.38, 6.55),
+    "glm_5_3-no_indexer": (2.84, 2.06, 2.91, 2.14),
+}
 PERF_TARGETS_MS = {
-    ("Galaxy", "warm", "untraced"): 4.38,
-    ("Galaxy", "warm", "traced"): 3.23,
-    ("Galaxy", "long", "untraced"): 7.74,
-    ("Galaxy", "long", "traced"): 6.89,
-    ("LoudBox", "warm", "untraced"): None,
-    ("LoudBox", "warm", "traced"): None,
-    ("LoudBox", "long", "untraced"): None,
-    ("LoudBox", "long", "traced"): None,
+    (case, "Galaxy", scenario, mode): ms
+    for case, row in _GALAXY_TARGETS_MS.items()
+    for (scenario, mode), ms in zip([(s, m) for s in SCENARIO_CACHE_TOKENS for m in MODES], row)
 }
 # Untraced is host-bound and moves with the CPU clock; traced is device-bound and steady.
 PERF_MARGIN = {"untraced": 0.05, "traced": 0.03}
@@ -92,6 +101,8 @@ class SparsePerfCase:
     kvpe_cache: ttnn.Tensor
     index_kv_cache: ttnn.Tensor | None
     cache_layer_idx: int
+    # A GLM-5.3 shared layer runs no indexer: it takes a full layer's top-k indices.
+    indexer_indices: ttnn.Tensor | None = None
 
     def forward(self, start: int) -> ttnn.Tensor:
         """One chunk forward at `start`; the caller owns (and deallocates) the output."""
@@ -102,6 +113,7 @@ class SparsePerfCase:
             actual_start=start,
             cache_layer_idx=self.cache_layer_idx,
             index_kv_cache=self.index_kv_cache,
+            indexer_indices=self.indexer_indices,
         )
 
 
@@ -116,11 +128,14 @@ def build_sparse_perf_case(
     attn_mode: str = "sparse",
     kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
     tp_shard_kv: bool = True,
+    shared_layer: bool = False,
 ) -> SparsePerfCase:
     """ttMLA, its caches and one chunk of input for forwards over a `cache + chunk` prefix.
 
     sparse: DSA indexer + sparse SDPA over `kv_cache_format`, caches SPxTP-sharded when `tp_shard_kv`.
     dense: the v3.1 baseline, no indexer, full-prefix ring MLA over the tiled BFP8 cache.
+    shared_layer (GLM-5.3, sparse): the last shared layer, which runs no indexer and reuses the top-k indices of a
+    full layer's forward at `cache`.
     """
     has_indexer = attn_mode == "sparse"
     sp_axis, tp_axis = 0, 1
@@ -210,7 +225,49 @@ def build_sparse_perf_case(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    return SparsePerfCase(mla, x, rope, kvpe_cache, index_kv_cache, cache_layer_idx)
+    case = SparsePerfCase(mla, x, rope, kvpe_cache, index_kv_cache, cache_layer_idx)
+    if not shared_layer:
+        return case
+
+    assert has_indexer and full_indexer_layers, f"{variant.name} has no shared (indexer-reuse) layers"
+    out, indices = mla.forward(
+        x,
+        rope,
+        kvpe_cache,
+        actual_start=cache,
+        cache_layer_idx=cache_layer_idx,
+        index_kv_cache=index_kv_cache,
+        return_indexer_indices=True,
+    )
+    ttnn.deallocate(out)
+    ttnn.deallocate(index_kv_cache)
+    shared_layer_idx = [i for i, mode in enumerate(config.indexer_types) if mode == "shared"][-1]
+    shared = ttMLA(
+        config,
+        dict(random_mla_weights(config)),
+        mesh_device,
+        topology=topology,
+        layer_idx=shared_layer_idx,
+        seq_len=total,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_chunked=True,
+        active_seq_len=chunk,
+        layer_num=1,
+        has_indexer=True,
+        sparse_kv_cache_format=kv_cache_format,
+    )
+    shared_kvpe_cache = init_mla_kv_cache(
+        cache_format=kv_cache_format,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=total,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        tp_axis=kv_tp_axis,
+    )
+    return SparsePerfCase(shared, x, rope, shared_kvpe_cache, None, 0, indexer_indices=indices)
 
 
 _BOX_BY_DEVICE_COUNT = {
@@ -218,20 +275,32 @@ _BOX_BY_DEVICE_COUNT = {
     8: ("LoudBox", (2, 4), fabric2d_device_params),
 }
 _BOX = _BOX_BY_DEVICE_COUNT.get(detect_num_devices())
+# Kimi-K3.1 opens at its own fabric packet size; the others keep the default maximum.
+_FABRIC_PAYLOAD = {"kimi_k3_1": KimiK31Config}
 
 
-def _mesh_param():
+def _gate_params():
     if _BOX is None:
-        return pytest.param(
-            (8, 4), {}, marks=pytest.mark.skip(reason="K3.1 sparse MLA perf gate runs on Galaxy and LoudBox only")
-        )
+        return [
+            pytest.param(
+                (8, 4),
+                {},
+                "kimi_k3_1",
+                False,
+                marks=pytest.mark.skip(reason="sparse MLA perf gate runs on Galaxy and LoudBox only"),
+            )
+        ]
     name, mesh, device_params = _BOX
-    params = device_params(
-        fabric_payload_size=moe_fabric_payload(KimiK31Config),
-        worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-        trace_region_size=16 * 1024 * 1024,
-    )
-    return pytest.param(mesh, params, id=f"{name.lower()}-{mesh[0]}x{mesh[1]}")
+    params = []
+    for case, (variant, shared_layer) in GATE_CASES.items():
+        payload = _FABRIC_PAYLOAD.get(variant)
+        dp = device_params(
+            fabric_payload_size=moe_fabric_payload(payload) if payload else None,
+            worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            trace_region_size=16 * 1024 * 1024,
+        )
+        params.append(pytest.param(mesh, dp, variant, shared_layer, id=f"{name.lower()}-{mesh[0]}x{mesh[1]}-{case}"))
+    return params
 
 
 def _device_tensors(tensor):
@@ -289,13 +358,18 @@ def _time_traced(mesh_device, case, start):
 @skip_with_llk_assert("LLK assertions perturb kernel timing")
 @skip_with_watcher("Watcher perturbs kernel timing")
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize("mesh_device, device_params", [_mesh_param()], indirect=True)
-@pytest.mark.parametrize("variant", ["kimi_k3_1"], ids=["kimi_k3_1"], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, variant, shared_layer",
+    _gate_params(),
+    indirect=["mesh_device", "device_params", "variant"],
+)
 @pytest.mark.parametrize("scenario", list(SCENARIO_CACHE_TOKENS))
-def test_kimi_k31_sparse_mla_perf(mesh_device, device_params, variant, config_only, scenario):
+def test_sparse_mla_perf(mesh_device, device_params, variant, shared_layer, config_only, scenario):
     box = _BOX[0]
+    case_name = variant.name + ("-no_indexer" if shared_layer else "")
+    label = f"{case_name} sparse MLA {box} {scenario}"
     if box == "Galaxy":
-        require_high_power(f"kimi_k3_1 sparse MLA {scenario} perf")
+        require_high_power(f"{label} perf")
     sp, tp = mesh_device.shape
     chunk = CHUNK_TOKENS * sp // GALAXY_SP
     cache = local_cache_tokens(SCENARIO_CACHE_TOKENS[scenario], sp)
@@ -306,6 +380,7 @@ def test_kimi_k31_sparse_mla_perf(mesh_device, device_params, variant, config_on
         cache=cache,
         chunk=chunk,
         topology=per_axis_topology(device_params["fabric_config"]),
+        shared_layer=shared_layer,
     )
     start = cache
     samples = {}
@@ -316,17 +391,17 @@ def test_kimi_k31_sparse_mla_perf(mesh_device, device_params, variant, config_on
     failures = []
     for mode in MODES:
         measured_ms = min(samples[mode])
-        target_ms = PERF_TARGETS_MS[(box, scenario, mode)]
+        target_ms = PERF_TARGETS_MS.get((case_name, box, scenario, mode))
         margin = PERF_MARGIN[mode]
         within = target_ms is not None and abs(measured_ms - target_ms) <= target_ms * margin
         print(  # print, not logger: CI runs perf jobs at LOGURU_LEVEL=ERROR
-            f"K3.1 sparse MLA {box} {scenario} {mode}: {measured_ms:.3f} ms "
+            f"{label} {mode}: {measured_ms:.3f} ms "
             f"(max {max(samples[mode]):.3f}); target {target_ms} ms ± {margin:.0%}; "
             f"samples {' '.join(f'{x:.3f}' for x in samples[mode])}"
         )
         emit_perf_metrics(
-            f"kimi_k3_1_sparse_mla_{box.lower()}_{scenario}_{mode}",
-            f"Kimi-K3.1 sparse MLA {box} {scenario} ({mode})",
+            f"{case_name.replace('-', '_')}_sparse_mla_{box.lower()}_{scenario}_{mode}",
+            f"{label} ({mode})",
             {
                 "box": box,
                 "mesh": f"{sp}x{tp}",
@@ -335,7 +410,9 @@ def test_kimi_k31_sparse_mla_perf(mesh_device, device_params, variant, config_on
                 "chunk_tokens": chunk,
                 "cache_tokens": cache,
                 "fabric": device_params["fabric_config"].name,
-                "fabric_payload_bytes": moe_fabric_payload(KimiK31Config),
+                "fabric_payload_bytes": (
+                    moe_fabric_payload(_FABRIC_PAYLOAD[variant.name]) if variant.name in _FABRIC_PAYLOAD else None
+                ),
                 "kv_cache_format": "scaled_fp8",
                 "weights": "random",
                 "samples_ms": samples[mode],
@@ -356,7 +433,7 @@ def test_kimi_k31_sparse_mla_perf(mesh_device, device_params, variant, config_on
             )
     if trace_pcc < TRACE_PCC:
         failures.append(f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}")
-    assert not failures, f"K3.1 sparse MLA {box} {scenario}: " + "; ".join(failures)
+    assert not failures, f"{label}: " + "; ".join(failures)
 
 
 # ============================================================================
@@ -375,8 +452,6 @@ MATRIX_CASES = (
 )
 _MATRIX_BOX_BY_DEVICE_COUNT = {**_BOX_BY_DEVICE_COUNT, 4: ("QuietBox", (2, 2), fabric2d_device_params)}
 _MATRIX_BOX = _MATRIX_BOX_BY_DEVICE_COUNT.get(detect_num_devices())
-# Kimi-K3.1 opens at its own fabric packet size; the others keep the default maximum.
-_MATRIX_PAYLOAD = {"kimi_k3_1": KimiK31Config}
 
 
 def _matrix_case_runs(variant: str, scenario: str, case_id: str) -> bool:
@@ -401,7 +476,7 @@ def _matrix_params():
     name, mesh, device_params = _MATRIX_BOX
     params = []
     for variant in MATRIX_VARIANTS:
-        payload = _MATRIX_PAYLOAD.get(variant)
+        payload = _FABRIC_PAYLOAD.get(variant)
         dp = device_params(
             fabric_payload_size=moe_fabric_payload(payload) if payload else None,
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
