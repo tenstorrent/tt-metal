@@ -262,6 +262,8 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     bool output_final_state,
     bool output_per_token_state,
     bool inplace_final_state,
+    bool use_qk_l2norm_in_kernel,
+    float scale,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = FusedRecurrentGatedDeltaRuleDeviceOperation;
@@ -286,6 +288,8 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .output_final_state = output_final_state,
         .output_per_token_state = output_per_token_state,
         .inplace_final_state = inplace_final_state,
+        .use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel,
+        .scale = scale,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

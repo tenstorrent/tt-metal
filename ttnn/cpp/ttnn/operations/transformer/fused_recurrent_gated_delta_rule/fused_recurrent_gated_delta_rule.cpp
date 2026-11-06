@@ -3,8 +3,8 @@
 //
 // Host side of fused_recurrent_gated_delta_rule: the contract (shape rules, then combination rules, in a fixed order
 // so a given bad call always fails on the same message) in front of the program. The program reads the layer's
-// tensors itself; what remains here is the optional norm and the scale (until the compute commit folds them into the
-// kernel) and the output relayout (until the writer commit).
+// tensors itself and folds the norm and the scale into its passes; what remains here is the output relayout (until
+// the writer commit).
 
 #include "fused_recurrent_gated_delta_rule.hpp"
 
@@ -22,9 +22,6 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
@@ -34,19 +31,6 @@ namespace ttnn::transformer {
 namespace {
 
 constexpr const char* kOp = "fused_recurrent_gated_delta_rule";
-
-ttnn::Tensor as_f32(const ttnn::Tensor& x) {
-    return x.dtype() != DataType::FLOAT32 ? ttnn::typecast(x, DataType::FLOAT32) : x;
-}
-
-// use_qk_l2norm_in_kernel: x / sqrt(sum_K x^2 + eps) in fp32 with eps inside the root (the golden's l2_norm), as
-// host ops in front of the program until the compute commit folds it into the constants pass.
-ttnn::Tensor l2_norm_rows(const ttnn::Tensor& x_in, const DeviceComputeKernelConfig& cfg) {
-    const ttnn::Tensor x = as_f32(x_in);
-    const ttnn::Tensor sum_sq = ttnn::sum(ttnn::multiply(x, x), -1, /*keepdim=*/true, std::nullopt, cfg);
-    const ttnn::Tensor inv = ttnn::rsqrt(ttnn::add(sum_sq, 1e-6f));
-    return ttnn::multiply(x, inv);
-}
 
 // The dimensions a call names, read off q and v.
 struct Dims {
@@ -244,13 +228,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
 
-    // The optional norm and the scale, as host ops until the compute commit folds them into the kernel; everything
-    // else reaches the program as the layer holds it (the reader gathers the rows and does the GQA mapping). The host
-    // norm is fp32, so v follows q's dtype in that case.
-    ttnn::Tensor q = use_qk_l2norm_in_kernel ? l2_norm_rows(q_in, kernel_cfg) : q_in;
-    q = ttnn::multiply(q, scale);
-    const ttnn::Tensor k = use_qk_l2norm_in_kernel ? l2_norm_rows(k_in, kernel_cfg) : k_in;
-    const ttnn::Tensor v = v_in.dtype() == q.dtype() ? v_in : as_f32(v_in);
+    // Everything reaches the program as the layer holds it: the reader gathers the rows and does the GQA mapping, the
+    // compute kernel folds the optional norm and the scale into its passes.
 
     // Initial state: rows [0:B] of [Bs,HV,K,V] -> [BH,K,V] fp32 TILE; absent, the reader builds a zero state.
     //
@@ -277,9 +256,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const bool want_state = output_final_state || output_per_token_state || inplace_final_state;
     auto res = ttnn::prim::fused_recurrent_gated_delta_rule(
-        q,
-        k,
-        v,
+        q_in,
+        k_in,
+        v_in,
         g_in,
         beta_in,
         s0,
@@ -291,6 +270,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         want_state && !output_per_token_state,
         output_per_token_state,
         inplace_final_state,
+        use_qk_l2norm_in_kernel,
+        scale,
         out_mem,
         kernel_cfg);
     const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]

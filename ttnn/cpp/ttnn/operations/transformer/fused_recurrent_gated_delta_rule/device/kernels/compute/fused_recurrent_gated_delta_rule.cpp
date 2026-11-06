@@ -6,9 +6,11 @@
 // `naive_recurrent_gated_delta_rule`; the vLLM `fused_sigmoid_gating_delta_rule_update` is this
 // same recurrence over the K+1 speculative tokens.
 //
-// Per token (q pre-scaled + L2-normed and k L2-normed on the host; g is the log decay):
+// Per token (q, k raw with the in-kernel norm, else L2-normed by the caller; the scale is always folded in here; g is
+// the log decay):
 //   e      = exp(g)                      (SFPU, exact)
-//   c      = q . k                       (FPU)
+//   q~, k^ = scale q / |q|, k / |k|      (norm: SFPU squares of exact row copies, rsqrt; folded into the passes)
+//   c      = q~ . k^                     (FPU dot of the raw rows, scaled)
 //   r      = [k; q] . S_old              (FPU pass 1: r_k = k . S_old, r_q = q . S_old)
 //   u      = beta * (v - e * r_k)        (SFPU, fp32)
 //   o      = e * r_q + c * u             (SFPU)
@@ -33,7 +35,9 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
+    constexpr bool norm = get_compile_time_arg_val(3) != 0;  // the in-kernel L2 norm of q and k
     const uint32_t T = get_arg_val<uint32_t>(0);
+    const uint32_t scale_bits = get_arg_val<uint32_t>(1);  // the query scale, fp32 bits
 
     // Every CB is fp32 (see the program factory). Matmul operand order: in0 (qk16) -> SrcB, in1 (S) -> SrcA; the
     // passes re-initialise the unpacker / packer per CB tile shape as they go.
@@ -57,12 +61,14 @@ void kernel_main() {
         .out16 = cb::out16,
         .state_out = cb::state_out,
         .ebc16 = cb::ebc16,
+        .qk16_utd = cb::qk16_utd,
+        .ncol16 = cb::ncol16,
     };
     for (uint32_t t = 0; t < T; t++) {
         const bool last = (t == T - 1);
         // decode_token pops the token's inputs and S_cur (pop_inputs = true); S_next is intentionally left in its
         // CB: the next iteration reads it as S_cur. The ring (S, then s2 / s3 alternating) is the CB header's.
-        gdn_decode::decode_token<Kt, Vt, /*FuseReadVector=*/true>(
-            tcb, cb::state_cur(t), cb::state_next(t), per_token || last);
+        gdn_decode::decode_token<Kt, Vt, /*FuseReadVector=*/true, norm>(
+            tcb, cb::state_cur(t), cb::state_next(t), per_token || last, scale_bits);
     }
 }

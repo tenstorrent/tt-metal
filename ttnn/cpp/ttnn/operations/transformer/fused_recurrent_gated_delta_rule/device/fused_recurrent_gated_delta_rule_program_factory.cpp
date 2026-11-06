@@ -15,6 +15,7 @@
 #include "fused_recurrent_gated_delta_rule_program_factory.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <set>
 #include <vector>
 
@@ -99,8 +100,17 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
             .format_descriptors = {{fmt_desc(s.utd), fmt_desc(s.mm)}}});
     };
 
+    // qk16 under a second id, the utd view the constants pass copies the rows through exactly (the norm's squares);
+    // the compute syncs the view's read pointer to qk16's each token, since qk16 is double-buffered.
+    auto add_cb_view = [&](uint32_t idx, uint32_t idx_view, uint32_t n_tiles, uint32_t nbuf) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = n_tiles * nbuf * cb::tile_bytes(cb::tile_dims[idx]),
+            .core_ranges = cores,
+            .format_descriptors = {{fmt_desc(idx), fmt_desc(idx_view)}}});
+    };
+
     // reader -> compute (the per-token tiles hold token_cb_nbuf tokens so the reader runs a token ahead)
-    add_cb(cb::qk16, Kt, cb::token_cb_nbuf);
+    add_cb_view(cb::qk16, cb::qk16_utd, Kt, cb::token_cb_nbuf);
     add_cb(cb::kT16, Kt, cb::token_cb_nbuf);
     add_cb(cb::qcol32, Kt, cb::token_cb_nbuf);
     add_cb(cb::v16, Vt, cb::token_cb_nbuf);
@@ -114,6 +124,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::ecol32, 1);
     add_cb(cb::craw16, 1);
     add_cb(cb::ebc16, 1);
+    add_cb(cb::ncol16, 1);
     add_cb(cb::u16, Vt);
     add_state_cb(cb::state_s2, kv);
     add_state_cb(cb::state_s3, kv);
@@ -142,7 +153,11 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
-    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token};
+    const uint32_t norm = attrs.use_qk_l2norm_in_kernel ? 1u : 0u;
+    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token, norm};
+    uint32_t scale_bits = 0;
+    static_assert(sizeof(float) == sizeof(uint32_t));
+    std::memcpy(&scale_bits, &attrs.scale, sizeof(scale_bits));
 
     std::vector<uint32_t> reader_ct = {
         Kt, Vt, use_blk_idx, has_state, in_bf16, g_bf16, b_bf16, attrs.H, attrs.HV, attrs.HV / attrs.H};
@@ -217,7 +232,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
             core, {h, T, q_buf, k_buf, v_buf, g_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
         writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
-        compute.emplace_runtime_args(core, {T});
+        compute.emplace_runtime_args(core, {T, scale_bits});
     }
 
     desc.kernels.push_back(std::move(reader));

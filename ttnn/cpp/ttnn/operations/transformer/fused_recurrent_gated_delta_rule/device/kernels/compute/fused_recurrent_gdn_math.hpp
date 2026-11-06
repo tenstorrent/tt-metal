@@ -7,10 +7,14 @@
 // The caller owns the token loop and the ring of state CBs; decode_token does one token:
 //
 //   e      = exp(g)                        constants pass, the API's exact exp_tile on faces 0 and 2 of gcol32 ->
-//   ecol32 c      = q~ . k^                       constants pass, FPU: Kt products qk16 x qcol32 -> craw16[0,0], then
-//   the FPU
-//                                          scalar broadcast; e, beta, c go to ebc16 (column 0 rows 0-3 / 4-7 / 8-11)
-//   r      = [k^; q~] . S_old              read pass, FPU: 16x32 qk16 x 32x32 S tiles -> r16 (row 0 = r_k, row 2 = r_q)
+//   ecol32 c      = q~ . k^                       constants pass: d = k.q on the FPU (Kt products qk16 x qcol32), with
+//   Norm the
+//                                          squares of the raw rows on the SFPU -> ik = 1/|k|, s_q = scale/|q|, c = d ik
+//                                          s_q; e, beta, c, (ik, 0, s_q, 0) go to ebc16 (column 0, bands 0..3)
+//   r      = [k; q] . S_old                read pass, FPU: 16x32 qk16 x 32x32 S tiles -> r16 (row 0 = r_k, row 2 =
+//   r_q),
+//                                          then r_k * ik and r_q * s_q (band 3): the norm and the scale, never
+//                                          re-packed
 //   u      = beta (v - e r_k)              vector pass, SFPU fp32 -> u16 (row 0 = u, rows 1-15 exactly 0)
 //   o      = e r_q + c u                   vector pass, SFPU fp32 -> out16 (row 0 = o, rows 1-15 0)
 //   S_new  = e S_old + k^T u               update pass: exact seed (copy_tile, UnpackToDestFp32), SFPU decay, FPU
@@ -35,7 +39,8 @@
 // Every pass waits for its inputs and never pops them; decode_token pops the CBs internal to the token (ecol32,
 // ebc16, r16, u16) and, with pop_inputs, the per-token inputs and S_cur (never ones32).
 //
-// The SFPU work is fused_recurrent_gdn_sfpu.hpp (namespace gdn_decode_sfpu): compositions of compute-API ops only.
+// The SFPU work is fused_recurrent_gdn_sfpu.hpp (namespace gdn_decode_sfpu): compositions of compute-API ops, plus
+// the norm's private sfpi piece pending a row-sum API.
 
 #pragma once
 
@@ -77,7 +82,9 @@ struct TokenCbs {
     uint32_t u16;        // Vt x 16x32: row 0 = u, rows 1-15 exactly 0 (compute)
     uint32_t out16;      // Vt x 16x32: row 0 = o, rows 1-15 0 (compute -> writer)
     uint32_t state_out;  // Kt*Vt x 32x32 (compute -> writer, when emit_state)
-    uint32_t ebc16;      // 16x32: column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c, else 0 (compute, utd)
+    uint32_t ebc16;      // 16x32: column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c, 12-15 = ik, 0, s_q, 0 (compute, utd)
+    uint32_t qk16_utd;   // the utd view of qk16 (same L1, never pushed): the norm's exact copies of the rows
+    uint32_t ncol16;     // 16x32: column 0 rows 0-3 = ik, 0, s_q, 0 (compute, utd)
 };
 
 // One state CB (Kt*Vt x 32x32) under its two ids, `utd` (UnpackToDestFp32, read by copy_tile for the exact seed; owns
@@ -87,6 +94,14 @@ using StateCb = gdn_decode_cb::StateCb;
 // The invariant the mm view rests on, checked under LLK asserts on the unpack thread before each read pass: the view's
 // read pointer equals the utd id's (both start at the CB base, and the CB holds exactly one state that is produced and
 // consumed whole, so they stay equal). A no-op in release builds.
+// Points the read pointer of a format view (a second id over a CB's allocation that is never pushed or popped) at the
+// CB's current read position, on the unpack thread, so copy_tile through the view reads the tiles the CB's wait_front
+// made visible. Needed for a CB that holds more than one set of its data (the double-buffered token CBs); the state
+// CBs hold exactly one and need no sync.
+inline void sync_cb_view(uint32_t view, uint32_t cb) {
+    UNPACK((get_local_cb_interface(view).fifo_rd_ptr = get_local_cb_interface(cb).fifo_rd_ptr));
+}
+
 inline void check_state_views(StateCb s) {
     // A statement, not an expression: with asserts on, LLK_ASSERT expands to a do / while block.
     UNPACK(LLK_ASSERT(
@@ -94,32 +109,38 @@ inline void check_state_views(StateCb s) {
         "state CB views diverged: the mm view needs a single-buffered CB produced and consumed whole"));
 }
 
-// Constants pass (three acquires): ecol32 <- exp(gcol32) on faces 0 and 2 (exp_tile<false> in VectorMode::C, the
-// fp32-accurate body: column 0 of all 32 rows; the other columns are never read); craw16 <- sum_ki qk16[ki] x
-// qcol32[ki] (c at [0,0]); then one acquire with the FPU scalar
-// broadcast of craw16[0,0] onto ones32 (c in every element of slot 0), copies of ecol32 and bcol16, and build_ebc16
-// -> ebc16 (column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c). Waits gcol32 (1), qk16 (Kt), qcol32 (Kt), ones32 (1),
-// bcol16 (1); pushes ecol32 (1) and ebc16 (1); craw16 is produced, consumed and popped here.
-template <uint32_t Kt>
+// Constants pass (three acquires). 1: ecol32 <- exp(gcol32) on the column-0 vectors (column 0 of all 32 rows; the
+// other columns are never read). 2: d = k.q on the FPU (Kt products qk16 x qcol32, [0,0] of slot 0) and, with Norm,
+// the squares of the raw rows on the SFPU (exact copies of the qk16 tiles through their utd view, k in row 0 and q in
+// row 2, squared and summed in fp32) from which norm_scalars forms the norm tile N (column 0: row 0 = ik = 1/|k|, row 2
+// = s_q = scale/|q|; without Norm, 1 and scale); c = d * ik * s_q goes to craw16 and N to ncol16. 3: the FPU scalar
+// broadcast of craw16[0,0] onto ones32 (c in every element of slot 0), copies of ecol32, bcol16 and ncol16, and
+// build_ebcn16 -> ebc16 (column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c, 12-15 = ik, 0, s_q, 0). The vector pass applies
+// band 3 to the read products (k.S * ik, q.S * s_q) and to u before the update (u * ik), and that is the whole of the
+// norm and the scale: no input tile is re-packed. Waits gcol32 (1), qk16 (Kt), qcol32 (Kt), ones32 (1), bcol16 (1);
+// pushes ecol32 (1) and ebc16 (1); craw16 and ncol16 are produced, consumed and popped here.
+template <uint32_t Kt, bool Norm>
 void constants_pass(
     uint32_t cb_gcol32,
     uint32_t cb_qk16,
+    uint32_t cb_qk16_utd,
     uint32_t cb_qcol32,
     uint32_t cb_ones32,
     uint32_t cb_bcol16,
     uint32_t cb_ecol32,
     uint32_t cb_craw16,
-    uint32_t cb_ebc16) {
+    uint32_t cb_ncol16,
+    uint32_t cb_ebc16,
+    uint32_t scale_bits) {
     CircularBuffer gcol(cb_gcol32), qk(cb_qk16), qcol(cb_qcol32), ones(cb_ones32), bcol(cb_bcol16);
-    CircularBuffer ecol(cb_ecol32), craw(cb_craw16), ebc(cb_ebc16);
+    CircularBuffer ecol(cb_ecol32), craw(cb_craw16), ncol(cb_ncol16), ebc(cb_ebc16);
     gcol.wait_front(1);
     qk.wait_front(Kt);
     qcol.wait_front(Kt);
     ones.wait_front(1);
     bcol.wait_front(1);
 
-    // 1. e = exp(g), exact (the fp32-accurate exp, whatever math_approx_mode says), on faces 0 and 2: column 0 of
-    //    every row, which is all the consumers read.
+    // 1. e = exp(g), exact, on column 0.
     ecol.reserve_back(1);
     tile_regs_acquire();
     copy_init(cb_gcol32);
@@ -133,25 +154,49 @@ void constants_pass(
     tile_regs_release();
     ecol.push_back(1);
 
-    // 2. c = k^ . q~ at [0,0] (row 0 of qk16 is k^, column 0 of qcol32 is q~); [2,0] = q~ . q~, unused.
+    // 2. d (FPU) in slot 0; the squares in slot 2 from exact copies into slot 1 (the copies into DEST after SFPU ops
+    //    are ordered behind them by the unpack-to-DEST handshake, as the update pass relies on); N in slot 3; then
+    //    c = d * ik * s_q in slot 0 with the scalars parked from N ([0,0] = ik; s_q moved from [2,0] to [0,0] of a
+    //    copy in slot 1).
     craw.reserve_back(1);
+    ncol.reserve_back(1);
     tile_regs_acquire();
     reconfig_full_operand<SrcOrder::Reverse>(cb_qk16, cb_qcol32);
     matmul_init(cb_qk16, cb_qcol32, 0);
     for (uint32_t ki = 0; ki < Kt; ki++) {
         matmul_tiles(cb_qk16, cb_qcol32, ki, ki, 0);
     }
+    if constexpr (Norm) {
+        sync_cb_view(cb_qk16_utd, cb_qk16);
+        copy_init(cb_qk16_utd);  // 16x32 utd
+        for (uint32_t ki = 0; ki < Kt; ki++) {
+            copy_tile(cb_qk16_utd, ki, 1);
+            gdn_decode_sfpu::square_acc_rows4(2, 1, ki == 0);
+        }
+    }
+    gdn_decode_sfpu::norm_scalars<Norm>(2, 3, scale_bits);
+    ckernel::sfpu_bcast_scalar_init();
+    ckernel::sfpu_bcast_scalar_load(3);                            // ik
+    ckernel::sfpu_mul_bcast_scalar<2>(0, ckernel::VectorMode::R);  // c <- d * ik (rows 0..3)
+    gdn_decode_sfpu::vector_chain_init();
+    gdn_decode_sfpu::copy_rows4(1, 3);
+    gdn_decode_sfpu::move_row2_to_row0(1);                         // slot 1: [0,0] = s_q
+    ckernel::sfpu_bcast_scalar_load(1);                            // s_q
+    ckernel::sfpu_mul_bcast_scalar<2>(0, ckernel::VectorMode::R);  // c <- d * ik * s_q
     tile_regs_commit();
     tile_regs_wait();
-    pack_init(cb_craw16);
+    pack_init(cb_craw16);  // 16x32: craw16 and ncol16 alike
     pack_tile<true>(0, cb_craw16, 0);
+    pack_tile<true>(3, cb_ncol16, 0);
     tile_regs_release();
     craw.push_back(1);
+    ncol.push_back(1);
 
     // 3. slot 0 = c everywhere (FPU scalar broadcast of craw16[0,0] onto the ones tile), slot 1 = ecol32, slot 2 =
-    //    bcol16; ebc16 built in slot 3 from column 0 rows 0-3 of each.
+    //    bcol16, slot 3 = ncol16; ebc16 built in place in slot 1 from column 0 rows 0-3 of each.
     craw.wait_front(1);
     ecol.wait_front(1);
+    ncol.wait_front(1);
     ebc.reserve_back(1);
     tile_regs_acquire();
     reconfig_full_operand(cb_ones32, cb_craw16);
@@ -161,14 +206,17 @@ void constants_pass(
     copy_tile(cb_ecol32, 0, 1);
     copy_init(cb_bcol16);  // 16x32
     copy_tile(cb_bcol16, 0, 2);
-    gdn_decode_sfpu::build_ebc16(1, 2, 0, 3);
+    copy_init(cb_ncol16);  // 16x32
+    copy_tile(cb_ncol16, 0, 3);
+    gdn_decode_sfpu::build_ebcn16(1, 2, 0, 3, 1);
     tile_regs_commit();
     tile_regs_wait();
     pack_init(cb_ebc16);
-    pack_tile<true>(3, cb_ebc16, 0);
+    pack_tile<true>(1, cb_ebc16, 0);
     tile_regs_release();
     ebc.push_back(1);
     craw.pop_front(1);
+    ncol.pop_front(1);
 }
 
 // Read pass: r16[j] <- sum_ki qk16[ki] x S_cur[ki*Vt + j], up to kDstTiles output tiles per acquire. Waits on the
@@ -229,12 +277,14 @@ void vector_pass(uint32_t cb_r16, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t c
         copy_tile(cb_v16, j, 1);
         copy_tile(cb_ebc16, 0, 2);
         gdn_decode_sfpu::vector_chain_init();
+        gdn_decode_sfpu::mul_band0_by(0, 2, 3);  // k.S * ik, q.S * s_q: the norm and the scale
         gdn_decode_sfpu::mul_band0_by(0, 2, 0);  // e r_k (row 0), e r_q (row 2)
         gdn_decode_sfpu::sub_rows4(1, 0);        // v - e r_k
         gdn_decode_sfpu::mul_band0_by(1, 2, 1);  // u = beta (v - e r_k)
         gdn_decode_sfpu::zero_rows_from_1(1);    // the padding rows of u16 exactly zero
         gdn_decode_sfpu::move_row2_to_row0(0);   // e r_q to the output row
         gdn_decode_sfpu::copy_rows4(3, 1);
+        gdn_decode_sfpu::mul_band0_by(1, 2, 3);  // u16 carries u * ik: the update's k^T u is k^T (u / |k|)
         gdn_decode_sfpu::mul_band0_by(3, 2, 2);  // c u
         gdn_decode_sfpu::add_rows4(0, 3);        // o = e r_q + c u
         tile_regs_commit();
@@ -276,12 +326,14 @@ void read_vector_pass(
         copy_tile(cb_v16, j, 1);
         copy_tile(cb_ebc16, 0, 2);
         gdn_decode_sfpu::vector_chain_init();
+        gdn_decode_sfpu::mul_band0_by(0, 2, 3);  // k.S * ik, q.S * s_q: the norm and the scale
         gdn_decode_sfpu::mul_band0_by(0, 2, 0);  // e r_k (row 0), e r_q (row 2)
         gdn_decode_sfpu::sub_rows4(1, 0);        // v - e r_k
         gdn_decode_sfpu::mul_band0_by(1, 2, 1);  // u = beta (v - e r_k)
         gdn_decode_sfpu::zero_rows_from_1(1);    // the padding rows of u16 exactly zero
         gdn_decode_sfpu::move_row2_to_row0(0);   // e r_q to the output row
         gdn_decode_sfpu::copy_rows4(3, 1);
+        gdn_decode_sfpu::mul_band0_by(1, 2, 3);  // u16 carries u * ik: the update's k^T u is k^T (u / |k|)
         gdn_decode_sfpu::mul_band0_by(3, 2, 2);  // c u
         gdn_decode_sfpu::add_rows4(0, 3);        // o = e r_q + c u
         tile_regs_commit();
@@ -296,14 +348,14 @@ void read_vector_pass(
 }
 
 // Update pass: S_next[i, j] <- e * S_cur[i, j] + kT16[i] x u16[j], groups of up to kUpdateGroup (= 4) S tiles per
-// acquire: ecol32 is copied into slot 0 and its [0, 0] parked in an SFPU register (sfpu_bcast_scalar_load), the exact
-// seeds are copied from the utd S_cur into slots 0..3, each is decayed by the parked e (sfpu_mul_bcast_scalar,
-// bit-identical to the column broadcast of a uniform column), then the rank-1 products accumulate onto the seeded
-// slots. With emit_state every slot is also packed to state_out. s_cur and s_next are state CBs; the pass touches their
-// utd ids only (the mm views are never pushed or popped). The outputs are reserved, packed (indices relative to the
-// reservation; the (i, j) order is sequential) and pushed per acquire group, so a writer can stream the state tiles
-// while the pass runs. Waits kT16 (Kt), u16 (Vt), S_cur (Kt*Vt), ecol32 (1); pushes S_next (Kt*Vt in total) and, with
-// emit_state, state_out (Kt*Vt in total).
+// acquire: ecol32 is copied into slot 0 and its [0, 0] parked in an SFPU register (load_scalar), the exact seeds are
+// copied from the utd S_cur into slots 0..3, each is decayed by the parked e (mul_loaded_scalar<32>, bit-identical to
+// the column broadcast of a uniform column), then the rank-1 products accumulate onto the seeded slots. With
+// emit_state every slot is also packed to state_out. s_cur and s_next are state CBs; the pass touches their utd ids
+// only (the mm views are never pushed or popped).
+// The outputs are reserved, packed (indices relative to the reservation; the (i, j) order is sequential) and pushed
+// per acquire group, so a writer can stream the state tiles while the pass runs. Waits kT16 (Kt), u16 (Vt), S_cur
+// (Kt*Vt), ecol32 (1); pushes S_next (Kt*Vt in total) and, with emit_state, state_out (Kt*Vt in total).
 template <uint32_t Kt, uint32_t Vt>
 void update_pass(
     uint32_t cb_kT16,
@@ -371,16 +423,35 @@ struct NoHook {
 // One token: constants -> read -> vector -> update, then pop the token-internal CBs. s_cur is the state the token
 // reads (the reader's S at t = 0, the ring after), s_next the ring CB it writes (left in its CBs for the next token);
 // emit_state also packs S_new to state_out. With pop_inputs (the op) the per-token inputs qk16, kT16, qcol32, v16,
-// gcol32, bcol16 and s_cur (its utd id) are popped at the end as well; ones32 never is. The caller must have run
+// gcol32, bcol16 and s_cur (its utd id) are popped at the end as well; ones32 never is. Norm selects the in-kernel L2
+// norm of q and k (raw rows in; 1/|k| and scale/|q| folded into the passes); without it the rows are taken as
+// normalised and only `scale` (its fp32 bits) is folded in. The caller must have run
 // compute_kernel_hw_startup once (both source orders give the same bits). FuseReadVector selects read_vector_pass
 // (one acquire per V tile for the products and the vector chain; r16 unused) instead of read_pass + vector_pass; the
 // bits are the same. `hook(p)` is called after pass p (0 constants, 1 read, 2 vector, 3 update; fused: 1 after the
 // fused pass and no 2); the gtest stamps the MATH clock there, the op passes nothing.
-template <uint32_t Kt, uint32_t Vt, bool FuseReadVector = false, typename Hook = NoHook>
+template <uint32_t Kt, uint32_t Vt, bool FuseReadVector = false, bool Norm = false, typename Hook = NoHook>
 void decode_token(
-    const TokenCbs& cb, StateCb s_cur, StateCb s_next, bool emit_state, bool pop_inputs = true, Hook&& hook = Hook{}) {
+    const TokenCbs& cb,
+    StateCb s_cur,
+    StateCb s_next,
+    bool emit_state,
+    uint32_t scale_bits,
+    bool pop_inputs = true,
+    Hook&& hook = Hook{}) {
     constexpr uint32_t kv = Kt * Vt;
-    constants_pass<Kt>(cb.gcol32, cb.qk16, cb.qcol32, cb.ones32, cb.bcol16, cb.ecol32, cb.craw16, cb.ebc16);
+    constants_pass<Kt, Norm>(
+        cb.gcol32,
+        cb.qk16,
+        cb.qk16_utd,
+        cb.qcol32,
+        cb.ones32,
+        cb.bcol16,
+        cb.ecol32,
+        cb.craw16,
+        cb.ncol16,
+        cb.ebc16,
+        scale_bits);
     hook(0);
     if constexpr (FuseReadVector) {
         read_vector_pass<Kt, Vt>(cb.qk16, s_cur, cb.v16, cb.ebc16, cb.u16, cb.out16);

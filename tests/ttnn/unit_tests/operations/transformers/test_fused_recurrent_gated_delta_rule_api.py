@@ -16,7 +16,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole
-from tests.ttnn.unit_tests.operations.transformers.gdn_decode_test_utils import SHAPES, make_inputs
+from tests.ttnn.unit_tests.operations.transformers.gdn_decode_test_utils import SHAPES, assert_accuracy, make_inputs
 from ttnn.operations.transformer_golden import l2_norm
 
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="fused_recurrent_gated_delta_rule is Blackhole-only")
@@ -178,20 +178,39 @@ def test_program_config_default_equals_none(device):
     ["qwen27b_tp4"] + [pytest.param(s, marks=_hw_only) for s in SHAPES if s != "qwen27b_tp4"],
 )
 def test_qk_l2norm_in_kernel_matches_host_norm(device, shape):
-    """The op on raw q, k with use_qk_l2norm_in_kernel against the op on inputs normalised by the golden module's
-    l2_norm (the same formula, eps inside the root): the two round differently, so the gate is PCC and max |delta|
-    one order tighter than the accuracy gates, not bit identity."""
+    """The op on raw q, k with use_qk_l2norm_in_kernel, and the op on inputs normalised by the golden module's l2_norm
+    (the same formula, eps inside the root), both match the golden at the accuracy gates. Between themselves they agree
+    to the tf32 truncation of their FPU operands: the in-kernel form feeds the FPU the raw rows and folds 1/|k| and
+    scale/|q| into the products, the host form feeds it the normalised rows, so the two truncations differ by up to
+    2^-10 per element and the results by a few 1e-3 of their maximum, at a PCC above 0.99999."""
     sh = SHAPES[shape]
     x = make_inputs(
         1, 1, sh.num_key_heads, sh.num_value_heads, K, V, seed=zlib.crc32(shape.encode()), normalize_qk=False
     )
     o_in, s_in = _op(device, x, output_final_state=True, use_qk_l2norm_in_kernel=True)
     o_host, s_host = _op(device, x, output_final_state=True, repl={"q": l2_norm(x["q"]), "k": l2_norm(x["k"])})
+    o_ref, s_ref = ttnn.get_golden_function(OP)(
+        x["q"],
+        x["k"],
+        x["v"],
+        x["g"],
+        x["beta"],
+        initial_state=x["initial_state"],
+        output_final_state=True,
+        use_qk_l2norm_in_kernel=True,
+    )
+    for label, ref, got in (
+        ("o, norm in kernel", o_ref, o_in),
+        ("state, norm in kernel", s_ref, s_in),
+        ("o, norm on host", o_ref, o_host),
+        ("state, norm on host", s_ref, s_host),
+    ):
+        assert_accuracy(ref, ttnn.to_torch(got), label)
     for label, a, b in (("o", o_host, o_in), ("state", s_host, s_in)):
         ref, got = ttnn.to_torch(a).double(), ttnn.to_torch(b).double()
         passed, pcc = comp_pcc(ref, got, 0.99999)
         rel = (ref - got).abs().max().item() / ref.abs().max().item()
-        assert passed and rel <= 1e-3, f"{label}: pcc {pcc}, max |delta| / max |ref| {rel:.2e}"
+        assert passed and rel <= 5e-3, f"{label}: pcc {pcc}, max |delta| / max |ref| {rel:.2e}"
 
 
 def test_bf16_inputs_match_the_golden(device):

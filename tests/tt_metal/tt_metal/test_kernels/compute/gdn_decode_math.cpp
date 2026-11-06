@@ -57,7 +57,12 @@ constexpr uint32_t state_out = 17;
 // The vector pass's constants tile, and the matmul views of S and s2 (second ids over the same L1 memory, never
 // pushed; the ids of the op's fused_recurrent_gdn_cb.hpp).
 constexpr uint32_t ebc16 = 19, S_mm = 20, s2_mm = 21;
+// The norm's tiles (the op's ids): the utd view of qk16 and the norm scalars.
+constexpr uint32_t qk16_utd = 23, ncol16 = 24;
 }  // namespace cb
+// The gtests run the no-norm form with scale 1.0: the fold multiplies by exactly 1.0, so every bit matches the
+// pre-fold kernel.
+constexpr uint32_t kScaleOneBits = 0x3f800000u;
 
 #ifdef TRISC_MATH
 volatile tt_l1_ptr uint32_t* g_stats = nullptr;
@@ -173,8 +178,18 @@ void kernel_main() {
         CircularBuffer ecol(cb::ecol32);
         stamp(0);
         for (uint32_t r = 0; r < REPS; r++) {
-            gdn_decode::constants_pass<KT>(
-                cb::gcol32, cb::qk16, cb::qcol32, cb::ones32, cb::bcol16, cb::ecol32, cb::craw16, cb::out16);
+            gdn_decode::constants_pass<KT, false>(
+                cb::gcol32,
+                cb::qk16,
+                cb::qk16_utd,
+                cb::qcol32,
+                cb::ones32,
+                cb::bcol16,
+                cb::ecol32,
+                cb::craw16,
+                cb::ncol16,
+                cb::out16,
+                kScaleOneBits);
             ecol.wait_front(1);
             ecol.pop_front(1);
         }
@@ -197,14 +212,16 @@ void kernel_main() {
             .u16 = cb::u16,
             .out16 = cb::out16,
             .state_out = cb::state_out,
-            .ebc16 = cb::ebc16};
+            .ebc16 = cb::ebc16,
+            .qk16_utd = cb::qk16_utd,
+            .ncol16 = cb::ncol16};
         constexpr gdn_decode::StateCb s_cur{cb::S, cb::S_mm}, s_next{cb::s2, cb::s2_mm};
         CircularBuffer sn(cb::s2);
         stamp(0);
         for (uint32_t r = 0; r < REPS; r++) {
             pass_clock_start();
-            gdn_decode::decode_token<KT, VT, (VARIANT == 7)>(
-                cbs, s_cur, s_next, EMIT_STATE, /*pop_inputs=*/false, StampHook{});
+            gdn_decode::decode_token<KT, VT, (VARIANT == 7), false>(
+                cbs, s_cur, s_next, EMIT_STATE, kScaleOneBits, /*pop_inputs=*/false, StampHook{});
             // Every repetition starts from the same S (c_6): recycle the ring slot the token wrote (its utd id; the
             // matmul view is never pushed or popped).
             sn.wait_front(KV);
