@@ -36,10 +36,6 @@ public:
 
     uint32_t get_last_event(uint8_t cq_id);
 
-    void reset_event_id(uint8_t cq_id);
-
-    void increment_event_id(uint8_t cq_id, uint32_t val);
-
     void set_last_completed_event(uint8_t cq_id, uint32_t event_id);
 
     uint32_t get_last_completed_event(uint8_t cq_id);
@@ -47,8 +43,6 @@ public:
     uint32_t get_current_event(uint8_t cq_id);
 
     void reset(uint8_t cq_id);
-
-    void set_issue_queue_size(uint8_t cq_id, uint32_t issue_queue_size);
 
     void set_bypass_mode(bool enable, bool clear);
 
@@ -89,13 +83,9 @@ public:
 
     uint32_t completion_queue_wait_front(uint8_t cq_id, std::atomic<bool>& exit_condition) const;
 
-    void send_completion_queue_read_ptr(uint8_t cq_id) const;
-
     void* get_completion_queue_ptr(uint8_t cq_id) const;
 
     void wrap_issue_queue_wr_ptr(uint8_t cq_id);
-
-    void wrap_completion_queue_rd_ptr(uint8_t cq_id);
 
     void completion_queue_pop_front(uint32_t num_pages_read, uint8_t cq_id);
 
@@ -107,7 +97,7 @@ public:
     void set_current_and_last_completed_event(
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 
-    bool is_dram_backed() const;
+    bool is_dram_backed() const { return is_dram_backed_; }
 
     uint32_t get_dram_region_base_addr() const;
 
@@ -115,15 +105,18 @@ public:
 
     std::pair<void*, uint32_t> allocate_region(uint32_t size);
 
-    uint32_t get_channel_offset() const { return channel_offset; }
-
 private:
-    bool is_mock_device() const;
+    bool is_mock_device() const { return is_mock_device_; }
 
     void init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel);
 
+    void send_completion_queue_read_ptr(uint8_t cq_id) const;
+
     MetalEnvImpl& env_;
     MetalContext& ctx_;
+    const bool is_mock_device_;
+    const bool is_dram_backed_;
+    const uint32_t cq_alignment_;  // DRAM alignment if DRAM-backed, host alignment otherwise
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;

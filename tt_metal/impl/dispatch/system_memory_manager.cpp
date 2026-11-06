@@ -126,6 +126,9 @@ bool d2h_uses_hugepage_fallback(const MetalContext& ctx) {
 SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs) :
     env_(env),
     ctx_(ctx),
+    is_mock_device_(env.get_cluster().is_mock_or_emulated()),
+    is_dram_backed_(env.get_rtoptions().get_dram_backed_cq()),
+    cq_alignment_(env.get_hal().get_alignment(is_dram_backed_ ? HalMemType::DRAM : HalMemType::HOST)),
     device_id(device_id),
     completion_byte_addrs(num_hw_cqs),
     cq_to_event_locks(num_hw_cqs),
@@ -289,10 +292,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             {.size = completion_q_rd_ptr + sizeof(uint32_t)}));
         this->completion_byte_addrs[cq_id] = completion_q_rd_ptr;
 
-        const uint32_t alignment = is_dram_backed() ? env_.get_hal().get_alignment(HalMemType::DRAM)
-                                                    : env_.get_hal().get_alignment(HalMemType::HOST);
         const uint32_t base = is_dram_backed() ? this->get_dram_region_base_addr() : 0;
-        this->cq_interfaces.emplace_back(channel, cq_id, this->cq_size, cq_start, alignment, base);
+        this->cq_interfaces.emplace_back(channel, cq_id, this->cq_size, cq_start, cq_alignment_, base);
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
         // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping plus
         // PREFETCH_MAX_OUTSTANDING_PCIE_READS to allow us to start writing to issue queue
@@ -311,8 +312,6 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
     }
 }
-
-bool SystemMemoryManager::is_mock_device() const { return env_.get_cluster().is_mock_or_emulated(); }
 
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
     if (is_mock_device()) {
@@ -337,26 +336,6 @@ void SystemMemoryManager::set_current_and_last_completed_event(
 
     this->cq_to_event[cq_id] = current_event_id;
     this->cq_to_last_completed_event[cq_id] = last_completed_event_id;
-    cq_to_event_locks[cq_id].unlock();
-}
-
-void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
-    if (is_mock_device()) {
-        this->cq_to_event[cq_id] = 0;
-        return;
-    }
-    cq_to_event_locks[cq_id].lock();
-    this->cq_to_event[cq_id] = 0;
-    cq_to_event_locks[cq_id].unlock();
-}
-
-void SystemMemoryManager::increment_event_id(const uint8_t cq_id, const uint32_t val) {
-    if (is_mock_device()) {
-        this->cq_to_event[cq_id] += val;
-        return;
-    }
-    cq_to_event_locks[cq_id].lock();
-    this->cq_to_event[cq_id] += val;
     cq_to_event_locks[cq_id].unlock();
 }
 
@@ -405,16 +384,6 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     cq_interface.issue_fifo_wr_toggle = false;
     cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
     cq_interface.completion_fifo_rd_toggle = false;
-}
-
-void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
-    if (is_mock_device()) {
-        return;
-    }
-
-    SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    cq_interface.issue_fifo_size = (issue_queue_size >> 4);
-    cq_interface.issue_fifo_limit = (cq_interface.cq_start + cq_interface.offset + issue_queue_size) >> 4;
 }
 
 void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
@@ -531,9 +500,7 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
     uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
     const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
-    const uint32_t alignment = is_dram_backed() ? env_.get_hal().get_alignment(tt::tt_metal::HalMemType::DRAM)
-                                                : env_.get_hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    if (issue_q_write_ptr + align(cmd_size_B, alignment) > command_issue_limit) {
+    if (issue_q_write_ptr + align(cmd_size_B, cq_alignment_) > command_issue_limit) {
         this->wrap_issue_queue_wr_ptr(cq_id);
         issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
     }
@@ -595,9 +562,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         this->bypass_buffer_write_offset += push_size_B;
         return;
     }
-    const uint32_t alignment = is_dram_backed() ? env_.get_hal().get_alignment(tt::tt_metal::HalMemType::DRAM)
-                                                : env_.get_hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    const uint32_t push_size_16B = align(push_size_B, alignment) >> 4;
+    const uint32_t push_size_16B = align(push_size_B, cq_alignment_) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     uint32_t issue_q_wr_ptr = ctx_.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
@@ -815,16 +780,6 @@ void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
     cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;
 }
 
-void SystemMemoryManager::wrap_completion_queue_rd_ptr(const uint8_t cq_id) {
-    if (is_mock_device()) {
-        return;
-    }
-
-    SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
-    cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
-}
-
 void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, const uint8_t cq_id) {
     if (is_mock_device()) {
         return;
@@ -896,8 +851,6 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     }
     this->prefetch_q_dev_ptrs[cq_id] += entry_bytes;
 }
-
-bool SystemMemoryManager::is_dram_backed() const { return env_.get_rtoptions().get_dram_backed_cq(); }
 
 uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
