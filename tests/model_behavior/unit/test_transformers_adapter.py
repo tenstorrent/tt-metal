@@ -49,8 +49,9 @@ def test_behavior_jobs_keep_hardware_tiers_and_workflow_selectors(backend):
         workflow = yaml.load(
             (root / f".github/workflows/models-t{tier}-sweep-tests.yaml").read_text(), Loader=yaml.BaseLoader
         )
-        choices = workflow["on"]["workflow_dispatch"]["inputs"]["model"]["options"]
-        assert (model in choices) == (tier in expected_tiers.values())
+        # The model input is a free-form filter list since #58226, so every sweep model can be dispatched.
+        model_input = workflow["on"]["workflow_dispatch"]["inputs"]["model"]
+        assert model_input["type"] == "string" and model_input["default"] == "all"
         tier_skus = {sku for sku, sku_tier in expected_tiers.items() if sku_tier == tier}
         sku_choices = workflow["on"]["workflow_dispatch"]["inputs"]["sku"]["options"]
         assert tier_skus <= {choice.split()[0] for choice in sku_choices}

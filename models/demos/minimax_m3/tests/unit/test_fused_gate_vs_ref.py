@@ -73,7 +73,7 @@ def test_fused_gate_matches_m3_rule(device, reset_seeds):
 
     logits = torch.randn(1, 1, TOKENS, E, dtype=torch.float32) * 3.0
     bias_1d = torch.randn(E, dtype=torch.float32) * 0.5
-    # The device holds the bias as bf16, and it dominates top-k selection, so an fp32 reference bias
+    # The op gets a bf16 bias here, and the bias dominates top-k selection, so an fp32 reference bias
     # would choose different experts for reasons that have nothing to do with the op under test.
     bias_as_stored = bias_1d.to(torch.bfloat16).float()
 

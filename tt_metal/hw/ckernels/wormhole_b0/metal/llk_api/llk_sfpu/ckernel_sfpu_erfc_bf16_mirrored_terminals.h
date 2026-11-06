@@ -6,7 +6,7 @@ namespace ckernel::sfpu::ttpoly::erfc {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <int CODE>
-inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) {
+__attribute__((always_inline)) inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) {
     static_assert(CODE >= 0 && CODE <= 6, "unsupported raw terminal class");
     if constexpr (CODE == 0) {
         return std::numeric_limits<float>::quiet_NaN();
@@ -25,9 +25,8 @@ inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) 
     }
 }
 
-// Keep the selected BH conjunction and WH nested predicate distinct.
 template <int Code, bool Nested>
-inline void negative_nan_class_terminal(vUInt raw_u16, vFloat& result) {
+__attribute__((always_inline)) inline void negative_nan_class_terminal(vUInt raw_u16, vFloat& result) {
     static_assert(Code >= 0 && Code <= 4, "negative NaN requires a class result");
     if constexpr (Nested) {
         vUInt exponent_and_sign_delta = (raw_u16 ^ vUInt(0x80ffu)) & vUInt(0x80ffu);
@@ -49,7 +48,7 @@ inline void negative_nan_class_terminal(vUInt raw_u16, vFloat& result) {
 
 // Ordered actions on raw input classes. Callers choose their own early exits
 // and interleaving, and opt into the negative-tail narrowing.
-template <typename Config, uint32_t INDEX, bool NegativeTailFold = false, typename Float>
+template <typename Config, uint32_t INDEX, typename Float>
 inline void apply_raw_domain_record(Float x_raw, Float& result) {
     constexpr auto record = Config::kDomainActions[INDEX];
     static_assert(record.action_kind <= 4, "unsupported domain-action kind");
@@ -73,9 +72,6 @@ inline void apply_raw_domain_record(Float x_raw, Float& result) {
         vFloat magnitude = std::numeric_limits<float>::infinity();
         action_value = copysgn(magnitude, x_raw);
     }
-    if constexpr (NegativeTailFold && INDEX == 1) {
-        action_value = x_raw * 0.0f;
-    }
     if constexpr (record.direction == 0 && record.inclusive != 0) {
         v_if(x_raw <= record.bound) { result = action_value; }
         v_endif;
@@ -92,7 +88,7 @@ inline void apply_raw_domain_record(Float x_raw, Float& result) {
 }
 
 template <typename Config, uint32_t INDEX>
-inline void apply_raw_domain_records(vFloat x_raw, vFloat& result) {
+__attribute__((always_inline)) inline void apply_raw_domain_records(vFloat x_raw, vFloat& result) {
     apply_raw_domain_record<Config, INDEX>(x_raw, result);
     if constexpr (INDEX > 0) {
         apply_raw_domain_records<Config, INDEX - 1>(x_raw, result);
@@ -100,10 +96,7 @@ inline void apply_raw_domain_records(vFloat x_raw, vFloat& result) {
 }
 
 template <int Code>
-inline void positive_nonfinite_terminal(vUInt raw_u16, vFloat& result, float constant) {
-    // Physical BF16 layout has the complete exponent byte in bits 7:0 and
-    // the sign in bit 15. This one quotient is exactly +Inf plus all 127
-    // positive NaNs; codegen admits it only for equal typed constant actions.
+__attribute__((always_inline)) inline void positive_nonfinite_terminal(vUInt raw_u16, vFloat& result, float constant) {
     vUInt exponent_and_sign_delta = (raw_u16 ^ vUInt(0x00ffu)) & vUInt(0x80ffu);
     v_if(exponent_and_sign_delta == 0u) { result = target_raw_terminal_value<Code>(result, constant); }
     v_endif;

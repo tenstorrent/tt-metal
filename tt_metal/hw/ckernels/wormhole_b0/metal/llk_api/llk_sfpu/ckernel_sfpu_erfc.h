@@ -89,15 +89,10 @@ inline void calculate_erfc() {
     }
 }
 
-void init_erfc_bf16();
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void erfc_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<true>();
-    if constexpr (!is_fp32_dest_acc_en) {
-        init_erfc_bf16();
-    }
 }
 
 }  // namespace ckernel::sfpu

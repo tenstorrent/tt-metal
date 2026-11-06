@@ -32,7 +32,6 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SILU,
     ACTIVATION_SITU,
     ACTIVATION_SWIGLUOAI,
-    TorchExpert,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -43,6 +42,8 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _ISL_EXHAUSTIVE_SWEEP,
     _ISL_FUNCTIONAL_SWEEP,
     SINGLE_EXPERT_MODELS,
+    expert_golden,
+    expert_weights,
 )
 
 SINGLE_CHIP_MESH_PARAMS = [
@@ -114,28 +115,12 @@ def run_routed_expert_hybrid(
         f"{threshold=} {owner=} {weights_dram_sharded=} {activation=}"
     )
 
-    torch.manual_seed(42)
-    # torch.nn.Linear convention (out_features, in_features), which is what TorchExpert reads.
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
-    torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
+    torch_active, torch_output_active = expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation)
+
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)
     torch_input[:active_tokens] = torch_active
-
-    with torch.no_grad():
-        torch_expert = TorchExpert(
-            emb_dim,
-            hidden_dim,
-            weights,
-            activation=torch_activation,
-            situ_beta=_SITU_BETA_GATE,
-            situ_linear_beta=_SITU_BETA_UP,
-        )
-        torch_output_active = torch_expert(torch_active)
 
     # TtRoutedExpert branches on x layout: ROW_MAJOR is bf16 (tilized and bf8-packed inside the op),
     # TILE is consumed directly as bf8. Pair dtype with layout so each variant drives its real path.
@@ -249,10 +234,10 @@ def _isl_params(active_sweep, only_models=None):
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim, threshold", _isl_params(_ISL_FUNCTIONAL_SWEEP)
 )
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="the hybrid dispatch is Blackhole-only")
 def test_tt_routed_expert_hybrid_functional(
     mesh_device,
@@ -280,15 +265,15 @@ def test_tt_routed_expert_hybrid_functional(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize(
-    "allocated_tokens, active_tokens, emb_dim, hidden_dim, threshold",
-    _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
-)
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 # DRAM ND-sharded weights let a core fetch its whole K-row weight slice in one NoC request instead
 # of one per tile. Swept here rather than only per-op because the split hands the same weight
 # tensors to whichever band claims the count, so both ops must read the placement.
 @pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim, threshold",
+    _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
+)
 @pytest.mark.skipif(not is_blackhole(), reason="the hybrid dispatch is Blackhole-only")
 def test_tt_routed_expert_hybrid_isl_sweep(
     mesh_device,
