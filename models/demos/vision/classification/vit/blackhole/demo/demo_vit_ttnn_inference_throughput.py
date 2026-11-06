@@ -35,7 +35,6 @@ def test_vit(device, model_location_generator):
 
     model_name = "google/vit-base-patch16-224"
     batch_size = 10
-    sequence_size = 224
 
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
@@ -63,21 +62,6 @@ def test_vit(device, model_location_generator):
     position_embeddings = ttnn.from_torch(
         torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
-
-    torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
-    if torch_attention_mask is not None:
-        head_masks = [
-            ttnn.from_torch(
-                torch_attention_mask[index].reshape(1, 1, 1, sequence_size).expand(batch_size, -1, -1, -1),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            for index in range(config.num_hidden_layers)
-        ]
-    else:
-        head_masks = [None for _ in range(config.num_hidden_layers)]
 
     # IMAGENET INFERENCE
     #####################
