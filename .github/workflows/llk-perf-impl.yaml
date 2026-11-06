@@ -165,9 +165,8 @@ jobs:
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name == 'merge_group' && 'merge_group' || '' }}
 
-      # Durations do not scale between run types, so take them from runs that
-      # measured what this one measures: the merge gate from the merge gate,
-      # the nightlies from the nightly of their own mode.
+      # Durations do not scale between run types, so they come from runs that
+      # measured the same ones: the merge gate from the merge gate.
       - name: Fetch test durations
         id: durations
         continue-on-error: true
@@ -179,8 +178,8 @@ jobs:
           SOURCE_BRANCH: ${{ inputs.pipeline == 'merge_baseline' && '' || 'main' }}
           SOURCE_EVENT: ${{ inputs.pipeline == 'merge_baseline' && 'merge_group' || 'schedule' }}
         run: .github/scripts/llk-fetch-test-durations.sh "$SOURCE" "$SOURCE_BRANCH" "$SOURCE_EVENT" split-durations
-      # An artifact fault here must not skip every leg, so the legs read the
-      # outcome of the upload, not of the fetch.
+      # The legs read the outcome of this upload, so an artifact fault here
+      # falls back to the tables instead of skipping every leg.
       - name: Upload test durations for the legs
         id: upload-durations
         if: steps.durations.outputs.found == 'true'
@@ -493,9 +492,8 @@ jobs:
           path: ${{ env.LLK_PATH }}/perf_data/runs/
           overwrite: true
 
-      # After the perf data, and bounded: this only feeds the next run's split,
-      # and a stall here must not push the leg past its timeout. Before stage 2
-      # and the shadow pass, which re-run the suite and rewrite .test_durations.
+      # Behind the perf data and bounded: this only feeds the next run's split.
+      # Before stage 2 and shadow, which rewrite .test_durations.
       - name: Upload test durations
         continue-on-error: true
         timeout-minutes: 2
