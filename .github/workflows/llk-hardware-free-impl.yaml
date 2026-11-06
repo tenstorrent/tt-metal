@@ -92,6 +92,9 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         run: |
           ${{ matrix.test-group.cmd }}
+      - name: Test the duration fetch script
+        shell: bash
+        run: python3 -m pytest .github/scripts/utils/test_llk_fetch_test_durations.py -q
       - name: Upload JUnit report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()

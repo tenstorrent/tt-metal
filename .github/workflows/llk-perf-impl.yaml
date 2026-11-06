@@ -86,6 +86,7 @@ on:
         type: number
 
 permissions:
+  actions: read
   checks: write
   contents: read
   packages: write
@@ -105,6 +106,7 @@ jobs:
     needs: [build-images]
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
+      split-durations: ${{ steps.upload-durations.outcome == 'success' }}
     env:
       TESTS_YAML_PATH: ${{ inputs.tests-yaml }}
     steps:
@@ -163,6 +165,31 @@ jobs:
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name == 'merge_group' && 'merge_group' || '' }}
 
+      # Durations do not scale between run types, so they come from runs that
+      # measured the same ones: the merge gate from the merge gate.
+      - name: Fetch test durations
+        id: durations
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE: ${{ inputs.pipeline == 'merge_baseline' && 'merge-gate.yaml' || (inputs.speed-of-light && 'llk-perf.yaml' || 'llk-perf-gate.yaml') }}
+          SOURCE_BRANCH: ${{ inputs.pipeline == 'merge_baseline' && '' || 'main' }}
+          SOURCE_EVENT: ${{ inputs.pipeline == 'merge_baseline' && 'merge_group' || 'schedule' }}
+        run: .github/scripts/llk-fetch-test-durations.sh "$SOURCE" "$SOURCE_BRANCH" "$SOURCE_EVENT" split-durations
+      # The legs read the outcome of this upload, so an artifact fault here
+      # falls back to the tables instead of skipping every leg.
+      - name: Upload test durations for the legs
+        id: upload-durations
+        if: steps.durations.outputs.found == 'true'
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: split-durations-${{ inputs.architecture }}${{ inputs.artifact-suffix }}
+          path: split-durations
+
   compile-quasar-perf:
     if: ${{ inputs.compile-quasar && (inputs.architecture == 'all' || inputs.architecture == 'quasar') }}
     needs: [build-images]
@@ -213,6 +240,19 @@ jobs:
             exit 1
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+      - name: Download test durations
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: split-durations-${{ inputs.architecture }}${{ inputs.artifact-suffix }}
+          path: split-durations
+      - name: Use the test durations for --perf-splits
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        shell: bash
+        run: |
+          if [[ -f "split-durations/$CHIP_ARCH.json" ]]; then
+            echo "LLK_SPLIT_DURATIONS=$PWD/split-durations/$CHIP_ARCH.json" >> "$GITHUB_ENV"
+          fi
       - name: Compile
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
@@ -250,6 +290,15 @@ jobs:
           archive: false
           retention-days: 1
           if-no-files-found: error
+      - name: Upload test durations
+        if: ${{ inputs.offload-compile }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test-durations-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}-compile${{ inputs.artifact-suffix }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/.test_durations
+          include-hidden-files: true
 
   stage2-baseline:
     name: "Stage 2: read the merge baseline"
@@ -341,6 +390,19 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
+      - name: Download test durations
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: split-durations-${{ inputs.architecture }}${{ inputs.artifact-suffix }}
+          path: split-durations
+      - name: Use the test durations for --perf-splits
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        shell: bash
+        run: |
+          if [[ -f "split-durations/$CHIP_ARCH.json" ]]; then
+            echo "LLK_SPLIT_DURATIONS=$PWD/split-durations/$CHIP_ARCH.json" >> "$GITHUB_ENV"
+          fi
       - name: Download the node list
         if: ${{ inputs.node-list-artifact != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -429,6 +491,17 @@ jobs:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: ${{ env.LLK_PATH }}/perf_data/runs/
           overwrite: true
+
+      # Behind the perf data and bounded: this only feeds the next run's split.
+      # Before stage 2 and shadow, which rewrite .test_durations.
+      - name: Upload test durations
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test-durations-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/.test_durations
+          include-hidden-files: true
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
