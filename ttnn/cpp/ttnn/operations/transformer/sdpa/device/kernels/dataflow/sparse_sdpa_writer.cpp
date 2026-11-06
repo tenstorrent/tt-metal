@@ -17,15 +17,14 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_gather.hpp"  // dual-NoC trid-ring gather helper (shared with the reader)
 
-constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
+constexpr uint32_t one_bf16 = 0x3F80u;
 constexpr uint16_t neg_inf_bf16 = 0xFF80u;
 
 void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::H);
     constexpr uint32_t S = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::S);
     constexpr uint32_t vDHt = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::V_DHT);
-    // CB ids — passed by the factory (the SparseCB enum is the single source); order must match the
-    // factory's writer CB-arg block (compile args 3..6).
+    // CB ids from the factory (the SparseCB enum is the single source).
     constexpr uint32_t cb_out_rm = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_OUT_RM);
     constexpr uint32_t cb_scale = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SCALE);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_COL_IDENTITY);
@@ -38,6 +37,7 @@ void kernel_main() {
     constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::BC_SHARD_STRIDE_GAP);
     constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::BC_SLAB_STRIDE_GAP);
     constexpr bool scaled_kv = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::SCALED_KV) != 0;
+    constexpr bool fused_dequant = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::FUSED_DEQUANT) != 0;
     constexpr uint32_t k_dim = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::K_DIM);
     constexpr uint32_t kv_elem_bytes = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::KV_ELEM_BYTES);
     constexpr uint32_t cb_idx = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_IDX);
@@ -76,8 +76,9 @@ void kernel_main() {
     const uint32_t kv_batch_page_offset =
         get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::KV_BATCH_PAGE_OFFSET);
 
+    constexpr uint32_t sqt = H / tt::constants::TILE_HEIGHT;
     constexpr uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;  // V_DIM bytes per head-row
-    constexpr uint32_t block_tiles = (H / tt::constants::TILE_HEIGHT) * vDHt;          // Sqt*vDHt: the [H,V_DIM] block
+    constexpr uint32_t block_tiles = sqt * vDHt;                                       // the [H,V_DIM] block
 
     Noc noc;
     experimental::CB out_cb(cb_out_rm);
@@ -102,8 +103,10 @@ void kernel_main() {
         /*reduce_factor=*/1>();
 
     // Col-identity (column 0 = 1.0): compute matmul-reduces the partial row-sum against it to finalize the
-    // within-tile reduction in normalize_row_streaming.
-    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), one_bf16_packed);
+    // within-tile reduction in normalize_row_streaming. With the fused dequant, V (the K latent) arrives scaled by
+    // 2^FUSED_DEQUANT_EXP_OFFSET; the identity holds the same power of two so out/sum is unchanged.
+    constexpr uint32_t identity_bf16 = fused_dequant ? (127u + sparse_sdpa::FUSED_DEQUANT_EXP_OFFSET) << 7 : one_bf16;
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), (identity_bf16 << 16) | identity_bf16);
 
     // All-(-inf) tile (row 0; compute bcast-adds it to fully-masked key tiles). Only row 0 matters for the
     // row-broadcast add: the left and right half-rows live in face 0 and face 1 respectively.
@@ -123,7 +126,8 @@ void kernel_main() {
             constexpr auto sink_args = TensorAccessorArgs<
                 kv_args.next_compile_time_args_offset(),
                 kv_args.next_common_runtime_args_offset()>();
-            const auto sink = TensorAccessor(sink_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS));
+            const auto sink = TensorAccessor(
+                sink_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS));
             experimental::CB sink_cb(cb_attention_sink), scratch(cb_sink_scratch);
             constexpr uint32_t sink_bytes = H * sizeof(uint16_t);
             constexpr uint32_t tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
@@ -159,7 +163,6 @@ void kernel_main() {
     experimental::CB head_out_cb(cb_head_out), head_max_cb(cb_head_max), head_sum_cb(cb_head_sum);
     experimental::CB head_ready_cb(cb_head_ready), head_ack_cb(cb_head_ack);
     experimental::CB merge_ctrl_cb(cb_merge_ctrl);
-    constexpr uint32_t sqt = H / tt::constants::TILE_HEIGHT;
     constexpr uint32_t state_tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);  // bf16 flash state
     uint32_t recv_out_l1 = 0, recv_max_l1 = 0, recv_sum_l1 = 0;
     uint32_t head_out_l1 = 0, head_max_l1 = 0, head_sum_l1 = 0;
@@ -210,7 +213,7 @@ void kernel_main() {
                     bc_slab_stride_gap,
                     sparse_sdpa::SCALED_K_TRID_RING>(
                     noc, kv, dst_l1, idx_ptr, base, 0, split, packed_row_bytes, kv_batch_page_offset);
-                sparse_sdpa::scatter_packed_scales<scale_blocks>(
+                sparse_sdpa::scatter_packed_scales<scale_blocks, fused_dequant>(
                     dst_l1, scale_dst_l1, 0, split, packed_row_bytes, latent_row_bytes);
             } else {
                 sparse_sdpa::trid_ring_gather<
