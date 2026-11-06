@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 import copy
@@ -207,6 +209,20 @@ def create_vadv2_model_parameters_tramsformer(model: ResNet, device=None):
     return parameters
 
 
+def branch_parameters(branches, device):
+    """The decoder's per-layer refinement MLPs, as TtDetectionTransformerDecoder reads them."""
+    return {
+        str(lid): {
+            str(i): SimpleNamespace(
+                weight=ttnn.to_device(preprocess_linear_weight(linear.weight, dtype=ttnn.bfloat16), device),
+                bias=ttnn.to_device(preprocess_linear_bias(linear.bias, dtype=ttnn.bfloat16), device),
+            )
+            for i, linear in enumerate(m for m in branch if isinstance(m, nn.Linear))
+        }
+        for lid, branch in enumerate(branches)
+    }
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_vadv2_transformer(
     device,
@@ -248,6 +264,15 @@ def test_vadv2_transformer(
     reg_branch.append(nn.Linear(256, 10))
     reg_branch = nn.Sequential(*reg_branch)
     reg_branches = nn.ModuleList([copy.deepcopy(reg_branch) for i in range(3)])
+    # The trained refinement branches, which both models apply between decoder layers.
+    reg_branches = load_torch_model(
+        torch_model=reg_branches, layer="pts_bbox_head.reg_branches.", model_location_generator=model_location_generator
+    )
+    map_reg_branches = load_torch_model(
+        torch_model=map_reg_branches,
+        layer="pts_bbox_head.map_reg_branches.",
+        model_location_generator=model_location_generator,
+    )
     img_metas = [
         {
             "can_bus": np.array(
@@ -368,7 +393,10 @@ def test_vadv2_transformer(
         decoder=True,
         map_decoder=True,
         embed_dims=256,
-        params_branches=None,
+        params_branches=SimpleNamespace(
+            reg_branches=branch_parameters(reg_branches, device),
+            map_reg_branches=branch_parameters(map_reg_branches, device),
+        ),
     )
     shift = ttnn.from_torch(shift, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     can_bus = bev_queries.new_tensor([each["can_bus"] for each in img_metas])  # [:, :]
@@ -394,8 +422,8 @@ def test_vadv2_transformer(
         bev_w,
         grid_length=grid_length,
         bev_pos=bev_pos,
-        reg_branches=None,
-        map_reg_branches=None,
+        reg_branches=True,
+        map_reg_branches=True,
         img_metas=img_metas,
         shift=shift,
         can_bus=can_bus,
@@ -404,7 +432,7 @@ def test_vadv2_transformer(
     result1 = assert_with_pcc(model_outputs[0], ttnn.to_torch(ttnn_outputs[0]).float(), 0.99)
     result2 = assert_with_pcc(model_outputs[1], ttnn.to_torch(ttnn_outputs[1]).float(), 0.99)
     result3 = assert_with_pcc(model_outputs[2], ttnn.to_torch(ttnn_outputs[2]).float(), 0.99)
-    result4 = assert_with_pcc(model_outputs[3], ttnn.to_torch(ttnn_outputs[3]).float(), 0.98)
-    result5 = assert_with_pcc(model_outputs[4], ttnn.to_torch(ttnn_outputs[4]).float(), 0.98)
-    result6 = assert_with_pcc(model_outputs[5], ttnn.to_torch(ttnn_outputs[5]).float(), 0.98)
-    result7 = assert_with_pcc(model_outputs[6], ttnn.to_torch(ttnn_outputs[6]).float(), 0.98)
+    result4 = assert_with_pcc(model_outputs[3], ttnn.to_torch(ttnn_outputs[3]).float(), 0.99)
+    result5 = assert_with_pcc(model_outputs[4], ttnn.to_torch(ttnn_outputs[4]).float(), 0.99)
+    result6 = assert_with_pcc(model_outputs[5], ttnn.to_torch(ttnn_outputs[5]).float(), 0.99)
+    result7 = assert_with_pcc(model_outputs[6], ttnn.to_torch(ttnn_outputs[6]).float(), 0.99)

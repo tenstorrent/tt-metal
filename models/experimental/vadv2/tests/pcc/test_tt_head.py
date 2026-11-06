@@ -597,7 +597,7 @@ def test_vadv2_head(
     assert_with_pcc(model_outputs["bev_embed"], ttnn.to_torch(ttnn_outputs["bev_embed"]).float(), 0.99)
     assert_with_pcc(model_outputs["all_cls_scores"], ttnn.to_torch(ttnn_outputs["all_cls_scores"]).float(), 0.99)
     assert_with_pcc(model_outputs["all_bbox_preds"], ttnn.to_torch(ttnn_outputs["all_bbox_preds"]).float(), 0.99)
-    assert_with_pcc(model_outputs["all_traj_preds"], ttnn.to_torch(ttnn_outputs["all_traj_preds"]).float(), 0.98)
+    assert_with_pcc(model_outputs["all_traj_preds"], ttnn.to_torch(ttnn_outputs["all_traj_preds"]).float(), 0.99)
     assert_with_pcc(
         model_outputs["all_traj_cls_scores"], ttnn.to_torch(ttnn_outputs["all_traj_cls_scores"]).float(), 0.99
     )
