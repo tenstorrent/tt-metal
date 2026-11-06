@@ -145,3 +145,24 @@ Totals: DRAM ≈ 22.8 MB (minimum ≈ 19.1 MB with W and the mixes once); NoC �
 - `cb_w_slice`: unchanged size; now filled per block during the first row (cumulative push), not up front.
 - `cb_gather`: `fan-in · COMBINE_DEPTH` with fan-in 8 (Q ≤ 88) = 16 tiles; 16 for larger Q.
 - Data-movement budget at the focus (bf16 collapse, T160 C5120): F 1.6 MB, X 6.6 MB, X' 6.6 MB, y 1.6 MB once each; W 5 × 2.6 MB = 13.1 MB (R = 5; was 2 × at R = 2); coefficients 21 × 5 page reads (packed).
+
+### Refinement 4 deltas (reuse multicast)
+
+- No CB added, resized or removed. `cb_w_slice` (resident) is the W channel's landing region: the
+  injector's own slice is the multicast source (src == dst, same CB offset on every core), written once
+  per block on the first row, so the channel needs no handshake (Counter signal). `cb_coef_src` (reader
+  scratch) is the coefficient channels' landing region; it is rewritten every row, so those channels
+  handshake (a receiver re-arms only after it has expanded the previous row).
+- Semaphores: combine `n_sems` (ids 0..n_sems−1), then W 1, coef 2, coef-tail 2 (focus: 8 + 5 = 13 ≤
+  16). A channel that would exceed `MAX_SEMAPHORES` is dropped and its cores read for themselves.
+- Placement (`core_layout`): fused with R > 1 and R·⌈Q/gx⌉ ≤ gy uses the band layout
+  `(g_r, g_c) → (g_c mod gx, g_r + R·⌊g_c/gx⌋)`. Otherwise (plain, R = 1, or no fit) the row-major layout
+  is kept (W read per core).
+- Data-movement budget at the focus (bf16 collapse, T160 C5120, R=5, Q=21, M=2 bands):
+  - W: 1 × 2.6 MB from DRAM (was 5 × = 13.1 MB), plus 4 × 2.6 MB of NoC multicast fan-out (one write per
+    rectangle to each of the R−1 group members).
+  - Coefficients: M = 2 page reads per row (was Q = 21), multicast to the 11- and 10-core row segments.
+  - F / X / X' / y: unchanged (once each).
+  - DRAM total ≈ 19.3 MB (was ≈ 29.7 MB).
+- Plain row-major layout: coefficients are read once per row group (Q-core RowMajor group; up to 3
+  rectangles), e.g. plain fp32 T1/C7168 Q=75: 75 → 1 read of the post + comb pages.

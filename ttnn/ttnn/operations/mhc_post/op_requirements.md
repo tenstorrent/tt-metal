@@ -197,7 +197,7 @@ collapse the same `(R, Q, block_c)`, or `test_fused_modes_agree` breaks.
   is left for the tournament. Plain fp32 T160 is 100.6 µs at Q=22 vs 111 µs at Q=21 (aggregate-DRAM-bound
   there); a mode/dtype-aware core-count preference could take it.
 
-### [ ] Refinement 4 — Speed up the perf-flagged profile: reuse multicast (W and coefficients)
+### [x] Refinement 4 — Speed up the perf-flagged profile: reuse multicast (W and coefficients)
 
 **Type**: perf
 
@@ -222,6 +222,24 @@ collapse the same `(R, Q, block_c)`, or `test_fused_modes_agree` breaks.
 **Done when**:
 - Measured device-ns improves on the flagged shape, the golden suite is green, and stats / X' bits are unchanged.
 - No regression across the guard set (plain fp32, plain bf16, stats, collapse; separate and packed).
+
+**Outcome**:
+- Flagged config (T160 C5120 bf16 collapse packed HiFi2): **137.9 → 129.5 µs** device kernel (−6 %).
+  Stats 107.3 → 96.0, plain bf16 74.3 → 73.6; HiFi4 stats 204.5 → 195.1, collapse 236.7 → 228.5; T640 HiFi2
+  stats 314.1 → 284.7, collapse 361.8 → 354.0. Plain fp32 separate: T160 109.2 → 94.7, T1/C7168 49.3 → 40.7,
+  T4096 740.7 → 734.9 (median of 3), T640/C1792 146.1 → 147.4 (+0.9 %, inside the noise band, consistent).
+- Split by channel at the focus: W-mcast alone is 137.9 → 130.2 µs, coef-mcast alone 137.9 → 137.5. Both kept
+  as live knobs (`W_MCAST`, `COEF_MCAST`). Measured W-mcast lands on the "skip non-injector W reads" ceiling
+  (129.9 µs), so the W stream is now fully removed from the receivers' critical path.
+- Topology: band core layout `(g_r, g_c) → (g_c mod gx, g_r + R·⌊g_c/gx⌋)`. Column groups are R cores down
+  one grid column, so the W channel is a native ColumnMajor helper multicast with staggered injectors. Row
+  groups are M = ⌈Q/gx⌉ grid-row segments, served by two RowMajor coefficient channels (full and tail
+  segments); with Q = 21 on the 11-wide grid that means 2 reads per row, not 1. One read per row group
+  would need equal consecutive groups in both orders, i.e. Q ≤ gx; the helper cannot express it at Q = 21.
+- Bottleneck now: unchanged from Refinement 3, the per-tile SFPU mix chain (~2.7 µs per output tile) plus
+  the per-row fixed cost. That is Refinement 5. Not done here: an injector-rotating W stream (each group
+  member injects 1/R of the slice) would also balance the injector's extra read. It is not tried because
+  the receivers already sit at the W-free ceiling.
 
 ### [ ] Refinement 5 — Speed up the perf-flagged profile: SFPU-bound mix
 

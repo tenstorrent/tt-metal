@@ -255,3 +255,58 @@
       accumulation order, so it is not taken here).
 - Tests added: `tests/ttnn/unit_tests/operations/mhc_post/test_mhc_post_knob_sweep.py` (`MHC_SWEEP="R,Q,block_c,fanin[,io,out,coef];..."`,
   `MHC_T/MHC_C/MHC_MODE/MHC_DT/MHC_SEP`; without env it dispatches the default config once).
+
+## Refinement 4 — Speed up the perf-flagged profile: reuse multicast (W and coefficients)
+- Date: 2026-11-06
+- What was done:
+  - **w-mcast**: one W injector per column group multicasts each first-row block's W slice into the R
+    group members' resident `cb_w_slice` (kernel_lib `McastArgs` sender/receiver, host `ttnn.Mcast` +
+    `attach`). No handshake, Counter signal: the slice is written once, so the injector never waits.
+    Injectors are staggered across the row groups (`McastSenderPlacement.Staggered`).
+  - **coef-mcast**: the row segment's sender reads the coefficient source page(s) and multicasts them to
+    the segment's `cb_coef_src`. Handshake, because the scratch is reused every row. Receivers skip their
+    reads; cores without a role read for themselves.
+  - **Placement** (`core_layout`): the helper partitions receivers into equal groups that are consecutive
+    in row- or column-major order.
+    - Fused with R > 1 and R·⌈Q/gx⌉ ≤ gy: band layout. W uses ColumnMajor groups of R. Coefficients use
+      RowMajor full-width segments plus a tail-segment channel.
+    - Otherwise (plain, R = 1, or no fit): row-major layout. The coefficient channel is one RowMajor group
+      of Q per row group, and W is read per core.
+    - The combine transport takes physical coordinates from the same `pos(k)`.
+  - Semaphores: the channels take ids after the combine's; a channel past `MAX_SEMAPHORES` is dropped
+    (`attach_absent_mcast`).
+  - Reused: every CB, the compute and writer kernels, the split / block / fan-in choice (stats and X' bits
+    unchanged), and the reader's block loop. Added: `core_layout`, `_attach_mcasts`, the `W_MCAST` /
+    `COEF_MCAST` knobs, and ~40 reader lines (roles, `share_coefficients`, a per-block W send/receive).
+- Perf (device kernel ns, Blackhole 11×10; Refinement 3 → Refinement 4):
+
+  | Config | before | after |
+  |---|---|---|
+  | **bf16 packed collapse HiFi2 T160 (flagged)** | **137.9 µs** | **129.5 µs** |
+  | stats HiFi2 T160 | 107.3 | 96.0 |
+  | plain bf16 T160 | 74.3 | 73.6 |
+  | stats / collapse HiFi4 T160 | 204.5 / 236.7 | 195.1 / 228.5 |
+  | stats / collapse HiFi2 T640 | 314.1 / 361.8 | 284.7 / 354.0 |
+  | plain fp32 sep T160 / T1 C7168 | 109.2 / 49.3 | 94.7 / 40.7 |
+  | plain fp32 sep T640 C7168 / T4096 C1792 | 460.3 / 740.7 | 454.2 / 734.9 |
+  | plain fp32 sep T640 C1792 | 146.1 | 147.4 (+0.9 %, noise band) |
+
+  - Channel split at the focus: W only 130.2, coef only 137.5, both 129.5.
+  - Ceiling check (non-injector W reads stubbed, wrong output): 129.9 µs. The multicast reaches it.
+- Accuracy achieved: unchanged bits. The data is moved, not computed, and (R, Q, block_c, fan-in) are
+  unchanged. Every gate as in Refinement 3.
+- Golden test progress (targeted slices):
+  - `test_golden.py -k "collapse or stats"`: 124 passed / 348 skipped (INVALID).
+  - `-k plain`: 332 / 332.
+  - `test_regression.py`: 26 / 27. The one failure is the pre-existing `test_hc_scalars_are_runtime`
+    `hc_eps` gate defect (Refinement 2).
+  - Unit `test_mhc_post.py`: 30 / 30.
+- Issues encountered:
+  - With the helper's equal-consecutive-group partition, both channels cannot be single groups when
+    Q > gx. A row group would have to be consecutive in row-major order while a column group is
+    consecutive in column-major order, which forces a product layout (Q ≤ gx).
+  - The coefficients are therefore read M = ⌈Q/gx⌉ times per row at the focus (2, was 21). W is read
+    exactly once.
+  - Shapes where the band layout does not fit (e.g. T640 C1792 fused, R = 20 > gy) keep per-core W reads.
+- Tests added: none (the existing unit / golden / perf files cover the changed path; `test_fused_modes`
+  T160 exercises the band layout with both W and coefficient channels).
