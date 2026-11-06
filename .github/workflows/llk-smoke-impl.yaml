@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.hardware-matrix.outputs.matrix }}
-      split-durations: ${{ steps.durations.outputs.found }}
+      split-durations: ${{ steps.upload-durations.outcome == 'success' }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_pr_gate_tests.yaml
     steps:
@@ -121,8 +121,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: .github/scripts/llk-fetch-test-durations.sh pr-gate.yaml main push split-durations
+      # An artifact fault here must not skip every leg, so the legs read the
+      # outcome of the upload, not of the fetch.
       - name: Upload test durations for the legs
+        id: upload-durations
         if: steps.durations.outputs.found == 'true'
+        continue-on-error: true
+        timeout-minutes: 2
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: split-durations
@@ -189,7 +194,12 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
+      # Only push runs on main are ever read back, and a fault here must not
+      # turn a passing leg red.
       - name: Upload test durations
+        if: github.event_name == 'push'
+        continue-on-error: true
+        timeout-minutes: 2
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: test-durations-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}

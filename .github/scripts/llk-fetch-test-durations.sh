@@ -3,7 +3,10 @@ set -euo pipefail
 
 DOWNLOAD="$(mktemp -d)"
 
-for run in $(gh run list -w "$1" -b "$2" -e "$3" -s success -L 5 --json databaseId --jq '.[].databaseId'); do
+ARGS=(-w "$1" -e "$3" -s success -L 20)
+[ -n "$2" ] && ARGS+=(-b "$2")
+
+for run in $(gh run list "${ARGS[@]}" --json databaseId --jq '.[].databaseId'); do
   gh run download "$run" -p 'test-durations-*' -D "$DOWNLOAD" && break
 done
 
