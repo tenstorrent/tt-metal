@@ -350,6 +350,7 @@ def test_share_page_tables_default_policy(monkeypatch):
     monkeypatch.setenv(model_module.SHARE_PAGE_TABLES_ENV, "0")
     assert model_module.share_page_tables_default(mesh) is False
     monkeypatch.delenv(model_module.SHARE_PAGE_TABLES_ENV)
+    monkeypatch.setattr(model_module, "SHARE_PAGE_TABLES_DEFAULT_SHAPES", ())
     assert model_module.share_page_tables_default(mesh) is False
     monkeypatch.setattr(model_module, "SHARE_PAGE_TABLES_DEFAULT_SHAPES", ((1, 4),))
     assert model_module.share_page_tables_default(mesh) is True

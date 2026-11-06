@@ -319,7 +319,10 @@ def sampling_trace_default(mesh_device, mesh_config=None) -> bool:
 
 SHARE_PAGE_TABLES_ENV = "GEMMA4_SHARE_PAGE_TABLES"
 # Mesh shapes where the per-group page-table buffers are the default (measured: see share_page_tables_default).
-SHARE_PAGE_TABLES_DEFAULT_SHAPES = ()
+# (1, 4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): the 48 per-layer page-table
+# copies per prefill become 6 per-group ones (install 9.2 -> 5.7 ms x2), TTFT 128/128 c1 99 -> 90 ms, decode flat,
+# coherence PASS, PCC bit-identical.
+SHARE_PAGE_TABLES_DEFAULT_SHAPES = ((1, 4),)
 
 
 def page_table_group_slots(layer_types, kv_shared_layer_map=None):
@@ -369,7 +372,9 @@ def share_page_tables_default(mesh_device, mesh_config=None, *, bounded_sliding=
 
 PREFILL_TAIL_TRACE_ENV = "GEMMA4_PREFILL_TAIL_IN_TRACE"
 # Mesh shapes where the traced prefill tail is the default (measured: see prefill_tail_in_trace_default).
-PREFILL_TAIL_TRACE_DEFAULT_SHAPES = ()
+# (1, 4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): TTFT 2K/128 c1 346 -> 329 ms,
+# 128/128 flat, decode flat, coherence PASS, traced tail bit-exact vs the eager tail.
+PREFILL_TAIL_TRACE_DEFAULT_SHAPES = ((1, 4),)
 
 
 def prefill_tail_in_trace_default(mesh_device, mesh_config=None) -> bool:

@@ -339,7 +339,10 @@ def _get_out_subblock_w(per_core_n, out_subblock_h):
 PREFILL_WIDE_GRID_ENV = "GEMMA4_PREFILL_WIDE_GRID"
 # Mesh shape -> hidden sizes (the model) where the wide short-row prefill grid is the default (measured: see
 # prefill_wide_grid_default).
-PREFILL_WIDE_GRID_DEFAULT = {}
+# (1, 4) x hidden 3840 (12B TP4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): TTFT
+# 128/128 c1 99 -> 72 ms, 2K 346 -> 293, 8K 1409 -> 1276, 32K 6468 -> 5916, c32 1466 -> 1229 (aggregate +5 %), decode
+# flat, coherence PASS, matmul PCC vs torch identical to the narrow grid; test_full_model 0.955 -> 0.984.
+PREFILL_WIDE_GRID_DEFAULT = {(1, 4): (3840,)}
 # in0_block_w cap of the wide config (the largest divisor of the K tiles up to it whose CBs fit the budget).
 PREFILL_WIDE_IN0_CAP = max(1, int(os.environ.get("GEMMA4_PREFILL_WIDE_IN0_CAP", "8")))
 
