@@ -20,7 +20,11 @@
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);
+// Tiles of each row this core handles: the whole row, or its slice of it.
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
+// Cores that share each row; they exchange their partial scale through the writer.
+constexpr uint32_t num_slices = get_compile_time_arg_val(4);
+constexpr bool sliced = num_slices > 1U;
 
 // CBs with input data
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
@@ -40,6 +44,13 @@ constexpr uint32_t cb_dL_dgate_idx = tt::CBIndex::c_13;
 constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
 constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
 constexpr uint32_t cb_du_idx = tt::CBIndex::c_14;
+constexpr uint32_t cb_slice_partial_idx = tt::CBIndex::c_15;
+constexpr uint32_t cb_gathered_partials_idx = tt::CBIndex::c_16;
+// A sliced core accumulates the scale over its slice only, and reduce_scale adds up the gathered partials of all
+// slices.
+constexpr uint32_t cb_scale_partial_idx = sliced ? cb_slice_partial_idx : cb_scale_idx;
+constexpr uint32_t cb_row_scale_partials_idx = sliced ? cb_gathered_partials_idx : cb_scale_idx;
+constexpr uint32_t num_row_partials = sliced ? num_slices : 1U;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -67,6 +78,7 @@ constexpr bool gated = false;
 static_assert(
     !gated || everything_fits_in_l1,
     "Gated mode needs the row resident in L1: cb_du holds the whole row for the stages after the gate stage.");
+static_assert(!sliced || (everything_fits_in_l1 && !gated), "Only ungated rows resident in L1 are split into slices.");
 
 // Gradient with respect to the RMSNorm output, read by every stage below. In gated mode cb_dL_out holds the gradient
 // of the gated output rmsnorm(a) * silu(gate), so the stages read du = dL_dout * silu(gate) from cb_du instead.
@@ -327,26 +339,28 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
 }
 
 inline void reduce_scale() {
-    // Reduces the accumulated scale tile in cb_scale along the inner dimension (C) and pushes it back reduced.
-    cb_wait_front(cb_scale_idx, onetile);
+    // Reduces the accumulated scale tiles of the row along the inner dimension (C) and pushes the result to cb_scale.
+    cb_wait_front(cb_row_scale_partials_idx, num_row_partials);
     const uint32_t reduced_scale_register = 0U;
     tile_regs_acquire();
 
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
     // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
-    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
-    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
-    matmul_tiles(
-        cb_scale_idx,
-        cb_mat_mul_reduce,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        reduced_scale_register);
+    reconfig_data_format(cb_mat_mul_reduce, cb_row_scale_partials_idx);
+    matmul_init(cb_row_scale_partials_idx, cb_mat_mul_reduce, 0);
+    for (uint32_t partial = 0; partial < num_row_partials; ++partial) {
+        matmul_tiles(
+            cb_row_scale_partials_idx,
+            cb_mat_mul_reduce,
+            /* tile_idx */ partial,
+            /* tile_idx */ 0,
+            reduced_scale_register);
+    }
     tile_regs_commit();
 
-    // Pop the non-reduced scale tile from the CB.
-    cb_pop_front(cb_scale_idx, onetile);
+    // Pop the non-reduced scale tiles from the CB.
+    cb_pop_front(cb_row_scale_partials_idx, num_row_partials);
     pack_and_push(reduced_scale_register, cb_scale_idx);
 }
 
@@ -403,7 +417,7 @@ inline void compute_scale(const uint32_t row) {
     }
     tile_regs_commit();
 
-    pack_and_push(scale_register, cb_scale_idx);
+    pack_and_push(scale_register, cb_scale_partial_idx);
     reduce_scale();
 }
 #else
@@ -463,7 +477,7 @@ inline void compute_scale(const uint32_t row) {
     }
     tile_regs_commit();
 
-    pack_and_push(scale_register, cb_scale_idx);
+    pack_and_push(scale_register, cb_scale_partial_idx);
     reduce_scale();
 }
 #endif  // EVERYTHING_FITS_IN_L1

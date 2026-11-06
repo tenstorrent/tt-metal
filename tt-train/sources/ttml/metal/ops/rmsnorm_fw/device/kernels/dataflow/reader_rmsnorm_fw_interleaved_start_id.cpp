@@ -15,6 +15,8 @@ void kernel_main() {
     uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
+    // First tile of this core's slice within each row; 0 without slicing.
+    uint32_t slice_start = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;
@@ -31,6 +33,8 @@ void kernel_main() {
     // The gate's layout for head_merged_row; 1 and 1 when ungated.
     constexpr uint32_t layout_Ht = get_compile_time_arg_val(5);
     constexpr uint32_t layout_num_heads = get_compile_time_arg_val(6);
+    // Tiles of each row this core reads: Wt, or its slice of the row.
+    constexpr uint32_t St = get_compile_time_arg_val(7);
 
     constexpr uint32_t onetile = 1U;
 
@@ -46,11 +50,16 @@ void kernel_main() {
     constexpr bool gated = false;
 #endif
 
+#if defined(GATED) || !defined(EVERYTHING_FITS_IN_L1)
+    static_assert(St == Wt, "Only ungated rows resident in L1 are split into slices.");
+#endif
+
     // generate mask tile
     if constexpr (do_mask_w) {
         constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
         constexpr uint16_t zero = 0x0;
-        generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+        // Only the slice holding the row's last tile has width padding; a full-width mask keeps every column.
+        generate_mask_tile(cb_mask_w_idx, one, zero, slice_start + St == Wt ? mask_w : tt::constants::TILE_WIDTH);
     }
 
     // generate tiles to include scalar and epsilon
@@ -59,19 +68,19 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_idx);
-    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr auto input_args = TensorAccessorArgs<8>();
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     const auto input_address_generator = TensorAccessor(input_args, input_address);
     const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        uint32_t idx = (start_row + i) * Wt;
+        uint32_t idx = (start_row + i) * Wt + slice_start;
 
 #ifdef EVERYTHING_FITS_IN_L1
-        read_tiles_by_row(cb_input_idx, input_address_generator, idx, Wt, tile_bytes, Wt);
+        read_tiles_by_row(cb_input_idx, input_address_generator, idx, St, tile_bytes, St);
 
         if (i == 0) {
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, 0, Wt, gamma_tile_bytes, Wt);
+            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, slice_start, St, gamma_tile_bytes, St);
         }
         if constexpr (gated) {
             constexpr auto gate_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();

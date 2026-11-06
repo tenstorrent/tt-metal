@@ -39,6 +39,7 @@ ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_retu
     const std::optional<ttnn::Tensor>& gate,
     bool return_intermediates,
     float epsilon = 1e-6F,
+    uint32_t max_row_slices = ttml::metal::ops::rmsnorm::kMaxRowSlices,
     const std::optional<ttnn::Tensor>& preallocated_rms = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 
