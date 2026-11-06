@@ -143,7 +143,7 @@ ProgramDescriptor build_program_descriptor(
     const GlobalSemaphore& pre_op_barrier_semaphore,
     uint32_t num_links) {
     auto* mesh_device = input_tensors.at(0).device();
-    TT_FATAL(input_tensors.at(0).buffer() != nullptr, "deepseek_moe_reduce_scatter input tensor must have a buffer");
+    TT_FATAL(input_tensors.at(0).is_allocated(), "deepseek_moe_reduce_scatter input tensor must have a buffer");
 
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
 
@@ -255,12 +255,12 @@ ProgramDescriptor build_program_descriptor(
     };
     for (uint32_t slice = 0; slice < kRingSize; ++slice) {
         TT_FATAL(
-            intermediate_slice_tensors.at(slice).buffer() != nullptr,
+            intermediate_slice_tensors.at(slice).is_allocated(),
             "deepseek_moe_reduce_scatter intermediate slice {} must have a buffer",
             slice);
         TensorAccessorArgs(intermediate_slice_tensors.at(slice).buffer()).append_to(writer_ct_args);
     }
-    TT_FATAL(output_tensor.buffer() != nullptr, "deepseek_moe_reduce_scatter output tensor must have a buffer");
+    TT_FATAL(output_tensor.is_allocated(), "deepseek_moe_reduce_scatter output tensor must have a buffer");
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
 
     std::vector<uint32_t> reduce_ct_args = {
@@ -506,15 +506,14 @@ void DeepseekMoEReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             }
             for (uint32_t slice = 0; slice < kRingSize; ++slice) {
                 TT_FATAL(
-                    tensor_return_value.at(slice).buffer() != nullptr,
+                    tensor_return_value.at(slice).is_allocated(),
                     "deepseek_moe_reduce_scatter intermediate slice {} must have a buffer",
                     slice);
                 args[kWriterIntermediateArg0 + slice] =
                     static_cast<uint32_t>(tensor_return_value.at(slice).buffer()->address());
             }
             TT_FATAL(
-                tensor_return_value.back().buffer() != nullptr,
-                "deepseek_moe_reduce_scatter output must have a buffer");
+                tensor_return_value.back().is_allocated(), "deepseek_moe_reduce_scatter output must have a buffer");
             args[kWriterOutputArg] = static_cast<uint32_t>(tensor_return_value.back().buffer()->address());
         }
     }

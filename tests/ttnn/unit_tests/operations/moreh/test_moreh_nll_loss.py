@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_nll_loss import (
     run_moreh_nll_loss_backward,
     run_moreh_nll_loss_regression,

@@ -21,6 +21,9 @@ constexpr auto attn_args = TensorAccessorArgs<value_args.next_compile_time_args_
 constexpr auto loc_args = TensorAccessorArgs<attn_args.next_compile_time_args_offset()>();
 
 static_assert(!FROM_OFFSETS, "V1 reader must not be built with the from-offsets frontend");
+#ifdef MSDA_DEVICE_COUNTS
+#error "device valid query counts are only offered on the from-offsets reader"
+#endif
 
 namespace {
 

@@ -36,7 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import TT_CCL
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, TT_CCL
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -284,6 +284,8 @@ def test_indexer_selection_stages_thread_runtime_metadata(monkeypatch, use_metad
         ),
         "subdevice_id": subdevice_id,
         "sub_core_grids": core_grid,
+        # Unset here; the overlap region is what passes NOC_1.
+        "dram_read_noc": None,
     }
     assert indexer.finalize_distribution(selected, state) is local_indices
 
@@ -346,8 +348,10 @@ def _bare_tt_ccl(mesh):
 
 
 def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
-    """The local proxy owns exactly 88/22 cores (top-k / KV gather), a mesh-initialized pair, and idempotent teardown."""
+    """The local proxy splits its 11x10 grid by worker row (top-k / KV gather), a mesh-initialized pair, and idempotent
+    teardown."""
     mesh = _FakeOverlapMesh(11, 10)
+    gather_cores = 11 * _SPARSE_MLA_OVERLAP_GATHER_ROWS
     ccl = _bare_tt_ccl(mesh)
     events = []
     semaphores = iter(("ready", "valid"))
@@ -371,16 +375,16 @@ def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
         lambda semaphore, value: events.append(("reset", semaphore, value)),
     )
 
-    resources = ccl.get_sparse_mla_overlap_resources("qb2_rows2")
-    assert resources.topk_core_grid.num_cores() == 88
-    assert resources.gather_core_grid.num_cores() == 22
+    resources = ccl.get_sparse_mla_overlap_resources("qb2_rows1")
+    assert resources.topk_core_grid.num_cores() == 11 * 10 - gather_cores
+    assert resources.gather_core_grid.num_cores() == gather_cores
     assert resources.ready_semaphore == "ready"
     assert resources.data_valid_semaphore == "valid"
-    assert ccl.get_sparse_mla_overlap_resources("qb2_rows2") is resources
+    assert ccl.get_sparse_mla_overlap_resources("qb2_rows1") is resources
     assert mesh.calls[0][0] == "create" and mesh.calls[0][2] == 0
     assert events[:3] == [
-        ("create_sem", 22, 0, ttnn.BufferType.L1_SMALL),
-        ("create_sem", 22, 0, ttnn.BufferType.L1_SMALL),
+        ("create_sem", gather_cores, 0, ttnn.BufferType.L1_SMALL),
+        ("create_sem", gather_cores, 0, ttnn.BufferType.L1_SMALL),
         ("sync", mesh),
     ]
 
@@ -397,12 +401,51 @@ def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
 
 @pytest.mark.parametrize(
     "profile,grid",
-    [("galaxy_rows2", (11, 10)), ("loudbox_rows2", (12, 9)), ("qb2_rows2", (12, 10))],
+    [("galaxy_rows1", (11, 10)), ("loudbox_rows1", (12, 9)), ("qb2_rows1", (12, 10))],
 )
 def test_sparse_mla_overlap_profiles_fail_closed(profile, grid, expect_error):
     ccl = _bare_tt_ccl(_FakeOverlapMesh(*grid))
     with expect_error(ValueError, "requires a"):
         ccl.get_sparse_mla_overlap_resources(profile)
+
+
+@pytest.mark.parametrize(
+    "profile,grid,gather_rows",
+    [
+        ("auto", (12, 10), 1),
+        ("auto", (11, 10), 1),
+        ("loudbox_rows1", (12, 10), 1),
+        ("loudbox_rows2", (12, 10), 2),
+        ("galaxy_rows1", (12, 10), 1),
+        ("qb2_rows2", (11, 10), 2),
+    ],
+)
+def test_sparse_mla_overlap_profile_row_split(monkeypatch, profile, grid, gather_rows):
+    """The gather takes the top gather_rows worker rows at full width and top-k takes the rest.
+
+    auto is what GLM 5.3 selects and must resolve to the one-row split. Full width matters on row 0: it is what
+    keeps a core under every Ethernet core, so the fabric CCL senders stay one NoC hop from their links.
+    """
+    width, height = grid
+    ccl = _bare_tt_ccl(_FakeOverlapMesh(width, height))
+    monkeypatch.setattr(ttnn, "get_memory_view", lambda *_: SimpleNamespace(total_bytes_per_bank=2048))
+    monkeypatch.setattr(ttnn, "create_global_semaphore", lambda *_: object())
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_: None)
+
+    resources = ccl.get_sparse_mla_overlap_resources(profile)
+
+    def cells(core_range_set):
+        return {
+            (x, y)
+            for cr in core_range_set.ranges()
+            for y in range(cr.start.y, cr.end.y + 1)
+            for x in range(cr.start.x, cr.end.x + 1)
+        }
+
+    gather, topk = cells(resources.gather_core_grid), cells(resources.topk_core_grid)
+    assert gather == {(x, y) for x in range(width) for y in range(gather_rows)}
+    assert topk == {(x, y) for x in range(width) for y in range(gather_rows, height)}
+    assert gather | topk == {(x, y) for x in range(width) for y in range(height)}
 
 
 def test_sparse_mla_overlap_region_orders_join_before_distribution(monkeypatch):
@@ -439,7 +482,7 @@ def test_sparse_mla_overlap_region_orders_join_before_distribution(monkeypatch):
         def select_local(self, actual_state, **kwargs):
             assert mla.mesh_device.loaded
             assert actual_state is state
-            assert kwargs == {"subdevice_id": "topk_sd", "sub_core_grids": "topk_grid"}
+            assert kwargs == {"subdevice_id": "topk_sd", "sub_core_grids": "topk_grid", "dram_read_noc": ttnn.NOC.NOC_1}
             events.append("topk")
             return local_indices
 
@@ -709,30 +752,30 @@ def _overlap_integration_cases():
         pytest.param(
             (2, 2),
             fabric2d(),
-            "qb2_rows2",
-            22,
+            "qb2_rows1",
+            11 * _SPARSE_MLA_OVERLAP_GATHER_ROWS,
             256,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="qb2_rows2-full-mesh-tp-sharded-2x2",
+            id="qb2_rows1-full-mesh-tp-sharded-2x2",
         ),
         pytest.param(
             (2, 4),
             fabric2d(),
-            "loudbox_rows2",
-            24,
+            "loudbox_rows1",
+            12 * _SPARSE_MLA_OVERLAP_GATHER_ROWS,
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="loudbox_rows2-fabric2d-2x4",
+            id="loudbox_rows1-fabric2d-2x4",
         ),
         pytest.param(
             (8, 4),
             fabric2d(),
-            "galaxy_rows2",
-            24,
+            "galaxy_rows1",
+            12 * _SPARSE_MLA_OVERLAP_GATHER_ROWS,
             # 8*4*TILE_SIZE: the smallest seq_len whose per-chip SPxTP cache stripe holds whole tiles.
             1024,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="galaxy_rows2-fabric2d-8x4",
+            id="galaxy_rows1-fabric2d-8x4",
         ),
     ]
 

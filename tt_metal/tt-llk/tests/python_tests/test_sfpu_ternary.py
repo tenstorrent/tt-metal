@@ -5,7 +5,7 @@ import struct
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -215,6 +215,10 @@ _TERNARY_RECIP_NEWTON_OPS = [
 ]
 
 
+# Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 items 2 and
+# 5, verified on Blackhole silicon only; Wormhole's sfpu_reciprocal_init programs its
+# constants in both modes
+@blackhole_only
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
@@ -224,12 +228,6 @@ def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
     """APPROX_MODE=Yes with the SFPU registers clobbered first: the init must program the
     Newton step's 2.0 (vConstFloatPrgm0) itself, or 1/c comes out about 47.6x too large.
     """
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
-            "items 2 and 5, verified on Blackhole silicon only; Wormhole's "
-            "sfpu_reciprocal_init programs its constants in both modes"
-        )
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     _run_sfpu_ternary(

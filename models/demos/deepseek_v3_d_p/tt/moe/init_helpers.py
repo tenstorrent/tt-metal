@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 # Fabric packet payload limits (conservative round values below hardware maximums).
 MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
@@ -38,6 +39,13 @@ def combine_overlap_payload_size(routed_emb_dim: int) -> int:
     return routed_emb_dim + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
+def dispatch_fabric2d_packet_bytes(routed_emb_dim: int) -> int:
+    """The fabric payload dispatch_fabric2d needs: it sends a whole bfloat16 token, padded to the 64 B DRAM
+    alignment, with its routing tail in one packet."""
+    token_page_bytes = -(-routed_emb_dim * 2 // 64) * 64
+    return token_page_bytes + CMB_FABRIC2D_ROUTING_INFO_BYTES
+
+
 def routed_expert_combine_overlap_enabled(model_cfg) -> bool:
     """Whether the model opts into TtMoe's routed expert / combine_fabric2d overlap. Off unless the config names
     ROUTED_EXPERT_COMBINE_OVERLAP = True (Kimi K2.7, GLM 5.3 and Mistral Small 4 today)."""
@@ -51,18 +59,127 @@ def routed_expert_combine_overlap_arg(model_cfg):
     return None if routed_expert_combine_overlap_enabled(model_cfg) else False
 
 
+def moe_fabric2d_transport_enabled(model_cfg) -> bool:
+    """Whether the model opts into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d). Off unless the
+    config names MOE_FABRIC2D_TRANSPORT = True (Kimi K2.7 and GLM 5.3 today)."""
+    return getattr(model_cfg, "MOE_FABRIC2D_TRANSPORT", False)
+
+
+def moe_transport_arg(model_cfg):
+    """TtMoe's moe_transport for ``model_cfg``: None (fabric2d wherever it fits) for a model that opts in, "direct"
+    for every other."""
+    return None if moe_fabric2d_transport_enabled(model_cfg) else "direct"
+
+
 def moe_fabric_payload_size(model_cfg) -> int:
     """The fabric payload to open a mesh with for a model whose MoE is TtMoe.
 
     On Blackhole a model that opts into the overlap (routed_expert_combine_overlap_enabled) overlaps the routed
-    expert with combine_fabric2d, so the mesh needs room for half a bf16 token plus combine's routing tail.
-    Everywhere else TtMoe runs the routed expert then combine as separate ops, and the model's own
-    FABRIC_PAYLOAD_SIZE stands. TtMoe reads the payload back to decide whether to overlap, so a mesh opened any
-    other way simply runs without it. Deferred to avoid probing hardware at import time.
+    expert with combine_fabric2d, so the mesh needs room for half a bf16 token plus combine's routing tail, and one
+    that opts into the fabric2d transport (moe_fabric2d_transport_enabled) needs room for a whole routed token,
+    which dispatch_fabric2d sends in one packet. Everywhere else the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe
+    reads the payload back to decide whether to use either, so a mesh opened any other way simply runs without
+    them. No larger than needed: a larger max packet can leave the fabric routers fewer buffer slots, which every
+    fabric op pays for. Deferred to avoid probing hardware at import time.
     """
-    if is_blackhole() and routed_expert_combine_overlap_enabled(model_cfg):
-        return max(model_cfg.FABRIC_PAYLOAD_SIZE, combine_overlap_payload_size(model_cfg.EMB_SIZE))
-    return model_cfg.FABRIC_PAYLOAD_SIZE
+    payload = model_cfg.FABRIC_PAYLOAD_SIZE
+    if not is_blackhole():
+        return payload
+    if routed_expert_combine_overlap_enabled(model_cfg):
+        payload = max(payload, combine_overlap_payload_size(model_cfg.EMB_SIZE))
+    if moe_fabric2d_transport_enabled(model_cfg):
+        routed_emb_dim = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
+        payload = max(payload, dispatch_fabric2d_packet_bytes(routed_emb_dim))
+    return payload
+
+
+# Values of TtMoe's moe_transport: dispatch and combine (TtDispatchModule, TtCombineModule), or dispatch_fabric2d
+# and combine_fabric2d (TtDispatch2dModule, TtCombine2dModule).
+MOE_TRANSPORTS = ("direct", "fabric2d")
+# Largest top-k dispatch_fabric2d accepts (validated in dispatch_fabric2d_device_operation.cpp).
+# combine_fabric2d has no such limit.
+DISPATCH_FABRIC2D_MAX_TOPK = 16
+
+
+def fabric2d_setup_error(
+    mesh_device, cluster_axis: int, emb_dim: int, op: str, num_experts_per_tok: int | None = None
+) -> str | None:
+    """Why `op` ("dispatch" or "combine", for dispatch_fabric2d or combine_fabric2d) cannot run on this mesh and
+    fabric, or None if it can.
+
+    Both ops send bf16 tokens one hop at a time around a ring on `cluster_axis`, and both check the ring size and
+    the packet size when they launch. dispatch_fabric2d sends a whole token in one packet; combine_fabric2d splits
+    one that does not fit into two halves. Whether the fabric came up with the ring wired needs a device tensor,
+    so axis_wired_into_ring checks that separately. `num_experts_per_tok` is checked for dispatch only.
+    """
+    if op not in ("dispatch", "combine"):
+        raise ValueError(f"op must be 'dispatch' or 'combine', got {op!r}")
+    if op == "dispatch" and num_experts_per_tok is not None and num_experts_per_tok > DISPATCH_FABRIC2D_MAX_TOPK:
+        return (
+            f"dispatch_fabric2d supports top-k up to {DISPATCH_FABRIC2D_MAX_TOPK}, "
+            f"got num_experts_per_tok={num_experts_per_tok}"
+        )
+    extent = mesh_device.shape[cluster_axis]
+    # Even, because the ops split the traffic to the opposite chip across both directions.
+    if extent < 4 or extent % 2 != 0:
+        return (
+            f"fabric2d dispatch/combine need an even ring of at least 4 chips on cluster_axis {cluster_axis}, "
+            f"got {extent}"
+        )
+    fabric_config = ttnn.get_fabric_config()
+    # FABRIC_1D_RING wraps axis 0 too, but the ops build 2D fabric routes, so it does not work.
+    wraps = (
+        fabric_config != ttnn.FabricConfig.FABRIC_1D_RING
+        and per_axis_topology(fabric_config)[cluster_axis] == ttnn.Topology.Ring
+    )
+    if not wraps:
+        return (
+            f"fabric2d dispatch/combine need a 2D fabric that wraps cluster_axis {cluster_axis} into a ring, "
+            f"got {fabric_config}"
+        )
+    if op == "dispatch":
+        packet_bytes = dispatch_fabric2d_packet_bytes(emb_dim)
+        what = f"dispatch_fabric2d sends a {emb_dim}-wide bf16 token"
+    else:
+        packet_bytes = combine_overlap_payload_size(emb_dim)
+        what = f"combine_fabric2d sends a {emb_dim}-wide bf16 token as two halves at most"
+    max_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    if max_payload < packet_bytes:
+        return (
+            f"{what} plus a {CMB_FABRIC2D_ROUTING_INFO_BYTES} B routing tail in one packet ({packet_bytes} B), but "
+            f"the fabric max payload is {max_payload} B. Open the mesh with moe_fabric_payload_size for a model "
+            f"that opts in, or raise it with create_fabric_router_config(max_payload_size=...) in device_params."
+        )
+    return None
+
+
+def check_fabric2d_setup(
+    mesh_device, cluster_axis: int, emb_dim: int, op: str, num_experts_per_tok: int | None = None
+) -> None:
+    """Raise ValueError if `op` cannot run on this mesh and fabric; see fabric2d_setup_error."""
+    error = fabric2d_setup_error(mesh_device, cluster_axis, emb_dim, op, num_experts_per_tok)
+    if error is not None:
+        raise ValueError(error)
+
+
+def axis_wired_into_ring(tensor, cluster_axis: int) -> bool:
+    """Whether the fabric wired `cluster_axis` of the mesh `tensor` lives on into a ring.
+
+    The fabric config alone does not say: auto-discovery falls back TORUS_XY -> TORUS_Y -> TORUS_X -> MESH behind a
+    log warning when a wrap link is missing, and get_fabric_config() still reports the request. get_usable_topology
+    keeps Ring exactly when the closing link of every line along the axis is wired, the check dispatch_fabric2d
+    makes when it launches. combine_fabric2d does not check, and runs on such an axis unchecked.
+    """
+    return ttnn.get_usable_topology(tensor, ttnn.Topology.Ring, cluster_axis) == ttnn.Topology.Ring
+
+
+def check_axis_wired_into_ring(tensor, cluster_axis: int) -> None:
+    """Raise ValueError unless axis_wired_into_ring."""
+    if not axis_wired_into_ring(tensor, cluster_axis):
+        raise ValueError(
+            f"fabric2d dispatch/combine need cluster_axis {cluster_axis} wired into a ring, but the fabric "
+            f"{ttnn.get_fabric_config()} came up without a wrap link on that axis; check the wrap cabling"
+        )
 
 
 @dataclass
@@ -370,7 +487,8 @@ def get_gate_outputs(
     to a group are zeroed out.
 
     Args:
-        indices: Expert indices tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+        indices: Expert indices tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok).
+            An entry equal to num_routed_experts marks a padded token and is not counted.
         dispatch_group_size: Number of chips in each dispatch group
         num_routed_experts: Total number of routed experts across all chips
         experts_per_chip: Number of experts per chip
@@ -413,7 +531,9 @@ def get_gate_outputs(
         for token in range(seq_len_per_chip):
             for topk_idx in range(num_experts_per_tok):
                 routed_expert = indices[chip, token, topk_idx]
-                expert_counter_dense[chip, routed_expert] += 1
+                # num_routed_experts marks a padded token, which goes to no expert.
+                if routed_expert != num_routed_experts:
+                    expert_counter_dense[chip, routed_expert] += 1
 
     # Create group masks from dispatch table: (num_dispatch_groups, 1, num_routed_experts)
     group_masks = (expert_dispatch_table >= 0).unsqueeze(1).to(torch.int32)

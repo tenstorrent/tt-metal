@@ -14,7 +14,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include "context/metal_context.hpp"
 #include "fabric/fabric_context.hpp"

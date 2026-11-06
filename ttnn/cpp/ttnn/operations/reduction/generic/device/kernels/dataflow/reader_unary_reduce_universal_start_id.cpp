@@ -31,12 +31,12 @@ void kernel_main() {
     const uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id;) {
         const uint32_t batch = std::min(tiles_per_batch, end_id - i);
-        dfb_in0.reserve_back(batch);
+        dfb_in0.reserve_back(static_cast<uint16_t>(batch));
         for (uint32_t k = 0; k < batch; ++k) {
             noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = i + k}, {.offset_bytes = k * tile_bytes});
         }
         noc.async_read_barrier();
-        dfb_in0.push_back(batch);
+        dfb_in0.push_back(static_cast<uint16_t>(batch));
         i += batch;
     }
 }

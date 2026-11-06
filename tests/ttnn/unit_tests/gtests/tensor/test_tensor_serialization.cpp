@@ -14,8 +14,9 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/utils.hpp"
-#include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/tensor/pinned_upload.hpp"
 
 #include "ttnn/config.hpp"
@@ -1380,8 +1381,7 @@ TEST_F(TensorSerializationPinnedUploadTest, LargeLoadedTensorUploadPinsSharedFil
     if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
         GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
     }
-    const size_t cache_limit =
-        MetalContext::instance(extract_context_id(&mesh_device)).rtoptions().get_pinned_memory_cache_limit_bytes();
+    const size_t cache_limit = mesh_device.impl().metal_env().get_rtoptions().get_pinned_memory_cache_limit_bytes();
     if (cache_limit < size_bytes || pinning_params.max_total_pin_size < size_bytes || pinning_params.max_pins < 1) {
         GTEST_SKIP() << "Requires a pin budget large enough for a " << size_bytes << " byte mapping";
     }

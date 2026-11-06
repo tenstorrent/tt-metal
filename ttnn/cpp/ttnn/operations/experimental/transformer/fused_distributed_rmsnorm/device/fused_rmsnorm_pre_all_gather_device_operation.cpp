@@ -25,7 +25,7 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", tensor.dtype());
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device, got: {}", tensor.storage_type());
-    TT_FATAL(tensor.buffer() != nullptr, "Input tensor must be allocated in device buffers (buffer is null)");
+    TT_FATAL(tensor.is_allocated(), "Input tensor must be allocated in device buffers (buffer is null)");
     const auto& tile = tensor.tensor_spec().tile();
     TT_FATAL(
         tile == tt::tt_metal::Tile() && !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),

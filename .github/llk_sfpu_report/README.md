@@ -150,7 +150,8 @@ most 300 files, so a longer diff runs both. `--arch all` runs both regardless.
 
 **Which ops.** `detect.py` compiles every variant of `perf_eltwise_unary_sfpu.py`,
 `perf_eltwise_unary_typecast.py` and `perf_eltwise_binary_sfpu.py` on both sides (no
-device needed) and compares the
+device needed). Unary artifacts come from the shared
+`sources/eltwise_unary_sfpu_test.cpp/` build directory. The detector compares the
 `.text` of each variant's math ELF, matched across sides by its generated `build.h`.
 An op is measured when its code changed, which catches ops that only include a
 changed header, and when its variants build on one side only. Both sides compile

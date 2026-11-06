@@ -47,6 +47,7 @@ set(TTNN_CORE_SRCS
     core/services/h2d_socket_service.cpp
     core/services/d2h_socket_service.cpp
     core/services/layer_ack_service.cpp
+    core/tensor/d2d_pipeline_descriptor.cpp
     core/tensor/d2d_stream_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp
@@ -228,6 +229,9 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/operation_concepts.hpp
     api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
+    api/ttnn/tensor/d2d_pipeline_descriptor.hpp
+    api/ttnn/tensor/d2d_stage_gate.hpp
+    api/ttnn/tensor/d2d_stream_service.hpp
     api/ttnn/tensor/host_buffer/functions.hpp
     api/ttnn/tensor/layout/alignment.hpp
     api/ttnn/tensor/layout/layout.hpp

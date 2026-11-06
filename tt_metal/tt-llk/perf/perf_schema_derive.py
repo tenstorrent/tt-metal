@@ -316,11 +316,12 @@ def _perf_test_sources(quasar: bool):
     """Yield (catalog_key, source_path) for each perf test.
 
     WH/BH: perf_*.py at the python_tests root, derived from itself unless the
-    sibling test_*.py or a runner imported by that sibling holds
-    create_test_or_perf_config and the wrapper does not.
+    wrapper does not hold create_test_or_perf_config and the sibling test_*.py, or a
+    local module the sibling or wrapper imports from, does.
     Quasar: quasar/perf_*_quasar.py wrappers, derived from the sibling
-    test_*_quasar.py (perf_ -> test_) that actually calls PerfConfig and holds the
-    templates/runtimes lists. Keyed by the wrapper name a developer runs.
+    test_*_quasar.py (perf_ -> test_), or the runner module it imports, whichever
+    calls PerfConfig and holds the templates/runtimes lists. Keyed by the wrapper
+    name a developer runs.
     """
 
     def imported_runner_source(tree):
@@ -329,9 +330,7 @@ def _perf_test_sources(quasar: bool):
         for node in tree.body:
             if not isinstance(node, ast.ImportFrom) or not node.module:
                 continue
-            if not any(
-                alias.name.startswith(("run_", "_run_")) for alias in node.names
-            ):
+            if node.module.startswith("helpers"):
                 continue
             candidate = ROOT.joinpath(*node.module.split(".")).with_suffix(".py")
             if not candidate.exists():
@@ -347,28 +346,35 @@ def _perf_test_sources(quasar: bool):
     if quasar:
         for wrapper in sorted(ROOT.glob(f"{QUASAR_DIR}/perf_*_quasar.py")):
             sibling = wrapper.parent / wrapper.name.replace("perf_", "test_", 1)
-            if _is_fuser_perf_test(ast.parse(wrapper.read_text())):
+            wrapper_tree = ast.parse(wrapper.read_text())
+            if _is_fuser_perf_test(wrapper_tree):
                 yield wrapper.stem, wrapper
             elif sibling.exists():
-                yield wrapper.stem, sibling
+                sibling_tree = ast.parse(sibling.read_text())
+                if _has_perfconfig(sibling_tree):
+                    yield wrapper.stem, sibling
+                else:
+                    yield wrapper.stem, (
+                        imported_runner_source(sibling_tree)
+                        or imported_runner_source(wrapper_tree)
+                        or sibling
+                    )
     else:
         for path in sorted(ROOT.glob("perf_*.py")):
             sibling = path.parent / path.name.replace("perf_", "test_", 1)
+            try:
+                perf_tree = ast.parse(path.read_text())
+                sibling_tree = (
+                    ast.parse(sibling.read_text()) if sibling.exists() else None
+                )
+            except SyntaxError:
+                yield path.stem, path
+                continue
             source = path
-            if sibling.exists():
-                try:
-                    sibling_tree = ast.parse(sibling.read_text())
-                    perf_tree = ast.parse(path.read_text())
-                except SyntaxError:
-                    sibling_tree = None
-                    perf_tree = None
-                if (
-                    sibling_tree
-                    and _has_perfconfig(sibling_tree)
-                    and (not perf_tree or not _has_perfconfig(perf_tree))
-                ):
+            if not _has_perfconfig(perf_tree):
+                if sibling_tree and _has_perfconfig(sibling_tree):
                     source = sibling
-                elif not perf_tree or not _has_perfconfig(perf_tree):
+                else:
                     source = (
                         imported_runner_source(sibling_tree)
                         or imported_runner_source(perf_tree)

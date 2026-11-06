@@ -31,7 +31,7 @@ maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 
 with `H_local = 96 / TP`, `D = 128`, `K - 1 = 3`. Heads are TP-sharded; every SP row holds a replica.
 
-The contract form is a second copy the engine owns (`KdaStates`, allocated by
+The contract form is the carries' only store, owned by the engine (`KdaStates`, allocated by
 `KimiK3Adapter.allocate_kv_cache`, one consolidated slab per state kind so a `KvCacheStage` can name
 it by one base address):
 
@@ -43,8 +43,8 @@ where `L` is the rank's KDA layer count and the leading index is `slot * L + lay
 (user-major, as the kvpe cache). The convolution slab's 384-byte page `row0[64c:64c+64] |
 row1[...] | row2[...]` is byte-identical to the ND `[1, K-1, 64]` shard, and an interleaved page `p`
 sits at bank `p % N`, offset `(p // N) * 384`, where ND shard `s = p` would sit; the two forms are
-interchangeable for the table. The interleaved form is used because `slice_write` can write whole
-rows into it per layer, while no op writes a row-major sub-region into an ND-sharded tensor.
+interchangeable for the table. The interleaved form keeps each batch's rows contiguous logical pages,
+so one whole-batch copy writes them.
 
 ## Segment numbering
 
@@ -64,12 +64,15 @@ The convolution order is the golden's `[all q | all k | all v]`. The recurrent g
 `[heads, v, k]`, the transpose of the device's `[k, v]`.
 
 `models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the per-layer
-export (`fill_cache_for_user_` for recurrent, reshape/permute/`slice_write` for convolution), the
-import (`slice` back to a native carry) and the host decoders (`recurrent_segment_to_torch`,
-`convolution_segment_to_torch`, `assemble_*`). `KdaStateCache.commit` exports every committed layer
-inside the captured region, so the state a reader sees is the one after the last committed chunk, and
-it lands before any later MLA layer acks that chunk, and before the KDA layer's own ack.
-`reset(slot)` zeroes the slot's regions too.
+export (`indexed_entry_copy` of the native recurrent tiles; reshape/permute to slab rows, then
+`indexed_entry_copy`, for convolution), the import (the same copies back into a native carry) and the
+host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Both take
+the slot as a device tensor and resolve batch `slot * L + layer_position` on device, so a captured
+load or store follows the slot in the traced metadata. The slabs are the KDA carries' only store:
+every K3 KDA layer loads its slot's carry from them and stores the replacement back inside the
+captured region, so the state a reader sees is the one after the last committed chunk, and it lands
+before any later MLA layer acks that chunk, and before the KDA layer's own ack. `zero_slot(slot)`
+zeroes the slot's regions.
 
 ## Reading it back
 
