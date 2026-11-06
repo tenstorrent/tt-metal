@@ -92,3 +92,33 @@ def test_flat_layout_options():
     assert a != weights_py.flat_layout(a, gu_read_pieces=2)
     # (pin_ratio, arena_bytes, gu_read_pieces)
     assert list(a.key()) == [8, 40960, 2**32 - 1]
+
+
+@pytest.mark.parametrize("units", [False, True], ids=["pairs", "units"])
+def test_flat_weight_regions_nk(units):
+    """weights_nk (bring-up): nn.Linear's [N, K] matrices in, every laid-out tile the transpose of the x @ W layout's
+    tile at the same place (the SE_W_NK matmuls transpose it back), padding the same."""
+    E, H, I, banks = 2, 256, 1024 if not units else 1536, 8
+    lay = _layout(E, H, I, banks, nd=4, n_rd=16, np_=0 if units else 1, nu=3 if units else 0)
+    g = torch.Generator().manual_seed(5)
+    W = [
+        (torch.randn(H, I, generator=g), torch.randn(H, I, generator=g), torch.randn(I, H, generator=g))
+        for _ in range(E)
+    ]
+    W_nk = [(a.T.contiguous(), b.T.contiguous(), c.T.contiguous()) for a, b, c in W]
+    regions, dregs = weights_py.flat_weight_regions(W, lay)
+    regions_nk, dregs_nk = weights_py.flat_weight_regions(W_nk, lay, nk=True)
+    for r, r_nk in zip(regions + dregs, regions_nk + dregs_nk, strict=True):
+        assert torch.equal(r_nk, r.transpose(-1, -2))
+    # (a transposed region is not the plain one: the check above is not vacuous)
+    assert not torch.equal(regions_nk[0], regions[0])
+
+
+def test_flat_layout_options_weights_nk():
+    ttnn = pytest.importorskip("ttnn")
+    mb = ttnn._ttnn.operations.bringup.moe_block_main
+    a = mb.FlatLayoutOptions(weights_nk=True)
+    assert a.weights_nk and a != mb.FlatLayoutOptions()
+    assert list(a.key()) == [8, 2**32 - 1, 2**32 - 1, 1]  # (off: the source's 3-field key)
+    assert list(mb.FlatLayoutOptions().key()) == [8, 2**32 - 1, 2**32 - 1]
+    assert weights_py.flat_layout(dict(weights_nk=True)) == a

@@ -29,6 +29,11 @@ struct FlatLayoutOptions {
     // each gate/up weight block read as this many pieces, 1 / 2 / 4 (the reads in flight count pieces; -1: the plan's
     // choice from the block's bytes)
     int32_t gu_read_pieces = -1;
+    // (bring-up, DeepSeek-V4.1) the weights laid out from nn.Linear's [N, K] matrices: every weight tile the transpose
+    // of the x @ W tile at its place, and every weight matmul transposes its in1 tile back (SE_W_NK). A bfp tile then
+    // shares its exponents along K (e2m1 x ue8m0 experts: bfp8 exact, bfp4 in the checkpoint's groups). Default off
+    // (= the source's program).
+    bool weights_nk = false;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;

@@ -41,6 +41,13 @@
 #include "api/compute/eltwise_unary/gelu.h"
 #endif
 
+// (bring-up, FlatLayoutOptions.weights_nk) every weight tile is the transpose of the x @ W tile: the matmul transposes
+// it back
+#ifdef SE_W_NK
+constexpr bool kWT = true;
+#else
+constexpr bool kWT = false;
+#endif
 constexpr uint32_t x_cb = tt::CBIndex::c_0;
 constexpr uint32_t in1_cb = tt::CBIndex::c_1;
 constexpr uint32_t h_local_cb = tt::CBIndex::c_3;
@@ -158,7 +165,7 @@ FORCE_INLINE void act_dst(uint32_t n) {
 FORCE_INLINE void gate_up(uint32_t e, bool last, uint32_t ph0 = 0, uint32_t rows = mt) {
     {
         if (rows != cur_rt || cur_ct != gw) {  // (x is in0 here: re-init against x_cb)
-            matmul_block_init(x_cb, in1_cb, false, gw, rows, kblk);
+            matmul_block_init(x_cb, in1_cb, kWT, gw, rows, kblk);
             cur_ct = gw;
             cur_rt = rows;
         }
@@ -167,7 +174,7 @@ FORCE_INLINE void gate_up(uint32_t e, bool last, uint32_t ph0 = 0, uint32_t rows
             cb_wait_front(x_cb, mt * kblk);
             const uint32_t w = wblock_dyn(e * nk_gu + b, ph0 + b);
             for (uint32_t k = 0; k < kblk; ++k) {
-                matmul_block(x_cb, in1_cb, k, w + k * gw, 0, false, gw, rows, kblk);
+                matmul_block(x_cb, in1_cb, k, w + k * gw, 0, kWT, gw, rows, kblk);
             }
             cb_pop_front(x_cb, mt * kblk);
             if (last) {  // free the block for the next expert as soon as possible
@@ -210,7 +217,7 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
         const bool fin = ps + 1 == npass;
         {
             if (rr != cur_rt || cur_ct != gw) {
-                matmul_block_init(x_cb, in1_cb, false, gw, rr, kblk);
+                matmul_block_init(x_cb, in1_cb, kWT, gw, rr, kblk);
                 cur_ct = gw;
                 cur_rt = rr;
             }
@@ -226,7 +233,7 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
                 }
                 const uint32_t w = wblock_dyn(e * nk_gu + b, ph0 + b);
                 for (uint32_t k = 0; k < kblk; ++k) {
-                    matmul_block(x_cb, in1_cb, xo + r0 * kblk + k, w + k * gw, 0, false, gw, rr, kblk);
+                    matmul_block(x_cb, in1_cb, xo + r0 * kblk + k, w + k * gw, 0, kWT, gw, rr, kblk);
                 }
                 if (fin) {
                     cb_pop_front(x_cb, xblk);
@@ -262,7 +269,7 @@ void kernel_main() {
 #ifdef SE_PACK_SRND  // stochastic rounding in the packer (the default rounds bf16 -> bfp8 ties away from zero)
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
 #endif
-    matmul_block_init(x_cb, in1_cb, false, gw, mt, kblk);
+    matmul_block_init(x_cb, in1_cb, kWT, gw, mt, kblk);
 #if defined(SE_HG)  // (every face-wise GLU uses SiTU's sigmoid: tanh_init, no vConstFloatPrgm for the sigmoid)
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
 #elif SE_ACT == 1

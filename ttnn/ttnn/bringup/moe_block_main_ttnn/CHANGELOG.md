@@ -32,3 +32,21 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
 - Needed by: <model> <task>
 - Files: <paths inside this folder>
 -->
+
+### weights_nk: [N, K] weight tiles, transposed back in the matmuls (2026-11-06, deepseek_v41_flash_d_p, MOE_BLOCK_SRC=main)
+- What: `FlatLayoutOptions.weights_nk` (default false = the source's program, plan and key): the gate/up and down
+  computes take `SE_W_NK` and pass transpose = true to every `matmul_block_init` / `matmul_block` (in1 = the weight
+  tile); `flat_weight_regions(W_l, lay, nk=True)` takes nn.Linear's [N, K] matrices and lays out every tile transposed
+  (the x @ W layout's tile at the same place, rows along K). In the plan key / program hashes only when on.
+- Why: DeepSeek-V4.1's routed experts are e2m1 values with a ue8m0 scale per 32 K values. A bfp tile shares an
+  exponent per 16 values along its rows: in the x @ W orientation a group spans 16 output columns with their own
+  scales (bfp8 rounds, bfp4 / bfp4_mse lose the checkpoint's groups); [N, K] tiles keep a group inside one K block.
+  The same option the carried `ttnn.bringup.flat_routed_expert` fork has (its CHANGELOG, P.3 / DS41-35), re-applied here.
+- Tests: `tests/flat_routed_expert/test_flat_routed_expert_host.py` (`test_flat_weight_regions_nk`: every region tile
+  the transpose of the plain layout's for both plans, pairs and 16-column units; `test_flat_layout_options_weights_nk`:
+  the key unchanged when off).
+- Needed by: deepseek_v41_flash_d_p (DS41_MOE_BLOCK_SRC=main)
+- Files: `flat_routed_expert/device/flat_routed_expert_device_operation_types.hpp`, `.../flat_routed_expert_options.cpp`,
+  `.../flat_routed_expert_program_factory.cpp`, `.../kernels/{gate_up_compute,down_compute}.cpp`,
+  `flat_routed_expert/flat_routed_expert_nanobind.cpp`, `flat_routed_expert/flat_routed_expert_weights.py`,
+  `tests/flat_routed_expert/test_flat_routed_expert_host.py`

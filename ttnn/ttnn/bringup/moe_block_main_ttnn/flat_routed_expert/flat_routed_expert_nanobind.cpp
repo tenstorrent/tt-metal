@@ -89,17 +89,26 @@ void bind_flat_routed_expert(nb::module_& mod) {
     )doc")
         .def(
             "__init__",
-            [](FlatLayoutOptions* self, uint32_t pin_ratio, int32_t arena_bytes, int32_t gu_read_pieces) {
+            [](FlatLayoutOptions* self,
+               uint32_t pin_ratio,
+               int32_t arena_bytes,
+               int32_t gu_read_pieces,
+               bool weights_nk) {
                 new (self) FlatLayoutOptions{
-                    .pin_ratio = pin_ratio, .arena_bytes = arena_bytes, .gu_read_pieces = gu_read_pieces};
+                    .pin_ratio = pin_ratio,
+                    .arena_bytes = arena_bytes,
+                    .gu_read_pieces = gu_read_pieces,
+                    .weights_nk = weights_nk};
             },
             nb::kw_only(),
             nb::arg("pin_ratio") = 8,
             nb::arg("arena_bytes") = -1,
-            nb::arg("gu_read_pieces") = -1)
+            nb::arg("gu_read_pieces") = -1,
+            nb::arg("weights_nk") = false)
         .def_rw("pin_ratio", &FlatLayoutOptions::pin_ratio)
         .def_rw("arena_bytes", &FlatLayoutOptions::arena_bytes)
         .def_rw("gu_read_pieces", &FlatLayoutOptions::gu_read_pieces)
+        .def_rw("weights_nk", &FlatLayoutOptions::weights_nk)
         .def("key", &FlatLayoutOptions::key)
         .def("__repr__", [](const FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })
         .def("__eq__", [](const FlatLayoutOptions& a, const FlatLayoutOptions& b) { return a == b; });
