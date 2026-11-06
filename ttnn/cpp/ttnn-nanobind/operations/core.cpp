@@ -17,6 +17,8 @@
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
+#include <nanobind/stl/tuple.h>
 #include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
@@ -324,6 +326,71 @@ void py_module(nb::module_& mod) {
             nb::arg("layout"),
             nb::arg("mesh_device"),
             nb::arg("memory_config") = nb::none());
+
+    // (shard, byte offset, byte size, host address) tuples -> ShardRegionTransfer
+    auto to_region_transfers = [](const std::vector<std::tuple<uint32_t, uint64_t, uint64_t, uintptr_t>>& regions) {
+        std::vector<tt::tt_metal::ShardRegionTransfer> out;
+        out.reserve(regions.size());
+        for (const auto& [shard, offset, size, host] : regions) {
+            out.push_back(tt::tt_metal::ShardRegionTransfer{
+                .shard = shard, .offset = offset, .size = size, .host = reinterpret_cast<std::byte*>(host)});
+        }
+        return out;
+    };
+
+    mod.def(
+        "copy_device_to_host_regions",
+        [to_region_transfers](
+            const ttnn::Tensor& device_tensor,
+            const std::vector<std::tuple<uint32_t, uint64_t, uint64_t, uintptr_t>>& regions,
+            bool blocking,
+            std::optional<ttnn::QueueId> cq_id) {
+            TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_device_to_host_regions needs a device tensor");
+            auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+            tt::tt_metal::enqueue_read_shard_regions(
+                cq, device_tensor.mesh_tensor(), to_region_transfers(regions), blocking);
+        },
+        nb::arg("device_tensor"),
+        nb::arg("regions"),
+        nb::arg("blocking") = true,
+        nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+        Copies byte ranges of a device tensor's per-device buffers to host memory owned by the caller.
+
+        Args:
+            device_tensor (ttnn.Tensor): the tensor to read (any mesh; DRAM interleaved buffers read whole pages as
+                one contiguous range: page i is bytes [i * buffer_page_size(), (i + 1) * buffer_page_size())).
+            regions (List[Tuple[int, int, int, int]]): (device index in the mesh, row-major; byte offset in that
+                device's buffer; byte count; destination host address). The memory must stay valid until the read
+                completes.
+            blocking (bool): wait for the reads to land. Defaults to True.
+            cq_id (ttnn.QueueId, optional): command queue; the reads run after everything already enqueued on it.
+        )doc");
+
+    mod.def(
+        "copy_host_to_device_regions",
+        [to_region_transfers](
+            ttnn::Tensor& device_tensor,
+            const std::vector<std::tuple<uint32_t, uint64_t, uint64_t, uintptr_t>>& regions,
+            bool blocking,
+            std::optional<ttnn::QueueId> cq_id) {
+            TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_host_to_device_regions needs a device tensor");
+            auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+            tt::tt_metal::enqueue_write_shard_regions(
+                cq, device_tensor.device_storage().get_mesh_tensor(), to_region_transfers(regions), blocking);
+        },
+        nb::arg("device_tensor"),
+        nb::arg("regions"),
+        nb::arg("blocking") = true,
+        nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+        Copies host memory owned by the caller into byte ranges of a device tensor's per-device buffers (the reverse of
+        copy_device_to_host_regions, same region tuples, the address being the source). The writes are ordered after
+        everything already enqueued on the queue; with blocking=False the host memory must stay unchanged until they
+        complete (a later blocking call, ttnn.synchronize_device, or an event).
+        )doc");
 
     mod.def(
         "copy_host_to_device_tensor",
