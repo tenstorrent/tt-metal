@@ -351,8 +351,10 @@ def embed(
     chunks = plan_sorted_chunks(
         lengths[order].tolist(), model.tt_config.max_chunk_tokens, model.tt_config.min_chunk_tokens
     )
-    # A padded batch whose padding costs it a pass: pack whole texts side by side instead (tt.packing).
-    if model.tt_config.packed_sequences and len(chunks) > 1:
+    # Pack whole texts side by side instead (tt.packing) wherever the device time model puts it below the chunks: a
+    # pass saved, a pass's padding, or a pass below 32 tile rows widened to where the generated ops run
+    # (nomic_sdpa's segmented mode makes packed attention cost about what an unpacked pass's does).
+    if model.tt_config.packed_sequences:
         attention_us = PACKED_ATTENTION_US if model.tt_config.generated_sdpa_segments else STOCK_PACKED_ATTENTION_US
         packed = cheaper_packing(lengths.tolist(), model.tt_config.max_chunk_tokens, chunks, attention_us)
         if packed is not None:

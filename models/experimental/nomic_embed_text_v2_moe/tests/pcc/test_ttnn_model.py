@@ -25,6 +25,8 @@ separate concern means these tests measure one thing, the port, and need neither
 remote code to do it.
 """
 
+from dataclasses import replace
+
 import pytest
 import torch
 
@@ -388,6 +390,8 @@ def test_packed_pooling_embeds_as_mean_pool(config, reference_model, tt_model, t
             attention_mask[row, keep:] = 0
             input_ids[row, keep:] = tokenizer.pad_token_id
     assert tt_model.tt_config.packed_pooling
+    # The same backbone pass on both sides: sequence packing (tt.packing), which may run the batch in other rows, off.
+    tt_model.tt_config = replace(tt_model.tt_config, packed_sequences=False)
 
     got = embed(tt_model, input_ids, attention_mask, matryoshka_dim)
     batched = ttnn.to_torch(pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim)).float()
