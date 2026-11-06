@@ -93,6 +93,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<std::uint8_t>(TEST_FACE_C_DIM),
         static_cast<std::uint8_t>(num_faces_r_dim_A),
         static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    constexpr ckernel::TensorShape tensor_shape_b = {
+        static_cast<std::uint8_t>(in1_face_r_dim),
+        static_cast<std::uint8_t>(in1_face_c_dim),
+        static_cast<std::uint8_t>(num_faces_r_dim_B),
+        static_cast<std::uint8_t>(num_faces_c_dim_B)};
     constexpr ckernel::Transpose transpose  = UNPACK_TRANSPOSE_FACES ? (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
                                                                      : (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
     constexpr std::uint32_t num_total_tiles = INPUT_NUM_TILES_IN_BLOCK * INPUT_NUM_BLOCKS;
@@ -104,6 +109,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_C_DIM          = params.TEST_FACE_C_DIM;
     const int num_faces_r_dim_A                  = params.num_faces_r_dim_A;
     const int num_faces_c_dim_A                  = params.num_faces_c_dim_A;
+    const int in1_face_r_dim                     = params.in1_face_r_dim;
+    const int in1_face_c_dim                     = params.in1_face_c_dim;
+    const int num_faces_r_dim_B                  = params.num_faces_r_dim_B;
+    const int num_faces_c_dim_B                  = params.num_faces_c_dim_B;
     const bool UNPACK_TRANSPOSE_FACES            = params.UNPACK_TRANSPOSE_FACES;
     const bool UNPACK_TRANSPOSE_WITHIN_FACE      = params.UNPACK_TRANSPOSE_WITHIN_FACE;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
@@ -119,6 +128,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<std::uint8_t>(TEST_FACE_C_DIM),
         static_cast<std::uint8_t>(num_faces_r_dim_A),
         static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    const ckernel::TensorShape tensor_shape_b = {
+        static_cast<std::uint8_t>(in1_face_r_dim),
+        static_cast<std::uint8_t>(in1_face_c_dim),
+        static_cast<std::uint8_t>(num_faces_r_dim_B),
+        static_cast<std::uint8_t>(num_faces_c_dim_B)};
     const ckernel::Transpose transpose  = UNPACK_TRANSPOSE_FACES ? (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
                                                                  : (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
     const std::uint32_t num_total_tiles = INPUT_NUM_TILES_IN_BLOCK * INPUT_NUM_BLOCKS;
@@ -132,15 +146,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst,
             formats.unpack_B_dst,
             tensor_shape.face_r_dim,
-            tensor_shape.face_r_dim,
+            tensor_shape_b.face_r_dim,
             tensor_shape.total_num_faces(),
-            tensor_shape.total_num_faces(),
+            tensor_shape_b.total_num_faces(),
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
 
         // Must follow HW configure, which overwrites the ALU stoch-rnd bits.
         _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
-        _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose);
+        _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, tensor_shape_b, transpose);
         PROFILER_SYNC();
     }
     {

@@ -34,24 +34,26 @@ struct UntilizerCtArgs {
     uint32_t my_dg_index;
     uint32_t num_destinations = 0;  // counted from the host destination block; read from CT args on device
     uint32_t walks_down;
-    // Position in the group and its size. A group's batches are dealt out round robin, so this core takes
-    // those where batch % num_peers == my_index and needs nothing else to know which are its own.
-    uint32_t my_index;
+    // The group's size. Its batches are dealt out round robin, so a core takes those where
+    // batch % num_peers == core_index() and needs nothing else to know which are its own.
     uint32_t num_peers;
     uint32_t num_consumers;
     uint32_t ring_batches;
     uint32_t control_addr;
-    uint32_t produced_slot;
     // Tile geometry. These cores exist only where there is something to untilize.
     uint32_t tiles_per_row;
     uint32_t tile_bytes;
     uint32_t block_tiles;
     // The routed expert's split between its two passes; decides the order experts are walked in.
     uint32_t expert_threshold;
-    // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
+    // Whether an expert id table was passed. Without one the ring's experts are contiguous.
+    uint32_t has_expert_table;
+    // This ring's first row of the expert id table: one row per chip of the ring follows it.
     uint32_t expert_table_page_base;
-    // The routed expert's per-expert readiness count on this core.
+    // The producer's per-expert readiness count on this core and its per-chunk release, or NO_SEMAPHORE when
+    // every tile-row was written before the launch.
     uint32_t ready_sem;
+    uint32_t progress_sem;
     // Pages in the dispatched buffer, as in the reader's arguments: both walk the same clamped runs.
     uint32_t dispatch_capacity;
 
@@ -69,18 +71,18 @@ struct UntilizerCtArgs {
         dispatch_group_size(op::ring_extent(args)),
         my_dg_index(op::my_dg_index(args, coord)),
         walks_down(plan.walks_down),
-        my_index(plan.my_index),
         num_peers(plan.num_peers),
         num_consumers(static_cast<uint32_t>(plan.consumers.size())),
         ring_batches(UNT_RING_BATCHES),
         control_addr(plan.control_addr),
-        produced_slot(plan.produced_slot),
         tiles_per_row(op::tiles_per_token_row(tensor_args)),
         tile_bytes(op::tile_size_bytes(tensor_args)),
         block_tiles(op::untilize_block_tiles(tensor_args)),
         expert_threshold(args.hybrid_token_threshold),
+        has_expert_table(tensor_args.global_expert_idx_table.has_value() ? 1u : 0u),
         expert_table_page_base(plan.expert_table_page_base),
         ready_sem(plan.ready_sem),
+        progress_sem(plan.progress_sem),
         dispatch_capacity(op::dispatch_capacity(tensor_args)) {
         // The own destinations in emission order, which is the order the group walks their runs. Taken from
         // the same work list a reader's schedule is built from, so neither side can reorder alone.
@@ -98,27 +100,13 @@ struct UntilizerCtArgs {
     }
 
     std::vector<uint32_t> to_ct_word_arr() const {
-        std::vector<uint32_t> word_arr{token_size_bytes,
-                                       num_routed_experts,
-                                       experts_per_chip,
-                                       my_expert_base,
-                                       dispatch_group_size,
-                                       my_dg_index,
-                                       num_destinations,
-                                       walks_down,
-                                       my_index,
-                                       num_peers,
-                                       num_consumers,
-                                       ring_batches,
-                                       control_addr,
-                                       produced_slot,
-                                       tiles_per_row,
-                                       tile_bytes,
-                                       block_tiles,
-                                       expert_threshold,
-                                       expert_table_page_base,
-                                       ready_sem,
-                                       dispatch_capacity};
+        std::vector<uint32_t> word_arr{token_size_bytes, num_routed_experts,  experts_per_chip,
+                                       my_expert_base,   dispatch_group_size, my_dg_index,
+                                       num_destinations, walks_down,          num_peers,
+                                       num_consumers,    ring_batches,        control_addr,
+                                       tiles_per_row,    tile_bytes,          block_tiles,
+                                       expert_threshold, has_expert_table,    expert_table_page_base,
+                                       ready_sem,        progress_sem,        dispatch_capacity};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -132,41 +120,34 @@ struct UntilizerCtArgs {
         my_dg_index(get_compile_time_arg_val(5)),
         num_destinations(get_compile_time_arg_val(6)),
         walks_down(get_compile_time_arg_val(7)),
-        my_index(get_compile_time_arg_val(8)),
-        num_peers(get_compile_time_arg_val(9)),
-        num_consumers(get_compile_time_arg_val(10)),
-        ring_batches(get_compile_time_arg_val(11)),
-        control_addr(get_compile_time_arg_val(12)),
-        produced_slot(get_compile_time_arg_val(13)),
-        tiles_per_row(get_compile_time_arg_val(14)),
-        tile_bytes(get_compile_time_arg_val(15)),
-        block_tiles(get_compile_time_arg_val(16)),
-        expert_threshold(get_compile_time_arg_val(17)),
-        expert_table_page_base(get_compile_time_arg_val(18)),
-        ready_sem(get_compile_time_arg_val(19)),
+        num_peers(get_compile_time_arg_val(8)),
+        num_consumers(get_compile_time_arg_val(9)),
+        ring_batches(get_compile_time_arg_val(10)),
+        control_addr(get_compile_time_arg_val(11)),
+        tiles_per_row(get_compile_time_arg_val(12)),
+        tile_bytes(get_compile_time_arg_val(13)),
+        block_tiles(get_compile_time_arg_val(14)),
+        expert_threshold(get_compile_time_arg_val(15)),
+        has_expert_table(get_compile_time_arg_val(16)),
+        expert_table_page_base(get_compile_time_arg_val(17)),
+        ready_sem(get_compile_time_arg_val(18)),
+        progress_sem(get_compile_time_arg_val(19)),
         dispatch_capacity(get_compile_time_arg_val(20)) {}
 
-    // The overlapped build gets program semaphores, because the routed expert's arena occupies the L1 the
-    // standalone op places its ring counters in. The framework re-initialises those every launch; the
-    // hand-placed pair is this op's to zero.
-#ifdef CMBF2D_OVERLAPPED
+    // Every handshake counter is a program semaphore, named by its id: the framework re-initialises those
+    // every launch, so nothing here zeroes them.
     volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(peer_word));
     }
-    uint32_t produced_slot_addr() const { return get_semaphore(produced_slot); }
-    void reset_freed_counter(volatile tt_l1_ptr uint32_t*) const {}
-#else
-    volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_word);
-    }
-    uint32_t produced_slot_addr() const { return produced_slot; }
-    void reset_freed_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
-#endif
+    // One kernel serves the whole group, so this core's position and produced-count semaphore are its runtime
+    // arguments.
+    uint32_t core_index() const { return get_arg_val<uint32_t>(0); }
+    uint32_t produced_slot_addr() const { return get_semaphore(get_arg_val<uint32_t>(1)); }
 
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;
     static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(6);  // num_destinations
     static constexpr uint32_t accessor_base =
-        consumer_base + UNT_PEER_WORDS * get_compile_time_arg_val(10);  // num_consumers
+        consumer_base + UNT_PEER_WORDS * get_compile_time_arg_val(9);  // num_consumers
 
     // One accessor per DRAM buffer the program factory chained on, in that order.
     static constexpr auto dram_in_args = TensorAccessorArgs<accessor_base>();
@@ -174,10 +155,10 @@ struct UntilizerCtArgs {
     static constexpr auto dram_region_args = TensorAccessorArgs<dram_counts_args.next_compile_time_args_offset()>();
     static constexpr auto dram_expert_offsets_args =
         TensorAccessorArgs<dram_region_args.next_compile_time_args_offset()>();
-#ifdef CMBF2D_OVERLAPPED
-    static constexpr auto dram_expert_table_args =
-        TensorAccessorArgs<dram_expert_offsets_args.next_compile_time_args_offset()>();
-#endif
+    // Without a table nothing reads through this, so it names expert_offsets' args rather than ones past the end.
+    static constexpr auto dram_expert_table_args = TensorAccessorArgs<
+        get_compile_time_arg_val(16) != 0 ? dram_expert_offsets_args.next_compile_time_args_offset()
+                                          : dram_region_args.next_compile_time_args_offset()>();
 #endif
 
 #ifndef KERNEL_BUILD

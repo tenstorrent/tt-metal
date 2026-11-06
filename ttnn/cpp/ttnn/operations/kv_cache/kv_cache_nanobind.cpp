@@ -61,7 +61,7 @@ void bind_update_cache_for_token_(nb::module_& mod) {
         Args:
             cache (ttnn.Tensor): the cache tensor to be written to.
             token (ttnn.Tensor): the token tensor to be written to the cache.
-            update_index (int): the index into the cache tensor.
+            update_index (int): the cache sequence position, less than ``cache.padded_shape[-2]``.
             batch_offset (int): the batch_offset into the cache tensor.
 
 
@@ -89,7 +89,7 @@ void bind_update_cache(nb::module_& mod) {
         Args:
             * :attr:`cache` (ttnn.Tensor): The cache tensor to be written to.
             * :attr:`input` (ttnn.Tensor): The token tensor to be written to the cache.
-            * :attr:`update_index` (int): The index into the cache tensor.
+            * :attr:`update_index` (int): The cache sequence position, less than ``cache.padded_shape[-2]``.
             * :attr:`batch_offset` (int): The batch_offset into the cache tensor. Default = 0 .
 
         Keyword Args:
