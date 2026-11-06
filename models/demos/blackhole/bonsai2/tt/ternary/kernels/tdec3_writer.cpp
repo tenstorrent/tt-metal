@@ -7,6 +7,9 @@
 #ifdef STEP_PREFETCH
 #include "../../gdn_step/kernels/step_prefetch.hpp"
 #endif
+#ifdef KV_PREFETCH
+#include "../../sdpa_dec/kernels/kv_prefetch.hpp"
+#endif
 #ifndef OUT_PER_NT
 #define OUT_PER_NT 1
 #endif
@@ -71,6 +74,25 @@ void kernel_main() {
                 TensorAccessor(ps, get_common_arg_val<uint32_t>(PF_ARG + 7), 2048));
             noc_async_read_barrier();
         }
+    }
+#endif
+#ifdef KV_PREFETCH
+    // the decode SDPA's K / V into its cores' L1 (sdpa_dec/kernels/kv_prefetch.hpp). Common args from KVP_ARG: record,
+    // buffer, K cache, V cache, bs, NG, H, maxr; compile-time accessor args from KVP_CT.
+    {
+        constexpr auto ka = TensorAccessorArgs<KVP_CT>();
+        constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
+        kv_pf::prefetch(
+            core_index(get_common_arg_val<uint32_t>(4)),
+            get_common_arg_val<uint32_t>(KVP_ARG),
+            get_common_arg_val<uint32_t>(KVP_ARG + 1),
+            TensorAccessor(ka, get_common_arg_val<uint32_t>(KVP_ARG + 2), kv_pf::KB),
+            TensorAccessor(va, get_common_arg_val<uint32_t>(KVP_ARG + 3), kv_pf::KB),
+            get_common_arg_val<uint32_t>(KVP_ARG + 4),
+            get_common_arg_val<uint32_t>(KVP_ARG + 5),
+            get_common_arg_val<uint32_t>(KVP_ARG + 6),
+            get_common_arg_val<uint32_t>(KVP_ARG + 7));
+        noc_async_read_barrier();
     }
 #endif
 #if defined(GCB_STREAM) || defined(W_STREAM)

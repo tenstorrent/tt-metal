@@ -38,12 +38,29 @@ void kernel_main() {
 #ifdef SDPA_ZONES
         DeviceZoneScopedN("TD-R-meta");
 #endif
+#ifdef KV_PF
+        // K / V already in this core's L1 (kv_prefetch.hpp), its share in its record
+        const uint32_t tmp = get_common_arg_val<uint32_t>(10);
+        (void)poss;
+        (void)pts;
+#else
         const uint32_t tmp = (get_write_ptr(cb_tmp) + 63) & ~63u;
         noc_async_read(poss.get_noc_addr(0), tmp, 64);
         noc_async_read(pts.get_noc_addr(0), tmp + 64, (pt_bytes + 63) & ~63u);
+#endif
         // q while those land (the constant tiles: the writer)
         cb_reserve_back(cb_q, Dt);
         const uint32_t lq = get_write_ptr(cb_q);
+#ifdef Q_HUB
+        // rows 0 .. 5 of this group's hub (qk_rope.py q_hub): 192 B per face
+        const uint32_t hub = get_common_arg_val<uint32_t>(11 + g);
+        for (uint32_t d = 0; d < Dt; ++d) {
+            const uint64_t src = get_noc_addr(hub >> 16, hub & 0xffff, q_addr + d * QB);
+            noc_async_read(src, lq + d * QB, 192);
+            noc_async_read(src + 512, lq + d * QB + 512, 192);
+        }
+        (void)qs;
+#else
         for (uint32_t d = 0; d < Dt; ++d) {
             const uint64_t src = qs.get_noc_addr(d);
             for (uint32_t r = 0; r < 6;) {  // contiguous row runs (split at face row 16)
@@ -55,6 +72,7 @@ void kernel_main() {
                 r += run;
             }
         }
+#endif
         noc_async_read_barrier();
         const uint32_t n = *(volatile tt_l1_ptr uint32_t*)tmp + 1;
         pt = (volatile tt_l1_ptr uint32_t*)(tmp + 64);
@@ -65,6 +83,10 @@ void kernel_main() {
         info[0] = nr;
         info[1] = nr != 0 && r1 == nt;
         info[2] = n - (nt - 1) * 32;
+#ifdef KV_PF
+        nr = ((volatile tt_l1_ptr uint32_t*)tmp)[1];  // the prefetch's share (the same split)
+        info[0] = nr;
+#endif
         cb_push_back(cb_info, 1);
         cb_push_back(cb_q, Dt);
     }
@@ -73,6 +95,13 @@ void kernel_main() {
     }
 #ifdef SDPA_ZONES
     DeviceZoneScopedN("TD-R-kv");
+#endif
+#ifdef KV_PF
+    cb_reserve_back(cb_k, nr * Dt);
+    cb_reserve_back(cb_v, nr * Dt);
+    cb_push_back(cb_k, nr * Dt);
+    cb_push_back(cb_v, nr * Dt);
+    return;
 #endif
     cb_reserve_back(cb_k, nr * Dt);
     cb_reserve_back(cb_v, nr * Dt);

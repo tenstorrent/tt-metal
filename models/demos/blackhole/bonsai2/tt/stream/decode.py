@@ -100,6 +100,7 @@ class StreamDecode:
         from models.demos.blackhole.bonsai2.tt.ternary.argmax import prealloc
 
         prealloc(device)  # the decode argmax's result buffer, before any decode trace
+        self.kvp = self._kv_prefetch_setup(model, nl)
         # the decode embedding's output: persistent, L1, zero (embed() writes row 0 only)
         D = model.embd.weights.shape[-1]
         self.embed_out = ttnn.from_torch(
@@ -111,6 +112,67 @@ class StreamDecode:
         )
         print(f"BONSAI_STREAM slots per sender {self.plan.slots} segments {len(self.plan.w)}", flush=True)
         self.deactivate()
+
+    def _kv_prefetch_setup(self, model, nl):
+        """The decode SDPA's K / V prefetch (BONSAI_SDPA_PF=0: off): a persistent L1 K / V buffer on the SDPA cores (the
+        first 4 x NG receivers, inside every q projection's cores), filled by each attention layer's q projection
+        writer, and a per-core record ([0] position, [16 ..] page table) the step's embedding fills."""
+        caches = getattr(model, "_paged_kv_caches", None)
+        if os.environ.get("BONSAI_SDPA_PF", "1") != "1" or not caches:
+            return None
+        kc = caches[0][0]
+        nb, H, bs, D = list(kc.shape)
+        qcores = min(layer.attention.ternary.q.cores for layer in model.layers if layer.is_full_attention)
+        NG = qcores // H
+        maxpos = int(os.environ.get("BONSAI_SDPA_PF_MAXPOS") or nb * bs)
+        maxr = -(-(-(-maxpos // 32)) // NG)
+        cores = self.st.rx_order[: H * NG]
+        crs = core_ranges.rects(cores)
+        sh = lambda shape: ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(crs, shape, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        rows = 2 * maxr * (D // 32) * 32  # K then V tiles, one tile column
+        kvbuf = ttnn.from_torch(
+            torch.zeros(len(cores) * rows, 32),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=kc.device(),
+            memory_config=sh([rows, 32]),
+        )
+        pinfo = ttnn.from_torch(
+            torch.zeros(len(cores), 128, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=kc.device(),
+            memory_config=sh([1, 128]),
+        )
+        # the SDPA's q: kv group g's 6 heads in rows 0 .. 5 of its hub core (mid-group), written by the q norm + RoPE
+        hubs = [cores[g * NG + NG // 2] for g in range(H)]
+        qhub = ttnn.from_torch(
+            torch.zeros(H * 32, D),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=kc.device(),
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(core_ranges.rects(hubs), [32, D], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+        print(f"BONSAI_SDPA_PF cores {len(cores)} max positions {maxpos} rows/core {maxr}", flush=True)
+        return dict(cores=cores, NG=NG, H=H, maxr=maxr, kvbuf=kvbuf, pinfo=pinfo, hubs=hubs, qhub=qhub)
+
+    def kv_prefetch(self, kc, vc):
+        """(common args, compile-time args, tensors) of the K / V prefetch of this attention layer's caches, for its q
+        projection's writer (decode_linear3 kvp=)."""
+        p = self.kvp
+        bs = list(kc.shape)[2]
+        common = [p["pinfo"].buffer_address(), p["kvbuf"].buffer_address(), kc.buffer_address(), vc.buffer_address()]
+        common += [bs, p["NG"], p["H"], p["maxr"]]
+        ct = ttnn.TensorAccessorArgs(kc).get_compile_time_args() + ttnn.TensorAccessorArgs(vc).get_compile_time_args()
+        return common, ct, [kc, vc]
 
     def bench(self):
         """STREAM_BENCH=1: the step's stream with drain-only consumers (one per linear), traced: the stream's own pace
@@ -209,7 +271,7 @@ class StreamDecode:
         self.pending, self.ready = None, (0 if self.head_pf() is not None else None)
 
 
-def embed(table, ids):
+def embed(table, ids, cur_pos=None, page_table=None):
     """The decode embedding (ttnn.embedding + its tilize) on the first receiver: row ids[0] of table into row 0 of a
     [1, 1, D] bf16 TILE tensor."""
     from models.demos.blackhole.bonsai2.tt.stream.stream import KERNELS, _crs
@@ -221,11 +283,29 @@ def embed(table, ids):
     crs = _crs([core])
     rt = ttnn.RuntimeArgs()
     page = list(ids.shape)[-1] * 4  # only page 0 is read: any page size gives its address
-    rt[core.x][core.y] = [ids.buffer_address(), page, table.buffer_address(), out.buffer_address()]
+    args = [ids.buffer_address(), page, table.buffer_address(), out.buffer_address()]
     ct = [D]
     for t in (ids, table, out):
         ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
     size = 64 + D * 2
+    defines, extra = [], []
+    kvp = STATE.kvp
+    if kvp is not None and cur_pos is not None and page_table is not None:
+        # the step's position and page table into the SDPA cores' records (sdpa_dec K / V prefetch)
+        pt_bytes = -(-list(page_table.shape)[-1] * 4 // 64) * 64
+        assert 64 + pt_bytes <= 512, pt_bytes
+        dev = table.device()
+        xy = []
+        for c in kvp["cores"]:
+            w = dev.worker_core_from_logical_core(c)
+            xy.append((w.x << 16) | w.y)
+        args += [cur_pos.buffer_address(), page_table.buffer_address(), pt_bytes]
+        args += [kvp["pinfo"].buffer_address(), len(xy)] + xy
+        for t in (cur_pos, page_table):
+            ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        size += 64 + pt_bytes
+        defines, extra = [("POS_INFO", "1")], [cur_pos, page_table]
+    rt[core.x][core.y] = args
     prog = ttnn.ProgramDescriptor(
         kernels=[
             ttnn.KernelDescriptor(
@@ -233,6 +313,7 @@ def embed(table, ids):
                 core_ranges=crs,
                 compile_time_args=ct,
                 runtime_args=rt,
+                defines=defines,
                 config=ttnn.ReaderConfigDescriptor(),
             )
         ],
@@ -245,7 +326,7 @@ def embed(table, ids):
             )
         ],
     )
-    return ttnn.generic_op([ids, table, out], prog)
+    return ttnn.generic_op([ids, table] + extra + [out], prog)
 
 
 def setup(model):

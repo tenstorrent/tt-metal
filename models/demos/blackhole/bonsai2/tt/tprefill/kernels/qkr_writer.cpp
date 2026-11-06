@@ -51,9 +51,25 @@ void kernel_main() {
     const uint32_t row = pos % bs, rt = row / 32, rr = row % 32;
     const uint32_t fa = rr < 16 ? 0 : 2, fr = rr % 16;
     const uint32_t e0 = fa * 16 + fr, e1 = e0 + 16, m0 = 64 + fa * 256 + fr * 16, m1 = m0 + 256;
+#ifdef KV_L1
+    // the same row into the decode SDPA's prefetched K / V (sdpa_dec/kernels/kv_prefetch.hpp, already in L1 when this
+    // op runs): on core g NG + c holding tile row pos / 32 (its c-th share), at its slot there
+    const uint32_t kvbuf = get_common_arg_val<uint32_t>(12), maxr = get_common_arg_val<uint32_t>(13);
+    const uint32_t NG = get_common_arg_val<uint32_t>(14);
+    const uint32_t nt = (pos + 32) / 32, tl = pos / 32;
+    uint32_t oc = 0;
+    while ((oc + 1) * nt / NG <= tl) {
+        ++oc;
+    }
+    const uint32_t slot = tl - oc * nt / NG;
+#endif
     for (uint32_t it = first; it < first + n_items; ++it) {
         const uint32_t h = it % H;
         const uint32_t base = ((blk * H + h) * (bs / 32) + rt) * Dt;
+#ifdef KV_L1
+        const uint32_t ov = get_common_arg_val<uint32_t>(15 + h * NG + oc);
+        const uint64_t own = get_noc_addr(ov >> 16, ov & 0xffff, kvbuf);
+#endif
         for (uint32_t k = 0; k < 2 * Dt; ++k) {
             const uint32_t j = k >= Dt ? k - Dt : (k < Dt - 2 ? k + 2 : k - (Dt - 2));
             cb_wait_front(cb_out, 1);
@@ -76,6 +92,13 @@ void kernel_main() {
             noc_async_write(t + e1, d + e1, 1);
             noc_async_write(t + m0, d + m0, 16);
             noc_async_write(t + m1, d + m1, 16);
+#ifdef KV_L1
+            const uint64_t l = own + ((k < Dt ? slot : maxr + slot) * Dt + j) * TB;
+            noc_async_write(t + e0, l + e0, 1);
+            noc_async_write(t + e1, l + e1, 1);
+            noc_async_write(t + m0, l + m0, 16);
+            noc_async_write(t + m1, l + m1, 16);
+#endif
             noc_async_writes_flushed();
             cb_pop_front(cb_out, 1);
         }
@@ -94,11 +117,17 @@ void kernel_main() {
     const uint32_t scratch = get_write_ptr(cb_v);
     for (uint32_t it = first; it < first + n_items; ++it) {
         const uint32_t h = it % H;
-        const uint32_t ro = (h < 16 ? 0 : 1024) + (h % 16) * 32;
+#ifdef Q_HUB
+        // the decode SDPA's q (sdpa_dec): head h at row h % 6 of kv group h / 6's hub core (x << 16 | y, args 12 ..)
+        const uint32_t hub = get_common_arg_val<uint32_t>(12 + h / 6);
+        const uint32_t hx = hub >> 16, hy = hub & 0xffff, ro = (h % 6) * 32;
+#else
+        const uint32_t hx = sh_x, hy = sh_y, ro = (h < 16 ? 0 : 1024) + (h % 16) * 32;
+#endif
         for (uint32_t k = 0; k < Dt; ++k) {
             const uint32_t j = k < Dt - 2 ? k + 2 : k - (Dt - 2);
             cb_wait_front(cb_out, 1);
-            const uint64_t d = get_noc_addr(sh_x, sh_y, k_sh + j * TB + ro);
+            const uint64_t d = get_noc_addr(hx, hy, k_sh + j * TB + ro);
             noc_async_write(get_read_ptr(cb_out), d, 32);
             noc_async_write(get_read_ptr(cb_out) + 512, d + 512, 32);
             noc_async_writes_flushed();

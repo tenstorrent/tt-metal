@@ -79,11 +79,25 @@ class TernaryAttention:
         then read x' from that op's L1 hub buffer (BONSAI_ATTN_NORM_FUSE=0: off)."""
         return os.environ.get("BONSAI_ATTN_NORM_FUSE", "1") == "1" and _ROT_FUSE() and self.heads is not None
 
+    def _kvp(self):
+        """This layer's K / V prefetch for the decode SDPA (stream/decode.py kv_prefetch), on the q projection."""
+        from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+        kv = getattr(self, "kv_caches", None)
+        if kv is None or not stream_decode.active() or stream_decode.STATE.kvp is None:
+            return None
+        return stream_decode.STATE.kv_prefetch(*kv)
+
     def project_q(self, x):
         lead = tuple(list(x.shape)[:-1])
         nrot = prerot.take_norm(x)
+        kvp = self._kvp()
         if nrot is not None and self._hm_ok(lead):
-            q, gate = self.q.rotated(nrot, x, lead=lead, qg_heads=self.heads, out_l1=True)
+            q, gate = self.q.rotated(nrot, x, lead=lead, qg_heads=self.heads, out_l1=True, kvp=kvp)
+            if kvp is not None:
+                from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+                stream_decode.STATE.kv_ready = True  # the SDPA takes its K / V from L1
             self._xr = self.q.last_xl1  # x' in every q core's L1 (k / v's cores are a subset)
             self._xr_local = True
             return _QGDec(q, gate)
@@ -312,7 +326,13 @@ class _Experimental:
         if x.kc is None:
             x.kc = cache
             return None
-        x.k.op(x.k.t, x.cos, x.sin, cache=(x.kc, cache, x.v, update_idxs_tensor, page_table))
+        from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+        kv_l1 = None
+        if stream_decode.active() and getattr(stream_decode.STATE, "kv_ready", False):
+            p = stream_decode.STATE.kvp  # also the new row into the SDPA's prefetched K / V
+            kv_l1 = (p["kvbuf"], p["maxr"], p["NG"], p["cores"])
+        x.k.op(x.k.t, x.cos, x.sin, cache=(x.kc, cache, x.v, update_idxs_tensor, page_table), kv_l1=kv_l1)
         ttnn.deallocate(x.k.t)
         ttnn.deallocate(x.v)
         return None
@@ -399,10 +419,19 @@ def _decode_sdpa(q, k, v, cur_pos_tensor=None, page_table_tensor=None, scale=Non
     from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
 
     _, H, bs, D = list(k.shape)
-    Hq = list(q.shape)[-2]
+    pf = stream_decode.active() and getattr(stream_decode.STATE, "kv_ready", False)
+    Hq = 6 * H if pf else list(q.shape)[-2]  # (pf: q is the per-group hubs, [H * 32, D])
     if k.dtype != ttnn.bfloat8_b or D != 256 or Hq != 6 * H or page_table_tensor is None or cur_pos_tensor is None:
         return None
     device = k.device()
+    if pf:
+        # K / V prefetched into the SDPA cores' L1 by the q projection (stream/decode.py kv_prefetch)
+        stream_decode.STATE.kv_ready = False
+        p = stream_decode.STATE.kvp
+        key = ("pf", tuple((c.x, c.y) for c in p["cores"]), H, p["maxr"], scale)
+        if key not in _SDPA:
+            _SDPA[key] = DecodeSDPA(device, p["cores"], H=H, Hq=Hq, D=D, scale=scale, maxr=p["maxr"])
+        return _SDPA[key](q, k, v, cur_pos_tensor, page_table_tensor, pf=(p["kvbuf"], p["pinfo"]), q_hubs=p["hubs"])
     if stream_decode.active():
         cores = stream_decode.STATE.st.rx_order
     else:
@@ -505,9 +534,15 @@ class TernaryAttentionTtnn:
                 from models.demos.blackhole.bonsai2.tt.tprefill.qk_rope import kv_shards
 
                 _, Hq, _, Dq = list(q.t.shape)
-                (q_sh,) = kv_shards(q.t.device(), Hq, Dq, n=1)
-                q.op(q.t, cos, sin, kv_out=(q_sh, None, None))
-                qo = _KVSh(q_sh)
+                p = stream_decode.STATE.kvp
+                if p is not None and getattr(stream_decode.STATE, "kv_ready", False):
+                    # straight into the decode SDPA's per-group q hubs (sdpa_dec)
+                    q.op(q.t, cos, sin, kv_out=(p["qhub"], None, None), q_hub=p["hubs"])
+                    qo = _KVSh(p["qhub"])
+                else:
+                    (q_sh,) = kv_shards(q.t.device(), Hq, Dq, n=1)
+                    q.op(q.t, cos, sin, kv_out=(q_sh, None, None))
+                    qo = _KVSh(q_sh)
             else:
                 qo = q.op(q.t, cos, sin)
             ttnn.deallocate(q.t)

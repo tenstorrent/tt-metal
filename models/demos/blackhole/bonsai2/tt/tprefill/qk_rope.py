@@ -27,14 +27,15 @@ class QKNormRope:
         self.consts = ttnn.from_torch(torch.cat(tiles, 0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         self.D, self.eps, self.device = D, eps, device
 
-    def __call__(self, x, cos, sin, kv_out=None, cache=None):
+    def __call__(self, x, cos, sin, kv_out=None, cache=None, kv_l1=None, q_hub=None):
         """x [1, H, T, D] bf16 TILE (head-major); cos, sin [..., T, 64] bf16 TILE -> rope(rms_norm(x) * w), same shape.
         T need not fill a tile (decode: T = 1, cos / sin [1, 1, 64]).
         kv_out = (k_sh, v, v_sh) (decode): write the result token-major into k_sh and copy v (head-major [1, H, 1, D])
         token-major into v_sh, both [1, 1, 32, D] L1 shards on one core (the paged cache update's inputs); returns k_sh.
         cache = (k_cache, v_cache, v, cur_pos, page_table) (decode, bf8 paged caches [blocks, H, bs, D]): write the
         result and v (head-major [1, H, 1, D]) straight into the caches at cur_pos[0] (no paged cache update ops);
-        returns None.
+        returns None. kv_l1 = (buffer, maxr, NG, cores): also into the decode SDPA's prefetched K / V
+        (sdpa_dec/kernels/kv_prefetch.hpp) on the core holding the position's tile row.
         """
         device, D = self.device, self.D
         _, H, T, Dx = list(x.shape)
@@ -78,12 +79,24 @@ class QKNormRope:
             wr_c += [kc.buffer_address(), vc.buffer_address(), pos.buffer_address(), pt.buffer_address()]
             wr_c += [list(kc.shape)[2]]
             wr_def = [("KV_CACHE", "1")]
+            if kv_l1 is not None:
+                buf, maxr, NG, cores = kv_l1
+                wr_c += [buf.buffer_address(), maxr, NG]
+                for c in cores:
+                    w = device.worker_core_from_logical_core(c)
+                    wr_c.append((w.x << 16) | w.y)
+                wr_def = wr_def + [("KV_L1", "1")]
         elif kv_out is not None:
             sh = device.worker_core_from_logical_core(out.memory_config().shard_spec.grid.ranges()[0].start)
             wr_ct += ttnn.TensorAccessorArgs(v if v is not None else out).get_compile_time_args()
             wr_c += [sh.x, sh.y, out.buffer_address()]
             wr_c += [v_sh.buffer_address(), v.buffer_address()] if v is not None else [0, 0]
             wr_def = [("TOKEN_MAJOR", "1")]
+            if q_hub is not None:  # out: the SDPA's q hubs (one row block per kv group, at the same L1 address)
+                for c in q_hub:
+                    w = device.worker_core_from_logical_core(c)
+                    wr_c.append((w.x << 16) | w.y)
+                wr_def.append(("Q_HUB", "1"))
         wr_kernel = ttnn.KernelDescriptor(
             kernel_source=KERNELS + "qkr_writer.cpp",
             core_ranges=crs,
@@ -107,7 +120,7 @@ class QKNormRope:
                     + span
                     + [H, Mt, Dt, Rt]
                     + ([v.buffer_address()] if cache is not None else []),  # fmt: skip
-                    defines=wr_def if cache is not None else [],
+                    defines=[("KV_CACHE", "1")] if cache is not None else [],
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 wr_kernel,
@@ -115,7 +128,7 @@ class QKNormRope:
                     kernel_source=KERNELS + "qkr_compute.cpp",
                     core_ranges=crs,
                     common_runtime_args=span + [Dt, _f32_bits(1.0 / D), _f32_bits(self.eps)],
-                    defines=wr_def if cache is not None else [],
+                    defines=[("KV_CACHE", "1")] if cache is not None else [],
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,

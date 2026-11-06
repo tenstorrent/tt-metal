@@ -45,6 +45,7 @@ def decode_forward(
 
         _orig, _orig_rope = _attn_mod.ttnn, _attn_mod.apply_rotary_pos_emb_ttnn
         si = TernaryAttentionTtnn(weights, ternary)
+        ternary.kv_caches = (paged_kv_cache_key, paged_kv_cache_value)  # the decode SDPA's K / V prefetch
         _attn_mod.ttnn = si
         # Bonsai: q / k norm + RoPE in one op when the stand-in deferred the norms (TernaryAttentionTtnn.apply_rope)
         _attn_mod.apply_rotary_pos_emb_ttnn = lambda q, k, c, s: si.apply_rope(q, k, c, s, _orig_rope)

@@ -205,11 +205,13 @@ class TernaryDecodeLinear3:
         x_local=False,
         stream=None,
         host_pf=None,
+        kvp=None,
     ):
         """stage: this linear's weights already copied into L1 by stage_kernels(stage) in an earlier op.
         stream: its weights from the weight stream's ring (bonsai2/tt/stream); streamed linears take it by
         themselves while the stream is active.
         host_pf: a GDN step's input prefetch (GDNStep.prefetch_spec) for this op's writer to run first.
+        kvp: the decode SDPA's K / V prefetch (stream/decode.py kv_prefetch) for this op's writer to run first.
         split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
         x_rot: [C, K] bf16 ROW_MAJOR, C copies of the rotated activation (one per DRAM bank: page c is in bank
         c mod 8) -> [32, N] bf16 TILE, row 0 = y.
@@ -374,6 +376,17 @@ class TernaryDecodeLinear3:
             ]
             wr_ct = wr_ct + pf_ct
             wr_c = wr_c + pf_common
+        if kvp is not None:  # the decode SDPA's K / V prefetch on this op's writer (sdpa_dec/kernels/kv_prefetch.hpp)
+            assert COMMON_ARGS
+            kv_common, kv_ct, kv_tensors = kvp
+            dm_defines = list(dm_defines) + [
+                ("KV_PREFETCH", "1"),
+                ("KVP_CT", str(len(wr_ct))),
+                ("KVP_ARG", str(len(wr_c))),
+            ]
+            wr_ct = wr_ct + kv_ct
+            wr_c = wr_c + kv_common
+            pf_tensors = list(pf_tensors) + list(kv_tensors)
         rkern, rcbs, rins, rsems = [], [], [], []
         if rot is not None:
             rotation, rx, ru, rsig = rot
@@ -543,6 +556,7 @@ class TernaryDecodeLinear3:
         stage=None,
         qg_heads=0,
         host_pf=None,
+        kvp=None,
     ):
         """This linear on rotation(x) (rotation(x, u=u, sig=sig)) in one op: the rotation runs on the cores after this
         linear's and hands x' over through core 0 (no rotation op, no x' round trip; the weight stream starts at
@@ -557,4 +571,5 @@ class TernaryDecodeLinear3:
             stage=stage,
             qg_heads=qg_heads,
             host_pf=host_pf,
+            kvp=kvp,
         )

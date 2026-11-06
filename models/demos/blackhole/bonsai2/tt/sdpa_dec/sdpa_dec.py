@@ -24,13 +24,13 @@ def _bf16_bits(v):
 
 
 class DecodeSDPA:
-    def __init__(self, device, cores, H=4, Hq=24, D=256, max_positions=4608, scale=None):
+    def __init__(self, device, cores, H=4, Hq=24, D=256, max_positions=4608, scale=None, maxr=None):
         assert Hq == 6 * H and D == 256, (H, Hq, D)
         assert len(cores) % H == 0, len(cores)
         self.device, self.cores, self.H, self.Hq, self.D = device, list(cores), H, Hq, D
         self.NG = len(cores) // H
         assert 8 <= self.NG, self.NG
-        self.maxr = -(-(-(-max_positions // 32)) // self.NG)
+        self.maxr = maxr or -(-(-(-max_positions // 32)) // self.NG)
         self.scale = D**-0.5 if scale is None else scale
         ones = torch.ones(32, 32)
         scaler = torch.zeros(32, 32)
@@ -44,9 +44,12 @@ class DecodeSDPA:
             torch.cat([ones, scaler, sel], 0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-    def __call__(self, q, kc, vc, pos, pt, out=None):
+    def __call__(self, q, kc, vc, pos, pt, out=None, pf=None, q_hubs=None):
         """q token-major [1, 1, Hq, D] bf16 TILE (L1); kc, vc [blocks, H, bs, D] bf8; pos [1] int32 (the current position,
-        its K / V already in the caches); pt [1, max_blocks] int32 -> token-major [1, 1, Hq, D] bf16 (L1)."""
+        its K / V already in the caches); pt [1, max_blocks] int32 -> token-major [1, 1, Hq, D] bf16 (L1).
+        pf = (K / V buffer, record): K / V already prefetched into each core's L1 (kernels/kv_prefetch.hpp; its maxr,
+        these cores in this order), no DRAM reads. q_hubs: q is kv group g's 6 heads in rows 0 .. 5 on core q_hubs[g]
+        (qk_rope.py q_hub) instead of token-major."""
         device, H, NG, D = self.device, self.H, self.NG, self.D
         bs = list(kc.shape)[2]
         if out is None:
@@ -79,10 +82,16 @@ class DecodeSDPA:
                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page)],
             )
 
-        cbs = [
+        if pf is not None:
+            kvb = maxr * 8 * 1088
+            kv_cbs = [
+                ttnn.cb_descriptor_from_sharded_tensor(1, pf[0], address_offset=0, total_size=kvb, core_ranges=crs),
+                ttnn.cb_descriptor_from_sharded_tensor(2, pf[0], address_offset=kvb, total_size=kvb, core_ranges=crs),
+            ]
+        else:
+            kv_cbs = [cb(1, b8, maxr * 8), cb(2, b8, maxr * 8)]
+        cbs = kv_cbs + [
             cb(0, bf, 8),
-            cb(1, b8, maxr * 8),
-            cb(2, b8, maxr * 8),
             cb(3, bf, 3),
             cb(5, bf, 1, 64),
             cb(6, bf, 1, 128 + ((pt_bytes + 63) // 64) * 64),
@@ -97,6 +106,10 @@ class DecodeSDPA:
             cb(19, bf, 1),
             cb(20, bf, maxr),
         ]
+        hub_xy = []
+        for c in q_hubs or []:
+            w = device.worker_core_from_logical_core(c)
+            hub_xy.append((w.x << 16) | w.y)
         zones = [("SDPA_ZONES", "1")] if os.environ.get("SDPA_ZONES") == "1" else []
         program = ttnn.ProgramDescriptor(
             kernels=[
@@ -115,9 +128,11 @@ class DecodeSDPA:
                         pt_bytes,
                         NG,
                         H,
-                    ],
+                        pf[1].buffer_address() if pf is not None else 0,
+                    ]
+                    + hub_xy,
                     runtime_args=rt_r,
-                    defines=zones,
+                    defines=zones + ([("KV_PF", "1")] if pf is not None else []) + ([("Q_HUB", "1")] if q_hubs else []),
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -152,5 +167,6 @@ class DecodeSDPA:
             ],
             cbs=cbs,
         )
-        ttnn.generic_op([pos, pt, kc, vc, q, self.consts, out], program)
+        extra = list(pf) if pf is not None else []
+        ttnn.generic_op([pos, pt, kc, vc, q, self.consts] + extra + [out], program)
         return out

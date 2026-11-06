@@ -1030,7 +1030,7 @@ class Qwen36Model:
         streaming = self.num_devices == 1 and stream_decode.active()
         if streaming:  # Bonsai weight stream: the senders run through the whole step
             stream_decode.STATE.launch()
-            x = stream_decode.embed(self.embd.weights, token_ids_buf)  # on the decode cores
+            x = stream_decode.embed(self.embd.weights, token_ids_buf, cur_pos_tensor, page_table)  # on the decode cores
         else:
             x = self.embd(token_ids_buf)
         if self.num_devices > 1:
