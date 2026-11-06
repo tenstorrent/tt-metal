@@ -1,5 +1,5 @@
 {
-  "status": "blocked",
+  "status": "local_release_blocked_secondary_smoke_pending",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -21,13 +21,30 @@
     "release_route_repairs": null,
     "account_fallback": null
   },
-  "stopped_at": "2026-11-06T04:33:36.867416+00:00",
   "remaining_work": [
-    "Fresh autoport harness entry and requested suite entries",
-    "Freeze stratified task lists before scoring",
-    "All smoke/nightly/server-sized/larger rungs",
+    "Collect and audit smoke trajectories before accepting scores",
+    "Nightly/server-sized/larger rungs",
     "Measured workload, limits and capacity; ranked efforts",
+    "Restore local release route or receive explicit operator route instruction",
     "Clean dry run and immutable release",
     "Stage gate pass"
-  ]
+  ],
+  "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
+  "updated_at": "2026-11-06T05:09:54.490083+00:00",
+  "completed_preparation": [
+    "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
+    "Stratified task cohorts frozen before scores",
+    "Three smoke2 jobs dispatched with immutable source and TTI SHAs"
+  ],
+  "live_wait": {
+    "run_ids": [
+      42166117505,
+      42166151590,
+      42166175324
+    ],
+    "status": "image-build runner queue",
+    "monitor": "bringup/artifacts/stage12-monitor-ci.py",
+    "tool_session_id": 20102,
+    "note": "Queueing is not a failed run; do not cancel or redispatch solely for queue time."
+  }
 }
