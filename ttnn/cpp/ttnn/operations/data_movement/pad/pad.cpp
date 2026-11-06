@@ -655,6 +655,10 @@ ttnn::Tensor pad_with_route(
     if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
             return p.before_elements == 0 && p.after_elements == 0;
         })) {
+        // Nothing to pad, but a requested output memory config still applies (as in the rank > 4 path below).
+        if (input_tensor.storage_type() == StorageType::DEVICE && memory_config_arg.has_value()) {
+            return ttnn::to_memory_config(input_tensor, memory_config_arg.value());
+        }
         return input_tensor;
     }
 
