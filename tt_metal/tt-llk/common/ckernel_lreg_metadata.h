@@ -13,8 +13,6 @@
 // An independent l_reg[R].in_use() at each endpoint is not that lifetime.
 // The older __builtin_rvtt_sfprawlreg_access is NOT a fallback: its first
 // mask releases a value, whereas the effect builtin's first mask is a read.
-// Access-only and older compilers therefore get the explicit no-op below;
-// define TT_LLK_REQUIRE_RAW_LREG_METADATA to reject them instead.
 #ifndef TT_LLK_SFPRAWLREG_EFFECT
 #if defined(__has_builtin)
 #if __has_builtin(__builtin_rvtt_sfprawlreg_effect)
@@ -176,8 +174,6 @@ TT_LLK_RAW_LREG_FN unsigned write(unsigned x) {
 }
 // Raw instructions execute under externally managed lane predicates. The
 // instruction word alone cannot prove that every destination lane is written.
-// A compiler advertising lane merging preserves old destination lanes itself.
-// Older effect compilers need the destination explicitly included as an input.
 // Keep that compatibility rule shared with caller-described LOADMACRO effects.
 #if defined(__riscv_xtt_sfprawlreg_merge)
 TT_LLK_RAW_LREG_FN unsigned lane_inputs(unsigned reads, unsigned) { return reads; }

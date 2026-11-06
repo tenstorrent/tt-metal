@@ -11,8 +11,12 @@
 
 namespace ckernel
 {
-inline volatile unsigned instrn_buffer[1];
+inline volatile unsigned long instrn_buffer[1];
 }
+
+// The legacy-target cases define __riscv_xtttensix*, so ckernel_ops.h issues through
+// __builtin_rvtt_ttinsn, which a host compiler lacks. Declare it as ckernel_ops.h does under __clang__.
+extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 
 #if !defined(TEST_DEFAULT_FALLBACK)
 #if !defined(TEST_FALLBACK)

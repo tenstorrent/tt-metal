@@ -52,6 +52,8 @@ inline void calculate_unary_max_min(uint value) {
 #else
     constexpr int offset = 0;
 
+    sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
+    sfpi::l_reg[sfpi::LRegs::LReg1].in_use();
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
