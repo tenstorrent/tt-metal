@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .rms_norm import (
-    EXCLUSIONS,
+    rms_norm,
+    default_compute_kernel_config,
+    validate,
     INPUT_TAGGERS,
     SUPPORTED,
-    default_compute_kernel_config,
-    rms_norm,
-    validate,
+    EXCLUSIONS,
+    PROPERTIES,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "INPUT_TAGGERS",
     "SUPPORTED",
     "EXCLUSIONS",
+    "PROPERTIES",
 ]

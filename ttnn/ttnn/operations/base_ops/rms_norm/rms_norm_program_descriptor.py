@@ -1,1270 +1,1448 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""rms_norm ProgramDescriptor — regime R1 (row-parallel, row-resident) and regime R3 (W-split + cross-core
-Σx² combine), op_design.md -> Regimes.
+"""rms_norm ProgramDescriptor: geometry, select_blocking(), CBs, kernels, per-core args.
 
-Regimes (select_plan):
-    R1  interleaved, rows too narrow to need a W-split: tile-rows over the full grid, each core holds whole
-        rows resident (no cross-Tensix-core traffic).
-    R3  every core owns a (tile-row range × W-slice) block. Cores are grouped into ROW-GROUPS of G_w cores that
-        share a tile-row range; group = a consecutive run of G_w cores in (y, x) order, root = its first core.
-        Per block: each core reduces its slice (square_accumulate + local REDUCE_ROW collapse, column 0
-        valid), unicasts the partial to the root's gather CB (+ a semaphore increment), the root sums the G_w
-        partials (reduce<AccumulateViaAdd, Skip>) and finalizes (×1/W, +ε, rsqrt), and multicasts inv_rms
-        back to the group (ttnn.Mcast + McastArgs, receiver handshake). With owners > 1 the combine is a
-        REDUCE-SCATTER instead (catalog tensix_all_reduce): the block's tile-rows are split over `owners` group
-        members, each member sends an owner its partials of that owner's rows (one write), every owner sums +
-        finalizes its ceil(R_b / owners) rows and unicasts them into every member's cb_inv_rms (all-gather; a
-        second semaphore counts the arrivals).
-        Placements:
-          - WIDTH_SHARDED / BLOCK_SHARDED input (native, zero-copy: cb_x_tiles backed on the input shard,
-            cb_output backed on the output shard; the slice/row map is read off the shard spec);
-          - INTERLEAVED TILE input when R1 refuses (row too wide for L1) or on occupancy (few tile-rows):
-            a logical W-split, each core reads its W-slice from DRAM once.
+Blocking (op_design.md -> Blocking Model):
+  * row axis (tile-rows, leading dims folded): split over row-groups across the whole Tensix grid;
+    each group's assignment is processed in blocks of `block_row_tiles` tile-rows.
+  * W axis: split over `w_split_cores` (k) consecutive Tensix cores (one grid row while k <= grid_x, else
+    row-major across grid rows); every member keeps its W share resident (cb_x) across pass 1 and pass 2,
+    and the k members combine their per-row sum-of-squares partials over the NoC (k > 1 only): symmetric
+    all-gather for k <= 8, per-row owner gather + inv_rms return beyond (Refinement 5).
+Every knob below (k, block_row_tiles, x_block_depth, rm_chunk_w_tiles, out_unit_tiles) is computed
+once here and handed to the kernels as a CT/RT arg; the kernels derive all trip counts from them.
 
-Blocking model (op_design.md -> Blocking Model). Every knob is defined ONCE here and every
-dependent quantity (CB page counts, loop trip counts, grid) derives from it:
-
-    W_CHUNK_TILES  -> cap on w_chunk_tiles. The cap actually used is the largest of
-                      W_CHUNK_TILES, W_CHUNK_TILES/2, ... that fits L1 (preferring one that still
-                      allows x_depth = 2); then, to minimise pad tiles, over the core's slice S
-                      (S = Wt in R1):
-                      num_w_chunks       = ceil(S / cap)
-                      w_chunk_tiles (C)  = ceil(S / num_w_chunks)
-                      width_padded_tiles = num_w_chunks * C      (Wp)
-                      x_row_stride (WS)  = Wp (interleaved ring, pad tiles zeroed) or S (shard-backed: the
-                                           shard's own row stride; the last chunk is S - (nch-1)*C wide)
-    STREAM_DEPTH   -> depth (in C-tile quanta) of cb_x_rm_sticks, cb_gamma_tiles (streaming γ), cb_output
-    GAMMA_RESIDENT -> allow the resident-γ fast path: all Wp row-0 γ tiles expanded ONCE per kernel
-                      (cb_gamma_tiles = Wp pages) when that fits L1 at the block size already chosen;
-                      otherwise (or False) γ chunks stream, expanded per (block, chunk). Both expansions
-                      run on the WRITER RISC-V, so γ never sits on the reader's critical path (lamp L4).
-    GAMMA_DIRECT_READ -> TILE γ on the resident path: read row 0 of each γ tile from DRAM straight into its
-                      cb_gamma_tiles page — no staging row, no L1->L1 expansion. Modes:
-                        GAMMA_DIRECT_PREFIX   one read of the row-0 byte prefix (gamma_row0_prefix_bytes:
-                                              face 0 row 0 .. face 1 row 0, + the Bfp8_b exponent head)
-                        GAMMA_DIRECT_SEGMENTS one read per row-0 segment (fewer bytes, more requests)
-                        GAMMA_DIRECT_OFF      staging fill + expansion (2 reads per segment per tile)
-    GAMMA_SEG_SLOT -> bytes per row-0 segment slot of the TILE-γ staging row (>= every arch's DRAM read
-                      alignment, so a DRAM->L1 segment read keeps matching low address bits)
-    SCALE_BLOCK_TILES -> tiles per DEST window of the scaling stages (scale_by_gamma / scale_by_inv_rms);
-                      the eltwise chain clamps it to DEST capacity (8 under 16-bit DEST, 4 under fp32
-                      DEST). 1 = one dst-sync + CB handshake per tile.
-    FINALIZE_COL0   -> perf lamp L7: the finalize post-op (x1/W, +eps, rsqrt) runs as one fused SFPU pass over
-                      the column-0 vectors of each REDUCE_ROW result (8 of the tile's 32 vectors, once) instead
-                      of three full-tile passes. False = the stock mul_unary / add_unary / rsqrt_tile sequence.
-    BANK_STAGGER    -> perf lamp L9: core k rotates its DRAM issue order (x reads, output writes, γ reads)
-                      by k mod NUM_DRAM_BANKS inside each batch, so cores in lockstep do not all hit one
-                      bank (every tile-row starts on the same bank when Wt % banks == 0). False = in order.
-    MIN_BLOCKS_PER_CORE -> block_rows cap so an interleaved core with >= 2 tile-rows walks >= 2 blocks (the
-                      reader fetches block k+1 while block k is scaled and written; perf lamp L1). Sharded
-                      cores take the coarsest block (the whole shard, clamped by L1): nothing to prefetch.
-    R3_ROWS_PER_GROUP, R3_MAX_GROUP_CORES, R3_MIN_SLICE_TILES -> interleaved regime R3 layout (perf lamp L2:
-                      fewer slice cores = cheaper combine, more = more occupancy). Aim for row-groups of
-                      ~R3_ROWS_PER_GROUP tile-rows: G_w target = clamp(cores // ceil(rows / R3_ROWS_PER_GROUP),
-                      1, R3_MAX_GROUP_CORES); S = max(R3_MIN_SLICE_TILES, ceil(Wt / target)); G_w = ceil(Wt / S);
-                      G_h = min(rows, cores // G_w).
-    R3_SCATTER_ROWS_PER_OWNER -> regime R3 combine topology (perf lamp L2, catalog tensix_all_reduce): the
-                      row-group splits the combine of each block over owners = min(G, rows_max //
-                      R3_SCATTER_ROWS_PER_OWNER) members (reduce-scatter + unicast all-gather), so the sum of the G
-                      partials and the finalize of R rows no longer serialize on one root. owners == 1 (one-row
-                      groups such as decode, or the knob at 0) is the flat root reduce + one multicast back.
-    R3_OCCUPANCY_GAIN, R3_MIN_GROUP_CORES -> interleaved regime R3 is chosen over R1 (when R1 also fits) only if
-                      the W-split puts at least R3_OCCUPANCY_GAIN x as many Tensix cores to work AND cuts each
-                      row into >= R3_MIN_GROUP_CORES slices (a 2-way split does not pay for its combine:
-                      32x256 4.02 -> 4.23 us). R3_OCCUPANCY_GAIN = 0 disables the occupancy branch.
-    block_rows (R), x_depth -> the largest R whose L1 ledger footprint fits (choose_block_rows; footprint is
-                               monotone in R)
-    grid / core count       -> R1: split_work_to_cores over the full compute grid (row_wise=True);
-                               R3: the shard spec (sharded) / R3 row-groups (interleaved)
+HEIGHT / WIDTH / BLOCK_SHARDED (Refinements 2, 4): the shard spec fixes the work split — one group per shard row
+(BLOCK / HEIGHT) or a single group (WIDTH), k = shard columns (HEIGHT: k = 1, no combine), members and their NoC coordinates from the shard
+grid (orientation-aware, groups may span grid rows). Block = the resident shard (sub-blocked along rows
+only under L1 pressure). TILE: cb_x / cb_out are backed on the input / output shards (zero-copy). RM:
+the resident sticks are copied locally into the tilize staging CB (never gathered across Tensix cores).
+Combine topology: k <= K_SYM_MAX_* symmetric unicast all-gather; beyond, a per-row owner gathers the
+k partials, combines + finalizes, and returns inv_rms to every member (L1 per member ~ k * ceil(b/k)).
 """
 
 from __future__ import annotations
 
-import dataclasses
 import math
-import os
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
+TILE = 32
 
-TILE_DIM = 32
-FACE_DIM = 16
-TILE_HW = TILE_DIM * TILE_DIM
-BFP8_EXP_BYTES = 64  # Bfp8_b tile: exponent section (4 faces x 16 face rows, 1 B each) before the mantissas
+# CB indices — must match kernels/rms_norm_common.hpp.
+CB_X_RM = 0  # RM: raw stick pieces (tile-sized pages) -> tilize
+CB_X = 1  # resident x block (ping)
+CB_GAMMA = 2  # gamma slice (compact interleaved row-0 pages, row-broadcast by compute), program lifetime
+CB_SUMSQ = 3  # per tile-row DEST-accumulated sum of x^2 (pass-1 output)
+CB_PARTIAL = 4  # k > 1: this member's per-row partial (column 0)
+CB_GATHERED = 5  # k > 1: k partials per row, all-gathered over the NoC
+CB_INV_RMS = 6  # per tile-row rsqrt(mean + eps) (column 0)
+CB_OUT = 7  # normalized tiles (TILE: -> writer; RM: -> untilize)
+CB_OUT_RM = 8  # RM: untilized stick pieces -> writer
+CB_X_ALT = 9  # resident x block (pong) — only when x_block_depth == 2
+CB_TAIL_MASK = 11  # sharded TILE W tail: 0/1 row mask of the valid columns of the last W tile
+CB_INV_OWNED = 12  # owner combine (k > K_SYM_MAX_*): inv_rms of the tile-rows this member owns
+CB_ONES = 13  # 1.0 reduce scaler tile of the FPU row collapse (reduce_tile ROW)
 
-# ---- Knobs (single source of truth) ----
-W_CHUNK_TILES = 32  # streaming chunk width cap (tiles) — perf lamp L3 (RM: C*32*es B NoC segments)
-STREAM_DEPTH = 2  # depth of the three streaming CBs, in C-tile quanta
-SCALE_BLOCK_TILES = 8  # compute block of the scaling chains (clamped to DEST capacity by the chain)
-FINALIZE_COL0 = True  # perf lamp L7: finalize (x1/W, +eps, rsqrt) as ONE SFPU pass over column 0 (8 vectors, not 96)
-BANK_STAGGER = False  # perf lamp L9: per-core rotation of the DRAM issue order (kernels reduce it mod #banks)
-MIN_BLOCKS_PER_CORE = 2  # perf lamp L1: cross-block read/write overlap needs >= 2 blocks per core
-# TILE reader: C-tile chunks per NoC read barrier, as a cap; None = a whole tile-row per barrier.
-READ_BATCH_CHUNKS = None
-GAMMA_RESIDENT = True  # perf lamp L4: expand γ once per kernel when L1 allows (never shrinks the block)
-GAMMA_DIRECT_OFF, GAMMA_DIRECT_PREFIX, GAMMA_DIRECT_SEGMENTS = 0, 1, 2  # mirrored by the writer kernel
-GAMMA_DIRECT_READ = GAMMA_DIRECT_PREFIX  # TILE γ resident path: DRAM -> cb_gamma_tiles, no staging
-GAMMA_SEG_SLOT = 64  # B; Blackhole DRAM read alignment (Wormhole: 32) — a multiple of both
-R3_ROWS_PER_GROUP = 2  # perf lamp L2: target tile-rows per interleaved row-group
-R3_MAX_GROUP_CORES = 24  # perf lamp L2: cap on W-slice cores per interleaved row-group (combine fan-in)
-R3_MIN_SLICE_TILES = 4  # perf lamp L2: smallest interleaved W-slice per core (tiles)
-R3_SCATTER_ROWS_PER_OWNER = 1  # perf lamp L2: min tile-rows per reduce-scatter owner (0 = flat root reduce)
-R3_OCCUPANCY_GAIN = 2  # interleaved R3 over R1 only when it puts >= this many times the cores to work
-R3_MIN_GROUP_CORES = 4  # ... and splits each row into at least this many W-slices
-# Perf 1 (combine_pipeline): the TILE-sharded reduce-scatter combine (owners > 1) runs in WAVES so the exchange
-# overlaps compute — partials of wave k travel while wave k+1 is squared, and wave k is scaled while later waves'
-# inv_rms are still landing (see wave_plan / the compute kernel's WAVE_ROWS branch).
-R3_WAVES = 4  # target waves per block (auto-halved below R3_WAVE_MIN_TILES; L1 fallback; 1 = no overlap)
-R3_WAVE_MIN_TILES = 8  # a wave carries >= this many tiles of square work (rows x slice tiles), else halve the waves
-R3_WAVE_GAMMA0_POS = 255  # γ chunk 0 runs before combine(waves // 2) (255 = half-way; k = before combine(k))
-R3_WAVE_INV_GROUP = 1  # waves per chunk-0 inv scaling call (1 = one call per wave, measured best)
-GAMMA_MCAST = True  # Perf 1 (gamma_mcast): cores sharing a γ window read it once + multicast (gamma_mcast_groups)
-# Carve-out (measured regression): a SHARDED input on at most this many Tensix cores keeps the per-core γ reads.
-# With no x DRAM traffic and few concurrent γ readers the per-core reads are uncontended, while the multicast moves
-# whole γ pages (4x the row-0 prefix bytes) through one injector: HEIGHT 1 tile-row/core, per-core vs multicast ns —
-# 8 cores 2,934 vs 3,802; 20 cores W=1024/3072/6144 5,184/9,677/18,035 vs 6,642/14,712/27,092; 32 cores W=3072/6144
-# 13,650/24,044 vs 15,374/28,569 (W=1024 flat); 48 cores W=1024/3072 7,474/17,216 vs 6,706/14,978 (win); 64 cores
-# win at every W. Interleaved inputs (x DRAM traffic contends with the γ reads) win at 20 cores (640x6144 RM).
-GAMMA_MCAST_SHARDED_DIRECT_MAX_CORES = 32
-# Carve-out (measured regression): a ROW_MAJOR-sharded input with a ROW_MAJOR γ window of at most this many bytes keeps
-# the per-core read — that read is ONE small DRAM request per core, so there is no contention to remove and the
-# multicast hop is pure latency on a latency-bound op. HEIGHT, per-core vs multicast ns: 256x512 4,798 vs 5,396;
-# 512x512 5,164 vs 5,441; 1024x512 5,379 vs 5,547 (1 KB windows); 2048x1024 (2 KB) 9,684 vs 7,787 and 256x2048 (4 KB)
-# 14,781 vs 11,448 win.
-GAMMA_MCAST_RM_SHARD_DIRECT_MAX_BYTES = 1024
-R3_ALLGATHER_ON_WRITER = True  # the wave all-gather runs on the writer RISC-V (its own NoC) when γ is resident/absent
-# Perf 2 (dram_noc_balance): NoC balance of the interleaved DRAM traffic. The Tensix cores of the NOC_SWAP_COLUMNS
-# westmost logical grid columns — on Blackhole p150b the three Tensix columns just east of DRAM column 0 (virtual NoC
-# x 1..3) — run their x reads on NoC1 and their output writes on NoC0 (a second reader / writer kernel descriptor, same
-# sources, DM_DEDICATED_NOC); every other Tensix core keeps reads on NoC0 / writes on NoC1. Default pairing everywhere
-# leaves those west columns' DRAM traffic queued behind the column-0 links while the far (east) cores starve; a
-# wholesale swap, east/west halves, checkerboard, per-bank shortest-hop NoC choice or odd-bank splits all measured
-# slower (0.68-0.97x on 8192x5120), and per-transaction NoC choice needs DM_DYNAMIC_NOC (0.92x on 32x7168 by itself).
-# Measured (device ns, base -> swap, medians of 3): 8192x5120 390,093 -> 374,972; 8192x1024 83,481 -> 75,339;
-# 7168x2048 139,811 -> 129,644; 640x6144 (R3) 43,845 -> 38,678; 32x7168 (R3) 6,278 -> 5,856. Sharded inputs move no x /
-# output DRAM traffic and swap nothing. Inexpressible (stay unswapped): multicast SENDERS (γ group injectors, R3 inv_rms
-# roots) — a sender's kernel NoC must equal its channel's host multicast NoC.
+SEM_PARTIALS_ARRIVED = 0
+SEM_INV_ARRIVED = 1  # owner combine: inv_rms tiles returned by the row owners
+SEM_GAMMA_MCAST_FIRST = 2  # gamma multicast channel (ttnn.Mcast allocates its semaphores from this id)
+# Combine pipeline: odd-sub-block partials / inv_rms semaphores. Only on sharded k > 1 owner combine, where neither
+# ttnn.Mcast user (gamma: sharded k = 1 only; inv_rms: off on the pipelined path) allocates ids >= 2 — asserted below.
+SEM_PARTIALS_PAR = 2
+SEM_INV_PAR = 3
+WRITER_NOC_XY_ARG_BASE = 13  # writer RT index of the first peer (x, y) pair — passed to the kernel as a CT arg
+
+# Knob constants (design Phase 0 values).
+# Interleaved W split cap: the writer carries one (x, y) NoC pair per member as runtime args, so k is bounded by
+# the per-kernel runtime-arg limit (tt-metalium kernel_types.hpp max_runtime_args = 341). Beyond K_SYM_MAX_INTERLEAVED
+# the owner combine runs; beyond grid_x a group spans grid rows (members placed row-major over the grid).
+MAX_RUNTIME_ARGS = 341
+K_CAP_MAX = (MAX_RUNTIME_ARGS - WRITER_NOC_XY_ARG_BASE) // 2
+# Combine topology: symmetric all-gather up to K_SYM_MAX_* members, per-row owner gather + inv_rms return beyond.
+# Interleaved (W split k <= 8): catalog tensix_all_reduce (k <= 8 unicast all-gather). Sharded: the owner
+# topology for every k > 1 — measured BH p150b (bf16, HiFi2, 16-bit DEST): BLOCK (7168,1024) [736,128] 8x10
+# 70.8 -> 32.3 us, (8192,1024) [1024,128] 8x8 96.7 -> 42.7 us (each member combines + finalizes rows/k
+# tile-rows instead of all of them); 1- and 2-tile-row shards flat (<= 3%).
+K_SYM_MAX_INTERLEAVED = 8
+K_SYM_MAX_SHARDED = 1
+# Interleaved: the Tensix cores sharing a W slice get gamma by one multicast (one DRAM read per slice) instead
+# of each reading it (the writer loads it, off the reader's x stream). BH p150b, perf config: the per-core load
+# was a 131 us serial prefix of (8192,7168) (130 Tensix cores reading the same 224 gamma tiles, 2 x 64 B reads
+# each); measured 771 -> 630 us (8192,7168), 90.8 -> 76.3 us (7168,1024), (640,6144) k=6 51.9 -> 45.7 us.
+GAMMA_MCAST = True
+# Sharded k = 1 (HEIGHT, or a single shard column): every Tensix core holds the whole gamma, so the same one-group
+# multicast applies (one DRAM read of gamma per launch instead of one per Tensix core). WIDTH / BLOCK k > 1 keep the
+# per-core slice load (a shard grid column need not hold a single W slice).
+GAMMA_MCAST_SHARDED_K1 = True
+# Owner combine: return inv_rms to the k members with ONE multicast per block (kernel_lib Mcast, fixed sender = member
+# 0, no handshake) instead of k unicasts + k semaphore increments per owner. Perf 1: single-owner blocks (one tile-row)
+# WIDTH [32,256] 7x4 k = 28 8.9 -> 7.6 us. Perf 2: every block — the owners hand their rows to member 0 (the root),
+# which multicasts once (owners multicasting concurrently measured 1.7-2.1x slower in Perf 1: they collide).
+INV_MCAST = True
+MAX_MCAST_RECTANGLES = 3  # kernel_lib mcast_protocol.hpp: receiver rectangles per multicast group
+# k > 1, per-core gamma load (no multicast): the writer issues the gamma DRAM reads at kernel start but finishes the
+# load (barrier [+ RM face-1 copy]) only after block 0's partials are sent / its owner duties are done, so the cross-core
+# combine no longer waits on it. Pays when pass 1 is short (few tile-rows per block): BH p150b, perf config,
+# blocks of 1-2 tile-rows — (1,1,32,32768) k=49 24.3 -> 20.8 us, (160,11008) k=25 29.4 -> 24.8 us, (352,4096)
+# 25.9 -> 24.2 us, WIDTH (32,7168) 9.3 -> 8.3 us. With long blocks the early load is already hidden behind pass 1
+# and the late finish only delays pass 2: BLOCK (7168,1024) [736,128] (23 tile-rows) 29.9 -> 30.8 us. Gated on
+# block_row_tiles <= GAMMA_AFTER_SEND_MAX_ROWS.
+GAMMA_AFTER_SEND = True
+GAMMA_AFTER_SEND_MAX_ROWS = 8
+# Combine signal fence: flush (writes left this Tensix core) instead of a write barrier before each semaphore
+# increment of the partial exchange / inv_rms return (catalog tensix_all_reduce, design perf lamp "Signal fence").
+SIGNAL_AFTER_FLUSH = True
+PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
+# Owner topology (Perf 2, row_partial_mcast) — one path, every owner-combine block (interleaved k > 8, sharded k > 1):
+#   * Row partial: a member's per-row partial is collapsed in ROW form (compute: matmul ones-row x sumsq^T) and ships as
+#     two 16-datum face rows into row m % 32 of gather tile m // 32 of the row's owner; the owner column-reduces
+#     ceil(k / ROW_GATHER) gather tiles instead of adding k partial tiles. Bytes into an owner: k x 2 face rows
+#     (k x 128 B fp32) instead of k x 2 faces (k x 2 KB fp32); cb_gathered: ceil(k/32) pages per owned row, not k.
+#   * Root return (sharded): owners write inv_rms into member 0's cb_inv_rms; member 0 multicasts the block once
+#     (kernel_lib Mcast, fixed sender). Concurrent multi-owner multicasts serialized in Perf 1; one root sender per
+#     group does not. Interleaved keeps Perf 1's return (one-tile-row blocks: owner multicast; else unicast) and so does
+#     any group that is not multicast-expressible (_inv_mcast_order -> None).
+#   * Owner spread: the exchange index of member m is relabeled so the owners of a block's rows sit ~k/rows apart
+#     (distinct grid rows / columns) instead of on adjacent Tensix cores (incast on shared NoC links).
+#   BH p150b (row_partial_mcast bench, base -> this): WIDTH (128,4096) k = 128 b = 4 26.7 -> 7.0 us, (224,3072) k = 96
+#   21.0 -> 7.8, (160,11008) k = 115 23.1 -> 9.5, (512,4096) k = 128 b = 16 61.8 -> 12.9, (13,777,1023) k = 32 386.9 ->
+#   229.7, RM WIDTH (1024,1024) k = 128 117.4 -> 61.8; BLOCK perf / interleaved owner / k = 8 cells flat to 1.06x.
+ROW_GATHER = 32  # members per gather tile (one 32-datum row each)
+
+
+def _spread_step(k: int, rows: int) -> int:
+    """Owner spread: exchange index v -> member (v * step) % k; owners of rows 0..rows-1 sit step apart (gcd = 1)."""
+    if rows >= k or rows <= 1:
+        return 1
+    step = _div_up(k, rows)
+    while math.gcd(step, k) != 1:
+        step += 1
+    return step
+
+
+# Combine pipeline (sharded TILE, owner combine, resident gamma): cut the resident shard's crt tile-rows into
+# n sub-blocks of s = ceil(crt / n) tile-rows and run compute as front(t+1), combine(t), apply(t-1) against a
+# two-round exchange window in the writer (parity semaphores), so the cross-core exchange / owner combine / inv_rms
+# return of a sub-block overlaps pass 1 + collapse and pass 2 of its neighbours. Row owners rotate per sub-block
+# (row r of t owned by (t * s + r) % k). Bit-exact with the one-block path.
+# Sub-block count n (the most, from the top, that passes the gates; _pipe_subblock_rows), w = shard width in tiles:
+#   n = COMBINE_PIPELINE_SUBBLOCKS (3) — 2 and 4..8 measured slower on w >= 4 (BLOCK [736,128] / [1024,128] /
+#       [736,192], WIDTH (1024,1000) [1024,128]);
+#   w == 1: n = max(3, ceil(crt / max(COMBINE_PIPELINE_NARROW_MAX_ROWS, k))) — one-tile-wide shards have too little
+#       work per tile-row to hide the exchange behind 3 rounds (WIDTH (2048,256) [2048,32] k=8: n3 33.8 -> n8 31.4 us),
+#       but never fewer than k tile-rows per sub-block (WIDTH (2048,1024) [2048,32] k=32: n8 70.1 vs n3 47.6 us — only
+#       s of the k members own a row per round).
+# Gates (measured regressions otherwise):
+#   s >= COMBINE_PIPELINE_MIN_ROWS and s * (w + 1) >= COMBINE_PIPELINE_MIN_WORK — a round's fixed exchange latency
+#       must hide behind its sub-block ((640,6144) [64,704] s=1: 19.5 -> 20.8 us; BLOCK (2048,256) w=1 s=2: 1.07x,
+#       s=3: 0.96x, s=4: 0.90x);
+#   k <= COMBINE_PIPELINE_K_PER_WORK * s * (w + 1) — each owner's k-way inv_rms return per round must hide behind one
+#       sub-block of work ((256,2048) WIDTH auto k=64, w=1, s=3: 26.0 -> 30.8 us).
+# GAMMA_AFTER_SEND applies per sub-block (s <= GAMMA_AFTER_SEND_MAX_ROWS: finished after sub-block 0's inv_rms return):
+# RM gamma (one DRAM page read by every Tensix core) BLOCK (2048,1024) auto 12.6 -> 10.3 us vs finishing it at kernel
+# start; TILE gamma within ~2 %.
+# The single-owner inv_rms multicast (INV_MCAST) is off on the pipelined path: the rotated owner of a one-tile-row
+# sub-block need not be member 0, the multicast's fixed sender.
+COMBINE_PIPELINE = True
+COMBINE_PIPELINE_SUBBLOCKS = 3
+COMBINE_PIPELINE_NARROW_MAX_ROWS = 8  # w == 1: s <= max(this, k)
+COMBINE_PIPELINE_MIN_WORK = 8  # s * (w + 1) floor (x-tile equivalents of pass 1 + pass 2 per sub-block)
+COMBINE_PIPELINE_MIN_ROWS = 2
+COMBINE_PIPELINE_K_PER_WORK = 2
+OUT_DEPTH = 2  # cb_out / cb_out_rm buffer depth
+# Streamed gamma (fallback when the resident gamma slice does not fit L1 — e.g. HEIGHT k = 1 with a wide W
+# beside the two resident shards): gamma flows through a GAMMA_STREAM_DEPTH-chunk ring of <= GAMMA_STREAM_CHUNK_CAP
+# tiles, re-loaded per (block, chunk). The largest chunk that fits is chosen.
+GAMMA_STREAM_CHUNK_CAP = 16
+GAMMA_STREAM_DEPTH = 2
+GAMMA_STREAM_FORCE_CHUNK = 0  # > 0: stream gamma in chunks of this many tiles even when resident fits (test hook)
+RM_IN_DEPTH = 2  # cb_x_rm buffer depth
+OUT_UNIT_CAP = 16  # TILE writer batch (tiles per wait/flush/pop)
+RM_CHUNK_CAP = 32  # balanced RM streaming chunk cap (tiles)
+RM_PIECE_FLOOR_BYTES = 512  # occupancy split must keep RM stick pieces >= this
+OCC_TILES_PER_MEMBER = 4  # occupancy split keeps >= 4 W tiles per member
+COMBINE_TILE_COST = 3  # k > 1: per-tile-row collapse + exchange + combine cost, in x-tile equivalents
+OWNER_MEMBER_COST = 0.4  # owner combine: per gathered partial on the owner (add + return write), x-tile equivalents
+# Whole assignment fits: split it into this many depth-2 blocks (1 = one block per core). Measured 2 on BH p150b
+# (perf config): (8192,7168) 630 -> 673 us, (7168,1024) 76 -> 81 us — the k = 1 prefill shapes are DRAM-write-
+# bound (compute stubbed: same time; write-only 438 vs read-only 313 us at 8192x7168), so 1 stays the default.
+OVERLAP_BLOCKS = 1
+# Perf-probe ablation defines (never set by the op): e.g. ("RMS_ABLATE_EMPTY", "RMS_ABLATE_DM",
+# "CKL_ELTWISE_CHAIN_SKIP_COMPUTE"). Stubs a stage's payload, keeps its synchronization (/perf-measure).
+PERF_ABLATE = ()
+# NoC pairing (Perf 1, dram_noc_balance): interleaved inputs only. Under the usual pairing (reader NoC0 / writer NoC1)
+# the NoC arbitration starves part of the grid (BH p150b, (8192,7168): rd_read 15..545 us for equal work per Tensix
+# core). The Tensix cores in the NOC_SWAP_COLUMNS logical worker columns nearest DRAM bank 0's column (asked of the
+# device: get_optimal_dram_bank_to_logical_worker_assignment) run the reversed pairing (reader NoC1 / writer NoC0),
+# which moves part of the read stream off NoC0 (catalog noc_placement `swap_columns`). Every multicast sender keeps
+# the usual pairing (a sender's writer must issue on its channel's NoC — kernel_lib Mcast static_asserts it — and a
+# gamma read + multicast on the read-heavy NoC0 measured 10-22 us to issue): the inv_rms senders (member 0 of each
+# owner group) and the k > 1 gamma column senders stay unswapped; k = 1 sends gamma from the first unswapped Tensix
+# core. Bit-identical output. BH p150b, see perf_experiments/dram_noc_balance/port. 0 = usual pairing everywhere.
 NOC_SWAP_COLUMNS = 3
 
 
-@dataclass(frozen=True)
-class WavePlan:
-    rows: int = 0  # Rw: tile-rows per wave (0 = no waves)
-    q: int = 0  # q_w: rows per owner per wave
-    full: int = 0  # waves per full block
+# HEIGHT_SHARDED ROW_MAJOR "flat" regime (Perf 2, perf_experiments/height_rm_flat; kernels rms_norm_flat_*.cpp): a
+# stick of W datums is contiguous in the shard, so it is normalized as ceil(W / 1024) flat tiles (1024 consecutive
+# datums each) — sum x^2 = DEST-accumulated x_j * x_j + one FPU REDUCE_SCALAR + finalize; out_j = x_j * inv (bcast
+# scalar) * gamma_j, gamma_j = flat tile j of the RM gamma page (resident: W * elem bytes, one DRAM read + multicast).
+# cb_x / cb_out are backed on the shards (page = gcd(stick pitch, tile bytes)); a partial last flat tile per stick
+# (W % 1024 != 0) is staged through a zero-filled tail tile. No tilize / untilize / 32x stick padding / gamma stream.
+# BH p150b: (1,1,128,4096) fp32 1 stick / core 93.3 -> 3.3 us, (1,224,11008) 2 sticks 121.6 -> 6.9 us,
+# (3104,4064) 24 sticks 43.2 -> 29.5 us. Gate (cost model, bf16 / fp32 DEST off / HiFi4 calibration; fp32 and fp32
+# DEST only make the tilized path slower, so the model is conservative there):
+#   flat    ~ FLAT_FIXED_NS + S * (FLAT_STICK_NS + FLAT_TILE_NS * ceil(W / 1024) + FLAT_TAIL_NS * [W % 1024 != 0])
+#   tilized ~ ceil(S / 32) * (TILIZED_ROW_NS + TILIZED_WTILE_NS * ceil(W / 32))      (S = sticks per Tensix core)
+# Crossover: W = 256: S ~ 7; 512: ~13; 1024: ~29; 2048: ~37; >= 4096: >= 64. Also used when the tilized plan does not
+# fit L1 and the flat one does (fp32 [32, 4096] shards).
+RM_FLAT_FORCE = False  # test hook: every expressible + L1-fitting HEIGHT RM input takes the flat path
+FLAT_FIXED_NS = 1200
+FLAT_STICK_NS = 150  # per stick: REDUCE_SCALAR + one-vector finalize + pack
+FLAT_TILE_NS = 230  # per flat tile: x*x (pass 1) + x*inv*gamma (pass 2)
+FLAT_TAIL_NS = 80  # per stick with a partial last flat tile (tail staging copy + second CB)
+TILIZED_ROW_NS = 2300  # per tile-row of the tilized path
+TILIZED_WTILE_NS = 310  # per W tile of a tile-row
+FLAT_MAX_CB_PAGES = 32768  # zero-copy cb_x / cb_out pages per Tensix core (16-bit CB page counters)
 
 
-def wave_plan(topo, block_rows: int, waves: int) -> WavePlan:
-    """Waves split each owner's per-block quantum q = ceil(R / owners) into ceil(q / waves)-row pieces: a wave is
-    q_w rows of EVERY owner (Rw = q_w * owners), so each wave's exchange spans the whole row-group and the CBs
-    stay ~ the one-shot size (cb_gather = full * G * q_w ~ G * q). The effective wave count is `full`."""
-    if waves <= 0 or not (topo.sharded and topo.combine and topo.owners > 1):
-        return WavePlan()
-    q = math.ceil(block_rows / topo.owners)
-    q_w = math.ceil(q / waves)
-    rw = q_w * topo.owners
-    full = math.ceil(block_rows / rw)
-    if 2 * full > 16:
-        raise NotImplementedError("rms_norm: > 8 R3 waves need more than 16 semaphores")
-    return WavePlan(rw, q_w, full)
+def _f32_bits(v: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", float(v)))[0]
 
 
-def choose_waves(g, topo, block_rows: int, x_depth: int, gamma_resident: bool, budget: int) -> WavePlan:
-    """Wave plan of the TILE-sharded reduce-scatter combine (WavePlan() = the one-shot combine, which is what every
-    other placement / owners == 1 runs). R3_WAVES, halved while a wave carries < R3_WAVE_MIN_TILES tiles of square
-    work (below that the per-wave fixed cost — chain / reduce setups + a semaphore round — outweighs the overlap:
-    99991x64 BLOCK, S = 1: 8 waves of 2 tiles measured +23 %). The wave CBs (cb_gather / cb_rms_root) round up per
-    wave: take the largest wave count that fits on top of the blocking already chosen (never shrinks the block).
-    One wave needs exactly the one-shot CB pages, so it always fits."""
-    waves = R3_WAVES
-    while waves > 1:
-        cand = wave_plan(topo, block_rows, waves)
-        if not cand.rows or cand.rows * g.S >= R3_WAVE_MIN_TILES:
-            break
-        waves //= 2
-    for w in range(min(waves, 8), 0, -1):
-        cand = wave_plan(topo, block_rows, w)
-        if not cand.rows:
-            break
-        extra = cand.full * topo.G * cand.q + cand.full * cand.q
-        extra -= gather_pages(topo, block_rows) + scatter_rows(topo, block_rows)
-        if footprint(g, block_rows, x_depth, gamma_resident) + max(0, extra) * g.T_interm <= budget:
-            return cand
-    return WavePlan()
+def _div_up(a: int, b: int) -> int:
+    return (a + b - 1) // b
 
 
-# Packed reduce scaler (1.0, exact in bfloat16) — calculate_and_prepare_reduce_scaler's format.
-SCALER_FORMAT = ttnn.bfloat16
-
-# ---- CB indices (semantic names; the kernels declare the same slots) ----
-CB_X_RM_STICKS = 0
-CB_X_TILES = 1
-CB_REDUCE_SCALER = 2
-CB_SUMSQ_PARTIAL = 3
-CB_INV_RMS = 4
-CB_GAMMA_ROW = 5
-CB_GAMMA_TILES = 6
-CB_X_GAMMA = 7
-CB_Y_TILES = 8
-CB_PARTIAL_COL = 9  # R3: this core's collapsed Σx² partial (column 0) — compute -> reader
-CB_GATHER = 10  # R3: the root's G_w partials per tile-row — reader (root) -> compute (root)
-CB_RMS_ROOT = 11  # R3: the root's finalized inv_rms, before the multicast — compute (root) -> reader (root)
-CB_SUMSQ_LAST = 12  # sharded W-pad mask: x² of the partial last tile — compute -> compute
-CB_SUMSQ_ACC = 13  # sharded W-pad mask: collapsed Σx² of the full tiles (reduce accumulator) — compute
-CB_OUTPUT = 16
-
-# ---- Semaphores ----
-SEM_GATHER = 0  # R3: root counts partial arrivals (contributors increment it after their write lands)
-SEM_MCAST_BASE = 1  # R3, owners == 1: first id of the inv_rms multicast channel's semaphores (ttnn.Mcast.attach)
-SEM_INV = 1  # R3, owners > 1: members count inv_rms arrivals (the multicast channel is absent, its ids are free)
-MCAST_PREFIX = "mcast"
-GAMMA_MCAST_PREFIX = "gmcast"  # the writer's γ multicast channel (gamma_mcast_groups)
-
-
-def _ordered(cores, order):
-    if order == ttnn.McastCoreOrder.RowMajor:
-        return sorted(cores, key=lambda c: (c.y, c.x))
-    return sorted(cores, key=lambda c: (c.x, c.y))
-
-
-def gamma_mcast_groups(plan, gamma_resident):
-    """γ multicast (Perf 1, perf_experiments/gamma_mcast; the reuse-shared broadcast): every set of Tensix cores that
-    needs the SAME γ window (w0, V, e0, ve) reads it once — the group's first core (writer RISC-V) reads it from DRAM
-    and multicasts it into every member's γ landing region (cb_gamma_tiles / cb_gamma_row) at the same L1 address.
-    R1 / HEIGHT: one group = the whole grid; R3 interleaved / BLOCK: one group per grid column.
-    Returns (group_size, McastCoreOrder) partitioning plan.work into equal consecutive groups, or None (the per-core
-    DRAM reads) when it is inexpressible or there is nothing to share: no γ, every window distinct (WIDTH / decode),
-    windows shared by strided cores ttnn.Mcast cannot group (R3 interleaved with G_w != grid width), or the
-    streaming direct-read L1 fallback (a per-step re-read, not a one-shot window)."""
-    g = plan.geometry
-    if not GAMMA_MCAST or not g.has_gamma:
-        return None
-    if (plan.topo.sharded or plan.topo.rm_sharded) and len(plan.work) <= GAMMA_MCAST_SHARDED_DIRECT_MAX_CORES:
-        return None  # measured regression (see GAMMA_MCAST_SHARDED_DIRECT_MAX_CORES)
-    if (
-        plan.topo.rm_sharded
-        and not g.gamma_is_tile
-        and max(w.ve for w in plan.work) * g.es_g <= GAMMA_MCAST_RM_SHARD_DIRECT_MAX_BYTES
-    ):
-        return None  # measured regression (see GAMMA_MCAST_RM_SHARD_DIRECT_MAX_BYTES)
-    if g.gamma_is_tile and not gamma_resident and g.gamma_stream_direct:
-        return None  # streaming direct read (L1 fallback): per-step re-reads, not a one-shot window
-    work = list(plan.work)
-    key = {(w.core.x, w.core.y): (w.w0, w.V, w.e0, w.ve) for w in work}
-    cores = [w.core for w in work]
-    counts = {}
-    for k in key.values():
-        counts[k] = counts.get(k, 0) + 1
-    sizes = set(counts.values())
-    if len(sizes) != 1:
-        return None
-    share = sizes.pop()
-    if share <= 1:
-        return None
-    candidates = [(share, ttnn.McastCoreOrder.RowMajor), (share, ttnn.McastCoreOrder.ColumnMajor)]
-    for size, order in candidates:
-        ordered = _ordered(cores, order)
-        groups = [ordered[i : i + size] for i in range(0, len(ordered), size)]
-        if all(len({key[(c.x, c.y)] for c in grp}) == 1 for grp in groups):
-            return size, order
-    return None
-
-
-def _fp32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", float(value)))[0]
-
-
-def _prod(xs):
-    p = 1
-    for x in xs:
-        p *= x
-    return p
-
-
-@dataclass(frozen=True)
-class Topology:
-    """Cross-core structure of the chosen regime — the host constants every footprint term depends on."""
-
-    sharded: bool = False  # TILE: cb_x_tiles / cb_output backed on the input / output shard (zero-copy)
-    rm_sharded: bool = False  # ROW_MAJOR shard: sticks re-laid locally into the tilize staging and back
-    combine: bool = False  # cross-core Σx² combine (G > 1)
-    G: int = 1  # cores per row-group (W-slices sharing a tile-row range)
-    owners: int = 1  # combine owners per row-group: 1 = root reduce + multicast, > 1 = reduce-scatter + all-gather
-    masked: bool = False  # sharded and W % 32 != 0: the core owning tile Wt-1 masks its pad columns in compute
-
-
-R1_TOPOLOGY = Topology()
-
-
-@dataclass(frozen=True)
+@dataclass
 class Geometry:
-    is_rm: bool
-    has_gamma: bool
-    W: int  # logical last-dim elements
-    Wt: int  # ceil(W / 32) — the whole row (DRAM page addressing)
-    S: int  # tiles of the W-slice one core owns (nominal; R1: Wt)
-    C: int  # w_chunk_tiles
-    num_w_chunks: int
-    Wp: int  # width_padded_tiles of the slice = num_w_chunks * C
-    WS: int  # cb_x_tiles / cb_output row stride (tiles): Wp (interleaved ring) or S (shard-backed)
-    tensor_tile_rows: int
-    num_sticks: int  # RM only (rows); 0 for TILE
-    es: int  # input element bytes
-    es_g: int  # gamma element bytes (0 when absent)
-    gamma_is_tile: bool  # γ arrives as Layout::TILE (row 0 of each γ tile holds 32 γ values)
-    gamma_row_page: int  # bytes of cb_gamma_row per γ tile: RM 32*es_g (compact stick), TILE segs*GAMMA_SEG_SLOT
-    T_in: int
-    T_out: int
-    T_g: int  # gamma tile bytes (0 when absent)
-    interm_format: object  # page format of the compute-internal CBs (follows DEST width)
-    T_interm: int  # intermediate tile bytes — the ONE source for both CB sizing and the footprint
-    topo: Topology
-    # TILE γ streaming: read row 0 straight from DRAM per (block, chunk) instead of through the S-page staging
-    # row — the L1 fallback choose_blocking takes only when the staging row does not fit.
-    gamma_stream_direct: bool = False
+    W: int
+    H: int
+    num_images: int
+    image_row_tiles: int
+    tensor_row_tiles: int
+    tensor_w_tiles: int
+    w_valid_in_last_tile: int
 
 
-def datum_bytes(dtype) -> int:
-    """Bytes per datum. Bfp8_b has no per-datum byte size (Tensor.element_size() raises): its 1 B is the
-    mantissa only, the shared exponents live in a 64 B section. Bfp8_b is TILE-only and W-aligned here,
-    so no consumer of this value (RM stick bytes, W-pad element zeroing) ever runs on a Bfp8_b tensor."""
-    return 1 if dtype == ttnn.bfloat8_b else ttnn.tile_size(dtype) // TILE_HW
+def derive_geometry(shape) -> Geometry:
+    shape = [int(d) for d in shape]
+    W, H = shape[-1], shape[-2]
+    num_images = 1
+    for d in shape[:-2]:
+        num_images *= d
+    image_row_tiles = _div_up(H, TILE)
+    tensor_w_tiles = _div_up(W, TILE)
+    return Geometry(
+        W=W,
+        H=H,
+        num_images=num_images,
+        image_row_tiles=image_row_tiles,
+        tensor_row_tiles=num_images * image_row_tiles,
+        tensor_w_tiles=tensor_w_tiles,
+        w_valid_in_last_tile=W - TILE * (tensor_w_tiles - 1),
+    )
 
 
-def intermediate_format(input_tensor, fp32_dest_acc_en: bool):
-    """Page format of every compute-internal CB (cb_sumsq_partial, cb_inv_rms, cb_x_gamma, and the R3
-    partial / gather / root CBs). It follows the DEST accumulation width (l1_ledger.md audit 2): Float32
-    under fp32 DEST, Float16_b under 16-bit DEST — never wider than DEST (a Float32 page would store no
-    extra bits), and never Bfp8_b even for a Bfp8_b input (the raw Σx² lanes and x·γ products would lose
-    their per-datum exponent)."""
+def acc_dtype(fp32_dest_acc_en: bool):
+    """Format of every DEST-written intermediate CB (sumsq / partial / gathered / inv_rms).
+
+    Follows the DEST width: with 16-bit DEST the value is already rounded before pack_tile(), so a Float32
+    page would carry no extra bits while doubling packer/unpacker/NoC bytes and L1.
+    """
     return ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
 
 
-def gamma_row_segments(gamma) -> tuple:
-    """Byte offsets, inside one TILE γ tile, of the segments that carry row 0 of faces 0 and 1 — the
-    only rows the BroadcastDim::Row multiply reads. Mirrored by the writer kernel (gamma_segment_offset).
-      Float32 / Float16_b: face 0 row 0 at 0, face 1 row 0 at one face (16x16 datums) in.
-      Bfp8_b: 64 B exponent section first (one shared exponent per 16-datum face row, face-major:
-              face f row r at byte 16f + r), then 1 B mantissas face-major. Row 0 of faces 0/1 needs
-              the exponents [0, 32) and the mantissas at 64 and 64 + 256. Every offset is a multiple
-              of the DRAM read alignment, so a segment read keeps matching low address bits."""
-    if gamma.dtype == ttnn.bfloat8_b:
-        return (0, BFP8_EXP_BYTES, BFP8_EXP_BYTES + FACE_DIM * FACE_DIM)
-    return (0, FACE_DIM * FACE_DIM * datum_bytes(gamma.dtype))
+# Compact cb_gamma (Perf 2, perf_experiments/compact_gamma). The row-broadcast unpack (llk_unpack_A<ROW, acc_to_dest,
+# DEST_TO_SRCA>) addresses page j at rd_ptr + j * page_size and its face 1 at + face_bytes (the unpacker's Z stride
+# — fixed by the data format, not by the CB page size); the ELWMUL SRCB_BCAST_ROW reads srcB row 0 only. So a page
+# only needs [exp section +] face 0 row 0 and face 1 row 0 — the page STRIDE can be far smaller than the 2-face
+# extent as long as no page's written bytes land on another page's row 0 / exponents. The stride is the smallest
+# multiple of GAMMA_READ_ALIGN (64 B: DRAM reads keep their source offset mod 64 B, and every gamma tile / RM slice
+# starts 64 B-aligned) whose per-page write footprint [0, exp + 64) u [exp + F, exp + F + 64) is disjoint across
+# pages: 192 B for bf16 / fp32 / bfloat8_b (vs 1024 / 2048 / 576 B). The last page's unpacker read runs
+# exp + 2F - S bytes past its stride: GAMMA tail pages (owned, never written) keep that read inside the slice /
+# streamed chunk's own reservation.
+GAMMA_READ_ALIGN = 64
 
 
-def gamma_segment_bytes(gamma) -> int:
-    """Bytes per row-0 segment read (uniform across a γ tile's segments). Bfp8_b: 32 B covers both the
-    face 0 / face 1 exponent bytes (16 each) and a 16 B mantissa row (the extra 16 B is face row 1,
-    never consumed)."""
-    return 2 * FACE_DIM if gamma.dtype == ttnn.bfloat8_b else FACE_DIM * datum_bytes(gamma.dtype)
+def _gamma_full_page_bytes(gamma_dtype):
+    """(exp_section_bytes, face_bytes, exp + 2 faces) of one gamma tile's faces 0/1 [+ bfp exponent section]."""
+    elem = 1 if gamma_dtype == ttnn.bfloat8_b else ttnn.tile_size(gamma_dtype) // (TILE * TILE)
+    exp = ttnn.tile_size(gamma_dtype) - TILE * TILE * elem
+    face = (TILE * TILE * elem) // 4
+    return exp, face, exp + 2 * face
 
 
-def gamma_row0_prefix_bytes(gamma) -> int:
-    """Bytes [0, n) of a TILE γ tile that contain every row-0 segment (gamma_row_segments): one contiguous
-    read covers them all. bf16 544 B, fp32 1088 B, Bfp8_b 352 B (vs 2048 / 4096 / 1088 B per tile).
-    Mirrored by the writer kernel (gamma_prefix_bytes)."""
-    return gamma_row_segments(gamma)[-1] + gamma_segment_bytes(gamma)
+def _gamma_page_layout(gamma_dtype):
+    """(cb_gamma page stride bytes, tail pages) — see "Compact cb_gamma" above."""
+    exp, face, full = _gamma_full_page_bytes(gamma_dtype)
+    foot = [(0, exp + GAMMA_READ_ALIGN), (exp + face, GAMMA_READ_ALIGN)]  # bytes one page's loader may write
+
+    def disjoint(s):
+        for j in range(1, full // s + 2):
+            for o1, l1 in foot:
+                for o2, l2 in foot:
+                    a, b = o2 + j * s, o2 + j * s + l2
+                    if a < o1 + l1 and o1 < b:
+                        return False
+        return True
+
+    for s in range(GAMMA_READ_ALIGN, full, GAMMA_READ_ALIGN):
+        if disjoint(s):
+            return s, _div_up(full - s, s)
+    return full, 0
 
 
-def tensor_tile_rows_of(input_tensor) -> int:
-    shape = list(input_tensor.shape)
-    if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
-        return math.ceil(_prod(shape[:-1]) / TILE_DIM)
-    return _prod(shape[:-2]) * math.ceil(shape[-2] / TILE_DIM)
+def _gamma_page_bytes(gamma_dtype) -> int:
+    """cb_gamma page stride (bytes) — see "Compact cb_gamma" above."""
+    return _gamma_page_layout(gamma_dtype)[0]
 
 
-def compute_geometry(
-    input_tensor,
-    gamma,
-    chunk_cap: int,
-    fp32_dest_acc_en: bool,
-    slice_tiles=None,
-    topo: Topology = R1_TOPOLOGY,
-    gamma_stream_direct: bool = False,
-) -> Geometry:
-    shape = list(input_tensor.shape)
-    is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    has_gamma = gamma is not None
-    W = shape[-1]
-    Wt = math.ceil(W / TILE_DIM)
-    S = Wt if slice_tiles is None else slice_tiles
-    num_w_chunks = math.ceil(S / chunk_cap)
-    C = math.ceil(S / num_w_chunks)
-    if topo.sharded:
-        # The shard's row stride is S; chunks walk it with a narrower last chunk (never past the row).
-        num_w_chunks = math.ceil(S / C)
-    Wp = num_w_chunks * C
-    WS = S if topo.sharded else Wp
-    num_sticks = _prod(shape[:-1]) if is_rm else 0
-    es = datum_bytes(input_tensor.dtype)
-    T_in = ttnn.tile_size(input_tensor.dtype)
-    if has_gamma:
-        es_g = datum_bytes(gamma.dtype)
-        T_g = ttnn.tile_size(gamma.dtype)
-        gamma_is_tile = gamma.layout == ttnn.TILE_LAYOUT
-        # TILE γ: the row-0 segments of each tile (gamma_row_segments), each in its own aligned slot.
-        # RM γ: the compact stick (two 16-element halves, contiguous).
-        assert gamma_segment_bytes(gamma) <= GAMMA_SEG_SLOT
-        gamma_row_page = len(gamma_row_segments(gamma)) * GAMMA_SEG_SLOT if gamma_is_tile else TILE_DIM * es_g
+class _Sizes:
+    def __init__(self, x_dtype, gamma_dtype, is_rm, has_gamma, fp32_dest_acc_en):
+        self.T_in = ttnn.tile_size(x_dtype)
+        self.T_out = self.T_in
+        # cb_gamma page: [bfp exponent section +] faces 0/1 of a gamma tile — compute reads gamma ROW-broadcast
+        # (row 0 of faces 0/1 only), so faces 2/3 are never stored.
+        self.T_g, self.g_tail = _gamma_page_layout(gamma_dtype) if has_gamma else (0, 0)
+        self.T_acc = ttnn.tile_size(acc_dtype(fp32_dest_acc_en))
+        self.is_rm = is_rm
+        self.has_gamma = has_gamma
+
+
+def _normalize_k(tw: int, k: int):
+    s = _div_up(tw, k)
+    return _div_up(tw, s), s
+
+
+def _out_unit(slice_w_tiles: int) -> int:
+    """TILE writer batch (tiles per wait/write/flush/pop) — also the cb_out depth unit."""
+    return min(slice_w_tiles, OUT_UNIT_CAP)
+
+
+def _rm_chunk(slice_w_tiles: int, cap: int = RM_CHUNK_CAP):
+    chunks = _div_up(slice_w_tiles, cap)
+    c = _div_up(slice_w_tiles, chunks)
+    return c, chunks * c
+
+
+@dataclass(frozen=True)
+class PlanOpts:
+    """Regime switches that change the CB inventory (one source of truth for footprint() and the CB list)."""
+
+    shard_backed: bool = False  # TILE sharded: cb_x / cb_out alias the shards (tensor buffers, not CB budget)
+    owner_combine: bool = False  # k > K_SYM_MAX_*: per-row owner gather + return instead of the all-gather
+    gather_depth: int = 2  # symmetric all-gather: blocks of cb_gathered (1 when every core runs one block)
+    mask_tail: bool = False  # sharded TILE, W % 32 != 0: tail tile's x^2 masked inside pass 1 (0/1 row mask)
+    gamma_chunk: int = 0  # 0: gamma slice resident (program lifetime); G > 0: streamed in G-tile chunks (ring)
+    rm_chunk_cap: int = RM_CHUNK_CAP  # RM: cap of the streaming chunk C (lowered only when the plan does not fit)
+    pipe_nb: int = 0  # combine pipeline: sub-blocks per Tensix core (0: off); b is then the sub-block (s tile-rows)
+
+
+def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = PlanOpts()) -> dict:
+    """Single source of truth for every CB's capacity: {cb_index: (pages, page_bytes)}.
+
+    Both footprint() (the L1-fit solve in select_blocking) and create_program_descriptor() (the CB
+    declarations) read this dict, so a knob change lands in exactly one place (l1_ledger.md rows).
+    """
+    if sz.is_rm:
+        c, pitch = _rm_chunk(slice_w, opts.rm_chunk_cap)
     else:
-        es_g = 0
-        T_g = 0
-        gamma_is_tile = False
-        gamma_row_page = 0
-    interm_format = intermediate_format(input_tensor, fp32_dest_acc_en)
-    return Geometry(
-        is_rm=is_rm,
-        has_gamma=has_gamma,
-        W=W,
-        Wt=Wt,
-        S=S,
-        C=C,
-        num_w_chunks=num_w_chunks,
-        Wp=Wp,
-        WS=WS,
-        tensor_tile_rows=tensor_tile_rows_of(input_tensor),
-        num_sticks=num_sticks,
-        es=es,
-        es_g=es_g,
-        gamma_is_tile=gamma_is_tile,
-        gamma_row_page=gamma_row_page,
-        T_in=T_in,
-        T_out=T_in,  # output dtype == input dtype
-        T_g=T_g,
-        interm_format=interm_format,
-        T_interm=ttnn.tile_size(interm_format),
-        topo=topo,
-        gamma_stream_direct=gamma_stream_direct and has_gamma and gamma_is_tile,
-    )
-
-
-def _per_row_bytes(g: Geometry, x_depth: int) -> int:
-    """Bytes that scale with block_rows (one tile-row of the block) — l1_ledger.md F(R, d)."""
-    t = g.topo
-    return (
-        int(not t.sharded) * x_depth * g.WS * g.T_in  # cb_x_tiles (shard-backed: zero-copy, no L1 of its own)
-        + 2 * g.T_interm  # cb_sumsq_partial + cb_inv_rms
-        + int(g.has_gamma) * g.C * g.T_interm  # cb_x_gamma
-        + int(g.is_rm) * g.C * g.T_out  # cb_y_tiles
-        + int(t.masked) * 2 * g.T_interm  # cb_sumsq_last + cb_sumsq_acc
-    )
-
-
-def scatter_rows(t: Topology, block_rows: int) -> int:
-    """Tile-rows each combine owner sums + finalizes per full block (the uniform push quantum, ragged split)."""
-    return math.ceil(block_rows / t.owners)
-
-
-def gather_pages(t: Topology, block_rows: int) -> int:
-    """cb_gather: G partials per owned tile-row (uniform quantum on every owner, so the base address every
-    contributor targets is where each owner's write pointer sits at a block start)."""
-    return scatter_rows(t, block_rows) * t.G
-
-
-def combine_bytes(g: Geometry, block_rows: int) -> int:
-    """cb_partial_col (R) + cb_gather + cb_rms_root (one page per owned tile-row) — l1_ledger.md."""
-    t = g.topo
-    if not t.combine:
-        return 0
-    return (block_rows + gather_pages(t, block_rows) + scatter_rows(t, block_rows)) * g.T_interm
-
-
-def gamma_tiles_pages(g: Geometry, gamma_resident: bool) -> int:
-    """cb_gamma_tiles capacity: the whole padded slice (resident) or STREAM_DEPTH C-tile chunks."""
-    return g.Wp if gamma_resident else STREAM_DEPTH * g.C
-
-
-def gamma_direct(g: Geometry, gamma_resident: bool) -> int:
-    """Direct-read mode of the γ supply: TILE γ on the resident path (or streaming, under the L1 fallback
-    gamma_stream_direct) reads row 0 straight into cb_gamma_tiles (no staging row); every other γ path stays on
-    the staging row (GAMMA_DIRECT_OFF)."""
-    if g.has_gamma and g.gamma_is_tile and (gamma_resident or g.gamma_stream_direct):
-        return GAMMA_DIRECT_READ
-    return GAMMA_DIRECT_OFF
-
-
-def gamma_row_pages(g: Geometry, gamma_resident: bool) -> int:
-    """cb_gamma_row (staging row) capacity: S pages (the core's slice), or 0 when the direct prefix read
-    replaces it. A ROW_MAJOR-sharded slice starts at any element, so its DRAM read starts at the aligned-down
-    address: one more page of slack."""
-    if not g.has_gamma or gamma_direct(g, gamma_resident) != GAMMA_DIRECT_OFF:
-        return 0
-    return g.S + int(g.topo.rm_sharded)
-
-
-def scaler_pages(g: Geometry) -> int:
-    """cb_reduce_scaler: [full 1.0] — or [full, partial] when a sharded core masks its W-pad columns in the
-    reduce (ReducePartialScaler::with_partial, l1_ledger.md)."""
-    return 2 if g.topo.masked else 1
-
-
-def _fixed_bytes(g: Geometry, gamma_resident: bool = False) -> int:
-    """Bytes independent of block_rows — l1_ledger.md F(R, d)."""
-    return (
-        scaler_pages(g) * ttnn.tile_size(SCALER_FORMAT)  # cb_reduce_scaler
-        + int(not g.topo.sharded) * STREAM_DEPTH * g.C * g.T_out  # cb_output (shard-backed: zero-copy)
-        + int(g.is_rm) * STREAM_DEPTH * g.C * g.T_in  # cb_x_rm_sticks
-        + gamma_row_pages(g, gamma_resident) * g.gamma_row_page  # cb_gamma_row
-        + int(g.has_gamma) * gamma_tiles_pages(g, gamma_resident) * g.T_g  # cb_gamma_tiles
-    )
-
-
-def footprint(g: Geometry, block_rows: int, x_depth: int, gamma_resident: bool = False) -> int:
-    return block_rows * _per_row_bytes(g, x_depth) + combine_bytes(g, block_rows) + _fixed_bytes(g, gamma_resident)
-
-
-def _max_block_rows(g: Geometry, x_depth: int, cap: int, budget: int) -> int:
-    """Largest R in [1, cap] whose footprint fits (footprint is monotone in R); 0 when R = 1 does not fit."""
-    lo, hi = 0, cap
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if footprint(g, mid, x_depth) <= budget:
-            lo = mid
+        c, pitch = 1, slice_w
+    plan = {
+        CB_SUMSQ: (b, sz.T_acc),
+        # combine pipeline: a slot is rewritten only after its apply (lag 1 -> 3 sub-blocks in flight)
+        CB_INV_RMS: (min(3, opts.pipe_nb) * b if opts.pipe_nb else b, sz.T_acc),
+        CB_ONES: (1, ttnn.tile_size(ttnn.bfloat16)),
+    }
+    if not opts.shard_backed:
+        plan[CB_X] = (b * pitch, sz.T_in)  # resident x block
+        if d == 2:
+            plan[CB_X_ALT] = (b * pitch, sz.T_in)  # second half of the depth-2 x budget
+    if sz.has_gamma:
+        # compact pages: every resident slice / streamed chunk owns g_tail extra pages (its last page's read extent)
+        g_unit = (opts.gamma_chunk if opts.gamma_chunk else pitch) + sz.g_tail
+        plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * g_unit if opts.gamma_chunk else g_unit, sz.T_g)
+    if k > 1:
+        pipe = 2 if opts.pipe_nb else 1  # combine pipeline: front(t+1) precedes send(t); two-round exchange window
+        plan[CB_PARTIAL] = (pipe * b, sz.T_acc)
+        if opts.owner_combine:
+            owned = _div_up(b, k)  # tile-rows a member owns per block (row r -> member (r + ofs) % k)
+            per_row = _div_up(k, ROW_GATHER)  # row-form gather tiles per owned row (k member rows, 32 per tile)
+            plan[CB_GATHERED] = (pipe * owned * per_row, sz.T_acc)  # uniform per block -> lockstep slots
+            plan[CB_INV_OWNED] = (owned, sz.T_acc)
         else:
-            hi = mid - 1
-    return lo
+            plan[CB_GATHERED] = (opts.gather_depth * k * b, sz.T_acc)  # lockstep slot-reuse mechanism cap
+    if opts.mask_tail:
+        plan[CB_TAIL_MASK] = (1, sz.T_acc)
+    if sz.is_rm:
+        plan[CB_X_RM] = (RM_IN_DEPTH * c, sz.T_in)
+        plan[CB_OUT] = (b * c, sz.T_out)  # spans one chunk column of the block (untilize input)
+        plan[CB_OUT_RM] = (OUT_DEPTH * c, sz.T_out)
+    elif not opts.shard_backed:
+        plan[CB_OUT] = (OUT_DEPTH * _out_unit(slice_w), sz.T_out)
+    return plan
 
 
-def choose_gamma_resident(g: Geometry, block_rows: int, x_depth: int, budget: int) -> bool:
-    """Resident γ only when it fits on top of the blocking already chosen with streaming γ — it never
-    costs block rows, x_depth or chunk width (l1_ledger.md: _WIDE shapes stay on the streaming path)."""
-    return GAMMA_RESIDENT and g.has_gamma and footprint(g, block_rows, x_depth, True) <= budget
+def footprint(sz: _Sizes, tw: int, k: int, b: int, d: int, opts: PlanOpts = PlanOpts()) -> int:
+    """Per-Tensix-core CB bytes — the l1_ledger.md expression, summed from cb_plan()."""
+    k, s = _normalize_k(tw, k)
+    return _plan_bytes(cb_plan(sz, k, s, b, d, opts))
 
 
-def l1_budget(device) -> int:
-    return ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
+def _plan_bytes(plan: dict) -> int:
+    return sum(pages * page_bytes for pages, page_bytes in plan.values())
 
 
-def choose_block_rows(g: Geometry, rows_per_core_max: int, budget: int):
-    """Closed form (op_design.md -> Work Distribution). Returns (block_rows, x_depth) or None when a
-    single resident tile-row does not fit."""
-    if g.topo.sharded:
-        # The shard is resident already (zero-copy): the coarsest block that fits, up to the whole shard.
-        # x_depth is meaningless here (no ring); 2 marks "the preferred choice" for choose_blocking.
-        r = _max_block_rows(g, 1, rows_per_core_max, budget)
-        return (r, 2) if r >= 1 else None
-    if rows_per_core_max <= 1:
-        # Every core walks exactly one block: there is no block k+1 to prefetch, so a second x buffer
-        # buys nothing — x_depth = 1 frees R*Wp*T_in bytes (e.g. for resident γ on decode shapes).
-        return (1, 1) if footprint(g, 1, 1) <= budget else None
-    rows_per_block_cap = max(1, math.ceil(rows_per_core_max / MIN_BLOCKS_PER_CORE))
-    r2 = _max_block_rows(g, 2, rows_per_block_cap, budget)
-    if r2 >= 1:
-        return r2, 2
-    if footprint(g, 1, 1) <= budget:
-        return 1, 1
-    return None
+@dataclass
+class Member:
+    """One Tensix core's share of the work: a run of tile-rows x a W slice."""
+
+    core: object  # logical ttnn.CoreCoord
+    m: int  # member index inside its group (W-slice order)
+    row_start: int  # first global tile-row (interleaved addressing; sharded: informational)
+    core_rows: int  # tile-rows on this core
+    w_tile_start: int  # first global W tile
+    core_w: int  # W tiles this core reduces (valid, not padding)
+    col0: int  # first global column (datums)
+    valid_cols: int  # valid columns of this slice (datums)
+    valid_sticks: int = 0  # RM sharded: valid sticks (rows) in the resident shard
 
 
-def choose_blocking(
-    input_tensor,
-    gamma,
-    rows_per_core_max: int,
+@dataclass
+class Blocking:
+    k: int  # w_split_cores (members per group)
+    slice_w_tiles: int  # W tiles of every non-last member
+    rm_chunk_w_tiles: int  # C (RM streaming quantum along W; TILE: unused, = 1)
+    x_row_pitch: int  # tile pitch of one tile-row inside cb_x (uniform across cores)
+    groups: list  # per group: list of k Member
+    block_row_tiles: int
+    x_block_depth: int
+    out_unit_tiles: int
+    opts: PlanOpts
+    footprint: int
+
+
+def _pitch(sz: _Sizes, slice_w: int, rm_chunk_cap: int = RM_CHUNK_CAP):
+    """(rm_chunk_w_tiles, x_row_pitch) for a slice of `slice_w` tiles."""
+    return _rm_chunk(slice_w, rm_chunk_cap) if sz.is_rm else (1, slice_w)
+
+
+def _solve_rows(
+    sz: _Sizes,
+    k: int,
+    slice_w: int,
+    crt_max: int,
     budget: int,
-    fp32_dest_acc_en: bool,
-    slice_tiles=None,
-    topo: Topology = R1_TOPOLOGY,
-    refuse: bool = True,
+    opts: PlanOpts,
+    allow_depth2: bool,
+    overlap_blocks: int = 1,
 ):
-    """Pick (geometry, block_rows, x_depth): the widest chunk cap (W_CHUNK_TILES, halving) that keeps
-    x_depth = 2; failing that, the widest that fits a resident row at x_depth = 1; failing that with TILE γ,
-    the same search without the γ staging row (gamma_stream_direct); else refuse (or None when refuse is
-    False — the caller then tries the next regime)."""
-    choice = _search_blocking(input_tensor, gamma, rows_per_core_max, budget, fp32_dest_acc_en, slice_tiles, topo)
-    if choice is None and gamma is not None and gamma.layout == ttnn.TILE_LAYOUT:
-        choice = _search_blocking(
-            input_tensor, gamma, rows_per_core_max, budget, fp32_dest_acc_en, slice_tiles, topo, True
-        )
-    if choice is not None or not refuse:
-        return choice
-    g = compute_geometry(input_tensor, gamma, 1, fp32_dest_acc_en, slice_tiles, topo)
-    raise NotImplementedError(
-        f"rms_norm: a W-slice of {g.S} tiles (W={g.W}) does not fit a resident tile-row in L1 (needs "
-        f"{footprint(g, 1, 1)} B, budget {budget} B)"
-    )
+    """Largest block_row_tiles (and x_block_depth) whose CB plan fits `budget`.
+
+    When the whole assignment fits: overlap_blocks > 1 (and depth 2 allowed) splits it into ceil(crt_max /
+    overlap_blocks)-row blocks at depth 2, so the read of block b+1 overlaps compute + write of block b
+    (design perf lamp "Overlap (one-block assignment)"); overlap_blocks == 1 keeps one block per core.
+    Otherwise the largest sub-block at depth 2 (TILE interleaved) / 1. The symmetric all-gather needs a
+    2-block cb_gathered only when a core runs > 1 block.
+    """
+
+    def fits(b, d):
+        single = b >= crt_max
+        o = replace(opts, gather_depth=1 if single else 2)
+        return _plan_bytes(cb_plan(sz, k, slice_w, b, d, o)) <= budget, o
+
+    if allow_depth2 and overlap_blocks > 1 and crt_max > 1:
+        b_ov = _div_up(crt_max, min(overlap_blocks, crt_max))
+        ok, o = fits(b_ov, 2)
+        if ok:
+            return b_ov, 2, o
+    ok, o = fits(crt_max, 1)
+    if ok:
+        return crt_max, 1, o
+    d = 2 if allow_depth2 else 1
+    for cand in range(crt_max, 0, -1):
+        ok, o = fits(cand, d)
+        if ok:
+            return cand, (1 if cand >= crt_max else d), o
+    ok, o = fits(1, 1)
+    if not ok:
+        raise RuntimeError(f"rms_norm: one tile-row block does not fit L1 ({budget} B per core)")
+    return 1, 1, o
 
 
-def _search_blocking(
-    input_tensor, gamma, rows_per_core_max, budget, fp32_dest_acc_en, slice_tiles, topo, gamma_stream_direct=False
-):
+def _sharded_plan_candidates(sz: _Sizes, slice_w: int, opts: PlanOpts):
+    """Sharded CB regimes in preference order; the first whose one-tile-row plan fits L1 is used.
+
+    Default: resident gamma slice (loaded / multicast once) and the RM chunk at RM_CHUNK_CAP. Wide W beside two
+    resident shards may not fit that (HEIGHT k = 1 holds the whole row), so fall back to
+      TILE: gamma streamed in the largest G <= GAMMA_STREAM_CHUNK_CAP chunks (per block, 2-chunk ring);
+      RM  : per halved chunk cap C (staging / cb_out / untilize buffers scale with C): resident gamma, then gamma
+            streamed with G = C (pass 2 already walks C-tile windows). The tilized x row stays resident.
+    GAMMA_STREAM_FORCE_CHUNK (test hook) skips the resident-gamma candidates (TILE: also caps G).
+    """
+    force = bool(GAMMA_STREAM_FORCE_CHUNK) and sz.has_gamma
+    if not sz.is_rm:
+        if not force:
+            yield opts
+        if sz.has_gamma:
+            for g in range(min(GAMMA_STREAM_FORCE_CHUNK or GAMMA_STREAM_CHUNK_CAP, slice_w), 0, -1):
+                yield replace(opts, gamma_chunk=g)
+        return
     caps = []
-    cap = W_CHUNK_TILES
+    cap = RM_CHUNK_CAP
     while cap >= 1:
         caps.append(cap)
         cap //= 2
-    fallback = None
-    for cap in caps:
-        g = compute_geometry(input_tensor, gamma, cap, fp32_dest_acc_en, slice_tiles, topo, gamma_stream_direct)
-        choice = choose_block_rows(g, rows_per_core_max, budget)
-        if choice is None:
+    # Resident gamma at ANY chunk cap before streamed gamma at any cap (Perf 2, compact_gamma): streamed RM gamma
+    # re-reads the one-bank RM gamma page per block — measured slower than a halved chunk cap (fp32 RM x, bf16 RM
+    # gamma, W = 8192: 111.5 -> 107.3 us).
+    if not force:
+        for cap in caps:
+            yield replace(opts, rm_chunk_cap=cap)
+    if sz.has_gamma:
+        for cap in caps:
+            yield replace(opts, rm_chunk_cap=cap, gamma_chunk=_rm_chunk(slice_w, cap)[0])
+
+
+def _solve_rows_sharded(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opts: PlanOpts):
+    """_solve_rows over _sharded_plan_candidates(): the first regime in which one tile-row block fits."""
+    for cand in _sharded_plan_candidates(sz, slice_w, opts):
+        try:
+            return _solve_rows(sz, k, slice_w, crt_max, budget, cand, allow_depth2=False)
+        except RuntimeError:
             continue
-        if choice[1] == 2:
-            return g, choice[0], choice[1]
-        if fallback is None:
-            fallback = (g, choice[0], choice[1])
-    return fallback
+    raise RuntimeError(
+        f"rms_norm: one tile-row block does not fit L1 ({budget} B per core), even with streamed gamma / RM chunk 1"
+    )
 
 
-# ---------------------------------------------------------------------------
-# Work plans (regime selection + per-core assignment)
-# ---------------------------------------------------------------------------
+def _max_groups(k: int, grid_x: int, grid_y: int) -> int:
+    """Row-groups a W split k fits on the grid: k <= grid_x keeps each group inside one grid row (grid_x // k per
+    row — a grid column then holds a single W slice, which the gamma multicast relies on); k > grid_x packs the
+    groups row-major over the whole grid (a group spans grid rows)."""
+    return (grid_x // k) * grid_y if k <= grid_x else (grid_x * grid_y) // k
 
 
-@dataclass(frozen=True)
-class CoreWork:
-    core: object  # ttnn.CoreCoord (logical)
-    start_tile_row: int
-    rows: int  # tile-rows this core (and its whole row-group) processes
-    w0: int  # first tile of this core's W-slice (TILE; ROW_MAJOR shard slices need not be tile-aligned)
-    V: int  # valid tiles of the slice (<= S; the ragged last slice is shorter)
-    index: int  # position in the row-group (0 = root)
-    root: object  # ttnn.CoreCoord (logical) of the row-group root
-    e0: int  # first element of the W-slice
-    ve: int  # valid elements of the W-slice
-    sticks: int = 0  # ROW_MAJOR shard: valid sticks (rows) this core holds; 0 otherwise
+def _occ_cost(trt: int, tw: int, k: int, grid_x: int, grid_y: int) -> float:
+    """Per-core critical-path work of a W split k, in x-tile equivalents.
+
+    Rows of the busiest group x (its slice width + the per-tile-row cost of the k > 1 collapse / exchange /
+    combine). The owner combine (k > K_SYM_MAX_INTERLEAVED) adds, on the busiest owner, ceil(rows / k) owned rows
+    x k gathered partials (one combine add + one inv_rms return write each): with few rows it grows with k.
+    """
+    groups = min(_max_groups(k, grid_x, grid_y), trt)
+    rows = _div_up(trt, groups)
+    cost = rows * (_div_up(tw, k) + (COMBINE_TILE_COST if k > 1 else 0))
+    if k > K_SYM_MAX_INTERLEAVED:
+        cost += _div_up(rows, k) * k * OWNER_MEMBER_COST
+    return cost
 
 
-@dataclass(frozen=True)
-class Plan:
-    regime: str  # "R1" or "R3"
-    topo: Topology
-    slice_tiles: int  # S
-    rows_max: int  # max tile-rows per core
-    work: tuple  # CoreWork per active core, in (y, x) order
-    geometry: Geometry
-    block_rows: int
-    x_depth: int
+def _choose_k(
+    geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, k_fit: int, k_cap: int, elem_bytes: int, budget: int
+) -> int:
+    """w_split_cores: the k >= k_fit that minimizes the busiest Tensix core's work (catalog width_split).
 
-    @property
-    def core_ranges(self):
-        return _core_range_set([w.core for w in self.work])
-
-
-def noc_swap_cores(plan, topo, gm):
-    """Tensix cores whose x reads / output writes swap NoCs (Perf 2, NOC_SWAP_COLUMNS): the NOC_SWAP_COLUMNS westmost
-    logical columns of an interleaved input, minus every multicast sender (inexpressible: a sender's kernel NoC must
-    match its channel's host multicast NoC). Sharded inputs have no x / output DRAM traffic: nothing swaps."""
-    if topo.sharded:
-        return []
-    senders = set()
-    if gm is not None:  # γ multicast: index 0 of each consecutive group of gm[0] cores in gm[1] order sends
-        senders |= {(c.x, c.y) for c in _ordered([w.core for w in plan.work], gm[1])[:: gm[0]]}
-    if topo.combine:  # R3 root: inv_rms multicast sender (owners == 1)
-        senders |= {(w.root.x, w.root.y) for w in plan.work}
-    return [w.core for w in plan.work if w.core.x < NOC_SWAP_COLUMNS and (w.core.x, w.core.y) not in senders]
+    A split is a candidate only while every member keeps >= OCC_TILES_PER_MEMBER W tiles (RM: stick pieces
+    >= RM_PIECE_FLOOR_BYTES). Ties keep the smaller k (fewer combine members).
+    """
+    tw, trt = geo.tensor_w_tiles, geo.tensor_row_tiles
+    best_k, best = k_fit, _occ_cost(trt, tw, _normalize_k(tw, k_fit)[0], grid_x, grid_y)
+    if tw < 2 * OCC_TILES_PER_MEMBER:
+        return best_k
+    for cand in range(k_fit + 1, k_cap + 1):
+        kk, s = _normalize_k(tw, cand)
+        if s < OCC_TILES_PER_MEMBER:
+            break
+        if sz.is_rm and s * TILE * elem_bytes < RM_PIECE_FLOOR_BYTES:
+            break
+        if _max_groups(kk, grid_x, grid_y) < 1:
+            break
+        if footprint(sz, tw, kk, 1, 1, PlanOpts(owner_combine=kk > K_SYM_MAX_INTERLEAVED)) > budget:
+            continue  # the owner's k gathered partials outgrow L1
+        c = _occ_cost(trt, tw, kk, grid_x, grid_y)
+        if c < best:
+            best_k, best = kk, c
+    return best_k
 
 
-def _split_noc_swapped(reader, writer, cores, swapped):
-    """([readers], [writers]): the default-NoC descriptors restricted to the unswapped cores, plus (when `swapped` is
-    non-empty) same-source descriptors on the swapped cores with the reader on NoC1 and the writer on NoC0."""
-    if not swapped:
-        return [reader], [writer]
-    sw = {(c.x, c.y) for c in swapped}
-    normal = [c for c in cores if (c.x, c.y) not in sw]
+def select_blocking(geo: Geometry, sz: _Sizes, grid_x: int, grid_y: int, budget: int, elem_bytes: int) -> Blocking:
+    """INTERLEAVED: row-groups over the whole grid x a W split over k consecutive Tensix cores (one grid row while
+    k <= grid_x, else row-major across grid rows)."""
+    k_cap = min(K_CAP_MAX, grid_x * grid_y)
+    tw, trt = geo.tensor_w_tiles, geo.tensor_row_tiles
 
-    def sub(kd, cores, cfg):
+    k_fit = None
+    for k in range(1, k_cap + 1):
+        if footprint(sz, tw, k, 1, 1) <= budget:
+            k_fit = k
+            break
+    if k_fit is None:
+        raise RuntimeError(
+            f"rms_norm: W={geo.W} too wide — even w_split_cores={k_cap} does not fit L1 ({budget} B per core)"
+        )
+
+    k, slice_w = _normalize_k(tw, _choose_k(geo, sz, grid_x, grid_y, k_fit, k_cap, elem_bytes, budget))
+    c, pitch = _pitch(sz, slice_w)
+
+    num_groups = min(_max_groups(k, grid_x, grid_y), trt)
+    base, rem = divmod(trt, num_groups)
+
+    def core_of(g, m):
+        if k <= grid_x:
+            gpr = grid_x // k
+            return ttnn.CoreCoord((g % gpr) * k + m, g // gpr)
+        idx = g * k + m
+        return ttnn.CoreCoord(idx % grid_x, idx // grid_x)
+
+    groups, start = [], 0
+    for g in range(num_groups):
+        n = base + (1 if g < rem else 0)
+        members = []
+        for m in range(k):
+            w_start = m * slice_w
+            core_w = min(slice_w, tw - w_start)
+            col0 = w_start * TILE
+            members.append(Member(core_of(g, m), m, start, n, w_start, core_w, col0, min(core_w * TILE, geo.W - col0)))
+        groups.append(members)
+        start += n
+    crt_max = base + (1 if rem else 0)
+
+    b, d, opts = _solve_rows(
+        sz,
+        k,
+        slice_w,
+        crt_max,
+        budget,
+        PlanOpts(owner_combine=k > K_SYM_MAX_INTERLEAVED),
+        allow_depth2=not sz.is_rm,
+        overlap_blocks=1 if sz.is_rm else OVERLAP_BLOCKS,
+    )
+    return Blocking(
+        k=k,
+        slice_w_tiles=slice_w,
+        rm_chunk_w_tiles=c,
+        x_row_pitch=pitch,
+        groups=groups,
+        block_row_tiles=b,
+        x_block_depth=d,
+        out_unit_tiles=_out_unit(slice_w),
+        opts=opts,
+        footprint=_plan_bytes(cb_plan(sz, k, slice_w, b, d, opts)),
+    )
+
+
+def _pipe_subblock_rows(crt: int, k: int, w: int) -> int:
+    """Combine pipeline sub-block s (tile-rows) for a crt-tile-row shard of w tiles in a k-member group; 0: off.
+
+    The most sub-blocks n in [2, n_max] whose s = ceil(crt / n) passes the gates (see COMBINE_PIPELINE): s >= MIN_ROWS,
+    s * (w + 1) >= MIN_WORK, k <= K_PER_WORK * s * (w + 1). n_max = SUBBLOCKS, raised on one-tile-wide shards (w == 1)
+    to ceil(crt / max(NARROW_MAX_ROWS, k)).
+    """
+    nb = COMBINE_PIPELINE_SUBBLOCKS
+    if w == 1:
+        nb = max(nb, _div_up(crt, max(COMBINE_PIPELINE_NARROW_MAX_ROWS, k)))
+    for n in range(nb, 1, -1):
+        s = _div_up(crt, n)
+        work = s * (w + 1)
+        if (
+            _div_up(crt, s) > 1
+            and s >= COMBINE_PIPELINE_MIN_ROWS
+            and work >= COMBINE_PIPELINE_MIN_WORK
+            and k <= COMBINE_PIPELINE_K_PER_WORK * work
+        ):
+            return s
+    return 0
+
+
+def _ordered_shard_cores(grid, row_major: bool):
+    """Cores of a shard grid in shard-assignment order (row-major or column-major)."""
+    cores = set()
+    for r in grid.ranges():
+        for y in range(r.start.y, r.end.y + 1):
+            for x in range(r.start.x, r.end.x + 1):
+                cores.add((x, y))
+    return sorted(cores, key=(lambda c: (c[1], c[0])) if row_major else (lambda c: (c[0], c[1])))
+
+
+def select_sharded_blocking(geo: Geometry, sz: _Sizes, input_tensor, budget: int) -> Blocking:
+    """HEIGHT / WIDTH / BLOCK_SHARDED: the shard spec IS the work split; block = the resident shard.
+
+    Groups = shard rows (WIDTH: one), k = shard columns (HEIGHT: one — local reduction, no combine). Member -> (slice, core) from the shard grid in its
+    orientation: WIDTH walks the grid's cores in order (a group may span grid rows); BLOCK puts shard
+    (row g, column i) at (x0 + i, y0 + g) for ROW_MAJOR, (x0 + g, y0 + i) for COL_MAJOR. Ragged last shard
+    row / column (Split.PAD): the members own only their valid tile-rows / W tiles.
+    """
+    mc = input_tensor.memory_config()
+    ss = mc.shard_spec
+    sh, sw = int(ss.shape[0]), int(ss.shape[1])
+    row_major = ss.orientation == ttnn.ShardOrientation.ROW_MAJOR
+    if sz.is_rm:
+        rows_ext, unit_h = geo.num_images * geo.H, sh  # sticks
+        w_ext, unit_w = geo.W, sw  # datums
+        slice_w = _div_up(sw, TILE)
+    else:
+        if sh % TILE or sw % TILE:
+            raise RuntimeError(f"rms_norm: TILE shard {sh}x{sw} is not a whole number of tiles")
+        rows_ext, unit_h = geo.tensor_row_tiles, sh // TILE  # tile-rows
+        w_ext, unit_w = geo.tensor_w_tiles, sw // TILE  # tiles
+        slice_w = unit_w
+    n_h, n_w = _div_up(rows_ext, unit_h), _div_up(w_ext, unit_w)
+
+    if mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        if n_h != 1:
+            raise RuntimeError(f"rms_norm: WIDTH shard height {sh} does not cover the tensor")
+        order = _ordered_shard_cores(ss.grid, row_major)
+        if len(order) < n_w:
+            raise RuntimeError(f"rms_norm: {n_w} W shards but only {len(order)} shard-grid cores")
+
+        def core_of(g, i):
+            return order[i]
+
+    elif mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        # k = 1: every Tensix core holds whole rows (the reduction is local, no combine). Shard row g lives on the
+        # g-th core of the grid in its orientation (a multi-range grid, e.g. full rows + a partial last row).
+        if n_w != 1:
+            raise RuntimeError(f"rms_norm: HEIGHT shard width {sw} does not cover the tensor")
+        order = _ordered_shard_cores(ss.grid, row_major)
+        if len(order) < n_h:
+            raise RuntimeError(f"rms_norm: {n_h} row shards but only {len(order)} shard-grid cores")
+
+        def core_of(g, i):
+            return order[g]
+
+    else:
+        bb = ss.grid.bounding_box()
+        x0, y0 = bb.start.x, bb.start.y
+
+        def core_of(g, i):
+            return (x0 + i, y0 + g) if row_major else (x0 + g, y0 + i)
+
+    k = n_w
+    groups = []
+    for g in range(n_h):
+        members = []
+        for i in range(k):
+            x, y = core_of(g, i)
+            if sz.is_rm:
+                stick0 = g * sh
+                sticks = min(sh, rows_ext - stick0)
+                col0 = i * sw
+                valid_cols = min(sw, geo.W - col0)
+                core_w = _div_up(valid_cols, TILE)
+                mem = Member(
+                    ttnn.CoreCoord(x, y), i, 0, _div_up(sticks, TILE), col0 // TILE, core_w, col0, valid_cols, sticks
+                )
+            else:
+                row0 = g * unit_h
+                w0 = i * unit_w
+                core_w = min(unit_w, geo.tensor_w_tiles - w0)
+                col0 = w0 * TILE
+                mem = Member(
+                    ttnn.CoreCoord(x, y),
+                    i,
+                    row0,
+                    min(unit_h, rows_ext - row0),
+                    w0,
+                    core_w,
+                    col0,
+                    min(core_w * TILE, geo.W - col0),
+                )
+            members.append(mem)
+        groups.append(members)
+    crt_max = max(grp[0].core_rows for grp in groups)
+
+    base_opts = PlanOpts(
+        shard_backed=not sz.is_rm,
+        owner_combine=k > K_SYM_MAX_SHARDED,
+        mask_tail=(not sz.is_rm) and geo.W % TILE != 0,
+    )
+    b, d, opts = _solve_rows_sharded(sz, k, slice_w, crt_max, budget, base_opts)
+    # Combine pipeline: sub-block the resident shard (see COMBINE_PIPELINE).
+    s_rows = _pipe_subblock_rows(crt_max, k, slice_w)
+    pipe_ok = opts.shard_backed and opts.owner_combine and not opts.gamma_chunk and b >= crt_max
+    if COMBINE_PIPELINE and pipe_ok and s_rows:
+        nb = _div_up(crt_max, s_rows)
+        o2 = replace(opts, pipe_nb=nb)
+        if nb > 1 and _plan_bytes(cb_plan(sz, k, slice_w, s_rows, 1, o2)) <= budget:
+            b, d, opts = s_rows, 1, o2
+    c, pitch = _pitch(sz, slice_w, opts.rm_chunk_cap)
+    return Blocking(
+        k=k,
+        slice_w_tiles=slice_w,
+        rm_chunk_w_tiles=c,
+        x_row_pitch=pitch,
+        groups=groups,
+        block_row_tiles=b,
+        x_block_depth=d,
+        out_unit_tiles=_out_unit(slice_w),
+        opts=opts,
+        footprint=_plan_bytes(cb_plan(sz, k, slice_w, b, d, opts)),
+    )
+
+
+def _gamma_mcast_groups(blk: Blocking, grid_x: int):
+    """(receiver_group_size, core order) of the interleaved gamma multicast, or None (per-core gamma load).
+
+    ttnn.Mcast cuts the ordered active cores into equal consecutive groups, and a group must share one W slice.
+    k == 1: every Tensix core holds the same slice -> one group of all of them. k > 1: member m of row-group g sits
+    in grid column (g % gpr) * k + m, so a grid column holds a single slice; when the row-groups fill whole grid
+    rows every column has the same count -> one group per column (column-major order). Otherwise (a partial last
+    grid row of row-groups) the columns differ in size and each Tensix core loads its own slice.
+    """
+    n = len(blk.groups)
+    if blk.k == 1:
+        return n, ttnn.McastCoreOrder.RowMajor
+    if blk.k > grid_x:
+        return None  # groups span grid rows: a slice's Tensix cores are not one grid column
+    gpr = grid_x // blk.k
+    if n % gpr == 0:
+        return n // gpr, ttnn.McastCoreOrder.ColumnMajor
+    return None
+
+
+def _inv_mcast_order(blk: Blocking, all_cores, row_major: bool, root: bool):
+    """McastCoreOrder of the inv_rms multicast, or None (unicast return everywhere).
+
+    root (sharded): every owner-topology block returns through member 0's multicast. Interleaved (root False): only
+    one-tile-row blocks multicast (their single owner is member 0); multi-row blocks keep the unicast return — the
+    root hop measured 2.2-3.7 % slower on DRAM-bound interleaved k = 16, b = 2..8 blocks (BH p150b: (1024,16384) bf16
+    167.5 -> 171.2 us, fp32 167.3 -> 173.6 us, (512,32768) 172.0 -> 175.8 us), where the exchange is not the
+    bottleneck.
+
+    ttnn.Mcast cuts the
+    ordered active Tensix cores into equal consecutive groups with the fixed sender first: that must reproduce every
+    W-split group with member 0 (the owner of tile-row 0) first, and each group must decompose into at most
+    MAX_MCAST_RECTANGLES member-only rectangles. Otherwise (custom multi-range shard grids) keep the unicast return.
+    """
+    if not (INV_MCAST and blk.k > 1 and blk.opts.owner_combine):
+        return None
+    if not root:  # interleaved: only single-owner (one-tile-row) blocks multicast, straight from the owner
+        if blk.opts.pipe_nb:
+            return None
+        b = blk.block_row_tiles
+        if not any(b == 1 or (m.core_rows - 1) % b == 0 for grp in blk.groups for m in grp):
+            return None  # no block of exactly one tile-row on any Tensix core
+    order = ttnn.McastCoreOrder.RowMajor if row_major else ttnn.McastCoreOrder.ColumnMajor
+    key = (lambda c: (c[1], c[0])) if row_major else (lambda c: (c[0], c[1]))
+    ordered = sorted(((c.x, c.y) for c in all_cores), key=key)
+    k = blk.k
+    by_first = {}
+    for i in range(0, len(ordered), k):
+        by_first[ordered[i]] = set(ordered[i : i + k])
+    for grp in blk.groups:
+        first = (grp[0].core.x, grp[0].core.y)
+        if by_first.get(first) != {(m.core.x, m.core.y) for m in grp}:
+            return None
+        merged = ttnn.CoreRangeSet([ttnn.CoreRange(m.core, m.core) for m in grp]).merge(ttnn.CoreRangeSet([]))
+        if len(merged.ranges()) > MAX_MCAST_RECTANGLES:
+            return None
+    return order
+
+
+def _noc_swapped_columns(device) -> set:
+    """Logical worker columns whose Tensix cores run the reversed NoC pairing (NOC_SWAP_COLUMNS nearest DRAM bank 0)."""
+    if not NOC_SWAP_COLUMNS:
+        return set()
+    grid = device.compute_with_storage_grid_size()
+    nearest = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
+    anchor = nearest[0].x
+    return set(sorted(range(grid.x), key=lambda col: (abs(col - anchor), col))[:NOC_SWAP_COLUMNS])
+
+
+def _ordered(cores, order):
+    key = (lambda c: (c.y, c.x)) if order == ttnn.McastCoreOrder.RowMajor else (lambda c: (c.x, c.y))
+    return sorted(cores, key=key)
+
+
+def _noc_swapped_cores(device, blk, all_cores, gamma_groups, inv_order) -> set:
+    """(x, y) of the active Tensix cores that run the reversed NoC pairing (interleaved only; see NOC_SWAP_COLUMNS)."""
+    cols = _noc_swapped_columns(device)
+    swapped = {(c.x, c.y) for c in all_cores if c.x in cols}
+    if inv_order is not None:  # inv_rms multicast senders: member 0 of each owner group
+        swapped -= {(grp[0].core.x, grp[0].core.y) for grp in blk.groups}
+    if gamma_groups is not None and gamma_groups[1] == ttnn.McastCoreOrder.ColumnMajor:  # k > 1 gamma senders
+        size, order = gamma_groups
+        ordered = _ordered(all_cores, order)
+        swapped -= {(ordered[i].x, ordered[i].y) for i in range(0, len(ordered), size)}
+    return swapped
+
+
+def _dm_config(processor, noc):
+    return ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc, noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC)
+
+
+def is_sharded(tensor) -> bool:
+    """Any shard scheme (HEIGHT / WIDTH / BLOCK): the shard spec fixes the work split, consumed in place."""
+    return tensor.memory_config().is_sharded()
+
+
+def cb_l1_budget(device) -> int:
+    """Bytes of L1 per Tensix core the program's CBs may occupy.
+
+    CBs are placed bottom-up from the allocator's L1 base; L1 buffers (interleaved-L1 / sharded
+    tensors, incl. this op's own output) are allocated top-down. The budget is therefore the free
+    region between the allocator base and the lowest allocated L1 buffer. NOT
+    `ttnn.get_max_worker_l1_unreserved_size()`: that figure starts at the kernel-config ring buffer,
+    below the allocator base, and overshoots by its size (~69 KB on BH) — shapes whose footprint fell
+    in that gap threw "circular buffers grow to N B which is beyond max L1 size".
+    """
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    allocated = [int(b["address"]) for b in view.block_table if b["allocated"] == "yes"]
+    return min(allocated) if allocated else int(view.total_bytes_per_bank)
+
+
+def _datum_bytes(tensor) -> int:
+    """Bytes per datum in L1 (bfloat8_b: one mantissa byte — Tensor.element_size() throws for block-float)."""
+    return 1 if tensor.dtype == ttnn.bfloat8_b else tensor.element_size()
+
+
+def _bfp_exp_section_bytes(dtype, elem_bytes: int) -> int:
+    """Bytes of shared-exponent section ahead of the datums in one tile of `dtype` (0 for plain formats).
+
+    A bfloat8_b tile is [one exponent byte per 16-datum face row (64 B)][one mantissa byte per datum]; the
+    datum area is TILE*TILE*elem_bytes, so the section is whatever the tile size holds beyond it.
+    """
+    return ttnn.tile_size(dtype) - TILE * TILE * elem_bytes
+
+
+def _cb(index, pages, page_size, dtype, core_ranges):
+    return ttnn.CBDescriptor(
+        total_size=pages * page_size,
+        core_ranges=core_ranges,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_size)],
+    )
+
+
+def _shard_backed_cb(index, tensor, core_ranges):
+    """CB aliasing a TILE tensor's resident shard (zero-copy: the shard IS the CB's L1)."""
+    cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
+    cb.core_ranges = core_ranges
+    return cb
+
+
+def _create_tilized_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
+    device = input_tensor.device()
+    geo = derive_geometry(input_tensor.shape)
+    is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    sharded = is_sharded(input_tensor)
+    has_gamma = gamma is not None
+    x_dtype = input_tensor.dtype
+    g_dtype = gamma.dtype if has_gamma else x_dtype
+    fp32_dest = bool(compute_kernel_config.fp32_dest_acc_en)
+    t_acc = acc_dtype(fp32_dest)
+    sz = _Sizes(x_dtype, g_dtype, is_rm, has_gamma, fp32_dest)
+    elem_bytes = _datum_bytes(input_tensor)
+    g_elem_bytes = _datum_bytes(gamma) if has_gamma else elem_bytes
+    gamma_is_tile = has_gamma and gamma.layout == ttnn.TILE_LAYOUT
+
+    budget = cb_l1_budget(device)
+    grid = device.compute_with_storage_grid_size()
+    if sharded:
+        blk = select_sharded_blocking(geo, sz, input_tensor, budget)
+    else:
+        blk = select_blocking(geo, sz, grid.x, grid.y, budget, elem_bytes)
+    k, C, pitch = blk.k, blk.rm_chunk_w_tiles, blk.x_row_pitch
+    b, d = blk.block_row_tiles, blk.x_block_depth
+    opts = blk.opts
+    combine_lookahead = 1 if (k > 1 and d == 2 and not opts.owner_combine) else 0
+
+    # ---- active Tensix cores: every member of every group (identical CB list on all of them: peers address
+    #      cb_gathered_sumsq / cb_inv_rms by their own write pointer) ----
+    all_cores = [mem.core for grp in blk.groups for mem in grp]
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in all_cores])
+
+    # ---- circular buffers ----
+    cb_dtype = {
+        CB_X: x_dtype,
+        CB_X_ALT: x_dtype,
+        CB_GAMMA: g_dtype,
+        CB_SUMSQ: t_acc,
+        CB_PARTIAL: t_acc,
+        CB_GATHERED: t_acc,
+        CB_INV_RMS: t_acc,
+        CB_X_RM: x_dtype,
+        CB_OUT: x_dtype,
+        CB_OUT_RM: x_dtype,
+        CB_ONES: ttnn.bfloat16,
+        CB_TAIL_MASK: t_acc,
+        CB_INV_OWNED: t_acc,
+    }
+    plan = cb_plan(sz, k, blk.slice_w_tiles, b, d, opts)
+    cbs = [_cb(idx, pages, page_bytes, cb_dtype[idx], core_ranges) for idx, (pages, page_bytes) in plan.items()]
+    if opts.shard_backed:
+        cbs.append(_shard_backed_cb(CB_X, input_tensor, core_ranges))
+        cbs.append(_shard_backed_cb(CB_OUT, output_tensor, core_ranges))
+        out_cb_pages = 0  # TILE sharded writer drains per block; no ring clamp
+    else:
+        out_cb_pages = plan[CB_OUT][0]
+
+    defines = []
+    if is_rm:
+        defines.append(("RMS_RM", "1"))
+    if has_gamma:
+        defines.append(("RMS_HAS_GAMMA", "1"))
+        defines.append(("RMS_GAMMA_TAIL_PAGES", str(sz.g_tail)))
+    if sharded:
+        defines.append(("RMS_SHARDED", "1"))
+    if opts.mask_tail:
+        defines.append(("RMS_MASK_TAIL", "1"))
+    defines.extend((name, "1") for name in PERF_ABLATE)
+    gamma_groups = None
+    if opts.gamma_chunk:
+        defines.append(("RMS_GAMMA_CHUNK", str(opts.gamma_chunk)))  # streamed gamma: per-core chunk ring, no mcast
+        defines.append(("RMS_GAMMA_STREAM_DEPTH", str(GAMMA_STREAM_DEPTH)))
+    elif has_gamma and (GAMMA_MCAST_SHARDED_K1 and k == 1 if sharded else GAMMA_MCAST):
+        gamma_groups = _gamma_mcast_groups(blk, grid.x)
+    gamma_mcast = gamma_groups is not None
+    if gamma_mcast:
+        defines.append(("RMS_GAMMA_MCAST", "1"))
+    inv_order = _inv_mcast_order(
+        blk,
+        [mem.core for grp in blk.groups for mem in grp],
+        not sharded or input_tensor.memory_config().shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR,
+        root=sharded,
+    )
+    if inv_order is not None:
+        defines.append(("RMS_INV_MCAST", "1"))
+    if opts.owner_combine and k > 1:
+        defines.append(("RMS_ROW_PARTIAL", "1"))
+        defines.append(("RMS_ROW_GATHER", str(_div_up(k, ROW_GATHER))))
+        defines.append(("RMS_ROW_GATHER_PAGES", str(plan[CB_GATHERED][0])))
+        if inv_order is not None and sharded:
+            defines.append(("RMS_INV_ROOT", "1"))
+
+    x_page = input_tensor.buffer_aligned_page_size()
+    out_page = output_tensor.buffer_aligned_page_size()
+    g_page = gamma.buffer_aligned_page_size() if has_gamma else 0
+
+    # Sharded: the local shard is consumed in place, never through an accessor -> empty accessor args.
+    x_acc_args = ttnn.TensorAccessorArgs() if sharded else ttnn.TensorAccessorArgs(input_tensor)
+    out_acc_args = ttnn.TensorAccessorArgs() if sharded else ttnn.TensorAccessorArgs(output_tensor)
+
+    reader_ct = [geo.tensor_w_tiles, geo.W, geo.H, geo.image_row_tiles, pitch, C, x_page, elem_bytes, d]
+    reader_ct.extend(x_acc_args.get_compile_time_args())
+
+    writer_ct = [
+        geo.tensor_w_tiles,
+        geo.W,
+        geo.H,
+        geo.image_row_tiles,
+        C,
+        out_page,
+        elem_bytes,
+        k,
+        blk.out_unit_tiles,
+        SEM_PARTIALS_ARRIVED,
+        out_cb_pages,
+        WRITER_NOC_XY_ARG_BASE,
+        1 if opts.owner_combine else 0,
+        1 if PARTIAL_FACES_ONLY else 0,
+        SEM_INV_ARRIVED,
+        pitch,
+        g_page,
+        g_elem_bytes,
+        1 if gamma_is_tile else 0,
+        _bfp_exp_section_bytes(g_dtype, g_elem_bytes) if has_gamma else 0,
+        1 if (GAMMA_AFTER_SEND and b <= GAMMA_AFTER_SEND_MAX_ROWS) else 0,
+        1 if SIGNAL_AFTER_FLUSH else 0,
+        sz.T_g,
+        1 if opts.pipe_nb else 0,
+        SEM_PARTIALS_PAR,
+        SEM_INV_PAR,
+    ]
+    writer_ct.extend(out_acc_args.get_compile_time_args())
+    writer_ct.extend(
+        (ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args()
+    )
+
+    compute_ct = [k, pitch, C, d, combine_lookahead, 1 if opts.owner_combine else 0, 1 if opts.pipe_nb else 0]
+
+    inv_w_bits = _f32_bits(1.0 / geo.W)
+    eps_bits = _f32_bits(epsilon)
+    x_addr = input_tensor.buffer_address()
+    g_addr = gamma.buffer_address() if has_gamma else 0
+    out_addr = output_tensor.buffer_address()
+
+    reader_rt, writer_rt, compute_rt = {}, {}, ttnn.RuntimeArgs()
+    tw = geo.tensor_w_tiles
+    for members in blk.groups:
+        noc_xy = []
+        vid = {}  # member index -> virtual (exchange) index
+        step = _spread_step(k, b) if (opts.owner_combine and k > 1) else 1
+        for v_i in range(len(members)):
+            mem = members[(v_i * step) % len(members)]
+            vid[mem.m] = v_i
+            v = device.worker_core_from_logical_core(mem.core)
+            noc_xy.extend([v.x, v.y])
+        for mem in members:
+            c = mem.core
+            core_rows = mem.core_rows
+            num_blocks = _div_up(core_rows, b)
+            last_rows = core_rows - (num_blocks - 1) * b
+            chunks_this = _div_up(mem.core_w, C)
+            owns_tail = 1 if (opts.mask_tail and mem.w_tile_start + mem.core_w == tw) else 0
+            # TILE sharded: every tile-row pushes the whole shard row (pitch) into the shard-backed cb_out.
+            norm_w = pitch if opts.shard_backed else mem.core_w
+            reader_rt[(c.x, c.y)] = [
+                x_addr,
+                mem.row_start,
+                num_blocks,
+                b,
+                last_rows,
+                mem.w_tile_start,
+                mem.core_w,
+                chunks_this,
+                mem.valid_cols,
+                mem.valid_sticks,
+                owns_tail,
+            ]
+            compute_rt[c.x][c.y] = [
+                num_blocks,
+                b,
+                last_rows,
+                mem.core_w,
+                chunks_this,
+                inv_w_bits,
+                eps_bits,
+                vid[mem.m],
+                norm_w,
+                owns_tail,
+            ]
+            writer_base = [
+                out_addr,
+                mem.row_start,
+                num_blocks,
+                b,
+                last_rows,
+                mem.w_tile_start,
+                mem.core_w,
+                chunks_this,
+                vid[mem.m],
+                mem.valid_cols,
+                mem.valid_sticks,
+                g_addr,
+                mem.col0,
+            ]
+            assert len(writer_base) == WRITER_NOC_XY_ARG_BASE
+            writer_rt[(c.x, c.y)] = writer_base + noc_xy
+
+    # DM kernel groups: the usual pairing (reader NoC0 / writer NoC1) and, on the swapped Tensix cores, the reversed one.
+    swapped = set() if sharded else _noc_swapped_cores(device, blk, all_cores, gamma_groups, inv_order)
+    dm_groups = []  # (cores, reader config, writer config)
+    for cores, rcfg, wcfg in (
+        (
+            [c for c in all_cores if (c.x, c.y) not in swapped],
+            ttnn.ReaderConfigDescriptor(),
+            ttnn.WriterConfigDescriptor(),
+        ),
+        (
+            [c for c in all_cores if (c.x, c.y) in swapped],
+            _dm_config(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1),
+            _dm_config(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0),
+        ),
+    ):
+        if cores:
+            dm_groups.append((cores, rcfg, wcfg))
+
+    def _rt(cores, table):
         rt = ttnn.RuntimeArgs()
         for c in cores:
-            rt[c.x][c.y] = list(kd.runtime_args[c.x][c.y])
+            rt[c.x][c.y] = table[(c.x, c.y)]
+        return rt
+
+    readers, writers = [], []
+    for cores, rcfg, wcfg in dm_groups:
+        crs = core_ranges if len(dm_groups) == 1 else ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        readers.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+                core_ranges=crs,
+                compile_time_args=reader_ct,
+                defines=defines,
+                runtime_args=_rt(cores, reader_rt),
+                config=rcfg,
+            )
+        )
+        writers.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
+                core_ranges=crs,
+                compile_time_args=writer_ct,
+                defines=defines,
+                runtime_args=_rt(cores, writer_rt),
+                config=wcfg,
+            )
+        )
+    compute = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=compute_ct,
+        defines=defines,
+        runtime_args=compute_rt,
+        config=compute_kernel_config,
+    )
+    semaphores = []
+    if k > 1:
+        semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_PARTIALS_ARRIVED, core_ranges=core_ranges, initial_value=0))
+        if opts.owner_combine:
+            semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
+        if opts.pipe_nb:
+            # ids 2 / 3 are the first ttnn.Mcast ids: neither multicast may be attached on the pipelined path.
+            assert not gamma_mcast
+            for sem in (SEM_PARTIALS_PAR, SEM_INV_PAR):
+                semaphores.append(ttnn.SemaphoreDescriptor(id=sem, core_ranges=core_ranges, initial_value=0))
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+    next_sem = SEM_GAMMA_MCAST_FIRST
+    if opts.pipe_nb:
+        next_sem = SEM_INV_PAR + 1  # pipelined: ids 2 / 3 are the parity semaphores (inv_rms root multicast from 4)
+    if gamma_mcast:
+        # Sender = each group's first Tensix core (reads the slice); one-shot, no handshake. k = 1 (one group of every
+        # Tensix core) with swapped cores: the first Tensix core on the usual pairing (all swapped: core 0 on NoC0).
+        group_size, order = gamma_groups
+        sender, noc = 0, ttnn.NOC.NOC_1  # the usual writer NoC (WriterConfigDescriptor)
+        if swapped and order == ttnn.McastCoreOrder.RowMajor:
+            plain = [i for i, c in enumerate(_ordered(all_cores, order)) if (c.x, c.y) not in swapped]
+            sender, noc = (plain[0], ttnn.NOC.NOC_1) if plain else (0, ttnn.NOC.NOC_0)
+        mc = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=noc, handshake=False),
+            core_ranges,
+            group_size,
+            ttnn.McastFixedSenderConfig(sender_index=sender),
+            order,
+        )
+        mc.attach(descriptor, "gamma_mcast", writers, next_sem)
+        next_sem = mc.next_semaphore_id()
+    if inv_order is not None:
+        # Single-owner blocks: member 0 (the group's first Tensix core in `inv_order`, always on the usual pairing)
+        # multicasts inv_rms to its group.
+        inv_mc = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(
+                noc=ttnn.NOC.NOC_1,  # member 0's writer NoC
+                handshake=False,
+                # pipelined: member 0 may multicast sub-block i+1 before a member consumed i's flag -> monotonic counter
+                data_ready=ttnn.McastDataReady.Counter if opts.pipe_nb else ttnn.McastDataReady.Flag,
+            ),
+            core_ranges,
+            k,
+            ttnn.McastFixedSenderConfig(),
+            inv_order,
+        )
+        inv_mc.attach(descriptor, "inv_mcast", writers, next_sem)
+    descriptor.kernels = readers + writers + [compute]
+    return descriptor
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# HEIGHT_SHARDED ROW_MAJOR flat regime (see the "flat" regime block above RM_FLAT_FORCE)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def flat_expressible(input_tensor, gamma) -> bool:
+    """HEIGHT_SHARDED ROW_MAJOR fp32 / bf16 input whose shard holds whole sticks, gamma absent or ROW_MAJOR.
+
+    A TILE gamma would need a row-0 gather into flat order (not built; RM input + TILE gamma under HEIGHT sharding is
+    golden-INVALID) — it keeps the tilized path.
+    """
+    if input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+        return False
+    mc = input_tensor.memory_config()
+    if mc.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        return False
+    if input_tensor.dtype not in (ttnn.float32, ttnn.bfloat16):
+        return False
+    if gamma is not None and (
+        gamma.layout != ttnn.ROW_MAJOR_LAYOUT or gamma.dtype not in (ttnn.float32, ttnn.bfloat16)
+    ):
+        return False
+    return int(mc.shard_spec.shape[1]) >= int(input_tensor.shape[-1])
+
+
+def flat_plan(input_tensor, gamma, fp32_dest: bool) -> dict:
+    """Geometry + CB plan of the flat path: {cb: (pages, page_bytes, dtype)}; shard-backed CBs carry pages = None.
+
+    cb_x / cb_out alias the input / output shards with page = gcd(stick pitch, tile bytes), so flat tile j of stick s
+    is page s * stick_pages + j * tile_pages. W % 1024 != 0: cb_x_rm / cb_out_rm hold one zero-padded tail tile per
+    stick. cb_ones (the REDUCE_SCALAR 1.0 scaler) follows the accumulator dtype: REDUCE_SCALAR moves its 32 first-stage
+    partial sums DEST -> srcB (MOVD2B), so a bf16 scaler would truncate them to bf16 (fp32 DEST, no gamma: rms error vs
+    torch 0.0027 -> 0.0015 bf16, 0.0014 -> 0.00056 fp32; same device time).
+    """
+    W = int(input_tensor.shape[-1])
+    x_dtype = input_tensor.dtype
+    elem = _datum_bytes(input_tensor)
+    T = ttnn.tile_size(x_dtype)
+    sh = int(input_tensor.memory_config().shard_spec.shape[0])
+    pitch = input_tensor.buffer_aligned_page_size()  # stick pitch inside the shard
+    nt = _div_up(W, 1024)
+    n_body = W // 1024
+    tail_bytes = (W - 1024 * n_body) * elem
+    page = math.gcd(pitch, T)
+    t_acc = acc_dtype(fp32_dest)
+    cbs = {CB_X: (None, page, x_dtype), CB_OUT: (None, page, x_dtype)}
+    if tail_bytes:
+        cbs[CB_X_RM] = (sh, T, x_dtype)
+        cbs[CB_OUT_RM] = (sh, T, x_dtype)
+    cbs[CB_SUMSQ] = (sh, ttnn.tile_size(t_acc), t_acc)
+    cbs[CB_INV_RMS] = (sh, ttnn.tile_size(t_acc), t_acc)
+    cbs[CB_ONES] = (1, ttnn.tile_size(t_acc), t_acc)
+    if gamma is not None:
+        cbs[CB_GAMMA] = (nt, ttnn.tile_size(gamma.dtype), gamma.dtype)
+    return dict(
+        W=W,
+        elem=elem,
+        T=T,
+        sh=sh,
+        pitch=pitch,
+        nt=nt,
+        n_body=n_body,
+        has_tail_cb=tail_bytes != 0,
+        tail_bytes=tail_bytes,
+        page=page,
+        stick_pages=pitch // page,
+        tile_pages=T // page,
+        cbs=cbs,
+        footprint=sum(n * b for (n, b, _) in cbs.values() if n is not None),
+    )
+
+
+def flat_fits(plan, budget: int) -> bool:
+    return plan["footprint"] <= budget and plan["sh"] * plan["stick_pages"] < FLAT_MAX_CB_PAGES
+
+
+def flat_preferred(plan) -> bool:
+    """Cost model (see the "flat" regime block above RM_FLAT_FORCE): the flat path is estimated no slower than the tilized one."""
+    S, W, nt = plan["sh"], plan["W"], plan["nt"]
+    flat = FLAT_FIXED_NS + S * (FLAT_STICK_NS + FLAT_TILE_NS * nt + FLAT_TAIL_NS * (1 if W % 1024 else 0))
+    tilized = _div_up(S, TILE) * (TILIZED_ROW_NS + TILIZED_WTILE_NS * _div_up(W, TILE))
+    return flat <= tilized
+
+
+def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
+    """Flat HEIGHT RM regime when expressible + fits L1 + (cost model prefers it); else the tilized program. If the
+    tilized plan does not fit L1 but the flat one does, the flat path runs.
+
+    ROW_MAJOR WIDTH / BLOCK_SHARDED shards whose width divides a 16-datum face row take the narrow-flat regime
+    (rms_norm_narrow_flat_program_descriptor.py); it returns None where it is inexpressible or does not fit L1."""
+    kw = dict(epsilon=epsilon, compute_kernel_config=compute_kernel_config)
+    from .rms_norm_narrow_flat_program_descriptor import create_narrow_flat_program_descriptor  # lazy: import cycle
+
+    desc = create_narrow_flat_program_descriptor(input_tensor, gamma, output_tensor, **kw)
+    if desc is not None:
+        return desc
+    flat_ok = False
+    if flat_expressible(input_tensor, gamma):
+        plan = flat_plan(input_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))
+        flat_ok = flat_fits(plan, cb_l1_budget(input_tensor.device()))
+        if flat_ok and (RM_FLAT_FORCE or flat_preferred(plan)):
+            return create_flat_program_descriptor(input_tensor, gamma, output_tensor, **kw)
+    try:
+        return _create_tilized_program_descriptor(input_tensor, gamma, output_tensor, **kw)
+    except RuntimeError:
+        if not flat_ok:
+            raise
+        return create_flat_program_descriptor(input_tensor, gamma, output_tensor, **kw)
+
+
+def _backed_cb_paged(index, tensor, dtype, page, core_ranges):
+    """CB aliasing a sharded tensor's resident shard (zero-copy) with an explicit page size."""
+    cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
+    cb.core_ranges = core_ranges
+    cb.format_descriptors = [ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)]
+    return cb
+
+
+def create_flat_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
+    device = input_tensor.device()
+    shape = [int(d) for d in input_tensor.shape]
+    W = shape[-1]
+    rows = math.prod(shape[:-1])
+    has_gamma = gamma is not None
+    plan = flat_plan(input_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))
+    pitch, nt, T = plan["pitch"], plan["nt"], plan["T"]
+    assert output_tensor.buffer_aligned_page_size() == pitch
+    n_body, has_tail_cb, tail_bytes = plan["n_body"], plan["has_tail_cb"], plan["tail_bytes"]
+    stick_pages, tile_pages = plan["stick_pages"], plan["tile_pages"]
+
+    # Active Tensix cores: shard g (sh sticks, the last one ragged) on the g-th core of the shard grid in its orientation.
+    ss = input_tensor.memory_config().shard_spec
+    sh = plan["sh"]
+    order = _ordered_shard_cores(ss.grid, ss.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+    n_shards = _div_up(rows, sh)
+    assert len(order) >= n_shards
+    cores = [ttnn.CoreCoord(x, y) for (x, y) in order[:n_shards]]
+    sticks_of = [min(sh, rows - g * sh) for g in range(n_shards)]
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+    cbs = []
+    for idx, (pages, page_bytes, dtype) in plan["cbs"].items():
+        if pages is None:
+            cbs.append(
+                _backed_cb_paged(idx, input_tensor if idx == CB_X else output_tensor, dtype, page_bytes, core_ranges)
+            )
+        else:
+            cbs.append(_cb(idx, pages, page_bytes, dtype, core_ranges))
+    g_page = gamma.buffer_aligned_page_size() if has_gamma else 0  # one read of the whole (aligned) gamma page
+    assert not has_gamma or g_page <= nt * ttnn.tile_size(gamma.dtype)
+
+    defines = []
+    if has_gamma:
+        defines.append(("RMS_HAS_GAMMA", "1"))
+    defines.extend((name, "1") for name in PERF_ABLATE)
+    gamma_mcast = has_gamma and GAMMA_MCAST_SHARDED_K1
+    if gamma_mcast:
+        defines.append(("RMS_GAMMA_MCAST", "1"))
+
+    stick_bytes = W * plan["elem"]
+    reader_ct = [n_body, int(has_tail_cb), tail_bytes, pitch, T, stick_pages, stick_bytes]
+    compute_ct = [n_body, int(has_tail_cb), stick_pages, tile_pages]
+    writer_ct = [n_body, int(has_tail_cb), tail_bytes, pitch, T, stick_pages, stick_bytes, g_page, nt, g_page]
+    writer_ct.extend(
+        (ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args()
+    )
+
+    x_addr, out_addr = input_tensor.buffer_address(), output_tensor.buffer_address()
+    g_addr = gamma.buffer_address() if has_gamma else 0
+    inv_w_bits, eps_bits = _f32_bits(1.0 / W), _f32_bits(epsilon)
+    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for c, n in zip(cores, sticks_of):
+        reader_rt[c.x][c.y] = [x_addr, n]
+        compute_rt[c.x][c.y] = [n, inv_w_bits, eps_bits]
+        writer_rt[c.x][c.y] = [out_addr, n, g_addr]
+
+    def _k(name, ct, rt, cfg):
         return ttnn.KernelDescriptor(
-            kernel_source=kd.kernel_source,
-            core_ranges=_core_range_set(cores),
-            compile_time_args=list(kd.compile_time_args),
-            defines=list(kd.defines),
+            kernel_source=str(KERNEL_DIR / name),
+            core_ranges=core_ranges,
+            compile_time_args=ct,
+            defines=defines,
             runtime_args=rt,
             config=cfg,
         )
 
-    swapped_reader = sub(
-        reader,
-        swapped,
-        ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1),
-    )
-    swapped_writer = sub(
-        writer,
-        swapped,
-        ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
-    )
-    if not normal:  # every active core swaps (e.g. one Tensix core): no empty-range descriptor (it has no CB formats)
-        return [swapped_reader], [swapped_writer]
-    readers = [sub(reader, normal, ttnn.ReaderConfigDescriptor()), swapped_reader]
-    writers = [sub(writer, normal, ttnn.WriterConfigDescriptor()), swapped_writer]
-    return readers, writers
-
-
-def _core_range_set(cores):
-    """CoreRangeSet of the given cores as maximal x-runs per grid row."""
-    ranges = []
-    run = None
-    for c in _yx_sorted(cores):
-        if run is not None and c.y == run[1].y and c.x == run[1].x + 1:
-            run = (run[0], c)
-        else:
-            if run is not None:
-                ranges.append(ttnn.CoreRange(run[0], run[1]))
-            run = (c, c)
-    if run is not None:
-        ranges.append(ttnn.CoreRange(run[0], run[1]))
-    return ttnn.CoreRangeSet(ranges)
-
-
-def _cores_of(core_range_set):
-    cores = []
-    for rng in core_range_set.ranges():
-        for y in range(rng.start.y, rng.end.y + 1):
-            for x in range(rng.start.x, rng.end.x + 1):
-                cores.append(ttnn.CoreCoord(x, y))
-    return cores
-
-
-def _yx_sorted(cores):
-    return sorted(cores, key=lambda c: (c.y, c.x))
-
-
-def _r1_work(input_tensor, Wt, tensor_tile_rows):
-    W = input_tensor.shape[-1]
-    grid = input_tensor.device().compute_with_storage_grid_size()
-    (_, _, core_group_1, core_group_2, rows_g1, rows_g2) = ttnn.split_work_to_cores(
-        grid, tensor_tile_rows, row_wise=True
-    )
-    work = []
-    start = 0
-    for group, rows in ((core_group_1, rows_g1), (core_group_2, rows_g2)):
-        if rows == 0:
-            continue
-        for core in _cores_of(group):
-            work.append(CoreWork(core, start, rows, 0, Wt, 0, core, 0, W))
-            start += rows
-    assert start == tensor_tile_rows
-    return work, rows_g1
-
-
-def _group_work(cores, group_size, slice_elems, W, row_ranges):
-    """Assign (row range, W-slice of slice_elems elements) to cores laid out as consecutive (y, x)-ordered
-    row-groups of group_size — exactly how ttnn.Mcast partitions its receiver set. row_ranges holds
-    (start_tile_row, tile_rows, sticks) per row-group."""
-    work = []
-    for gi, (start, rows, sticks) in enumerate(row_ranges):
-        group = cores[gi * group_size : (gi + 1) * group_size]
-        for j, core in enumerate(group):
-            e0 = j * slice_elems
-            ve = min(slice_elems, W - e0)
-            if ve <= 0 or rows <= 0:
-                raise NotImplementedError("rms_norm: a shard with no valid data is not supported")
-            work.append(
-                CoreWork(core, start, rows, e0 // TILE_DIM, math.ceil(ve / TILE_DIM), j, group[0], e0, ve, sticks)
-            )
-    return work
-
-
-def _sharded_work(input_tensor, tensor_tile_rows):
-    """A sharded input (HEIGHT: regime R1-HS, G = 1; WIDTH / BLOCK: regime R3): the shard spec IS the work split. Returns
-    (work, S, rows_max, shard_w): S = slice tiles (nominal), rows_max = tile-rows per core (max).
-      TILE:      shard = (tile-rows x S tiles); the core's tile-rows and tiles are the tensor's.
-      ROW_MAJOR: shard = (sticks x shard_w elements) — neither need be tile-aligned; a core's sticks are
-                 grouped into ceil(sticks / 32) local tile-rows, its slice padded to S = ceil(shard_w / 32)."""
-    mc = input_tensor.memory_config()
-    spec = mc.shard_spec
-    if spec is None or mc.buffer_type != ttnn.BufferType.L1:
-        raise NotImplementedError("rms_norm: sharded inputs must carry a 2-D L1 shard spec")
-    height = mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR and not height:
-        # HEIGHT cores are independent (no row-group), so any shard -> core order works there.
-        raise NotImplementedError("rms_norm: only ROW_MAJOR shard orientation is supported")
-    shape = list(input_tensor.shape)
-    W = shape[-1]
-    is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    shard_h, shard_w = int(spec.shape[0]), int(spec.shape[1])
-    if is_rm:
-        unit_h, total_h = 1, _prod(shape[:-1])  # sticks
-    else:
-        assert shard_h % TILE_DIM == 0 and shard_w % TILE_DIM == 0, "TILE shards are tile-multiples"
-        unit_h, total_h = TILE_DIM, tensor_tile_rows  # tile-rows
-    Hsh = shard_h // unit_h
-    S = math.ceil(shard_w / TILE_DIM)
-
-    def row_range(start, count):
-        # (start_tile_row, tile_rows, sticks): ROW_MAJOR rows are local to the shard.
-        if is_rm:
-            return (0, math.ceil(count / TILE_DIM), count)
-        return (start, count, 0)
-
-    if height:
-        # Regime R1-HS: every core holds full-W rows (one W-slice, G = 1 -> no cross-core combine); shard i
-        # sits on the i-th core of the grid in the buffer's own shard order (corerange_to_cores, orientation).
-        # A ragged last shard holds fewer valid rows; trailing grid cores past the last shard hold none.
-        if shard_w < W:
-            raise NotImplementedError("rms_norm: height shard spec does not cover the row width")
-        n = math.ceil(total_h / Hsh)
-        cores = ttnn.corerange_to_cores(spec.grid, n, row_wise=spec.orientation == ttnn.ShardOrientation.ROW_MAJOR)
-        if len(cores) < n:
-            raise NotImplementedError("rms_norm: height shard spec does not cover the tensor")
-        row_ranges = [row_range(i * Hsh, min(Hsh, total_h - i * Hsh)) for i in range(n)]
-        return _group_work(list(cores), 1, shard_w, W, row_ranges), S, max(r[1] for r in row_ranges), shard_w
-    cores = _yx_sorted(_cores_of(spec.grid))
-    if mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        # One row-group: every core holds the full height and one W-slice, in (y, x) shard order (the
-        # slices may span several grid rows — eval/SHARDING.md §2).
-        n = math.ceil(W / shard_w)
-        if Hsh < total_h or n > len(cores):
-            raise NotImplementedError("rms_norm: width shard spec does not cover the tensor")
-        rr = row_range(0, total_h)
-        return _group_work(cores[:n], n, shard_w, W, [rr]), S, rr[1], shard_w
-    # BLOCK_SHARDED, ROW_MAJOR orientation: shard (r, c) on core (x0 + c, y0 + r); row-group = grid row.
-    bbox = spec.grid.bounding_box()
-    nx = bbox.end.x - bbox.start.x + 1
-    ny = bbox.end.y - bbox.start.y + 1
-    if len(cores) != nx * ny:
-        raise NotImplementedError("rms_norm: BLOCK_SHARDED needs a rectangular shard grid")
-    gx = math.ceil(W / shard_w)
-    gy = math.ceil(total_h / Hsh)
-    if gx > nx or gy > ny:
-        raise NotImplementedError("rms_norm: block shard spec does not cover the tensor")
-    used = [c for c in cores if c.x - bbox.start.x < gx and c.y - bbox.start.y < gy]
-    row_ranges = [row_range(r * Hsh, min(Hsh, total_h - r * Hsh)) for r in range(gy)]
-    return _group_work(used, gx, shard_w, W, row_ranges), S, max(r[1] for r in row_ranges), shard_w
-
-
-def _r3_interleaved_layout(Wt, tensor_tile_rows, num_cores):
-    """(S, G_w, G_h): W-slices of S tiles (G_w = ceil(Wt / S) cores per row-group), G_h row-groups."""
-    groups_target = math.ceil(tensor_tile_rows / R3_ROWS_PER_GROUP)
-    G_w_target = max(1, min(R3_MAX_GROUP_CORES, num_cores // groups_target))
-    S = max(R3_MIN_SLICE_TILES, math.ceil(Wt / G_w_target))
-    S = min(S, Wt)
-    G_w = math.ceil(Wt / S)
-    G_h = max(1, min(tensor_tile_rows, num_cores // G_w))
-    return S, G_w, G_h
-
-
-def _r3_interleaved_work(input_tensor, Wt, tensor_tile_rows, S, G_w, G_h):
-    grid = input_tensor.device().compute_with_storage_grid_size()
-    cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][: G_w * G_h]
-    base, extra = divmod(tensor_tile_rows, G_h)
-    row_ranges = []
-    start = 0
-    for gi in range(G_h):
-        rows = base + (1 if gi < extra else 0)
-        row_ranges.append((start, rows, 0))
-        start += rows
-    W = input_tensor.shape[-1]
-    return _group_work(cores, G_w, S * TILE_DIM, W, row_ranges), base + (1 if extra else 0)
-
-
-def select_plan(input_tensor, gamma, fp32_acc: bool) -> Plan:
-    """Regime-selection function (op_design.md -> Regimes):
-    HEIGHT_SHARDED -> R1-HS (the sharded path with G = 1: local reduction, no combine).
-    WIDTH/BLOCK_SHARDED -> R3 sharded. INTERLEAVED -> R1 unless R1 refuses (row too wide) or the W-split puts
-    >= R3_OCCUPANCY_GAIN x the cores to work on a few-tile-row shape (TILE only; RM stays R1)."""
-    device = input_tensor.device()
-    budget = l1_budget(device)
-    W = input_tensor.shape[-1]
-    Wt = math.ceil(W / TILE_DIM)
-    tensor_tile_rows = tensor_tile_rows_of(input_tensor)
-    memory_layout = input_tensor.memory_config().memory_layout
-    is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-
-    def r3_plan(work, S, rows_max, sharded):
-        G = max(w.index for w in work) + 1
-        tile_shard = sharded and not is_rm
-        masked = tile_shard and (W % TILE_DIM != 0)
-        owners = 1
-        if G > 1 and R3_SCATTER_ROWS_PER_OWNER > 0:
-            owners = max(1, min(G, rows_max // R3_SCATTER_ROWS_PER_OWNER))
-        topo = Topology(
-            sharded=tile_shard, rm_sharded=sharded and is_rm, combine=G > 1, G=G, owners=owners, masked=masked
-        )
-        choice = choose_blocking(input_tensor, gamma, rows_max, budget, fp32_acc, S, topo, refuse=sharded)
-        if choice is None:
-            return None
-        g, block_rows, x_depth = choice
-        # Owners split each BLOCK's rows: when L1 (or the interleaved prefetch cap) cut the rows into blocks,
-        # owners beyond block_rows // R3_SCATTER_ROWS_PER_OWNER would never own a row. Fewer owners make the
-        # gather quantum larger, so keep the trim only if the footprint still fits.
-        if topo.owners > 1:
-            owners = max(1, min(topo.owners, block_rows // R3_SCATTER_ROWS_PER_OWNER))
-            if owners != topo.owners:
-                trimmed = dataclasses.replace(g, topo=dataclasses.replace(topo, owners=owners))
-                if footprint(trimmed, block_rows, x_depth) <= budget:
-                    g, topo = trimmed, trimmed.topo
-        regime = "R1-HS" if memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else "R3"
-        return Plan(regime, topo, S, rows_max, tuple(work), g, block_rows, x_depth)
-
-    if memory_layout in (
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    ):
-        work, S, rows_max, _ = _sharded_work(input_tensor, tensor_tile_rows)
-        if is_rm and gamma is not None and gamma.layout == ttnn.TILE_LAYOUT and any(w.e0 % TILE_DIM for w in work):
-            # A ROW_MAJOR shard slice that starts mid-tile would need γ re-tiled across tile boundaries.
-            raise NotImplementedError("rms_norm: TILE γ with a ROW_MAJOR shard that is not tile-aligned in W")
-        return r3_plan(work, S, rows_max, sharded=True)
-
-    if memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise NotImplementedError(f"rms_norm: memory_layout {memory_layout} is not built")
-
-    r1_work, rows_g1 = _r1_work(input_tensor, Wt, tensor_tile_rows)
-    r1 = choose_blocking(input_tensor, gamma, rows_g1, budget, fp32_acc, refuse=False)
-
-    r3 = None
-    if not is_rm:
-        grid = device.compute_with_storage_grid_size()
-        num_cores = grid.x * grid.y
-        S, G_w, G_h = _r3_interleaved_layout(Wt, tensor_tile_rows, num_cores)
-        r1_cores = len(r1_work)
-        wants_r3 = r1 is None or (
-            R3_OCCUPANCY_GAIN > 0 and G_w >= R3_MIN_GROUP_CORES and G_w * G_h >= R3_OCCUPANCY_GAIN * r1_cores
-        )
-        if wants_r3 and G_w > 1:
-            work, rows_max = _r3_interleaved_work(input_tensor, Wt, tensor_tile_rows, S, G_w, G_h)
-            r3 = r3_plan(work, S, rows_max, sharded=False)
-    if r3 is not None:
-        return r3
-    if r1 is None:
-        g = compute_geometry(input_tensor, gamma, 1, fp32_acc)
-        raise NotImplementedError(
-            f"rms_norm: W={g.W} does not fit a resident tile-row in L1 (needs {footprint(g, 1, 1)} B, budget "
-            f"{budget} B) and the W-split regime R3 is not built for this layout"
-        )
-    g, block_rows, x_depth = r1
-    return Plan("R1", R1_TOPOLOGY, Wt, rows_g1, tuple(r1_work), g, block_rows, x_depth)
-
-
-# ---------------------------------------------------------------------------
-# Program descriptor
-# ---------------------------------------------------------------------------
-
-
-# Reader runtime args (per core) ahead of the optional packed row-group member coordinates — the kernel's
-# get_arg_val indices.
-READER_RT_BASE_ARGS = (
-    "input_addr",
-    "start_tile_row",
-    "rows",
-    "bank_stagger",
-    "slice_w0",
-    "slice_valid",
-    "is_root",
-    "group_index",
-    "root_x",
-    "root_y",
-    "slice_e0",
-    "slice_elems",
-    "stick_count",
-)
-
-
-# Measurement-only kernel defines (perf investigations; never set in production — unset env => no defines, so the
-# production JIT hash and binaries are unchanged):
-#   RMS_NORM_PERF_ZONES=1      -> KERNEL_PERF_ZONES: turns on the permanent MaybeDeviceZoneScope stage zones
-#                                 (kernel_lib/perf_instrumentation.hpp; they also need the device profiler).
-#   RMS_NORM_ABLATE=<a,b,...>  -> payload ablation switches that keep every CB / semaphore / barrier handshake:
-#     reads   reader: no x NoC reads (interleaved TILE / RM)          -> RMS_ABLATE_READS
-#     writes  writer: no output NoC writes                            -> RMS_ABLATE_WRITES
-#     gamma   writer: no γ DRAM reads                                 -> RMS_ABLATE_GAMMA
-#     combine reader: no R3 partial / inv_rms data writes (semaphores kept) -> RMS_ABLATE_COMBINE
-#     compute compute: every eltwise_chain emits only its CB sync     -> CKL_ELTWISE_CHAIN_SKIP_COMPUTE
-#   RMS_NORM_SRCB_HOLD=0       -> RMS_SRCB_HOLD_OFF: the γ / inv passes take the chain everywhere (in-session A/B of the
-#                                 Perf 2 srcB-hold passes; bit-identical output)
-_ABLATE_DEFINES = {
-    "reads": "RMS_ABLATE_READS",
-    "writes": "RMS_ABLATE_WRITES",
-    "gamma": "RMS_ABLATE_GAMMA",
-    "combine": "RMS_ABLATE_COMBINE",
-}
-
-
-def _measurement_defines(compute: bool = False) -> list:
-    defines = []
-    if os.environ.get("RMS_NORM_PERF_ZONES", "0") not in ("", "0"):
-        defines.append(("KERNEL_PERF_ZONES", "1"))
-    ablate = {a.strip() for a in os.environ.get("RMS_NORM_ABLATE", "").split(",") if a.strip()}
-    unknown = ablate - set(_ABLATE_DEFINES) - {"compute"}
-    if unknown:
-        raise ValueError(f"RMS_NORM_ABLATE: unknown switches {sorted(unknown)}")
-    if compute:
-        if "compute" in ablate:
-            defines.append(("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1"))
-        if os.environ.get("RMS_NORM_SRCB_HOLD", "1") == "0":
-            defines.append(("RMS_SRCB_HOLD_OFF", "1"))
-    else:
-        defines += [(d, "1") for a, d in _ABLATE_DEFINES.items() if a in ablate]
-    return defines
-
-
-def _cb(index, data_format, page_size, num_pages, core_ranges):
-    return ttnn.CBDescriptor(
-        total_size=page_size * num_pages,
-        core_ranges=core_ranges,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=data_format, page_size=page_size)],
-    )
-
-
-def create_program_descriptor(
-    input_tensor: ttnn.Tensor,
-    output_tensor: ttnn.Tensor,
-    *,
-    gamma=None,
-    epsilon: float,
-    compute_kernel_config: ttnn.ComputeConfigDescriptor,
-) -> ttnn.ProgramDescriptor:
-    device = input_tensor.device()
-    fp32_acc = bool(compute_kernel_config.fp32_dest_acc_en)
-    plan = select_plan(input_tensor, gamma, fp32_acc)
-    g, block_rows, x_depth, topo = plan.geometry, plan.block_rows, plan.x_depth, plan.topo
-    all_cores = plan.core_ranges
-    budget = l1_budget(device)
-    gamma_resident = choose_gamma_resident(g, block_rows, x_depth, budget)
-
-    wp = choose_waves(g, topo, block_rows, x_depth, gamma_resident, budget)
-    ag_writer = bool(wp.rows) and R3_ALLGATHER_ON_WRITER and (not g.has_gamma or gamma_resident)
-    # ---------- Circular buffers ----------
-    C, R = g.C, block_rows
-    cbs = [
-        _cb(CB_REDUCE_SCALER, SCALER_FORMAT, ttnn.tile_size(SCALER_FORMAT), scaler_pages(g), all_cores),
-        _cb(CB_SUMSQ_PARTIAL, g.interm_format, g.T_interm, R, all_cores),
-        _cb(CB_INV_RMS, g.interm_format, g.T_interm, R, all_cores),
-    ]
-    if topo.sharded:
-        # Zero-copy: compute reads x straight out of the input shard and packs into the output shard.
-        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, input_tensor))
-        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor))
-    else:
-        cbs.append(_cb(CB_X_TILES, input_tensor.dtype, g.T_in, x_depth * R * g.WS, all_cores))
-        cbs.append(_cb(CB_OUTPUT, output_tensor.dtype, g.T_out, STREAM_DEPTH * C, all_cores))
-    if g.is_rm:
-        cbs.append(_cb(CB_X_RM_STICKS, input_tensor.dtype, g.T_in, STREAM_DEPTH * C, all_cores))
-        cbs.append(_cb(CB_Y_TILES, output_tensor.dtype, g.T_out, R * C, all_cores))
-    if g.has_gamma and gamma_row_pages(g, gamma_resident) > 0:
-        cbs.append(_cb(CB_GAMMA_ROW, gamma.dtype, g.gamma_row_page, gamma_row_pages(g, gamma_resident), all_cores))
-    if g.has_gamma:
-        cbs.append(_cb(CB_GAMMA_TILES, gamma.dtype, g.T_g, gamma_tiles_pages(g, gamma_resident), all_cores))
-        cbs.append(_cb(CB_X_GAMMA, g.interm_format, g.T_interm, R * C, all_cores))
-    if topo.combine:
-        cbs.append(_cb(CB_PARTIAL_COL, g.interm_format, g.T_interm, R, all_cores))
-        # Allocated identically on every core: a contributor addresses the root's gather slots through its
-        # own (never advanced) write pointer.
-        if wp.rows:
-            # Waves: one G*q_w gather region and q_w root pages per wave of a full block.
-            cbs.append(_cb(CB_GATHER, g.interm_format, g.T_interm, wp.full * topo.G * wp.q, all_cores))
-            cbs.append(_cb(CB_RMS_ROOT, g.interm_format, g.T_interm, wp.full * wp.q, all_cores))
-        else:
-            cbs.append(_cb(CB_GATHER, g.interm_format, g.T_interm, gather_pages(topo, R), all_cores))
-            cbs.append(_cb(CB_RMS_ROOT, g.interm_format, g.T_interm, scatter_rows(topo, R), all_cores))
-    if ag_writer:
-        # Writer-side all-gather: writer -> reader "wave all-gathered" tokens, one 32 B page per wave of a block.
-        cbs.append(_cb(15, ttnn.bfloat16, 32, wp.full, all_cores))
-    if topo.masked:
-        cbs.append(_cb(CB_SUMSQ_LAST, g.interm_format, g.T_interm, R, all_cores))
-        cbs.append(_cb(CB_SUMSQ_ACC, g.interm_format, g.T_interm, R, all_cores))
-
-    read_batch_chunks = g.num_w_chunks if READ_BATCH_CHUNKS is None else min(READ_BATCH_CHUNKS, g.num_w_chunks)
-    # ROW_MAJOR shard: bytes per shard stick (the input and output shards share the spec).
-    shard_row_bytes = int(input_tensor.memory_config().shard_spec.shape[1]) * g.es if topo.rm_sharded else 0
-
-    # ---------- Compile-time args ----------
-    # Shared geometry prefix (same order in all three kernels; SHARED_CT_ARGS entries).
-    common_ct = [
-        int(g.is_rm),
-        int(g.has_gamma),
-        block_rows,
-        C,
-        g.num_w_chunks,
-        g.Wt,
-        g.W,
-        g.num_sticks,
-        x_depth,
-        read_batch_chunks,
-        int(g.gamma_is_tile),
-        int(gamma_resident),
-        g.gamma_row_page,
-        gamma_direct(g, gamma_resident),
-        int(topo.sharded),
-        int(topo.combine),
-        g.WS,
-        topo.G,
-        int(topo.masked),
-        SEM_GATHER,
-        int(topo.rm_sharded),
-        shard_row_bytes,
-    ]
-    reader_ct = list(common_ct)
-    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    # Reader-only args after the accessor: combine owners, the all-gather semaphore, and where the packed
-    # row-group member coordinates start in the runtime args (owners > 1 only).
-    reader_ct.extend([topo.owners, wp.full if wp.rows else SEM_INV, len(READER_RT_BASE_ARGS)])
-    # All-gather on the writer RISC-V: waves on, γ resident or absent (no streaming γ push may sit behind it).
-    reader_ct.extend([wp.rows, wp.q, wp.full, int(ag_writer)])
-    # γ is supplied by the writer (its RISC-V is idle until the first output chunk) — lamp L4.
-    writer_ct = list(common_ct)
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    writer_ct.extend(
-        ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
-        if gamma is not None
-        else ttnn.TensorAccessorArgs().get_compile_time_args()
-    )
-    writer_ct.extend([int(ag_writer), topo.G, wp.rows, wp.q, wp.full, wp.full, 11, g.T_interm])
-    # Compute-only args follow the shared prefix.
-    compute_ct = list(common_ct) + [SCALE_BLOCK_TILES, int(FINALIZE_COL0), topo.owners]
-    compute_ct += [wp.rows, wp.q, R3_WAVE_GAMMA0_POS, max(1, R3_WAVE_INV_GROUP)]
-
-    # ---------- Runtime args ----------
-    inv_w_bits = _fp32_bits(1.0 / g.W)
-    eps_bits = _fp32_bits(epsilon)
-    in_addr = input_tensor.buffer_address()
-    out_addr = output_tensor.buffer_address()
-    gamma_addr = gamma.buffer_address() if gamma is not None else 0
-
-    reader_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
-    compute_rt = ttnn.RuntimeArgs()
-    # Reduce-scatter (owners > 1): every member addresses every other member of its row-group (partials to the
-    # owners, finalized rows to all). Virtual coordinates packed (x << 16) | y, in group-index order.
-    group_members = {}
-    if topo.owners > 1:
-        for w in plan.work:
-            group_members.setdefault((w.root.x, w.root.y), {})[w.index] = device.worker_core_from_logical_core(w.core)
-    for core_ordinal, w in enumerate(plan.work):
-        core = w.core
-        # Kernels reduce the stagger mod NUM_DRAM_BANKS (the arch's bank count is a kernel define).
-        stagger = core_ordinal if BANK_STAGGER else 0
-        root_virtual = device.worker_core_from_logical_core(w.root)
-        # The core owning tile Wt-1 of a non-aligned row masks that tile's pad columns (sharded only: the
-        # interleaved reader zeroes them in its own CB instead).
-        masked_core = int(topo.masked and w.w0 + w.V == g.Wt)
-        reader_rt[core.x][core.y] = [
-            in_addr,
-            w.start_tile_row,
-            w.rows,
-            stagger,
-            w.w0,
-            w.V,
-            int(w.index == 0),
-            w.index,
-            root_virtual.x,
-            root_virtual.y,
-            w.e0,
-            w.ve,
-            w.sticks,
-        ]
-        assert len(reader_rt[core.x][core.y]) == len(READER_RT_BASE_ARGS)
-        if topo.owners > 1:
-            members = group_members[(w.root.x, w.root.y)]
-            reader_rt[core.x][core.y] = list(reader_rt[core.x][core.y]) + [
-                (members[i].x << 16) | members[i].y for i in range(topo.G)
-            ]
-        writer_rt[core.x][core.y] = [
-            out_addr,
-            gamma_addr,
-            w.start_tile_row,
-            w.rows,
-            stagger,
-            w.w0,
-            w.V,
-            w.e0,
-            w.ve,
-            w.sticks,
-        ]
-        # Writer-side all-gather: [10] = group index, [11, 11 + G) = packed member coordinates.
-        writer_rt[core.x][core.y] = list(writer_rt[core.x][core.y]) + [w.index]
-        if ag_writer:
-            members = group_members[(w.root.x, w.root.y)]
-            writer_rt[core.x][core.y] = list(writer_rt[core.x][core.y]) + [
-                (members[i].x << 16) | members[i].y for i in range(topo.G)
-            ]
-        compute_rt[core.x][core.y] = [w.rows, inv_w_bits, eps_bits, w.V, w.index, masked_core]
-
-    dm_defines = [("RMS_BANK_STAGGER", "1" if BANK_STAGGER else "0")] + _measurement_defines()
-    compute_defines = _measurement_defines(compute=True)
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=reader_ct,
-        defines=dm_defines,
-        runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    gm = gamma_mcast_groups(plan, gamma_resident)
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=writer_ct,
-        defines=dm_defines,
-        runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
-    )
-    compute = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=compute_ct,
-        defines=compute_defines,
-        runtime_args=compute_rt,
-        config=compute_kernel_config,
-    )
-
-    # Perf 2 NoC balance: the swapped cores get their own reader (NCRISC on NoC1) / writer (BRISC on NoC0) descriptors.
-    readers, writers = _split_noc_swapped(reader, writer, [w.core for w in plan.work], noc_swap_cores(plan, topo, gm))
-
-    descriptor = ttnn.ProgramDescriptor()
-    descriptor.cbs = cbs
-    # Row-groups are consecutive (y, x)-ordered runs of G cores, root = index 0 = the fixed sender — the same
-    # partition ttnn.Mcast builds from (receivers, group size, RowMajor order).
-    if topo.combine and topo.owners > 1:
-        # Reduce-scatter: the all-gather of finalized rows is unicast + SEM_INV (no multicast channel; concurrent
-        # multicasts from every owner into one row-group measured slower, see the reader's scatter_block).
-        if wp.rows:
-            # Waves: gather sems [0, full), inv sems [full, 2*full) — one pair per wave.
-            descriptor.semaphores = [
-                ttnn.SemaphoreDescriptor(id=i, core_ranges=all_cores, initial_value=0) for i in range(2 * wp.full)
-            ]
-        else:
-            descriptor.semaphores = [
-                ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0),
-                ttnn.SemaphoreDescriptor(id=SEM_INV, core_ranges=all_cores, initial_value=0),
-            ]
-        for k in readers:
-            ttnn.attach_absent_mcast(k, MCAST_PREFIX)
-    elif topo.combine:
-        descriptor.semaphores = [ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0)]
-        mcast = ttnn.Mcast(
+    reader = _k("rms_norm_flat_reader.cpp", reader_ct, reader_rt, ttnn.ReaderConfigDescriptor())
+    writer = _k("rms_norm_flat_writer.cpp", writer_ct, writer_rt, ttnn.WriterConfigDescriptor())
+    compute = _k("rms_norm_flat_compute.cpp", compute_ct, compute_rt, compute_kernel_config)
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    if gamma_mcast:
+        # One group of every active Tensix core; sender = core 0 (reads the gamma page once) on the writer NoC; one-shot.
+        mc = ttnn.Mcast(
             device,
-            ttnn.McastConfig(),
-            all_cores,
-            topo.G,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),
+            core_ranges,
+            len(cores),
             ttnn.McastFixedSenderConfig(sender_index=0),
             ttnn.McastCoreOrder.RowMajor,
         )
-        mcast.attach(descriptor, MCAST_PREFIX, readers, SEM_MCAST_BASE)
-    else:
-        for k in readers:
-            ttnn.attach_absent_mcast(k, MCAST_PREFIX)
-    if gm is None:
-        for k in writers:
-            ttnn.attach_absent_mcast(k, GAMMA_MCAST_PREFIX)
-    else:
-        # After every combine semaphore (SEM_GATHER / SEM_INV, the inv_rms channel, or the per-wave pairs).
-        first_sem = max([s.id for s in descriptor.semaphores], default=-1) + 1
-        gmc = ttnn.Mcast(
-            device,
-            ttnn.McastConfig(
-                noc=ttnn.NOC.NOC_1,
-                # No receiver handshake: each landing address is written once per program (a measured ~1 µs saved).
-                handshake=False,
-                data_ready=ttnn.McastDataReady.Counter,
-            ),
-            all_cores,
-            gm[0],
-            ttnn.McastFixedSenderConfig(sender_index=0),
-            gm[1],
-        )
-        gmc.attach(descriptor, GAMMA_MCAST_PREFIX, writers, first_sem)
-    descriptor.kernels = readers + writers + [compute]
+        mc.attach(descriptor, "gamma_mcast", [writer], SEM_GAMMA_MCAST_FIRST)
+    descriptor.kernels = [reader, writer, compute]
     return descriptor
