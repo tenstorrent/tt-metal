@@ -51,35 +51,42 @@ void kernel_main() {
 #endif
 
 #if defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
+    // The compute consumes one mask row of block_wt tiles per input row. Walk the core's rows: the mask
+    // repeats every mask_Ht rows within a batch, and moves to the next batch's mask where the input does. A
+    // core can start at any row of a head and its shard can span batches.
+    constexpr std::uint32_t block_ht = get_arg(args::block_ht);
+    constexpr std::uint32_t mask_Ht = get_arg(args::mask_Ht);
+    constexpr std::uint32_t rows_per_batch = get_arg(args::rows_per_batch);
+    constexpr std::uint32_t mask_batch_stride = get_arg(args::mask_batch_stride);
+    std::uint32_t mask_ht = get_arg(args::mask_start_ht);
+    std::uint32_t rows_left_in_batch = get_arg(args::mask_rows_left_in_batch);
+    std::uint32_t mask_batch_base = mask_start_tile_id;
 
-    constexpr std::uint32_t fused_head = get_arg(args::fused_head);
-    constexpr std::uint32_t mask_block_ht = get_arg(args::mask_block_ht);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
-    for (std::uint32_t f = 0; f < fused_head; f++) {
-        mask_id = mask_start_tile_id;
+    for (std::uint32_t h = 0; h < block_ht; h++) {
+        mask_id = mask_batch_base + mask_ht * block_wt;
+        dfb_attn_obj.reserve_back(block_wt);
+        std::uint32_t write_offset = 0;
+        for (std::uint32_t w = 0; w < block_wt; w++) {
+            noc.async_read(
+                addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
+            write_offset += mask_tile_bytes;
+            ++mask_id;
+        }
+        noc.async_read_barrier();
+        dfb_attn_obj.push_back(block_wt);
 
-        for (std::uint32_t h = 0; h < mask_block_ht; h++) {
-            dfb_attn_obj.reserve_back(block_wt);
-            std::uint32_t write_offset = 0;
-            for (std::uint32_t w = 0; w < block_wt; w++) {
-                noc.async_read(
-                    addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
-                write_offset += mask_tile_bytes;
-                ++mask_id;
-            }
-            noc.async_read_barrier();
-            dfb_attn_obj.push_back(block_wt);
-
-            if (f == 0 && h == 0) {
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    dfb_max_scaler,
-                    ckernel::PoolType::MAX,
-                    ckernel::ReduceDim::REDUCE_ROW>();
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    dfb_sum_scaler,
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW>();
-            }
+        if (++mask_ht == mask_Ht) {
+            mask_ht = 0;
+        }
+        if (--rows_left_in_batch == 0) {
+            rows_left_in_batch = rows_per_batch;
+            mask_ht = 0;
+            mask_batch_base += mask_batch_stride;
         }
     }
 #elif defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
@@ -87,6 +94,38 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+#elif defined(MASK_PER_ROW)
+    // The shard does not sit inside one batch, so its rows need different batches' masks. Push the mask row of
+    // each input row's own batch; the compute pops it after every row.
+    constexpr std::uint32_t block_ht = get_arg(args::block_ht);
+    constexpr std::uint32_t rows_per_batch = get_arg(args::rows_per_batch);
+    constexpr std::uint32_t mask_batch_stride = get_arg(args::mask_batch_stride);
+    std::uint32_t rows_left_in_batch = get_arg(args::mask_rows_left_in_batch);
+    std::uint32_t mask_batch_base = mask_start_tile_id;
+
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+
+    for (std::uint32_t h = 0; h < block_ht; h++) {
+        mask_id = mask_batch_base;
+        dfb_attn_obj.reserve_back(block_wt);
+        std::uint32_t write_offset = 0;
+        for (std::uint32_t w = 0; w < block_wt; w++) {
+            noc.async_read(
+                addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
+            write_offset += mask_tile_bytes;
+            ++mask_id;
+        }
+        noc.async_read_barrier();
+        dfb_attn_obj.push_back(block_wt);
+
+        if (--rows_left_in_batch == 0) {
+            rows_left_in_batch = rows_per_batch;
+            mask_batch_base += mask_batch_stride;
+        }
+    }
 #else
     dfb_attn_obj.reserve_back(block_wt);
     std::uint32_t write_offset = 0;

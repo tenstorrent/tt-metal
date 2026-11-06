@@ -75,8 +75,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const std::uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     const std::uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const std::uint32_t tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
-    std::uint32_t num_cores_per_batch = (shape[1] * shape[2] * shape[3]) / (input_tensor.shard_spec().value().shape[0] *
-                                                                            input_tensor.shard_spec().value().shape[1]);
+    // A shard can start mid-batch or span several batches, so the mask is addressed per tile row.
+    const std::uint32_t rows_per_batch = shape[1] * shape[2] / tile_height;
 
     // A last dimension that is not a multiple of the tile width leaves padding columns in the last tile of every
     // row. The reader pushes a -inf padding tile that the compute adds to that tile, as the interleaved path does.
@@ -110,14 +110,29 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     // sharded reader is selected — that reader alone honors SHARDED_CAUSAL_MASK and skips the mask read.
     // The hw-dims and row-major readers always stream the mask themselves (c_3 reader-produced, 1P+1C),
     // so the resident path must exclude them or those readers would reference args/DFBs the host withholds.
-    const bool mask_sharded_resident =
-        has_mask && attributes.is_causal_mask && mask_sharded && !attributes.is_scale_causal_mask_hw_dims_softmax;
+    // A sharded mask has the input's padded shape, so it is a full mask whether or not is_causal_mask is set.
+    const bool mask_sharded_resident = has_mask && mask_sharded && !attributes.is_scale_causal_mask_hw_dims_softmax;
+    const bool full_row_mask = has_mask && (attributes.is_causal_mask || mask_sharded_resident);
     // hw_dims_only_causal_mask does not support RM Layout atm
     const bool use_row_major_kernel = has_mask && tensor_args.mask->layout() == tt::tt_metal::Layout::ROW_MAJOR;
 
+    // A single-batch mask is shared by every input batch.
+    std::uint32_t mask_batch_stride = 0;
+    if (has_mask && !mask_sharded && tensor_args.mask->padded_shape()[0] > 1) {
+        const auto& mask_shape = tensor_args.mask->padded_shape();
+        mask_batch_stride =
+            use_row_major_kernel ? mask_shape[-2] : (mask_shape[-2] / tile_height) * (mask_shape[-1] / tile_width);
+    }
+    // A broadcast mask is read once per core only while every shard stays inside one batch.
+    const bool broadcast_mask_per_row = has_mask && !full_row_mask &&
+                                        !attributes.is_scale_causal_mask_hw_dims_softmax && mask_batch_stride > 0 &&
+                                        rows_per_batch % program_config.block_h != 0;
+
     // c_3 (attn mask) entry count — mirrors legacy in3_CB_size / mask_tile_size.
     std::uint32_t attn_num_entries = program_config.block_w;
-    if (attributes.is_causal_mask) {
+    if (broadcast_mask_per_row) {
+        attn_num_entries = 2 * program_config.block_w;
+    } else if (full_row_mask) {
         if (mask_sharded) {
             attn_num_entries = program_config.block_w * program_config.block_h;
         } else {
@@ -257,7 +272,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     if (has_mask) {
         reader_defines["FUSED_SCALE_MASK"] = "1";
     }
-    if (attributes.is_causal_mask) {
+    if (broadcast_mask_per_row) {
+        reader_defines["MASK_PER_ROW"] = "1";
+    }
+    if (full_row_mask) {
         reader_defines["CAUSAL_MASK"] = "1";
         // SHARDED_CAUSAL_MASK tells the compute to treat c_3 as resident (skip wait_front) and the default
         // reader to skip the mask read. Keyed on mask_sharded_resident so it stays off for the hw-dims path,
@@ -326,9 +344,17 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             } else if (attributes.is_scale_causal_mask_hw_dims_softmax) {
                 reader_cta.insert({"block_ht", program_config.block_h});
                 reader_rta_names.push_back("mask_num_tiles");
-            } else if (attributes.is_causal_mask) {
-                reader_cta.insert({"fused_head", program_config.block_h / mask_Ht});
-                reader_cta.insert({"mask_block_ht", mask_Ht});
+            }
+            if (!attributes.is_scale_causal_mask_hw_dims_softmax &&
+                (attributes.is_causal_mask || broadcast_mask_per_row)) {
+                reader_cta.insert({"block_ht", program_config.block_h});
+                reader_cta.insert({"rows_per_batch", rows_per_batch});
+                reader_cta.insert({"mask_batch_stride", mask_batch_stride});
+                reader_rta_names.push_back("mask_rows_left_in_batch");
+                if (attributes.is_causal_mask) {
+                    reader_cta.insert({"mask_Ht", mask_Ht});
+                    reader_rta_names.push_back("mask_start_ht");
+                }
             }
         }
     }
@@ -430,7 +456,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             {{"block_h", program_config.block_h},
              {"block_w", program_config.block_w},
              {"subblock_w", program_config.subblock_w},
-             {"causal_mask", static_cast<std::uint32_t>(attributes.is_causal_mask)},
+             {"causal_mask", static_cast<std::uint32_t>(full_row_mask)},
              {"sharded_causal_mask", static_cast<std::uint32_t>(mask_sharded_resident)}},
         .hw_config = compute_hw,
     };
@@ -467,35 +493,41 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         num_tiles_in_attn_mask = tensor_args.mask->padded_shape()[-1] * tensor_args.mask->padded_shape()[-2] / tile_hw;
         num_tiles_of_attn_mask_needed_per_core = program_config.block_h * program_config.block_w;
     }
-    std::uint32_t num_cores_per_batch_index = 0;
+    // Cores are visited in shard order, so the n-th core visited holds tile rows [n * block_h, (n + 1) * block_h).
+    std::uint32_t core_linear_idx = 0;
 
     auto emit_reader_args = [&](const CoreCoord& core) {
         if (has_mask) {
             AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"pre_scale", scale_u}});
             if (!mask_sharded_resident) {
-                AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"mask_start_tile_id", mask_start_tile_id}});
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
                     AddRuntimeArgsForNode(
+                        reader_ra.runtime_arg_values, core, {{"mask_start_tile_id", mask_start_tile_id}});
+                    AddRuntimeArgsForNode(
                         reader_ra.runtime_arg_values, core, {{"mask_num_tiles", num_tiles_in_attn_mask}});
-                }
-            }
-        }
-
-        num_cores_per_batch_index++;
-        if (attributes.is_scale_causal_mask_hw_dims_softmax) {
-            mask_start_tile_id = (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
-        } else if (num_cores_per_batch_index == num_cores_per_batch) {
-            num_cores_per_batch_index = 0;
-            if (has_mask) {
-                if (attributes.is_causal_mask) {
-                    mask_start_tile_id += tensor_args.mask->padded_shape()[-1] * tensor_args.mask->padded_shape()[-2] /
-                                          tile_width / tile_height;
+                    mask_start_tile_id =
+                        (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
                 } else {
-                    mask_start_tile_id += use_row_major_kernel ? tensor_args.mask->padded_shape()[-2]
-                                                               : tensor_args.mask->padded_shape()[-1] / tile_width;
+                    const std::uint32_t first_row = core_linear_idx * program_config.block_h;
+                    const std::uint32_t batch = first_row / rows_per_batch;
+                    const std::uint32_t row_in_batch = first_row % rows_per_batch;
+                    AddRuntimeArgsForNode(
+                        reader_ra.runtime_arg_values, core, {{"mask_start_tile_id", batch * mask_batch_stride}});
+                    if (attributes.is_causal_mask || broadcast_mask_per_row) {
+                        AddRuntimeArgsForNode(
+                            reader_ra.runtime_arg_values,
+                            core,
+                            {{"mask_rows_left_in_batch", rows_per_batch - row_in_batch}});
+                    }
+                    if (attributes.is_causal_mask) {
+                        // The causal mask repeats every mask_Ht rows within a batch (once per head).
+                        AddRuntimeArgsForNode(
+                            reader_ra.runtime_arg_values, core, {{"mask_start_ht", row_in_batch % mask_Ht}});
+                    }
                 }
             }
         }
+        core_linear_idx++;
     };
 
     if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {

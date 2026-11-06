@@ -27,6 +27,13 @@ void kernel_main() {
     push_mask_padded_tile<num_datum_padded, tile_hw>(dfb_mask_padded_obj);
 #endif
 
+    // The reduce scalers go first: with a per-row mask the compute needs them to finish a row before the reader
+    // can push more mask rows than the mask buffer holds.
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+
 #ifdef FUSED_SCALE_MASK
     constexpr std::uint32_t block_wt = get_arg(args::block_w);
     const std::uint32_t mask_start_tile_id = get_arg(args::mask_start_tile_id);
@@ -47,39 +54,48 @@ void kernel_main() {
     constexpr std::uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE ? 64 : 32;
     constexpr std::uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE ? 1024 : 512;
 
-    dfb_attn_obj.reserve_back(block_wt);
+#ifdef MASK_PER_ROW
+    // The shard does not sit inside one batch: push the mask row of each input row's own batch, which the
+    // compute pops after every row.
+    constexpr std::uint32_t num_mask_rows = get_arg(args::block_ht);
+    constexpr std::uint32_t rows_per_batch = get_arg(args::rows_per_batch);
+    constexpr std::uint32_t mask_batch_stride = get_arg(args::mask_batch_stride);
+    std::uint32_t rows_left_in_batch = get_arg(args::mask_rows_left_in_batch);
+#else
+    // One mask row that the compute broadcasts to every row of the shard.
+    constexpr std::uint32_t num_mask_rows = 1;
+#endif
+    std::uint32_t mask_batch_base = mask_start_tile_id;
     std::uint32_t local_noc_x = my_x[noc.get_noc_id()];
     std::uint32_t local_noc_y = my_y[noc.get_noc_id()];
-    std::uint32_t write_offset = 0;
-    for (std::uint32_t w = 0; w < block_wt; w++) {
-        noc.async_read(
-            addr_mask,
-            dfb_attn_obj,
-            mask_read_tile_face_bytes * 2,
-            {.page_id = mask_start_tile_id + w},
-            {.offset_bytes = write_offset});
+    for (std::uint32_t h = 0; h < num_mask_rows; h++) {
+        dfb_attn_obj.reserve_back(block_wt);
+        std::uint32_t write_offset = 0;
+        for (std::uint32_t w = 0; w < block_wt; w++) {
+            noc.async_read(
+                addr_mask,
+                dfb_attn_obj,
+                mask_read_tile_face_bytes * 2,
+                {.page_id = mask_batch_base + w},
+                {.offset_bytes = write_offset});
+            noc.async_read_barrier();
+            std::uint32_t src_addr = dfb_attn_obj.get_write_ptr() + write_offset + mask_read_tile_face_bytes;
+            noc.async_read(
+                UnicastEndpoint{},
+                dfb_attn_obj,
+                mask_read_tile_face_bytes,
+                {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr},
+                {.offset_bytes = write_offset + mask_read_tile_offset_bytes});
+            write_offset += mask_tile_bytes;
+        }
         noc.async_read_barrier();
-        std::uint32_t src_addr = dfb_attn_obj.get_write_ptr() + write_offset + mask_read_tile_face_bytes;
-        noc.async_read(
-            UnicastEndpoint{},
-            dfb_attn_obj,
-            mask_read_tile_face_bytes,
-            {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr},
-            {.offset_bytes = write_offset + mask_read_tile_offset_bytes});
-        write_offset += mask_tile_bytes;
-    }
-    noc.async_read_barrier();
-    dfb_attn_obj.push_back(block_wt);
+        dfb_attn_obj.push_back(block_wt);
+#ifdef MASK_PER_ROW
+        if (--rows_left_in_batch == 0) {
+            rows_left_in_batch = rows_per_batch;
+            mask_batch_base += mask_batch_stride;
+        }
 #endif
-
-    {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_max_scaler,
-            ckernel::PoolType::MAX,
-            ckernel::ReduceDim::REDUCE_ROW>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_sum_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>();
     }
+#endif
 }
