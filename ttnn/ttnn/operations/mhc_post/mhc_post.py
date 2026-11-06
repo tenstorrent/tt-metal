@@ -168,6 +168,11 @@ def validate(
     for name, t in (("post", post), ("comb", comb)):
         if t.dtype != ttnn.float32 or t.layout != ttnn.TILE_LAYOUT:
             raise ValueError(f"mhc_post: {name} must be float32 TILE")
+    # The reader / writer address every tensor through an interleaved TensorAccessor page walk;
+    # a sharded tensor would be read as if interleaved (TARGET has no memory_layout axis).
+    for name, t in (("input_tensor", input_tensor), ("residual", residual), ("post", post), ("comb", comb)):
+        if t.memory_config().is_sharded():
+            raise ValueError(f"mhc_post: {name} must be interleaved (sharded inputs are not in the contract)")
     _check_caller_buffer("output_tensor", output_tensor, x_shape, residual.dtype, (input_tensor, residual, post, comb))
 
     # --- (2) per-axis SUPPORTED, in TARGET order ---
