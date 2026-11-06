@@ -20,11 +20,11 @@ void bind_entry_correction(nb::module_& mod) {
         (``summarize_chunk_recurrence(emit_outputs=True)``) once the entry states are known. The recurrence is
         affine in its seed, so ``output_c = F0_c + (FI_c - F0_c) @ seed`` and, from the final transition's
         complement form ``E = A - I``, ``final = seed + (E @ seed + B)`` with the seed and ``B`` added exactly in
-        FP32 (only ``E @ seed`` passes through the matmul's source registers), all chunks in parallel. The seed is ``entry`` for the chunks before the chronological reset chunk and
-        ``tail_entry`` from it on; the final state takes ``tail_entry`` when the rank's valid rows reach its
-        split tail. Each head's chunks are split over ``len(cores) / (B*H)`` cores, and ``terms`` is
-        height-sharded over ``cores`` so each core's chunk rows are in its L1. Chunks past ``actual_end`` are
-        left unspecified.
+        FP32 (only ``E @ seed`` passes through the matmul's source registers), all chunks in parallel. The seed
+        is ``entry`` for the chunks before the chronological reset chunk and ``tail_entry`` from it on; the final
+        state takes ``tail_entry`` when the rank's valid rows reach its split tail. Each head's chunks are split
+        over ``len(cores) / (B*H)`` cores, and ``terms`` is height-sharded over ``cores`` so each core's chunk rows
+        are in its L1. Chunks past ``actual_end`` are left unspecified.
 
         Args:
             terms (ttnn.Tensor): FLOAT32 TILE-layout ``[len(cores), 2, rows, K]`` chunk outputs for a zero
