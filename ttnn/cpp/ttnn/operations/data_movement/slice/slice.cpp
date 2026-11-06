@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -182,6 +183,9 @@ ttnn::Tensor slice(
         return ttnn::copy(result, dst);
     };
 
+    // Block-float inputs reach RM as bfloat16, so carry the caller's dtype back through the final
+    // to_layout; every other dtype keeps the existing behaviour.
+    const bool restore_block_float = tt::tt_metal::is_block_float(input_tensor.dtype()) && input_layout == Layout::TILE;
     auto ret_adjustment([&](const ttnn::Tensor& source) {
         if (source.storage_type() != StorageType::DEVICE) {
             return source;
@@ -190,7 +194,8 @@ ttnn::Tensor slice(
         const auto resolved_mc = resolve_mc(source);
         const auto target = can_land_in_preallocated(source) ? optional_output_tensor : std::nullopt;
         auto tensor = ttnn::to_memory_config(source, resolved_mc, std::nullopt, target);
-        tensor = ttnn::to_layout(tensor, input_layout);
+        tensor = restore_block_float ? ttnn::to_layout(tensor, input_layout, input_tensor.dtype())
+                                     : ttnn::to_layout(tensor, input_layout);
         return tensor;
     });
 
@@ -379,7 +384,14 @@ ttnn::Tensor slice(
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
         }
-        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
+        // Block-float has no row-major form, so go to RM as bfloat16 and restore the dtype in
+        // ret_adjustment.
+        if (tt::tt_metal::is_block_float(input.dtype())) {
+            input = ttnn::to_layout(
+                ttnn::typecast(input, DataType::BFLOAT16), Layout::ROW_MAJOR, std::nullopt, memory_config);
+        } else {
+            input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
+        }
     }
 
     ttsl::SmallVector<uint32_t> padded_ends = modified_ends;

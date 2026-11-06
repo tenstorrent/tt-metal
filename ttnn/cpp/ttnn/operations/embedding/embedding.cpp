@@ -27,8 +27,15 @@ ttnn::Tensor embedding(
     }
     Tensor mutable_weight = weight_arg;
 
+    // Block-float has no row-major form: untilize as bfloat16 and restore the caller's dtype at
+    // the end (the restore below compares against weight_arg's dtype, not the untilized one).
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
-        mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
+        if (tt::tt_metal::is_block_float(mutable_weight.dtype())) {
+            mutable_weight =
+                ttnn::to_layout(ttnn::typecast(mutable_weight, DataType::BFLOAT16), ttnn::ROW_MAJOR_LAYOUT);
+        } else {
+            mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
+        }
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
     auto original_input_rank = input_tensor.logical_shape().rank();
@@ -72,9 +79,15 @@ ttnn::Tensor embedding(
     } else {
         embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
     }
-    embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
-    if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
-        embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
+    // The restore must compare against the caller's weight_arg dtype: block-float weights reach
+    // RM as bfloat16, and weight (the untilized copy) reports bfloat16 for them.
+    const auto& output_dtype = dtype.value_or(weight_arg.dtype());
+    embeddings = ttnn::to_layout(
+        embeddings,
+        layout.value_or(weight_arg.layout()),
+        tt::tt_metal::is_block_float(output_dtype) ? std::optional<ttnn::DataType>(output_dtype) : std::nullopt);
+    if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != output_dtype) {
+        embeddings = ttnn::typecast(embeddings, output_dtype);
     }
     return embeddings;
 }
