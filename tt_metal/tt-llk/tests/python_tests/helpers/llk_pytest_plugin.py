@@ -761,10 +761,9 @@ def _split_by_cost(config, items):
     A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
     --speed-of-light, which compiles every variant) divided by the module's test count. The
     chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
-    except at a cut point. build_perf_split_costs.py rebuilds both tables. When
-    LLK_SPLIT_DURATIONS names a file of measured durations, those replace the table weights.
-    This runs before _collapse_runtime_only_variants, so the compile and run passes cut the
-    same list.
+    except at a cut point. When LLK_SPLIT_DURATIONS names a file of measured durations, those
+    replace the table weights. This runs before _collapse_runtime_only_variants, so the compile
+    and run passes cut the same list.
     """
     splits = config.getoption("--perf-splits")
     group = config.getoption("--perf-group")
