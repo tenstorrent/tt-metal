@@ -21,6 +21,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -572,9 +573,10 @@ TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     }
 }
 
-// The DM0 descriptor pool packs every slot on a core to 8 B (<= 5 counters), 16 B (<= 13) or 32 B,
-// with the threshold in the slot's last byte. Each case puts real descriptors at a stride boundary,
-// rebuilds them with DM0's copy rules, and checks no counter is lost or overwritten by the threshold.
+// The DM0 descriptor pool packs every slot on a core to 8 B (<= 2 counters), 16 B (<= 10) or 32 B,
+// with the threshold in the slot's last byte. Each case puts real descriptors at a stride or copy-word
+// boundary, rebuilds them with DM0's copy rules, and checks no counter or finish field is lost or
+// overwritten by the threshold.
 struct DfbDm0DescriptorCase {
     const char* name;
     std::vector<experimental::dfb::DataflowBufferConfig> configs;
@@ -593,14 +595,14 @@ struct Dm0CopiedDescriptor {
     uint8_t threshold;
 };
 
-// Mirrors DM0's copy in dataflow_buffer_init.h: the first 8 B always, bytes 8-15 (16 B slot) or
-// 8-23 (32 B slot) only past 6 counters, and the threshold from dfb_dm0_desc_threshold_offset.
+// Mirrors DM0's copy in dataflow_buffer_init.h: the first 8 B always, bytes 8-15 past 3 counters,
+// bytes 16-23 past 11 (32 B slot only), and the threshold from dfb_dm0_desc_threshold_offset.
 Dm0CopiedDescriptor dm0_copy_descriptor(const uint8_t* slot, uint32_t stride) {
     Dm0CopiedDescriptor out{};
     auto* image = reinterpret_cast<uint8_t*>(&out.image);
     std::memcpy(image, slot, 8);
-    if (slot[0] > 6) {
-        std::memcpy(image + 8, slot + 8, stride == 32 ? 16 : 8);
+    if (slot[0] > 3) {
+        std::memcpy(image + 8, slot + 8, slot[0] > 11 ? 16 : 8);
     }
     out.threshold = slot[dfb_dm0_desc_threshold_offset(stride)];
     return out;
@@ -676,6 +678,11 @@ TEST_P(DfbDm0DescriptorStrideTest, RoundTripsThroughDm0Copy) {
                 }
                 EXPECT_EQ(copied.image.tiles_to_post_or_ack, desc.num_entries_per_txn_id_per_tc);
                 EXPECT_EQ(copied.threshold, desc.num_entries_to_process_threshold);
+                // DM0's kernel-exit flush reads the finish record from every side's first txn id.
+                const uint16_t side_mask =
+                    is_producer ? c.configs[i].producer_risc_mask : c.configs[i].consumer_risc_mask;
+                EXPECT_EQ(copied.image.finish.issuer_hart_mask, side_mask & ((1u << ::dfb::TENSIX_RISC_OFFSET) - 1u));
+                EXPECT_EQ(copied.image.finish.num_txn_ids, desc.num_txn_ids);
             }
         }
     }
@@ -713,28 +720,40 @@ constexpr auto kBlocked = dfb::AccessPattern::BLOCKED;
 }  // namespace
 
 // Neo harts start at bit 8. A side's count is max(P, C) for STRIDED and P x C for BLOCKED<->STRIDED,
-// with at most 6 counters per hart, so 13 and 14 have no topology: 12 and 15 stand in for them.
+// with at most 6 counters per hart, so 11 has no topology: 12 is the first 32 B count.
 INSTANTIATE_TEST_SUITE_P(
     CompactBoundaries,
     DfbDm0DescriptorStrideTest,
     ::testing::Values(
-        // 1 DM -> 5 DMs: 5 counters, the most an 8 B slot holds.
+        // 1 DM -> 2 DMs: 2 counters, the most an 8 B slot holds.
         DfbDm0DescriptorCase{
-            .name = "Counters5Stride8",
-            .configs = {dm0_desc_config(20, 0x01, 1, kStrided, 0x3E, 5, kStrided)},
+            .name = "Counters2Stride8",
+            .configs = {dm0_desc_config(8, 0x01, 1, kStrided, 0x06, 2, kStrided)},
             .expected_stride = 8,
-            .expected_counters = {{5, 5}}},
-        // 1 DM -> 6 DMs: 6 counters, the first 16 B count and the last DM0 copies in one word.
+            .expected_counters = {{2, 2}}},
+        // 1 DM -> 3 DMs: 3 counters, the first 16 B count and the last DM0 copies in one word.
         DfbDm0DescriptorCase{
-            .name = "Counters6Stride16",
-            .configs = {dm0_desc_config(24, 0x01, 1, kStrided, 0x7E, 6, kStrided)},
+            .name = "Counters3Stride16",
+            .configs = {dm0_desc_config(12, 0x01, 1, kStrided, 0x0E, 3, kStrided)},
             .expected_stride = 16,
-            .expected_counters = {{6, 6}}},
-        // 4 BLOCKED DMs -> 3 DMs: 12 counters per side, both words of a 16 B slot.
+            .expected_counters = {{3, 3}}},
+        // 1 DM -> 4 DMs: 4 counters, the first that needs word 1.
         DfbDm0DescriptorCase{
-            .name = "Counters12Stride16",
+            .name = "Counters4Stride16",
+            .configs = {dm0_desc_config(16, 0x01, 1, kStrided, 0x1E, 4, kStrided)},
+            .expected_stride = 16,
+            .expected_counters = {{4, 4}}},
+        // 5 BLOCKED DMs -> 2 DMs: 10 counters per side, the most a 16 B slot holds.
+        DfbDm0DescriptorCase{
+            .name = "Counters10Stride16",
+            .configs = {dm0_desc_config(20, 0x1F, 5, kBlocked, 0x60, 2, kStrided)},
+            .expected_stride = 16,
+            .expected_counters = {{10, 10}}},
+        // 4 BLOCKED DMs -> 3 DMs: 12 counters per side, the first 32 B count and the first to need word 2.
+        DfbDm0DescriptorCase{
+            .name = "Counters12Stride32",
             .configs = {dm0_desc_config(24, 0x0F, 4, kBlocked, 0x70, 3, kStrided)},
-            .expected_stride = 16,
+            .expected_stride = 32,
             .expected_counters = {{12, 12}}},
         // 5 BLOCKED DMs -> 3 DMs: 15 counters per side, three words of a 32 B slot.
         DfbDm0DescriptorCase{

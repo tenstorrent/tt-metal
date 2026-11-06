@@ -443,7 +443,7 @@ So one ISR fire means: all participating DMs have each completed their NOC ops o
 Host packs a **DM0 ISR blob** into the DFB config region, and DM0 reads its prologue from one header word:
 
 1. `dfb_global_header_t::dm0_packed` — the blob offset, the descriptor stride, and the `producer_txn_id_mask` / `consumer_txn_id_mask` (bit `i` set ⇒ txn id `i` needs poster and/or acker IRQ)
-2. **Descriptor pool** (the whole blob) — one `TxnDFBDescriptor` image per used id, ascending id order, each slot 8, 16 or 32B: which TCs to touch and how many tiles to `inc_posted` / `inc_acked` when that id fires, with the CMDBUF threshold in the slot's last byte (byte 20 of a 32B slot, which is followed by padding)
+2. **Descriptor pool** (the whole blob) — one `TxnDFBDescriptor` image per used id, ascending id order, each slot 8, 16 or 32B: which TCs to touch and how many tiles to `inc_posted` / `inc_acked` when that id fires, plus the side's kernel-exit finish record, with the CMDBUF threshold in the slot's last byte (byte 23 of a 32B slot, which is followed by padding)
 
 At kernel launch DM0 runs `setup_dfb_implicit_sync`:
 

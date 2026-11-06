@@ -568,6 +568,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     DfbPackerRemapperRange packer_rmp{};
     if (num_dfbs == 0) {
         g_dfb_config_base_addr = 0;
+        g_dfb_bound_mask = 0;
         return packer_rmp;
     }
 
@@ -619,6 +620,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 
     // Widen walk counters to uint32_t so RV64 codegen avoids zext.b/zext.w on every
     // increment / compare. Blob fields stay uint8_t; only locals are widened.
+    uint32_t bound_mask = 0;
     for (uint32_t i = 0; i < num_init; i++) {
         const uintptr_t e_addr = reinterpret_cast<uintptr_t>(p);
         const uint32_t t_hdr_start = rdcycle();
@@ -659,12 +661,14 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         // Host already multiplied by sizeof(LocalDFBInterface): base + offset, no multiply here.
         LocalDFBInterface& iface =
             *reinterpret_cast<LocalDFBInterface*>(reinterpret_cast<uintptr_t>(g_dfb_interface) + iface_byte_off);
+        bound_mask |= 1u << (iface_byte_off / static_cast<uint32_t>(sizeof(LocalDFBInterface)));
 #else
         ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_TRISC);
         ASSERT(num_tcs <= dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
         ASSERT(trisc_tc_slot_count + num_tcs <= dfb::MAX_TRISC_TC_SLOTS);
         const uint8_t compact_id = compact_dfb_count++;
         g_dfb_logical_to_compact[eh.logical_dfb_id] = compact_id;
+        bound_mask |= 1u << eh.logical_dfb_id;
         LocalDFBInterface& iface = g_dfb_interface[compact_id];
         iface.tc_slots.slot_base = trisc_tc_slot_count;
         trisc_tc_slot_count += static_cast<uint8_t>(num_tcs);
@@ -838,6 +842,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 
         WAYPOINT("L5");
     }
+    g_dfb_bound_mask = bound_mask;
 
     const uint32_t t_after_loop = rdcycle();
 
