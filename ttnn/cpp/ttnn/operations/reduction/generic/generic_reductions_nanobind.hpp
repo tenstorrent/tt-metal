@@ -28,7 +28,7 @@ inline std::string get_generic_reduction_doc(
     bool has_fast_approximate_mode = false) {
     // INT32 (TILE only) is supported for sum/min/max via the SFPU reduce path, but not for mean:
     // the average (sum / N) is usually fractional, so there is no canonical INT32 result to return.
-    // UINT32 sum/min/max reduce it natively on the same SFPU path with unsigned compares.
+    // UINT32 sum/min/max take the same SFPU reduce path as INT32 with unsigned compares.
     const char* int32_row = int32_supported ? R"doc(
                 * - INT32
                   - TILE

@@ -15,10 +15,13 @@
  * routes fp32 through the SFPU at full fp32. Only affects Float32; Int32, UInt32 and bf16 MIN use the SFPU
  * regardless of this mode.
  */
-constexpr bool is_int_reduce_format(DataFormat data_format) {
-    return data_format == DataFormat::Int32 || data_format == DataFormat::UInt32;
-}
 enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
+
+// True for the 32-bit integer formats that reduce on the SFPU.
+// is_uint32_format() returns false on Quasar since it is not supported.
+constexpr bool is_int_reduce_format(DataFormat data_format) {
+    return data_format == DataFormat::Int32 || is_uint32_format(data_format);
+}
 
 /**
  * @brief Determines whether a reduce operation should use the SFPU path.
