@@ -8,6 +8,7 @@
 // tile stride once (_llk_pack_block_w_init_, llk_pack_w_take); a block that continues the last one only moves the base with the packer W counter. MATMUL_PACK_FORM 1
 // is the plain block, 2 the closed block. Keep it equal to llk_pack_block and llk_pack_w_take.
 
+#include <cstdint>
 #if defined(ARCH_BLACKHOLE)
 #include "llk_pack.h"
 

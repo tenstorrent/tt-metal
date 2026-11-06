@@ -173,7 +173,15 @@ def _unpack_bfp_b(
 
 def unpack_bfp8(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):
     """BFP8 with the 5 bit exponent (bias 15) to a float16 tensor."""
-    return _unpack_bfp_b(bfp8_block, magnitude_bits=7, sfpu=sfpu, num_faces=num_faces, face_r_dim=face_r_dim, exp_bias=15, dtype=torch.float16)
+    return _unpack_bfp_b(
+        bfp8_block,
+        magnitude_bits=7,
+        sfpu=sfpu,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        exp_bias=15,
+        dtype=torch.float16,
+    )
 
 
 def unpack_bfp8_b(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):

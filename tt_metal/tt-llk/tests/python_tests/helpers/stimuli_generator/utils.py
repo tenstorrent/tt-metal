@@ -610,7 +610,9 @@ def generate_face_matmul_data(
     if dtype in (torch.int8, torch.uint8, torch.int16, torch.int32):
         # small integers keep every K-sum inside the format (unsigned formats stay non-negative)
         low = 0 if stimuli_format == DataFormat.UInt8 else -3
-        out = torch.randint(low, 4, (rt, ct, DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)).to(dtype)
+        out = torch.randint(
+            low, 4, (rt, ct, DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        ).to(dtype)
     else:
         out = torch.rand(rt, ct, DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM, dtype=dtype)
     mask = _mask_tile(

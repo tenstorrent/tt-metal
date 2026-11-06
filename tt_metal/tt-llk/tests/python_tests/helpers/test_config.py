@@ -1182,8 +1182,13 @@ class TestConfig:
                     )
 
         # A matmul with per-operand tile geometry strides each unpacker by the L1 tile size of its own operand
-        if self.variant_stimuli and self.variant_stimuli.operand_unpack_words is not None:
-            self.unpack_size_a, self.unpack_size_b = self.variant_stimuli.operand_unpack_words
+        if (
+            self.variant_stimuli
+            and self.variant_stimuli.operand_unpack_words is not None
+        ):
+            self.unpack_size_a, self.unpack_size_b = (
+                self.variant_stimuli.operand_unpack_words
+            )
 
         # We need to call this here because this function generates serialisation format need for writing RTs to L1,
         # Which is needed by execution part of test infra

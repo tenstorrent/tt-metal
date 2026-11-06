@@ -778,8 +778,6 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_matmul_grid2_tiny": "perf_matmul_grid2_tiny"},
     },
-
-
     "perf_matmul_cov2": {
         "version": 1,
         "columns": [

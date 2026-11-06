@@ -39,7 +39,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_INDEX,
     DEST_SYNC,
@@ -47,12 +46,13 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_FORM_KEYS,
-    MATMUL_K_LOOP,
-    MATMUL_ROW_END_FOLD,
     MATMUL_IN1_ALT,
+    MATMUL_K_LOOP,
     MATMUL_PACK_BLOCK,
-    MATMUL_STREAM_NARROW,
+    MATMUL_PHASE_ELIDE,
     MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
+    MATMUL_STREAM_NARROW,
     MATMUL_STREAM_Z,
     NUM_BLOCKS,
     NUM_FACES,
@@ -328,14 +328,24 @@ def test_math_matmul(
         )
     num_blocks = 1 if dest_straddles_half else 4
 
-
     configuration = TestConfig(
         "sources/math_matmul_test.cpp",
         formats,
         templates=[
             STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
             MATH_FIDELITY(math_fidelity),
-            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces, MATMUL_PHASE_ELIDE.keeps_requested(matmul_config.tile_dimensions, matmul_config.dest_sync, math_fidelity)),
+            *MATMUL_PHASE_ELIDE.for_block(
+                formats,
+                math_fidelity,
+                matmul_config.dest_acc,
+                throttle,
+                matmul_config.face_layout_config.unpack_transpose_faces,
+                MATMUL_PHASE_ELIDE.keeps_requested(
+                    matmul_config.tile_dimensions,
+                    matmul_config.dest_sync,
+                    math_fidelity,
+                ),
+            ),
             THROTTLE_LEVEL(throttle),
             DEST_SYNC(matmul_config.dest_sync),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
@@ -380,7 +390,10 @@ def test_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            *MATMUL_ROW_END_FOLD.for_block(matmul_config.tile_dimensions.ct_dim, matmul_config.tile_dimensions.rt_dim),
+            *MATMUL_ROW_END_FOLD.for_block(
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+            ),
             *MATMUL_FORM_KEYS.for_block(
                 formats,
                 matmul_config.tile_dimensions.kt_dim,

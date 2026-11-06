@@ -11,10 +11,10 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     MATH_FIDELITY,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    PACK_SRC_FROM_OUTPUT,
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block

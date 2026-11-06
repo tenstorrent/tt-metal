@@ -4,10 +4,11 @@
 # init of the arm before every call (the init cost: mode 4 less mode 3).
 # A tree with _llk_math_matmul_init_switch_ re-inits through it, as matmul_block_math_dynamic_throttle does; main's tree takes main's template
 # arguments and its full init. Regenerate by importing the module without DYN_NOGEN; DYN_NOGEN keeps the committed source.
-import os, re, tempfile
+import os
+import re
+import tempfile
 from dataclasses import dataclass
 
-import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
 from helpers.test_variant_parameters import TemplateParameter
@@ -17,11 +18,16 @@ _TESTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _generate():
     src = open(os.path.join(_TESTS, "sources", "matmul_test.cpp")).read()
-    llk = open(os.path.join(_TESTS, "..", "tt_llk_blackhole", "llk_lib", "llk_math_matmul.h")).read()
+    llk = open(
+        os.path.join(_TESTS, "..", "tt_llk_blackhole", "llk_lib", "llk_math_matmul.h")
+    ).read()
     head = "_llk_math_matmul_init_switch_" in llk
     if head:
         call, init = "MATMUL_MATH_TEMPLATE_ARGS", "MATMUL_MATH_INIT_TEMPLATE_ARGS"
-        tcall, tinit = "MATMUL_FIDELITY, 5, false, true, matmul_reuse_dir_k", "MATMUL_FIDELITY, 5, false, true, 0, false, false, matmul_reuse_dir_k, false"
+        tcall, tinit = (
+            "MATMUL_FIDELITY, 5, false, true, matmul_reuse_dir_k",
+            "MATMUL_FIDELITY, 5, false, true, 0, false, false, matmul_reuse_dir_k, false",
+        )
         reinit = "_llk_math_matmul_init_switch_"
     else:
         call = init = "MATH_FIDELITY, THROTTLE_LEVEL"
@@ -60,7 +66,9 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
     i = src.index("#ifdef LLK_TRISC_MATH")
     j = src.index("void run_kernel", i)
     out = src[:j] + defs + "\n" + src[j:]
-    pat = re.compile(r"_llk_math_matmul_<[^>]*>\(\s*/\*\s*dest_index\s*\*/\s*0,\s*CT_DIM,\s*RT_DIM\);")
+    pat = re.compile(
+        r"_llk_math_matmul_<[^>]*>\(\s*/\*\s*dest_index\s*\*/\s*0,\s*CT_DIM,\s*RT_DIM\);"
+    )
     k = i + (len(defs) + 1)
     body = out[k:]
     body, n = pat.subn("DYN_MATMUL();", body)
@@ -68,7 +76,10 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
     out = out[:k] + body
     path = os.path.join(_TESTS, "sources", "matmul_dyn_test.cpp")
     if not (os.path.exists(path) and open(path).read() == out):
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path)); os.write(fd, out.encode()); os.close(fd); os.replace(tmp, path)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+        os.write(fd, out.encode())
+        os.close(fd)
+        os.replace(tmp, path)
 
 
 if not os.environ.get("DYN_NOGEN"):
@@ -78,7 +89,10 @@ import perf_matmul as pm  # noqa: E402
 F = DataFormat
 CASES = [
     (fmt, sync, (rt, ct, kt), mf)
-    for fmt in (InputOutputFormat(F.Float16_b, F.Float16_b), InputOutputFormat(F.Bfp8_b, F.Bfp8_b))
+    for fmt in (
+        InputOutputFormat(F.Float16_b, F.Float16_b),
+        InputOutputFormat(F.Bfp8_b, F.Bfp8_b),
+    )
     for sync in (DestSync.Half, DestSync.Full)
     for rt, ct in ((1, 1), (1, 8), (4, 2), (8, 1))
     for kt in (1, 4, 32)
@@ -103,19 +117,32 @@ def run_dyn(perf_report, fmt, sync, dims, mf, mode):
     orig = pm.PerfConfig
 
     def make(source, formats, run_types, templates=None, **kw):
-        return orig("sources/matmul_dyn_test.cpp", formats, run_types, templates=list(templates) + [DYN(mode)], **kw)
+        return orig(
+            "sources/matmul_dyn_test.cpp",
+            formats,
+            run_types,
+            templates=list(templates) + [DYN(mode)],
+            **kw,
+        )
 
     # the block keys ttnn's matmul_block passes: the cells llk_matmul_forms.h keeps on main's form apply, as in perf_matmul_grid
     keys = pm.MATMUL_FORM_KEYS
     orig_for_block = keys.for_block
 
     def for_block(*args, **kwargs):
-        return [k.with_block(ct, rt, kt, DestAccumulation.No) for k in orig_for_block(*args, **kwargs)]
+        return [
+            k.with_block(ct, rt, kt, DestAccumulation.No)
+            for k in orig_for_block(*args, **kwargs)
+        ]
 
     pm.PerfConfig = make
     keys.for_block = staticmethod(for_block)
     try:
-        pm.test_perf_matmul(perf_report, (fmt, DestAccumulation.No, sync, ([rt * 32, kt * 32], [kt * 32, ct * 32])), mf)
+        pm.test_perf_matmul(
+            perf_report,
+            (fmt, DestAccumulation.No, sync, ([rt * 32, kt * 32], [kt * 32, ct * 32])),
+            mf,
+        )
     finally:
         pm.PerfConfig = orig
         keys.for_block = staticmethod(orig_for_block)

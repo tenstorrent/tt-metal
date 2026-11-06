@@ -167,7 +167,9 @@ def bfp8a_to_float16(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     """BFP8 with the 5 bit exponent pack/unpack round trip, truncating like the packer; dimensions untilizes a tiled stimulus."""
     out = _quantize_bfp_a(operand, 7)
     if dimensions is not None:
-        out = untilize_block(out, stimuli_format=DataFormat.Float16, dimensions=dimensions).flatten()
+        out = untilize_block(
+            out, stimuli_format=DataFormat.Float16, dimensions=dimensions
+        ).flatten()
     return out
 
 

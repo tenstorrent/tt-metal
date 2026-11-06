@@ -3,21 +3,34 @@
 
 """Functional golden of the tiny tile cells of perf_matmul_grid2: operands of different formats (Float16_b, Bfp8_b, Bfp4_b, Float32), a
 different face count per operand (in0 height 1 to 16 with 2 faces, in1 width 16 with 2 faces) and block float tiles packed per operand, on the
-math matmul test. One block per tile shape and operand format pair, drawn from the perf rows of perf_matmul_grid2 (same cells, same blocks)."""
+math matmul test. One block per tile shape and operand format pair, drawn from the perf rows of perf_matmul_grid2 (same cells, same blocks).
+"""
 
 import pytest
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
-from helpers.golden_generators import TILE_DIM, MatmulGolden, TransposeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, PerfRunType, StochasticRounding, Transpose, format_dict
+from helpers.golden_generators import (
+    TILE_DIM,
+    MatmulGolden,
+    TransposeGolden,
+    get_golden_generator,
+)
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+    PerfRunType,
+    Transpose,
+    format_dict,
+)
+from helpers.logger import logger
 from helpers.matmul_sweep import matmul_pack_form
 from helpers.param_config import DEST_SYNC_TILE_LIMITS
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_INDEX,
     DEST_SYNC,
@@ -25,13 +38,14 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_FORM_KEYS,
-    MATMUL_K_LOOP,
-    MATMUL_ROW_END_FOLD,
     MATMUL_IN1_ALT,
+    MATMUL_K_LOOP,
     MATMUL_OPERAND_SIZES,
     MATMUL_PACK_BLOCK,
-    MATMUL_STREAM_NARROW,
+    MATMUL_PHASE_ELIDE,
     MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
+    MATMUL_STREAM_NARROW,
     MATMUL_STREAM_Z,
     NUM_BLOCKS,
     NUM_FACES,
@@ -44,7 +58,6 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
-from helpers.logger import logger
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 from perf_matmul_grid2 import _hash, _tiny_rows, tiny_config
@@ -62,7 +75,9 @@ def _golden_cases():
         if "F32" in key[2:]:
             # a 32-bit operand against the golden's 32-bit accumulation needs the 32-bit DEST
             rows = [r for r in rows if r[3] == "Y"]
-        a, b, o, acc, sy, fi, r0, c1, rt, ct, kt = rows[_hash("g%d,%d,%s,%s" % key) % len(rows)]
+        a, b, o, acc, sy, fi, r0, c1, rt, ct, kt = rows[
+            _hash("g%d,%d,%s,%s" % key) % len(rows)
+        ]
         out.append((a, b, o, acc, sy, getattr(MathFidelity, fi), r0, c1, rt, ct, kt))
     return out
 
@@ -72,7 +87,8 @@ def _golden_cases():
 @pytest.mark.parametrize(
     "case",
     _golden_cases(),
-    ids=lambda c: "in0_%dx32_in1_32x%d_in1fmt_%s_in0fmt_%s_out_%s_%s_%s_%s_%dx%dx%d" % (c[6], c[7], c[0], c[1], c[2], c[3], c[4], c[5].name, c[8], c[9], c[10]),
+    ids=lambda c: "in0_%dx32_in1_32x%d_in1fmt_%s_in0fmt_%s_out_%s_%s_%s_%s_%dx%dx%d"
+    % (c[6], c[7], c[0], c[1], c[2], c[3], c[4], c[5].name, c[8], c[9], c[10]),
 )
 def test_matmul_grid2_tiny(case):
     a, b, o, acc, sy, math_fidelity, r0, c1, rt, ct, kt = case
@@ -132,8 +148,20 @@ def test_matmul_grid2_tiny(case):
         )
 
     # the golden quantizes a block float operand in blocks of 16 of its tilized order and untilizes the result, so it takes those operands tilized
-    golden_in0 = tilize_block(in0, dimensions=in0_dimensions, stimuli_format=formats.input_format_B) if formats.input_format_B.is_block_float() else in0
-    golden_in1 = tilize_block(in1_golden, dimensions=in1_dimensions, stimuli_format=formats.input_format) if formats.input_format.is_block_float() else in1_golden
+    golden_in0 = (
+        tilize_block(
+            in0, dimensions=in0_dimensions, stimuli_format=formats.input_format_B
+        )
+        if formats.input_format_B.is_block_float()
+        else in0
+    )
+    golden_in1 = (
+        tilize_block(
+            in1_golden, dimensions=in1_dimensions, stimuli_format=formats.input_format
+        )
+        if formats.input_format.is_block_float()
+        else in1_golden
+    )
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
         golden_in0,
@@ -188,7 +216,6 @@ def test_matmul_grid2_tiny(case):
         )
     num_blocks = 1
 
-
     configuration = TestConfig(
         "sources/math_matmul_test.cpp",
         formats,
@@ -196,7 +223,18 @@ def test_matmul_grid2_tiny(case):
             STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
             MATH_FIDELITY(math_fidelity),
             MATMUL_OPERAND_SIZES(),
-            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces, MATMUL_PHASE_ELIDE.keeps_requested(matmul_config.tile_dimensions, matmul_config.dest_sync, math_fidelity)),
+            *MATMUL_PHASE_ELIDE.for_block(
+                formats,
+                math_fidelity,
+                matmul_config.dest_acc,
+                throttle,
+                matmul_config.face_layout_config.unpack_transpose_faces,
+                MATMUL_PHASE_ELIDE.keeps_requested(
+                    matmul_config.tile_dimensions,
+                    matmul_config.dest_sync,
+                    math_fidelity,
+                ),
+            ),
             THROTTLE_LEVEL(throttle),
             DEST_SYNC(matmul_config.dest_sync),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
@@ -241,7 +279,10 @@ def test_matmul_grid2_tiny(case):
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            *MATMUL_ROW_END_FOLD.for_block(matmul_config.tile_dimensions.ct_dim, matmul_config.tile_dimensions.rt_dim),
+            *MATMUL_ROW_END_FOLD.for_block(
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+            ),
             *MATMUL_FORM_KEYS.for_block(
                 formats,
                 matmul_config.tile_dimensions.kt_dim,
@@ -325,7 +366,9 @@ def test_matmul_grid2_tiny(case):
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
     # the result tiles come back packed to their own face count and rows; the golden keeps 1024 elements per tile
     per_tile = num_faces * min(in0_tile_r_dim, 16) * 16
-    res_tensor = torch.nn.functional.pad(res_tensor.view(-1, per_tile), (0, 1024 - per_tile)).flatten()
+    res_tensor = torch.nn.functional.pad(
+        res_tensor.view(-1, per_tile), (0, 1024 - per_tile)
+    ).flatten()
 
     # Convert golden tensor to L1 memory view for comparison
     golden_tensor = convert_to_l1_view(
@@ -345,7 +388,9 @@ def test_matmul_grid2_tiny(case):
         r = res_tensor.float().view(-1, 16)
         block_max = g.abs().max(dim=1, keepdim=True).values
         step = torch.exp2(torch.floor(torch.log2(block_max.clamp(min=1e-30))) - 2)
-        assert ((g - r).abs() <= 2.0 * step).all(), "Bfp4_b result is more than two block steps from the golden"
+        assert (
+            (g - r).abs() <= 2.0 * step
+        ).all(), "Bfp4_b result is more than two block steps from the golden"
         return
 
     if num_faces < 4:
