@@ -22,21 +22,28 @@ target_compile_definitions(x280_telemetry_loader PRIVATE X280_IMAGE_DIR="${X280_
 add_dependencies(x280_telemetry_loader x280_images)
 
 # Adds the host application which reads the telemetry table and displays it.
-add_executable(x280_telemetry_app host/telemetry_app.cpp)
-target_link_libraries(
-    x280_telemetry_app
-    PRIVATE
-        x280_device
-        TT::Metalium
-)
-target_include_directories(x280_telemetry_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+#add_executable(x280_telemetry_app host/telemetry_app.cpp)
+#target_link_libraries(
+#    x280_telemetry_app
+#    PRIVATE
+#        x280_device
+#        TT::Metalium
+#)
+#target_include_directories(x280_telemetry_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Adds the host application which reads the telemetry table and displays it.
-add_executable(x280_telemetry_app2 host/telemetry_app_v2.cpp)
+add_executable(
+    x280_telemetry_host_app 
+        host/telemetry_host_app.cpp
+        host/telemetry_host_lib.cpp
+)
+
 target_link_libraries(
-    x280_telemetry_app2
+    x280_telemetry_host_app 
     PRIVATE
         x280_device
         TT::Metalium
 )
-target_include_directories(x280_telemetry_app2 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(x280_telemetry_host_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(x280_telemetry_host_app PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
+add_dependencies(x280_telemetry_host_app x280_images)

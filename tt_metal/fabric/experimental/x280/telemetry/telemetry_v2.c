@@ -309,7 +309,7 @@ void update_arc_data_in_table() {
             continue;
         } 
 
-        g_table->num_values[g_table->labels[i].value_index] = get_arc_value(g_table->labels[i].arc_index);
+        g_table->num_values[g_table->labels[i].value_index].num_value = get_arc_value(g_table->labels[i].arc_index);
      }
 }
 
@@ -345,10 +345,7 @@ bool init_table() {
 }
 
 
-bool update_arc_tables() {
-}
-
-bool read_arc() {
+bool read_arc(uint32_t run_value) {
     bool result = true;
 
     x280_noc_coord_t coords = {.x = 8, .y = 0};
@@ -415,7 +412,7 @@ void run(uint64_t run_value) {
         }
 
         
-        auto result = read_arc(); 
+        auto result = read_arc(run_value); 
         if (result) {
             update_arc_data_in_table(); 
         }
@@ -432,7 +429,7 @@ int main(uint64_t hartid) {
     uint64_t run_value = x280_hart_control(hartid)->run_value;
     if (hartid == 0) {
         clear_memory(g_table, sizeof(MetricsTelemetryTable));
-        bool result = read_arc();
+        bool result = read_arc(run_value);
         if (result) {
             result = init_table();
         }
