@@ -502,19 +502,6 @@ class TtMoe(LightweightModule):
                 logger.info(f"TtMoe: running dispatch and combine, not the fabric2d ops: {fabric2d_error}")
         self.moe_transport = moe_transport
 
-        # The shared expert, WHEN OVERLAPPED with dispatch, runs on disjoint Tensix sub-devices that
-        # still SHARE the EDM fabric routers. In that case its TP-axis reduce-scatter must stay Linear
-        # even when the TP axis is a ring: a *ring* reduce-scatter concurrent with dispatch makes the
-        # two ops' wrap-link traffic form a cyclic EDM buffer-credit dependency and deadlocks (the
-        # shared-expert reduce_scatter wedges on its batch_ready_sem barrier at
-        # ring_reduce_scatter_minimal_async_writer.cpp). This mirrors the proven FABRIC_2D_TORUS_Y
-        # path, where the overlapped shared expert is Linear (col axis unwrapped) while dispatch
-        # rings on SP. The forcing is gated on the overlap flag: with overlap disabled the reduce-
-        # scatter runs alone (no concurrent dispatch on the shared routers), so Ring is safe and kept.
-        # The deadlock was recorded with the direct dispatch. dispatch_fabric2d forwards one hop at a time,
-        # and a soak with a Ring reduce-scatter beside it did not hang, so fabric2d keeps Ring.
-        # Every other TP-axis collective (MLA, dense FFN, gate, pre-dispatch all-gather, post-combine
-        # reduce) is never overlapped and keeps col_topology (Ring).
         force_shared_expert_linear = (
             self.overlap_shared_expert_with_dispatch
             and self.col_topology == ttnn.Topology.Ring

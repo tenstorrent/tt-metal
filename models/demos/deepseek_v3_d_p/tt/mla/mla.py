@@ -1524,10 +1524,7 @@ class ttMLA:
         cache writes. Sparse attention consumes the written cache; dense attention consumes packed values.
         """
         tt_kv = self._kv_a_proj(hidden_states, seq_len_local) if kv_a is None else None
-        # Sparse path: the fields feed only the cache write, which frees them right away
-        # (_prepare_sparse_kv_prefix, _forward_kv_only), so they fit in L1 (~6 KB/core at 640 rows).
         kv_mem = ttnn.L1_MEMORY_CONFIG if self._has_indexer and not return_kv_intermediates else ttnn.DRAM_MEMORY_CONFIG
-        # per_token_cast_to_fp8 reads and writes DRAM only, so a SCALED_FP8 cache keeps the normed latent there.
         latent_mem = ttnn.DRAM_MEMORY_CONFIG if kvpe_cache.format == MlaKvCacheFormat.SCALED_FP8 else kv_mem
         if kv_a is not None:
             tt_kv_nope, tt_kv_rope = kv_a
@@ -2051,7 +2048,6 @@ class ttMLA:
             # captured kv_actual_isl (None -> 0), stacking all chunks on top of chunk 0's KV region.
             metadata=metadata,
         )
-        # Dead once written: free them before the gather / top-k region (_kv_stem may place them in L1).
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
             ttnn.deallocate(value)
         # The write above is clamped to the chunk's real tokens, so on the last chunk KV is populated to
@@ -2091,7 +2087,7 @@ class ttMLA:
         # there is no transient buffer here any more.
         ttnn.deallocate(tt_q)
         v = self._apply_wkv_b2(attn_out, seq_len_local)
-        ttnn.deallocate(attn_out)  # may be an L1 buffer (_sparse_mla): must not outlive wkv_b2
+        ttnn.deallocate(attn_out)
         return v
 
     def _select_and_gather_overlapped(
@@ -2463,9 +2459,7 @@ class ttMLA:
 
         if transpose_head_to_seq:
             # Invert the redistribution so the result matches the head-sharded
-            # [1, H/tp, S/sp, v_dim] consumed by the epilogue. The result is wkv_b2's in0, so it goes where
-            # wkv_b2's tuned config wants it (L1 for GLM chunked: ~87 KB/core at 640 rows); the caller frees it
-            # right after wkv_b2.
+            # [1, H/tp, S/sp, v_dim] consumed by the epilogue.
             head_sharded = ttnn.experimental.all_to_all_async_generic(
                 ret,
                 in_dim=2,
