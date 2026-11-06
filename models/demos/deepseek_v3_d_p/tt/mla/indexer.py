@@ -83,6 +83,8 @@ def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
 
 
 class TtIndexerBase:
+    # score()/forward() accept qr already reduced to this TP rank's query rows (qr_tp_local=True).
+    accepts_tp_local_qr = True
     """Shared implementation foundation for DSA and compressed indexer variants.
 
     The current DSA path remains here so its tracing, TP cache deduplication, and
@@ -772,6 +774,7 @@ class TtIndexerBase:
         index_kv_cache: ttnn.Tensor = None,
         actual_end: int = None,
         metadata=None,
+        qr_tp_local: bool = False,
     ) -> IndexerSelectionState:
         """Run indexer stems and scoring, returning device logits plus selection metadata.
 
@@ -825,8 +828,9 @@ class TtIndexerBase:
 
         # Select the indexer's query rows BEFORE the replicated Q projection/RoPE/Hadamard.
         # Keep the original shared latent alive: the main MLA Q stem consumes it after this forward.
+        # qr_tp_local: the caller already reduced the q_a latent to these rows (see ttMLA._q_a_latent_tp_rows).
         tpsp = self.tp_factor > 1
-        qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp else qr
+        qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp and not qr_tp_local else qr
         sq_local = seq_len // self.tp_factor
         wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", sq_local)
         q = ttnn.linear(
@@ -1049,6 +1053,7 @@ class TtIndexerBase:
         index_kv_cache: ttnn.Tensor = None,
         actual_end: int = None,
         metadata=None,
+        qr_tp_local: bool = False,
     ) -> ttnn.Tensor:
         """Sequential compatibility wrapper for direct callers and non-overlapped sparse MLA."""
         state = self.score(
@@ -1062,6 +1067,7 @@ class TtIndexerBase:
             index_kv_cache=index_kv_cache,
             actual_end=actual_end,
             metadata=metadata,
+            qr_tp_local=qr_tp_local,
         )
         local_indices = self.select_local(state)
         return self.finalize_distribution(local_indices, state)
@@ -1082,6 +1088,8 @@ class TtCsaIndexer(TtIndexerBase):
     ``index_entries`` are compressed-entry counts, while ``active_seq_len_local`` and forward's
     ``seq_len`` remain token counts.
     """
+
+    accepts_tp_local_qr = False  # forward() takes the full q_a latent
 
     WEIGHT_NAMES = (
         "compressor.indexer.q_b_proj",

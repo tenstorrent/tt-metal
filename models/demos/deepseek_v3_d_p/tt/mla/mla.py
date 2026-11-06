@@ -1328,6 +1328,48 @@ class ttMLA:
             )
         return self._q_a_norm(qr, norm_memory_config)
 
+    def _q_a_rows_for_indexer(self) -> bool:
+        """Split the q_a stem around the indexer: reduce-scatter q_a over rows, so the indexer scores its own TP
+        rank's query rows straight from the normalized local rows (no all-gather + mesh_partition before it), and
+        gather the full rows for _q_stem only after the indexer is issued, while the device runs it."""
+        return (
+            self.tp_factor > 1
+            and self._has_indexer
+            and not self._merge_qkv_a
+            and not self.kv_only
+            # Every sparse layer takes this path, so a layer fed another layer's top-k (ReuseIndexer, which never reads
+            # qr) builds qr exactly as the layer that computed them. Only an indexer that needs the full latent opts out.
+            and getattr(self._indexer, "accepts_tp_local_qr", True)
+        )
+
+    def _q_a_latent_tp_rows(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """q_a projection + TP reduce-scatter over rows: this TP rank's query rows, un-normalized."""
+        return ttnn.experimental.matmul_reduce_scatter_prefill(
+            hidden_states,
+            self.q_a_proj_weight,
+            cluster_axis=self.tp_axis,
+            scatter_dim=-2,
+            topology=self.tp_ccl_topology,
+            num_links=self.ccl_num_links,
+        )
+
+    def _q_a_latent_from_tp_rows(
+        self, qr_rows: ttnn.Tensor, seq_len_local: int, norm_memory_config: ttnn.MemoryConfig
+    ) -> ttnn.Tensor:
+        """All-gather the TP ranks' q_a rows and normalize: the same qr _q_a_latent returns."""
+        assert (
+            seq_len_local == self.active_seq_len_local
+        ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
+        qr = ttnn.experimental.high_bw_all_gather(
+            qr_rows,
+            dim=2,
+            output_tensor=self._q_a_latent_gather_output,
+            cluster_axis=self.tp_axis,
+            num_links=self.ccl_num_links,
+            **self._tp_gather_semaphores,
+        )
+        return self._q_a_norm(qr, norm_memory_config)
+
     def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         x = ttnn.experimental.reduce_scatter_minimal_async(
             x,
@@ -1933,10 +1975,18 @@ class ttMLA:
         q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local)
         # Compute the q_a latent once and share it: the DSA indexer reads it for its queries, then
         # _q_stem consumes it for q_b_proj — so the sparse path does not recompute the q_a stem.
+        qr_rows = qr_local = None
         if self._merge_qkv_a:
             qr, kv_a = self._qkv_a_latent(hidden_states, seq_len_local, q_norm_mem_config)
+        elif self._q_a_rows_for_indexer():
+            qr_rows, kv_a = self._q_a_latent_tp_rows(hidden_states), None
+            qr = None  # gathered after the indexer
         else:
             qr, kv_a = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config), None
+        indexer_qr, indexer_qr_kwargs = qr, {}
+        if qr_rows is not None and indexer_indices is None:
+            qr_local = self._q_a_norm(qr_rows, ttnn.DRAM_MEMORY_CONFIG)
+            indexer_qr, indexer_qr_kwargs = qr_local, {"qr_tp_local": True}
 
         # DSA dispatch (v3.2 / GLM): the op graph is fixed by CONFIG — self._indexer and self._attention
         # are bound once at construction (sparsity × chunking), never by the runtime sequence length.
@@ -1960,7 +2010,7 @@ class ttMLA:
         elif self._sparse_mla_overlap is not None:
             selection_state = self._indexer.score(
                 hidden_states,
-                qr,
+                indexer_qr,
                 seq_len_local,
                 start_pos=kv_actual_isl or 0,
                 rope_tensors=rope_tensors,
@@ -1969,12 +2019,13 @@ class ttMLA:
                 index_kv_cache=index_kv_cache,
                 actual_end=actual_end,
                 metadata=metadata,
+                **indexer_qr_kwargs,
             )
             indices = None
         else:
             indices = self._indexer.forward(
                 hidden_states,
-                qr,
+                indexer_qr,
                 seq_len_local,
                 start_pos=kv_actual_isl or 0,
                 rope_tensors=rope_tensors,
@@ -1983,8 +2034,14 @@ class ttMLA:
                 index_kv_cache=index_kv_cache,
                 actual_end=actual_end,
                 metadata=metadata,
+                **indexer_qr_kwargs,
             )
 
+        if qr_rows is not None:
+            if qr_local is not None:
+                ttnn.deallocate(qr_local)
+            qr = self._q_a_latent_from_tp_rows(qr_rows, seq_len_local, q_norm_mem_config)
+            ttnn.deallocate(qr_rows)
         tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata)
         tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,
