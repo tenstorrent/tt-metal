@@ -19,7 +19,7 @@
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_HAS_INTERFACE
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
 #include "api/circular_buffer_constants.h"
@@ -31,8 +31,8 @@
 
 // clang-format on
 
-// The pack TRISC's firmware is the tightest of the four: it carries the dataflow-buffer init that the
-// other threads do not, and sits at ~93% of MEM_TRISC_FIRMWARE_SIZE (5120 B) before any debug feature
+// The pack and isolate-SFPU TRISCs carry the producer side of the dataflow-buffer init that the other
+// threads do not; the pack image sits at ~93% of MEM_TRISC_FIRMWARE_SIZE (5120 B) before any debug feature
 // is turned on. The watcher and DPRINT each cost it roughly 1.3-3 KB of .text, so either one alone
 // fits but the two together do not -- measured on main: watcher-only 4776 B, DPRINT-only 3180 B,
 // both 6140 B against the 5120 B limit. Enabling both produces a link-time region overflow at device
@@ -67,7 +67,7 @@ std::uint8_t my_logical_y_ __attribute__((used));
 std::uint8_t my_relative_x_ __attribute__((used));
 std::uint8_t my_relative_y_ __attribute__((used));
 
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_HAS_INTERFACE
 thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_TRISC] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
 thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS] __attribute__((used));
@@ -228,18 +228,23 @@ inline void enable_cc_stack() {
 // lo==0xFF means nothing was programmed.
 FORCE_INLINE void dfb_clear_packer_remapper_window(
     uint32_t trisc_id, volatile tt_l1_ptr std::uint8_t* trisc_run, uint8_t lo, uint8_t hi) {
-#if defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_CAN_PRODUCE
     if (lo == 0xFFu) {
         return;
     }
-    // Drop packer remapper pairs only after the TRISCs that can issue counter updates through them have drained.
-    // Clearing before that lets a Tensix-only counter update alias onto overlay counter id & 0xF.
+    // Drop this thread's remapper pairs only after the TRISCs that can issue counter updates through them have
+    // drained. Clearing before that lets a Tensix-only counter update alias onto overlay counter id & 0xF.
     // Math never touches DFB tile counters.
     using ckernel::trisc::TriscID;
     volatile tt_l1_ptr std::uint32_t* const neo_sync =
         reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(trisc_run - trisc_id);
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    // trisc3's pairs feed trisc0 or trisc3 itself, so it waits for trisc0 only.
+    constexpr std::uint32_t dfb_trisc_mask = std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8);
+#else
     constexpr std::uint32_t dfb_trisc_mask = (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8)) |
                                              (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Sfpu) * 8));
+#endif
     while ((*neo_sync & dfb_trisc_mask) != 0u) {
     }
     for (uint32_t i = lo; i < hi; i++) {
@@ -309,13 +314,13 @@ extern "C" std::uint32_t _start1() {
 
             uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_HAS_INTERFACE
             std::uint32_t tt_l1_ptr* dfb_l1_base =
                 (std::uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
             std::uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
             const DfbPackerRemapperRange packer_rmp = setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #else
-            // Math/SFPU TRISCs set up no DFBs, so there is no packer remapper window to clear.
+            // Math sets up no DFBs, so there is no packer remapper window to clear.
             const DfbPackerRemapperRange packer_rmp{};
 #endif
 

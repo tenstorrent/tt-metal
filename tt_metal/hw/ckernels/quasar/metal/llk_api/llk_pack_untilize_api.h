@@ -94,6 +94,7 @@ inline void llk_pack_untilize(
 
     const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
+    LLK_DFB_ASSERT_MY_PRODUCER(local_dfb_interface, "pack_untilize");
 
     // Compute how many l1_index units fit in one DFB entry
     const std::uint32_t entry_size_16B = local_dfb_interface.entry_size;  // DFB entry size in 16B
@@ -102,7 +103,7 @@ inline void llk_pack_untilize(
     const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
         entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
     const std::uint32_t base_l1 =
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx * l1_index_per_entry;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx * l1_index_per_entry;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;

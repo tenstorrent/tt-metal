@@ -118,11 +118,13 @@ inline void llk_unpack_AB_reduce(
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb_interface_a, "unpack_AB_reduce operandA");
+    LLK_DFB_ASSERT_MY_CONSUMER(local_dfb_interface_b, "unpack_AB_reduce operandB");
 
     const std::uint32_t l1_tile_index_a =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a;
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + tile_index_a;
     const std::uint32_t l1_tile_index_b =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
 
     WAYPOINT("UABW");
     _llk_unpack_reduce_<pool_type, reduce_dim>(l1_tile_index_a, l1_tile_index_b, tensor_shape);
