@@ -942,6 +942,42 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
         bias_single_tile_size = tt::tile_size(bias_data_format);
     }
+    {
+        // MX (OCP microscaling) operands. The unpacker expands every MX format to Float16_b in the Src registers,
+        // so the FPU never sees MX and the matmul itself is format-agnostic; the packer converts Dest back to MX
+        // for an MX output (the partials ring stays Float16_b / Float32, see get_interm_data_format). What the
+        // kernels cannot do on MX tiles is rejected here:
+        //  - MXFP4: matmul_init unpacks it as the 2x-packed src-register format (MxFp4_2x_B) and the FPU reads
+        //    SrcB through the same packed-FP4 view, so both operands must be MXFP4 (or neither);
+        //  - transpose: SrcA transpose is not supported for 2x formats, and the in0 transpose kernel path has
+        //    not been run on MX tiles;
+        //  - K not a tile multiple: the readers zero the last K tile's padding in L1 (pad_last_ktile), which knows
+        //    the bf16 / fp32 / WH block-float tile layouts but not the MX scale + element layout;
+        //  - bias: added through the Float16_b bias path; MX bias tiles are out of scope.
+        const DataType a_dtype = input_tensor_a.dtype();
+        const DataType b_dtype = input_tensor_b.dtype();
+        if (is_mx(a_dtype) || is_mx(b_dtype)) {
+            TT_FATAL(
+                (a_dtype == DataType::MXFP4) == (b_dtype == DataType::MXFP4),
+                "MXFP4 matmul needs both operands in MXFP4 (the 2x-packed src format pairs FP4 with FP4), got in0 {} "
+                "and in1 {}",
+                a_dtype,
+                b_dtype);
+            TT_FATAL(
+                !attributes.transpose_a && !attributes.transpose_b,
+                "transpose_a / transpose_b are not supported with MX operands (in0 {}, in1 {})",
+                a_dtype,
+                b_dtype);
+            TT_FATAL(
+                a_shape[-1] % input_tensor_a.tensor_spec().tile().get_width() == 0,
+                "MX matmul needs K to be a tile multiple (the MX tile layout cannot be zero-padded in L1), got K = {}",
+                a_shape[-1]);
+            TT_FATAL(
+                !optional_bias.has_value() || !is_mx(optional_bias->dtype()),
+                "MX bias tensors are not supported, got {}",
+                optional_bias->dtype());
+        }
+    }
     operations::experimental::quasar::matmul::MatmulProgramConfig chosen_program_config =
         operations::experimental::quasar::matmul::get_program_config(
             input_tensor_a,
@@ -2377,9 +2413,13 @@ MatmulParams create_matmul_attributes(
     auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
+    // MX elements carry at most 7 mantissa bits and are unpacked to Float16_b, which the first fidelity phase
+    // multiplies in full on Quasar (#57880), so MX inputs default to LoFi like the WH/BH block floats.
+    const auto is_low_precision_df = [](DataType dtype) {
+        return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || is_mx(dtype);
+    };
     bool are_inputs_low_precision_df =
-        ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
-         (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
+        is_low_precision_df(input_tensor_a.dtype()) && is_low_precision_df(input_tensor_b.dtype());
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
