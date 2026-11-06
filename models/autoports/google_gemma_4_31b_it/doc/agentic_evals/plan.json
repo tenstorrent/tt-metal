@@ -2810,7 +2810,7 @@
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-06T22:49:29.279442+00:00",
+  "last_updated": "2026-11-06T22:54:36.831293+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -4394,5 +4394,39 @@
     "tt_metal": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
     "admission": "Valid40 + measuredfit; C8 additionallyacceptedcomparison; exactmodel logging localaccepted and actualCIproofinflight; do not wait optionalC8",
     "evidence": "runs/ci-response-log-publication/RESULT.json"
+  },
+  "held_logging_future_cohorts": {
+    "evidence": "runs/logging-future-cohort-preparation/RESULT.json",
+    "candidates": [
+      {
+        "variant": "logging-c4",
+        "size": 160,
+        "candidate_sha": "2446d98eea1930ce351dd40fc500d6b322e3f853",
+        "parent_sha": "44d9f3996d9dd6bdd3aff1a0c09677aac01f5daf",
+        "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-logging-c4"
+      },
+      {
+        "variant": "logging-c4",
+        "size": 198,
+        "candidate_sha": "cc594f55460d7b9233f29c4281f65af1906d29e3",
+        "parent_sha": "2446d98eea1930ce351dd40fc500d6b322e3f853",
+        "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa198-logging-c4"
+      },
+      {
+        "variant": "logging-c8",
+        "size": 160,
+        "candidate_sha": "bef724d527779ff2496f5f5e342ceb7436c993c0",
+        "parent_sha": "ff1fac4b00357a82df8066969d5f8f2f103ebb8c",
+        "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa160-logging-c8"
+      },
+      {
+        "variant": "logging-c8",
+        "size": 198,
+        "candidate_sha": "255556468d732868b0494ef7cffd335332754818",
+        "parent_sha": "bef724d527779ff2496f5f5e342ceb7436c993c0",
+        "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa198-logging-c8"
+      }
+    ],
+    "admission": "Held; preceding rung must be valid and projected runtime/stage schedule must fit; C8 needs scored acceptance"
   }
 }

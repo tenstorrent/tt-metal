@@ -140,6 +140,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | ci-response-log-publication | 0.00000 / 0.00000 | 0.00000 | kept/solved: tt sha: eef534e5cd6bcaf37957647de4d8d4eff4f0e047; tti sha: 483509781a0898395208fe0fdc14f54eb3ff8857; published: source-only FF separate checkouts, dedicated branches; host tests: 37 |
 | ci-native-log-confirmation | 0.18296 / unknown | 0.00000 | running/pending: Pending |
 | hex-runtime-benchmark | 0.07605 / 0.15386 | 0.00000 | kept/solved: headline ttft ms: 754.1133353515761; headline decode tps: 35.31515153764353; native texts exact: 8; matrix completed: 8 |
+| logging-future-cohort-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: candidates: 4; focused tests each: 37; hooks: pass; registered ids exact: True |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
