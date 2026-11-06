@@ -28,6 +28,9 @@ struct SparseSDPAParams {
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
+    // Key-split decode: N cores share one token's selected keys (core c = token c / N, rank c % N) and combine
+    // their partial softmax states with an on-device binary tree. 1 = today's one-core-per-token program.
+    uint32_t key_splits = 1;
 };
 
 struct SparseSDPAInputs {

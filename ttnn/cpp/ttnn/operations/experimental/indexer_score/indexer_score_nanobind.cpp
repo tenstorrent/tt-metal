@@ -121,6 +121,18 @@ void bind_indexer_score(nb::module_& mod) {
                 [1, 1, R*S, D], users back to back (global row g -> user g // S). Needs
                 cache_batch_idx absent; chunk_start_idx, kv_len and the output width then
                 use the R*S extent.
+            valid_length_tensor: optional UINT32 ROW_MAJOR interleaved DRAM tensor [1,1,1,N], N <= 32, one valid
+                length per lane (pass the same tensor topk_large_indices receives as valid_length_tensor). The
+                reader, compute and writer read it at kernel start and skip every K work unit whose key tiles
+                all lie at or past the lane's bound of (value >> 5) + 1 tiles; skipped output columns are left
+                UNWRITTEN. Tracing-safe (the value is read on device each replay). Classic factory only.
+            valid_length_lane_rows: key rows per lane when K is the flat cache of several lanes (lane u's keys
+                start at row u * valid_length_lane_rows; tile multiple dividing T). 0 = one lane spanning K
+                (then valid_length_tensor holds exactly 1 value).
+            consumed_rows: optional (default 0 = write all 32 rows of every key tile). c > 0: the writer scatters
+                only c rows per key tile -- rows lane*c .. lane*c+c-1 with lane = key_tile / (valid_length_lane_rows
+                / 32) when valid_length_lane_rows != 0 (wide lanes form), else rows 0..c-1. All other rows of the
+                output are left UNWRITTEN; only for callers that read just those rows. Classic factory only.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -142,7 +154,10 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("page_table") = std::nullopt,
         nb::arg("paged_block_rows") = std::nullopt,
         nb::arg("paged_user_rows") = std::nullopt,
-        nb::arg("paged_wide") = false);
+        nb::arg("paged_wide") = false,
+        nb::arg("valid_length_tensor") = std::nullopt,
+        nb::arg("valid_length_lane_rows") = 0,
+        nb::arg("consumed_rows") = 0);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,

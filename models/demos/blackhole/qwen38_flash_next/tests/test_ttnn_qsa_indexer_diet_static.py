@@ -49,6 +49,8 @@ def _cpp(relative: str) -> str:
 
 
 def _ttnn_calls(source: str) -> list[str]:
+    # qsa_topk_block_ids IS ttnn.experimental.topk_large_indices unless QWEN38_TOPK_SEG splits wide rows (ttnn/qsa.py)
+    source = source.replace("qsa_topk_block_ids(", "ttnn.experimental.topk_large_indices(")
     return re.findall(r"\bttnn\.(?:experimental\.(?:deepseek_prefill\.)?|transformer\.)?(\w+)\(", source)
 
 

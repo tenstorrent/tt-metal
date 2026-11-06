@@ -64,6 +64,9 @@ class AsyncDecoder(FakeDecoder):
         self.reads = 0
         self.last_keep: list | None = None
 
+    def fence_ple(self) -> None:
+        """The real lane decoder's fence of the persistent PLE host buffers (QWEN38_LANE_PLE_FAST); the fake has none."""
+
     def bucket_for_step(self) -> int:
         live = [lane for lane in range(self.lanes) if self.positions[lane] is not None]
         need = max(live) + 1 if live else 1
@@ -213,6 +216,9 @@ def _fake_ttnn(monkeypatch):
     ttnn = vllm_module.ttnn
     monkeypatch.setattr(ttnn, "event_synchronize", lambda event: ORDER.append(f"wait:{event.name}"), raising=False)
     monkeypatch.setattr(ttnn, "to_torch", lambda host: host, raising=False)
+    # QWEN38_BATCH_SPIN now defaults on: the wait then polls host.to_numpy() of a non-blocking copy, which the fake host
+    # tensors here do not model; these tests cover the event-wait order.
+    monkeypatch.setattr(vllm_module.host_spin, "SPIN", False)
 
 
 @pytest.fixture

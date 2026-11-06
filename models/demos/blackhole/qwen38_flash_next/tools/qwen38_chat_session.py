@@ -88,6 +88,7 @@ from models.demos.blackhole.qwen38_flash_next.chat import (
 from models.demos.blackhole.qwen38_flash_next.config import LAYER_PATTERN
 from models.demos.blackhole.qwen38_flash_next.tools import fabric_node_probe, hardware_profiles, physical_route
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_host_spin as host_spin
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as sampling_step
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.evidence_records import Marker, utc_now
@@ -1368,6 +1369,7 @@ class Qwen38ChatSession:
             pending = self.chain.read_token_row_nonblocking()
             event = self.chain.record_event()
             self.chain.execute_head(residue)
+            host_spin.wait_read(pending)  # QWEN38_BATCH_SPIN: busy-wait first; the event wait then returns at once
             self.chain.event_synchronize(event)
             token_id = self.chain.pending_value(pending)
             self._require_vocabulary(token_id)
@@ -2871,7 +2873,10 @@ class Qwen38TracedChain:
         self._ple_upload_pending = False
 
     def read_token_row_nonblocking(self) -> Any:
-        return ttnn.from_device(ttnn.get_device_tensors(self.token_row_io)[0], blocking=False)
+        shard = ttnn.get_device_tensors(self.token_row_io)[0]
+        if host_spin.SPIN:  # QWEN38_BATCH_SPIN: a NaN-filled host tensor the waits poll
+            return host_spin.start_read(shard)
+        return ttnn.from_device(shard, blocking=False)
 
     def record_event(self) -> Any:
         return ttnn.record_event(self.mesh, cq_id=0)

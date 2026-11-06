@@ -68,7 +68,6 @@ CB_PT = 30  # the paged form's page-table row (one CB, absent from the unpaged p
 PAGED_DEFINE = ("PAGED", "1")  # the kernels' compile-time flag; the unpaged programs are built without it
 PT_ALIGN_SLACK = 64  # L1 bytes added to the page-table row so the kernels can align it to 64
 MIN_PAGE_SIZE = 128
-MAX_PT_ENTRIES = 2048
 
 
 @dataclass(frozen=True)
@@ -138,8 +137,9 @@ def _shape(tensor) -> tuple[int, ...]:
 
 
 def page_table_width(page_table, page_size: int, row: int = 0) -> int:
-    """Validate the page table (int32 ROW_MAJOR [1, 1, R, W], W a multiple of 8 and at most 2048, row ``row`` inside
-    it) and ``page_size`` (a power of two >= 128) and return W."""
+    """Validate the page table (int32 ROW_MAJOR [1, 1, R, W], W a multiple of 8; the width is bounded only by the L1
+    budget: the row is one circular buffer of W * 4 + 64 bytes; row ``row`` inside it)
+    and ``page_size`` (a power of two >= 128) and return W."""
 
     if page_size < MIN_PAGE_SIZE or page_size & (page_size - 1):
         raise ValueError(f"page_size must be a power of two >= {MIN_PAGE_SIZE}, got {page_size}")
@@ -148,12 +148,11 @@ def page_table_width(page_table, page_size: int, row: int = 0) -> int:
         len(shape) != 4
         or shape[:2] != (1, 1)
         or shape[3] % 8
-        or shape[3] > MAX_PT_ENTRIES
         or page_table.dtype != ttnn.int32
         or page_table.layout != ttnn.ROW_MAJOR_LAYOUT
     ):
         raise ValueError(
-            f"page_table must be int32 ROW_MAJOR [1, 1, R, W] with W a multiple of 8 up to {MAX_PT_ENTRIES}, got "
+            f"page_table must be int32 ROW_MAJOR [1, 1, R, W] with W a multiple of 8, got "
             f"{page_table.layout} {page_table.dtype} {shape}"
         )
     if not 0 <= row < shape[2]:
@@ -383,6 +382,11 @@ def build(
     if l1_bytes(g, config) > L1_BUDGET_BYTES:
         raise ValueError(
             f"the program's circular buffers take {l1_bytes(g, config)} bytes, over the {L1_BUDGET_BYTES} L1 budget"
+            + (
+                f" (the page-table row of {g['pt_w']} entries takes {g['pt_w'] * 4 + PT_ALIGN_SLACK} bytes of it)"
+                if g["pt_w"]
+                else ""
+            )
         )
     mesh = q.device()
     work = fp.split_work(g["num_tiles"], mesh)

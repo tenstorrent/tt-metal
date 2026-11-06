@@ -456,7 +456,10 @@ def test_generic_body_has_no_host_ints_and_a_fixed_op_sequence() -> None:
     assert score.index("ttnn.all_reduce(") < score.index("position.indexer_neg_mask")
 
     row = sources["_materialize_row_generic"]
-    assert "ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)" in row
+    assert (
+        "qsa_topk_block_ids(masked_scores, k=BLOCK_TOPK)" in row
+    )  # == topk_large_indices unless QWEN38_TOPK_SEG splits
+    row = row.replace("qsa_topk_block_ids(", "ttnn.experimental.topk_large_indices(")
     assert re.findall(r"\bttnn\.(?:experimental\.)?(\w+)\(", row) == [
         "topk_large_indices",
         "bitwise_left_shift",

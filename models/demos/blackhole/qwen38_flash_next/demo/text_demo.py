@@ -620,6 +620,32 @@ def batch_pool_pages(prompt_lens: list[int], max_generated_tokens: int, page_siz
     return 1 + sum(lane_page_count(p, max_generated_tokens, page_size) for p in prompt_lens) + 8
 
 
+def _log_step_split(rows, step_ms):
+    """QWEN38_STEP_SPLIT=1: per-phase median/mean in ms over steps 3..end, plus median(wall - exe)."""
+    import statistics
+
+    rows, wall = rows[2:], step_ms[2:]
+    if not rows:
+        return
+    parts = []
+    keys = ["ple", "tok", "exe", "adv", "read"]
+    if any("ple_lookup" in r for r in rows):  # the PLE sub-timers: lookup, host tensor, H2D copy, remainder
+        keys[1:1] = ["ple_lookup", "ple_host", "ple_h2d", "ple_other"]
+    count_keys = ("ple_minflt", "ple_majflt")  # counts, not seconds
+    extra_keys = sorted({k for r in rows for k in r} - set(keys) - {"ple_other"} - set(count_keys))
+    for key in keys + extra_keys + [k for k in count_keys if any(k in r for r in rows)]:
+        if key in count_keys:
+            vals = [float(r.get(key, 0)) for r in rows]
+            parts.append(f"{key} med {statistics.median(vals):g} mean {statistics.fmean(vals):.2f}")
+            continue
+        vals = [1000.0 * r.get(key, 0.0) for r in rows]
+        parts.append(f"{key} med {statistics.median(vals):.3f} mean {statistics.fmean(vals):.3f}")
+    gap = [w - 1000.0 * r.get("exe", 0.0) for w, r in zip(wall, rows)]
+    logger.info(
+        f"STEP_SPLIT ms over {len(rows)} steps: " + "; ".join(parts) + f"; wall-exe med {statistics.median(gap):.3f}"
+    )
+
+
 @run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
@@ -752,12 +778,18 @@ def test_demo_text_batched(mesh_device, seqlen, batch_size, tmp_path, record_pro
         outputs = [[t] for t in firsts]
         step_ms = []
         current = list(firsts)
+        split_on = os.environ.get("QWEN38_STEP_SPLIT") == "1"
+        split_rows = []
         for _ in range(max_generated_tokens - 1):
             step_started = time.perf_counter()
             current = decoder.step(current)
             step_ms.append(1000.0 * (time.perf_counter() - step_started))
+            if split_on:
+                split_rows.append(dict(decoder.step_split))
             for user in range(batch_size):
                 outputs[user].append(current[user])
+        if split_on:
+            _log_step_split(split_rows, step_ms)
     finally:
         decoder.release()
         vm.release_persistent_capture()

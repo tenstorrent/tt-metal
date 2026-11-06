@@ -113,8 +113,11 @@ def plan_for(mesh) -> DensePlan:
     first free shape of ``DOWN_SHAPES`` that is a contiguous NoC rectangle, then the untilize cores."""
 
     key = id(mesh)
+    lanes = rt_sc.lanes_flag()  # QWEN38_ROUTER_SC_LANES=1: a 4 x 6 top-k rectangle (4 groups of 6 cores)
+    if lanes:
+        key = (key, "lanes")
     if key not in _PLANS:
-        topk = placement.free_rectangle(mesh, *rt.RECTANGLE)
+        topk = placement.free_rectangle(mesh, *(rt_sc.LANES_RECTANGLE if lanes else rt.RECTANGLE))
         avoid = set(placement.rectangle_cores(placement.range_rect(topk)))
         noc = gr_read.noc_map(mesh)
         workers = None
@@ -384,6 +387,8 @@ def moe_dense(
     )
     fidelity = _fidelity_of(compute_kernel_config)
     lanes = len(rt.lane_cores(plan.topk, len(rt._core_plan(rows)[0])))
+    if rt_sc.lanes_enabled(rows):
+        lanes = rt_sc.lanes_core_count(rows)
     # G1 as router_tail states it (every lane core streams the logits and the index template); G2 the [gate | up |
     # scalar] shard once and its multicast of the intermediate into the 16 workers; G3 the down weight once (each
     # worker its five columns) and the partial out; G4 the hidden shard once and the rows out.  FLOPs: the top-k's

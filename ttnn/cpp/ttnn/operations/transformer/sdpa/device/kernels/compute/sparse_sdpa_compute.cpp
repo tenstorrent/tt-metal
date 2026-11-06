@@ -16,6 +16,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/bcast.h"  // add_tiles_bcast_rows (mask add)
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
+#ifdef SPARSE_KSPLIT
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_tree.hpp"
+#endif
 constexpr bool EXP_APPROX_MODE = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::MATH_APPROX_MODE) != 0;
 // compute_streaming.hpp needs declarations from compute_common.hpp (LightweightMaskContext, reduce helpers,
 // DEST_AUTO_LIMIT); include it first. Only compute_streaming primitives are used.
@@ -145,14 +148,28 @@ void kernel_main() {
 
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
+#ifdef SPARSE_KSPLIT
+    // Key-split combine buffers (see the factory): staging for a received child partial (l, m, o), the combine
+    // outputs/scratch of correction_block, and the fixed CBs a non-root rank's writer sends from.
+    constexpr uint32_t cb_l_in = SPARSE_KSPLIT_CB_L_IN;
+    constexpr uint32_t cb_m_in = SPARSE_KSPLIT_CB_M_IN;
+    constexpr uint32_t cb_o_in = SPARSE_KSPLIT_CB_O_IN;
+    constexpr uint32_t cb_ks_cur_max = SPARSE_KSPLIT_CB_CUR_MAX;
+    constexpr uint32_t cb_ks_cur_sum = SPARSE_KSPLIT_CB_CUR_SUM;
+    constexpr uint32_t cb_ks_exp1 = SPARSE_KSPLIT_CB_EXP1;
+    constexpr uint32_t cb_ks_exp2 = SPARSE_KSPLIT_CB_EXP2;
+#endif
+
     // Q tilize is the first operation, so startup must configure raw-Q -> tiled-Q.
     compute_kernel_hw_startup(cb_q_rm, cb_q_in);
 
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
 
     for (uint32_t tok = 0; tok < tok_count; ++tok) {
+#ifndef SPARSE_KSPLIT
         // tilize Q rows -> [Sqt, DHt]
         compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
+#endif
 
         // Per-token control from the reader: num_active_chunks (>=1; all-sentinel chunks are skipped) and
         // num_valid_keys (last chunk's mask boundary). read_tile_value mailbox-distributes the UNPACK read so
@@ -162,7 +179,22 @@ void kernel_main() {
             cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::ACTIVE_CHUNKS);
         const uint32_t num_valid_keys =
             ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::VALID_KEYS);
+#ifdef SPARSE_KSPLIT
+        // Key-split: num_active_chunks counts THIS rank's chunk range (0 = idle rank), valid_last_ks is the
+        // valid-key count of the range's last chunk (k_chunk unless the range owns the sentinel boundary).
+        const uint32_t valid_last_ks =
+            ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::ksplit_ctrl::VALID_LAST);
+        const uint32_t tree =
+            ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::ksplit_ctrl::TREE);
+        (void)num_valid_keys;  // the range's boundary comes from valid_last_ks
+#endif
         ctrl_cb.pop_front(1);
+#ifdef SPARSE_KSPLIT
+        if (sparse_sdpa::tree_word::role(tree) == sparse_sdpa::tree_word::ROLE_IDLE) {
+            continue;  // no keys for this rank: the reader pushed no Q
+        }
+        compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
+#endif
 
         // Flash running state, ping-pong. Reset every token; all buffers start empty.
         CircularBuffer max_prev(cb_max_a), max_cur(cb_max_b);
@@ -278,7 +310,11 @@ void kernel_main() {
             // -inf. Key tiles [full_start, Skt) are fully masked (cb_neginf); a mid-tile boundary masks the
             // straddling tile part_t via cb_mask_part.
             const uint32_t k_chunk = Skt * tt::constants::TILE_WIDTH;
+#ifdef SPARSE_KSPLIT
+            const uint32_t valid_last = valid_last_ks;
+#else
             const uint32_t valid_last = num_valid_keys - (num_active_chunks - 1) * k_chunk;
+#endif
             const uint32_t full_start = (valid_last + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
             const uint32_t part_t = valid_last / tt::constants::TILE_WIDTH;
             const bool has_part_mask = has_mask && (valid_last % tt::constants::TILE_WIDTH != 0);
@@ -491,6 +527,7 @@ void kernel_main() {
             sum_cur.push_back(Sqt);
             out_cur.push_back(Sqt * vDHt);
 
+#ifndef SPARSE_KSPLIT
             if (is_last) {
                 // Finalize: row-sum (matmul vs col-identity) -> recip -> out *= 1/sum -> cb_out_im.
                 // normalize_row_streaming is DST-safe for any sbh, so it does all Sqt rows in one call.
@@ -507,6 +544,7 @@ void kernel_main() {
                     sink_per_row>(sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt, max_cur.get_cb_id());
                 max_cur.pop_front(Sqt);  // running max no longer needed
             }
+#endif  // !SPARSE_KSPLIT (a key-split rank combines partials after its chunk loop instead)
 
             // Release the held cb_qk_im rows + this chunk's K (consumed by QK and PV).
             qk_cb.pop_front(Sqt * KT_stride);
@@ -524,7 +562,106 @@ void kernel_main() {
 
         q_in_cb.pop_front(Sqt * DHt);  // Q reused across all chunks; drop it so >1 token/core stays clean
 
+#ifdef SPARSE_KSPLIT
+        {
+            using namespace sparse_sdpa;
+            // This rank's partial (after the final ping-pong swap) is in max_prev / sum_prev / out_prev:
+            // max is the UNSCALED running row max (col 0); sum is the per-column partial row sum; out is the
+            // unnormalized P@V. The scale is applied only inside exp((m_a - m_b) * scale).
+            const uint32_t role = tree_word::role(tree);
+            const uint32_t child_mask = tree_word::child_mask(tree);
+            constexpr uint32_t out_tiles = Sqt * vDHt;
+            uint32_t m_id = max_prev.get_cb_id();
+            uint32_t o_id = out_prev.get_cb_id();
+            uint32_t l_id = sum_cur.get_cb_id();  // the reduced sum goes into the empty ping-pong twin
+            uint32_t m_spare = cb_ks_cur_max;
+            uint32_t l_spare = cb_ks_cur_sum;
+
+            // Collapse the partial row sum to column 0 (same matmul against the col identity as
+            // normalize_row_streaming), so the sdpa_decode correction math (col-0 vectors) applies.
+            // A lone root (n_eff == 1) has nothing to merge: normalize straight from the raw partial sum, exactly
+            // as the N=1 path does (no extra collapse rounding).
+            const bool lone_root = (role == tree_word::ROLE_ROOT) && (child_mask == 0);
+            if (lone_root) {
+                l_id = sum_prev.get_cb_id();
+            } else {
+                CircularBuffer ident(cb_col_identity), in(sum_prev.get_cb_id()), out(l_id);
+                ident.wait_front(1);
+                in.wait_front(Sqt);
+                out.reserve_back(Sqt);
+                reconfig_data_format(sum_prev.get_cb_id(), cb_col_identity);
+                pack_reconfig_data_format(l_id);
+                configure_single_tile_pack(l_id);
+                matmul_block_init(sum_prev.get_cb_id(), cb_col_identity, 0, 1, 1, 1);
+                for (uint32_t r = 0; r < Sqt; ++r) {
+                    tile_regs_acquire();
+                    matmul_block(sum_prev.get_cb_id(), cb_col_identity, r, 0, 0, 0, 1, 1, 1);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, l_id);
+                    tile_regs_release();
+                }
+                out.push_back(Sqt);
+                in.pop_front(Sqt);
+            }
+
+            // Combine children, one per round, with the sdpa_flash_decode.cpp:600-648 math (same helpers).
+            for (uint32_t round = 0; round < MAX_TREE_ROUNDS; ++round) {
+                if (((child_mask >> round) & 1u) == 0) {
+                    continue;
+                }
+                // cur_max = max(m, m_child); e2 = exp((m_child - cur_max) * scale); e1 = exp((m - cur_max) * scale);
+                // cur_sum = l * e1 + l_child * e2 (pops l and l_child)
+                correction_block<scale_fp32>(
+                    cb_m_in, cb_l_in, m_spare, m_id, l_spare, l_id, cb_ks_exp1, cb_ks_exp2, Sqt);
+                // o = o * e1 + o_child * e2
+                mul_block_bcast_cols_inplace<Sqt, vDHt>(o_id, cb_ks_exp1);
+                // The child's o arrives in cb_o_in (the writer produces it, compute consumes it). In-place math on a
+                // CB the DM pushed hangs the following wait_front, so copy it into compute's own cb_q_in first
+                // (idle after the chunk loop; same bf16 tile format) and combine there, as sdpa_flash_decode does
+                // with move_block_ool(cb_out_o, cb_out_accumulate_im_2).
+                move_block<true>(cb_o_in, cb_q_in, out_tiles);
+                mul_block_bcast_cols_inplace<Sqt, vDHt>(cb_q_in, cb_ks_exp2);
+                add_block_inplace<true>(o_id, cb_q_in, out_tiles);
+                CircularBuffer(m_id).pop_front(Sqt);
+                CircularBuffer(cb_m_in).pop_front(Sqt);
+                const uint32_t m_t = m_id;
+                m_id = m_spare;
+                m_spare = m_t;
+                const uint32_t l_t = l_id;
+                l_id = l_spare;
+                l_spare = l_t;
+            }
+
+            if (role == tree_word::ROLE_ROOT) {
+                normalize_row_streaming<
+                    /*profiling_enabled=*/false,
+                    vDHt,
+                    dst_size,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_out_im,
+                    scale_fp32,
+                    use_attention_sink,
+                    cb_attention_sink,
+                    sink_per_row>(l_id, o_id, Sqt, m_id);
+                CircularBuffer(m_id).pop_front(Sqt);
+                compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
+                // cb_out_rm holds out_tiles + 2*Sqt tiles and a non-root rank pushes exactly that: pad the root's
+                // push to the same size so the write pointer returns to 0 after every token.
+                CircularBuffer(cb_out_rm).reserve_back(2 * Sqt);
+                CircularBuffer(cb_out_rm).push_back(2 * Sqt);
+            } else {
+                // Non-root: hand the partial to the writer through cb_out_rm as [o | l | m] (the factory sizes it
+                // out_tiles + 2*Sqt for this); the writer sends it to the parent.
+                move_block<true>(o_id, cb_out_rm, out_tiles);
+                move_block<true>(l_id, cb_out_rm, Sqt);
+                move_block<true>(m_id, cb_out_rm, Sqt);
+            }
+        }
+#else
         // cb_out_im was written by normalize_row_streaming; untilize -> row-major out for the writer.
         compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
+#endif
     }
 }

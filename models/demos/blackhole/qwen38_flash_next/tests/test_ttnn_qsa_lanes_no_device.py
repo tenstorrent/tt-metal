@@ -507,6 +507,11 @@ def fake(monkeypatch):
         "QWEN38_FUSED_OFF",
         "qsa_index_tail,qsa_main_tail,qsa_post_attention,qsa_widen_partial,qsa_selection_row,qsa_score_merge",
     )
+    # the fake device has no grid; pin key_splits off whatever the default
+    monkeypatch.setenv("QWEN38_SDPA_KSPLIT", "0")
+    monkeypatch.setenv("QWEN38_IDX_LEN", "0")
+    # QWEN38_IDX_ROWWRITE now defaults on and passes consumed_rows= to the indexer, which the fake does not take
+    monkeypatch.setenv("QWEN38_IDX_ROWWRITE", "0")
     fake = make_qsa_fake()
     for module in (qsa_module, contracts_module, model_module, rope_module, decode_matmul_module):
         monkeypatch.setattr(module, "ttnn", fake)
@@ -996,8 +1001,10 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
         and _ttnn_op_walk("_score_blocks_lanes").count("all_reduce") == 1
     )
     materialize = _ttnn_op_walk("_materialize_rows_lanes")
+    # the top-k goes through qsa_topk_block_ids (a plain call, not a ttnn.* op: it is topk_large_indices as before, or
+    # the two-stage form under QWEN38_TOPK_SEG=1)
+    assert "qsa_topk_block_ids(masked_scores, k=BLOCK_TOPK)" in inspect.getsource(Qwen38TTNNQSA._materialize_rows_lanes)
     assert materialize == [
-        "topk_large_indices",
         "bitwise_left_shift",
         "repeat_interleave",
         "add",
@@ -1044,3 +1051,26 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
         "pools_shared",  # the prefill chain and the lanes share the page pools
         "lane_alias",  # an MTP width view: the per-lane fixed tensors are lane-prefix aliases
     )
+
+
+# --------------------------------------------------------------------------- key-split N is batch-invariant
+
+
+def test_sparse_sdpa_key_splits_independent_of_rows(monkeypatch):
+    device = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=10, y=11))
+    helper = qsa_module._sparse_sdpa_key_splits
+    monkeypatch.delenv("QWEN38_SDPA_KSPLIT", raising=False)
+    monkeypatch.delenv("QWEN38_SDPA_KSPLIT_N", raising=False)
+    assert [helper(device, r) for r in (1, 8, 32)] == [8, 8, 8]  # default on, N=8, same for every rows
+    monkeypatch.setenv("QWEN38_SDPA_KSPLIT", "0")
+    assert [helper(device, r) for r in (1, 8, 32)] == [1, 1, 1]  # off
+    monkeypatch.setenv("QWEN38_SDPA_KSPLIT", "1")
+    for n in (2, 4, 16, 32):
+        monkeypatch.setenv("QWEN38_SDPA_KSPLIT_N", str(n))
+        assert {helper(device, r) for r in (1, 2, 8, 13, 32, 64)} == {n}
+    monkeypatch.setenv("QWEN38_SDPA_KSPLIT_N", "1")
+    assert helper(device, 8) == 1
+    monkeypatch.setenv("QWEN38_SDPA_KSPLIT_N", "500")
+    assert helper(device, 8) == 64
+    monkeypatch.setenv("QWEN38_SDPA_KSPLIT", "0")
+    assert helper(device, 8) == 1

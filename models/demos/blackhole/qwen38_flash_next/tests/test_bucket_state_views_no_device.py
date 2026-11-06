@@ -261,6 +261,7 @@ class _Stop(Exception):
 
 def _score_kwargs(monkeypatch, state, form: str = "wide"):
     captured = {}
+    monkeypatch.setenv("QWEN38_IDX_LEN", "0")  # the pin is the kv_len-only call; the valid-length tensor is default now
 
     def fake_indexer(*args, **kwargs):
         captured.update(kwargs)

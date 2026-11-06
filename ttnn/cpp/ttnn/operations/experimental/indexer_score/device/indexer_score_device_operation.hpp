@@ -113,7 +113,16 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<ttnn::Tensor>& page_table = std::nullopt,
     std::optional<uint32_t> paged_block_rows = std::nullopt,
     std::optional<uint32_t> paged_user_rows = std::nullopt,
-    bool paged_wide = false);
+    bool paged_wide = false,
+    // Length-aware scoring (classic factory): UINT32 ROW_MAJOR DRAM [1,1,1,N] per-lane valid length (the tensor
+    // topk_large_indices takes as valid_length_tensor). Work units wholly at or past each lane's bound
+    // (value >> 5) + 1 tiles are skipped; their output columns are left unwritten. valid_length_lane_rows = key rows
+    // per lane in the wide lanes form (0 = a single lane spanning all of K).
+    const std::optional<ttnn::Tensor>& valid_length_tensor = std::nullopt,
+    uint32_t valid_length_lane_rows = 0,
+    // Row-write: 0 = write all 32 rows per key tile; c > 0 = only c consumed rows per tile (see
+    // operation_attributes_t::consumed_rows). With valid_length_lane_rows it may be used without valid_length_tensor.
+    uint32_t consumed_rows = 0);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale

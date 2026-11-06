@@ -16,14 +16,18 @@ and ordering semantics before asynchronous host prefetch is introduced.
 
 from __future__ import annotations
 
+import ctypes
 import functools
+import mmap
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.checkpoint import (
@@ -157,10 +161,24 @@ def _prepare_key_weight(source: torch.Tensor) -> torch.Tensor:
 # Per-pass sub-segment timing (QWEN38_MTP_SEGMENTS_LOG): mtp_v2 points this at a dict while a host lookup runs and
 # the lookup adds ns into it; None (the default) costs one global read.
 _SUB: dict[str, int] | None = None
+SPLIT = os.environ.get("QWEN38_STEP_SPLIT", "0") == "1"  # sub-timers of the lane lookup (``last_split``, seconds)
 
 
 PLE_FAST_ENV = "QWEN38_PLE_FAST"
 PLE_FAST_ADVISE_ROWS = 128  # rows per lookup from which the fast path queues WILLNEED for every row (2+ lanes)
+
+
+PLE_POPULATE = os.environ.get("QWEN38_PLE_POPULATE", "1") == "1"  # pre-fault every PLE mmap at lookup creation
+_MADV_POPULATE_READ = 22
+
+
+def ple_mmap() -> bool:
+    """``QWEN38_PLE_MMAP=1``: the decode-step PLE lookup gathers rows from read-only memory maps of the shard files
+    (one vectorized numpy gather per step, hash in numpy int64) instead of one ``preadv`` per row.
+    Default on (QWEN38_PLE_MMAP=0 turns it off).
+    Same bytes, same layout."""
+
+    return os.environ.get("QWEN38_PLE_MMAP", "1") == "1"
 
 
 def ple_fast() -> bool:
@@ -951,6 +969,8 @@ class Qwen38ResidentPLELookup:
         per-row ``bytes``, no dict.  Row ``r`` of part ``p`` is read at ``reader._tensor_base + r * row_bytes``, the
         offset of the ``pread`` path, so the payload bytes are the same."""
 
+        if ple_mmap():
+            return self._gather_mmap(np.asarray(hashed, dtype=np.int64), fast=True)
         sub = _SUB is not None
         t0 = time.monotonic_ns() if sub else 0
         rows_per_shard = self.host_embedding.rows_per_shard
@@ -1068,6 +1088,136 @@ class Qwen38ResidentPLELookup:
         )
         return self._read_token_rows(ids, proofs), next_context
 
+    def _mmap_tables(self) -> list:
+        """One read-only ``[rows, row_bytes/2]`` uint16 view per part over a shared mmap per shard file (the mmap is
+        made from the reader's admitted descriptor, so it maps the proven inode)."""
+
+        tables = getattr(self, "_mm_tables", None)
+        if tables is None:
+            maps: dict[str, mmap.mmap] = {}
+            tables = []
+            width = self._row_bytes // 2
+            for reader in self.readers:
+                descriptor = reader._descriptor
+                if descriptor is None:
+                    raise RuntimeError(f"sparse row reader for {reader.name} is closed")
+                if reader.shard not in maps:
+                    maps[reader.shard] = mmap.mmap(descriptor, 0, prot=mmap.PROT_READ)
+                tables.append(
+                    np.frombuffer(
+                        maps[reader.shard], dtype=np.uint16, count=reader.rows * width, offset=reader._tensor_base
+                    ).reshape(reader.rows, width)
+                )
+            self._mm_maps = maps
+            self._mm_tables = tables
+        return tables
+
+    def populate_mmaps(self) -> float:
+        """Pre-fault every shard mmap (``madvise(MADV_POPULATE_READ)``, one thread per map) so decode-step gathers take
+        no minor page faults.  A speed hint only: failures are logged, never raised.  Run it before decode (a populate
+        in a background thread blocks lookups).  Idempotent: later calls do nothing and return 0.0.  Returns wall seconds.
+        """
+
+        if getattr(self, "_mm_populated", False):
+            return 0.0
+        self._mm_populated = True
+        self._mmap_tables()
+        from concurrent.futures import ThreadPoolExecutor
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        libc.madvise.restype = ctypes.c_int
+        maps = list(self._mm_maps.values())
+        errors: list[int] = []
+
+        def one(mm) -> None:
+            address = np.frombuffer(mm, dtype=np.uint8).ctypes.data
+            if libc.madvise(address, len(mm), _MADV_POPULATE_READ) == -1:
+                errors.append(ctypes.get_errno())
+
+        started = time.perf_counter()
+        if maps:
+            with ThreadPoolExecutor(max_workers=min(32, len(maps))) as pool:
+                list(pool.map(one, maps))
+        seconds = time.perf_counter() - started
+        if errors:
+            logger.warning("PLE mmap populate: madvise(MADV_POPULATE_READ) failed: {}", os.strerror(errors[0]))
+        logger.info(
+            "PLE mmap populate: {} maps, {:.1f} GB, {:.2f} s", len(maps), sum(len(m) for m in maps) / 1e9, seconds
+        )
+        return seconds
+
+    def _gather_mmap(
+        self, ids: np.ndarray, proofs: list | None = None, fast: bool = False, vectorized: bool = False
+    ) -> bytearray:
+        """Rows ``ids`` (int64, request order) as one payload, byte-identical to the ``preadv`` readers.
+        ``vectorized`` (QWEN38_LANE_PLE_FAST): one numpy fancy-index copy per touched part instead of one python
+        iteration per row; the same bytes."""
+
+        tables = self._mmap_tables()
+        rows_per_shard = self.host_embedding.rows_per_shard
+        if SPLIT:
+            t_g0 = time.perf_counter()
+        if vectorized:
+            parts_np, rows_np = np.divmod(ids, rows_per_shard)
+            count = len(parts_np)
+            payload = bytearray(self._row_bytes * count)
+            out = np.frombuffer(payload, dtype=np.uint16).reshape(count, self._row_bytes // 2)
+            order = np.argsort(parts_np, kind="stable")
+            uniq, starts = np.unique(parts_np[order], return_index=True)
+            ends = np.append(starts[1:], count)
+            for part, start, end in zip(uniq.tolist(), starts.tolist(), ends.tolist()):
+                sel = order[start:end]
+                out[sel] = tables[part][rows_np[sel]]
+            touched = set(uniq.tolist())
+        else:
+            parts, rows = np.divmod(ids, rows_per_shard)
+            parts = parts.tolist()
+            rows = rows.tolist()
+            payload = bytearray(self._row_bytes * len(parts))
+            out = np.frombuffer(payload, dtype=np.uint16).reshape(len(parts), self._row_bytes // 2)
+            for index, (part, row) in enumerate(zip(parts, rows)):
+                out[index] = tables[part][row]
+            touched = set(parts)
+        if SPLIT:
+            t_g1 = time.perf_counter()
+        if fast:
+            for part in touched:
+                reader = self.readers[part]
+                if reader.shard not in self._proven:
+                    reader.prove_identity("before the first fast read of")
+                    self._proven[reader.shard] = reader
+        else:
+            proving = {self.readers[part].shard: self.readers[part] for part in touched}
+            if proofs is not None:
+                proofs.extend(proving.values())
+            else:
+                for reader in proving.values():
+                    reader.prove_identity("after")
+        if SPLIT:
+            self._gather_split = (t_g1 - t_g0, time.perf_counter() - t_g1)
+        return payload
+
+    def _hash_lanes_np(self, tokens: Sequence[int], contexts: Sequence[tuple[int, int] | None]):
+        """:func:`ngram_token_ids_decode_step` over all lanes in numpy int64 (products are below 2**63, checked in
+        ``__init__``, so the int64 mix equals the Python-int mix).  Returns ids ``[lanes * heads]`` lane-major."""
+
+        eos = self.eos_token_id
+        x = np.asarray(tokens, dtype=np.int64)
+        c = np.array([(eos, eos) if ctx is None else ctx for ctx in contexts], dtype=np.int64).reshape(-1, 2)
+        c0, c1 = c[:, 0], c[:, 1]
+        m = self.multipliers
+        bigram = (x * m[0]) ^ (c1 * m[1])
+        trigram = bigram ^ (np.where(c1 == eos, eos, c0) * m[2])
+        hv = np.asarray(self.head_vocab_sizes, dtype=np.int64)
+        ho = np.asarray(self.head_offsets, dtype=np.int64)
+        half = hv.shape[0] // 2
+        ids = np.concatenate(
+            [bigram[:, None] % hv[None, :half] + ho[None, :half], trigram[:, None] % hv[None, half:] + ho[None, half:]],
+            axis=1,
+        )
+        return ids.reshape(-1), np.stack([c1, x], axis=1)
+
     def _read_token_rows(self, hashed: Sequence[int], proofs: list | None = None) -> bytearray:
         """:meth:`_read_rows` for the decode step's few rows: one ``preadv`` per row straight into the payload (no
         WILLNEED, no per-row ``bytes``, no dict), then one identity proof per touched shard file after the reads.
@@ -1076,6 +1226,8 @@ class Qwen38ResidentPLELookup:
         payload is dropped (the batch proof before the reads only moved the same failure ahead of them).  Same bytes
         in the same order as :meth:`_read_rows`."""
 
+        if ple_mmap():
+            return self._gather_mmap(np.asarray(hashed, dtype=np.int64), proofs)
         readers = self.readers
         rows_per_shard = self.host_embedding.rows_per_shard
         row_bytes = self._row_bytes
@@ -1173,7 +1325,11 @@ class Qwen38ResidentPLELookup:
         return self._read_rows(hashed), tuple(lane_contexts)
 
     def lookup_lanes(
-        self, tokens: Sequence[int], contexts: Sequence[tuple[int, int] | None]
+        self,
+        tokens: Sequence[int],
+        contexts: Sequence[tuple[int, int] | None],
+        proofs: list | None = None,
+        vectorized: bool = False,
     ) -> tuple[bytearray, tuple[tuple[int, int], ...]]:
         """One batched step: lane u's sixteen rows hashed from ``(tokens[u], contexts[u])``, every lane's rows
         read in one pass (one payload of ``lanes x 5,120`` B, lane-major), and the next contexts."""
@@ -1182,6 +1338,35 @@ class Qwen38ResidentPLELookup:
             raise ValueError(
                 f"PLE lane lookup needs one context per token: got {len(tokens)} tokens, {len(contexts)} contexts"
             )
+        if ple_mmap():
+            if SPLIT:
+                t_h0 = time.perf_counter()
+            for lane, (token_id, context) in enumerate(zip(tokens, contexts)):
+                for value in (token_id, *(() if context is None else context)):
+                    if isinstance(value, bool) or type(value) is not int or not 0 <= value < self.vocab_size:
+                        raise ValueError(
+                            f"PLE lane {lane} tokens must be exact integers in [0,{self.vocab_size}), got {value!r}"
+                        )
+            np_ids, np_next = self._hash_lanes_np(tokens, contexts)
+            if SPLIT:
+                t_h1 = time.perf_counter()
+            if proofs is None and not vectorized:
+                payload = self._gather_mmap(np_ids)
+            else:
+                # the proofs are left in ``proofs`` for the caller's ``prove_deferred`` (the payload is not to be trusted before)
+                payload = self._gather_mmap(np_ids, proofs, vectorized=vectorized)
+            if SPLIT:
+                t_h2 = time.perf_counter()
+            nxt = tuple(map(tuple, np_next.tolist()))
+            if SPLIT:
+                gather, proof = self._gather_split
+                self.last_split = {
+                    "ple_hash": t_h1 - t_h0,
+                    "ple_gather": gather,
+                    "ple_proof": proof,
+                    "ple_ctxout": time.perf_counter() - t_h2,
+                }
+            return payload, nxt
         ids: list[int] = []
         next_contexts = []
         for lane, (token_id, context) in enumerate(zip(tokens, contexts)):
@@ -1259,6 +1444,8 @@ class Qwen38TTNNPLE:
 
         if self._resident_lookup is None:
             self._resident_lookup = Qwen38ResidentPLELookup(self.host_embedding)
+            if PLE_POPULATE and ple_mmap():
+                self._resident_lookup.populate_mmaps()
         return self._resident_lookup
 
     def _validate_residual(self, tensor, *, label: str) -> None:
@@ -2136,18 +2323,32 @@ class Qwen38TTNNPLE:
         return Qwen38TTNNPLELanesState.allocate(self.mesh_device, self.mesh_contract, lanes=lanes)
 
     def host_lanes(
-        self, tokens: Sequence[int], contexts: Sequence[tuple[int, int] | None]
+        self,
+        tokens: Sequence[int],
+        contexts: Sequence[tuple[int, int] | None],
+        proofs: list | None = None,
+        vectorized: bool = False,
     ) -> tuple[torch.Tensor, tuple[tuple[int, int], ...]]:
         """The n-gram rows of lane u's ``tokens[u]`` under ``contexts[u]`` as BF16 ``[1,1,lanes,2560]`` and the next
         context per lane.  Same hash, bytes and row order as the 1-row decode step, lane by lane."""
 
         lanes = require_lane_count(len(tokens), label="PLE lanes token count")
+        if SPLIT:
+            t_l0 = time.perf_counter()
+        extra = {} if proofs is None and not vectorized else {"proofs": proofs, "vectorized": vectorized}
         payload, next_contexts = self.resident_lookup.lookup_lanes(
-            [int(token) for token in tokens], _validate_lane_contexts(contexts, lanes, label="PLE lanes contexts")
+            [int(token) for token in tokens],
+            _validate_lane_contexts(contexts, lanes, label="PLE lanes contexts"),
+            **extra,
         )
         if not isinstance(payload, bytearray):  # the lookup's own bytearray is writable: no second copy
             payload = bytearray(payload)
         host = torch.frombuffer(payload, dtype=torch.bfloat16).reshape(1, 1, lanes, EMBEDDING_WIDTH)
+        if SPLIT:
+            inner = getattr(self.resident_lookup, "last_split", None)
+            if inner is not None:
+                self.last_split = dict(inner)
+                self.last_split["ple_torch"] = (time.perf_counter() - t_l0) - sum(inner.values())
         return host, next_contexts
 
     def prepare_lanes_input(

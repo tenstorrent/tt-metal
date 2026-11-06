@@ -75,6 +75,7 @@ from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, VOCAB_SIZE
 from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION, checkpoint_directory
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_host_spin as host_spin
 from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import (
     MODE,
     construct_live_decode_diagnostic,
@@ -2519,11 +2520,14 @@ class Qwen38ForCausalLM:
         """Block for the adapter's event of ``handle``; a device error marks the state failed (it surfaces here)."""
 
         try:
+            host_spin.wait_read(handle.host)  # QWEN38_BATCH_SPIN: busy-wait first; the event wait then returns at once
             if handle.kind == "chain":
                 self.chain.event_synchronize(handle.adapter_event)
                 self.chain.mark_ple_fenced()  # the PLE upload of the step before this read has finished
             else:
                 ttnn.event_synchronize(handle.adapter_event)
+                if handle is self._async_pending and self.decoder is not None:
+                    self.decoder.fence_ple()  # the newest step's PLE upload (before its replay) has been read
         except BaseException:
             if handle.kind == "chain":
                 self.slot.failed = True

@@ -186,7 +186,7 @@ def _score_kwargs(monkeypatch, state, form, count=LANES, composed=False):
     constants.indexer_form = form
     method = module._score_blocks_lanes if composed else module._score_blocks_lanes_fused
     with pytest.raises(_Stop):  # allow-pytest.raises: host check
-        method(None, state, None, constants)
+        method(None, state, SimpleNamespace(kv_block_start="kv_block_start"), constants)
     return captured[0]
 
 
@@ -200,6 +200,9 @@ def test_wide_indexer_scores_the_pool(allocation, monkeypatch, composed):
     assert kwargs["paged_user_rows"] == ROWS and kwargs["paged_wide"] is True
     assert kwargs["kv_len"] == LANES * ROWS and kwargs["chunk_start_idx"] == LANES * ROWS - ttnn.TILE_SIZE
     assert "cache_batch_idx" not in kwargs
+    assert kwargs["consumed_rows"] == 1 and kwargs["valid_length_lane_rows"] == ROWS  # QWEN38_IDX_ROWWRITE
+    if not composed:  # QWEN38_IDX_LEN: the fused wide form bounds each lane's keys by its kv_block_start
+        assert kwargs["valid_length_tensor"] == "kv_block_start"
 
 
 @pytest.mark.parametrize("composed", [False, True])

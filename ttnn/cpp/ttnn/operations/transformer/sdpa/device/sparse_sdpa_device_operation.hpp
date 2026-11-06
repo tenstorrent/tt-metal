@@ -60,6 +60,7 @@ Tensor sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
-    const std::optional<Tensor>& attention_sink = std::nullopt);
+    const std::optional<Tensor>& attention_sink = std::nullopt,
+    uint32_t key_splits = 1);
 
 }  // namespace ttnn::prim

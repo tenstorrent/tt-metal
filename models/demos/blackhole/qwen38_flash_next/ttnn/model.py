@@ -38,6 +38,7 @@ locks and enforcing broker lease.
 
 from __future__ import annotations
 
+import os
 import time
 import warnings
 from collections.abc import Callable, Sequence
@@ -46,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
 import torch
+from loguru import logger
 from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 
 import ttnn
@@ -253,6 +255,15 @@ class Qwen38TTNNModelPoisonedError(RuntimeError):
             "Do not reuse this owner or any of its state; close the task-owned mesh/process without reset. "
             f"Cause: {type(cause).__name__}: {cause}"
         )
+
+
+LANE_PLE_FAST = (
+    os.environ.get("QWEN38_LANE_PLE_FAST", "1") == "1"
+)  # persistent host PLE tensor, vectorized gather, deferred proofs
+LANE_PLE_DMAJOR = (
+    os.environ.get("QWEN38_LANE_PLE_DMAJOR", "1") == "1"
+)  # with LANE_PLE_FAST: device-major host buffer (borrowable)
+LANE_PLE_SPLIT = os.environ.get("QWEN38_STEP_SPLIT") == "1"  # sub-timers of write_lane_ple_rows (read once)
 
 
 def _shape(tensor) -> tuple[int, ...]:
@@ -1253,6 +1264,16 @@ QSA_LANE_FUSED_KERNELS = (  # the six programs the fused QSA lane body needs tog
 )
 
 
+def _fill_lane_ple_buffer(buffer: torch.Tensor, rows: torch.Tensor, dmajor: bool) -> None:
+    """In-place fill of the persistent lane PLE host buffer from ``rows`` (``[1,1,lanes,2560]``)."""
+
+    if dmajor:
+        _one, columns, lanes, width = buffer.shape
+        buffer.copy_(rows.reshape(1, lanes, columns, width).permute(0, 2, 1, 3))
+    else:
+        buffer.copy_(rows)
+
+
 class Qwen38TTNNTextModel:
     """Exact 48-layer ordinary-decode owner on one physical 1x4 mesh."""
 
@@ -1367,6 +1388,12 @@ class Qwen38TTNNTextModel:
         # id(lane state) -> (state, lanes) of the lane states ``write_lane_ple_rows`` validated: the 48-layer check runs
         # once per state, not per step; dropped at release (the held state keeps its id from being reused)
         self._ple_validated_lanes: dict[int, tuple[Qwen38TTNNTextModelLaneState, int]] = {}
+        # QWEN38_LANE_PLE_FAST=1: id(lane state) -> [state, torch buffer, persistent host tensor | None, pending, aliased]
+        self._lane_ple_hosts: dict[int, list] = {}
+        self.ple_split_extra: dict[
+            str, float
+        ] = {}  # QWEN38_STEP_SPLIT=1: sub-timers (s) and counts, not summed into ple_other
+        self.ple_split: dict[str, float] = {}  # QWEN38_STEP_SPLIT=1: the last write_lane_ple_rows sub-timers (seconds)
         # ids of the chunk states whose pad inputs hold the full-pass values (set by ``write_chunk_pad(None)``, dropped by
         # a partial write and at release): the next full-pass write is skipped
         self._chunk_pad_full: set[int] = set()
@@ -4286,6 +4313,7 @@ class Qwen38TTNNTextModel:
         if not state.is_view:
             raise ValueError("release_bucket_lane_state takes a bucket view; use release_lane_state")
         self._ple_validated_lanes.pop(id(state), None)
+        self._lane_ple_hosts.pop(id(state), None)
         actions = [
             (
                 f"target layer {index} bucket lane state",
@@ -4306,6 +4334,7 @@ class Qwen38TTNNTextModel:
         self._validate_lane_state(state)
         self._require_parent_lane_state(state, "release_lane_state")
         self._ple_validated_lanes.pop(id(state), None)
+        self._lane_ple_hosts.pop(id(state), None)
         actions = [
             (
                 f"target layer {index} lane state",
@@ -4529,8 +4558,105 @@ class Qwen38TTNNTextModel:
         if keep is not None:
             keep.append(host)
 
+    def mark_lane_ple_fenced(self) -> None:
+        """A completed (blocking) replay or waited event of the last step: every enqueued PLE upload has been read, so the
+        persistent host buffers of ``QWEN38_LANE_PLE_FAST`` are free to rewrite."""
+
+        for entry in self._lane_ple_hosts.values():
+            entry[3] = False
+
+    def prove_lane_ple_reads(self, proofs: list) -> None:
+        """Run the identity proofs a ``proofs=`` lane PLE write left (same check and error as the inline form)."""
+
+        if proofs:
+            ple = self.layers[PLE_CHECKPOINT_LAYER].ple
+            ple.resident_lookup.prove_deferred(proofs)
+
+    def _lane_ple_host_tensor(self, state: Qwen38TTNNTextModelLaneState, rows: torch.Tensor, keep: list | None):
+        """The host mesh tensor of ``rows`` (``[1,1,lanes,2560]`` BF16): the persistent one with its torch buffer filled in
+        place (``ttnn.from_torch`` over a persistent torch buffer borrows it, as the B=1 chain's ``prepare_ple_row``
+        does), or, while an earlier upload may still read the buffer or the borrow is not proven, a fresh ``from_torch``.
+        """
+
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3))
+        dmajor = LANE_PLE_DMAJOR
+        if dmajor:
+            # [1, D, lanes, 2560 // D]: device d's chunk buffer[:, d] is contiguous, so from_torch can borrow the buffer
+            columns = MESH_SHAPE[1]
+            lanes, width = rows.shape[2], rows.shape[3] // columns
+            buffer_shape = torch.Size((1, columns, lanes, width))
+        else:
+            buffer_shape = rows.shape
+        entry = self._lane_ple_hosts.get(id(state))
+        if entry is None or entry[0] is not state or entry[1].shape != buffer_shape:
+            if dmajor:
+                buffer = torch.empty(buffer_shape, dtype=torch.bfloat16)
+                buffer.copy_(rows.reshape(1, lanes, columns, width).permute(0, 2, 1, 3))
+                host_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 1))
+                concat_dim = 1
+            else:
+                buffer = rows.clone().contiguous()
+                host_mapper = mapper
+                concat_dim = 3
+            host = ttnn.from_torch(buffer, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=host_mapper)
+            aliased = self._lane_ple_borrow_proven(buffer, host, concat_dim)
+            if aliased and dmajor:
+                # copy_host_to_device_tensor gives the device tensor the host tensor's topology (tt_metal/impl/tensor/
+                # tensor_apis.cpp:209-219): relabel the host tensor as the lane-major dims=(None, 3) shard so the model's
+                # contract checks (HIDDEN_SHARDED, shard dim 3) hold.  The bytes stay d-major (device d = buffer[:, d]).
+                try:
+                    label = ttnn.from_torch(
+                        torch.zeros(rows.shape, dtype=torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=mapper,
+                    )
+                    host.update_tensor_topology(label.tensor_topology())
+                except Exception:
+                    aliased = False
+            logger.info(
+                f"lane PLE host buffer: layout={'dmajor' if dmajor else 'lanemajor'} "
+                f"lanes={rows.shape[2]} borrowed={aliased}"
+            )
+            entry = [state, buffer, host if aliased else None, False, aliased]
+            self._lane_ple_hosts[id(state)] = entry
+            if not aliased:
+                return self._fresh_lane_ple_host(rows, mapper, keep)
+            _fill_lane_ple_buffer(buffer, rows, dmajor)  # the probe pattern is replaced by this step's rows
+            return host
+        if entry[2] is None or entry[3]:  # not borrowed, or an upload from the buffer may still be in flight
+            return self._fresh_lane_ple_host(rows, mapper, keep)
+        _fill_lane_ple_buffer(entry[1], rows, dmajor)
+        return entry[2]
+
+    @staticmethod
+    def _fresh_lane_ple_host(rows: torch.Tensor, mapper, keep: list | None):
+        host = ttnn.from_torch(rows.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper)
+        if keep is not None:
+            keep.append(host)
+        return host
+
+    def _lane_ple_borrow_proven(self, buffer: torch.Tensor, host, dim: int = 3) -> bool:
+        """Once per buffer: rewrite the buffer in place and read the host tensor back; True only if it shows the new bytes
+        (the host tensor borrows the buffer).  Any failure of the probe means not proven: the fresh path serves."""
+
+        try:
+            probe = (
+                torch.arange(buffer.numel(), dtype=torch.int32).remainder_(251).to(torch.bfloat16).reshape(buffer.shape)
+            )
+            buffer.copy_(probe)
+            back = ttnn.to_torch(host, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=dim))
+            return back.numel() == buffer.numel() and torch.equal(back.reshape(buffer.shape), probe)
+        except Exception:
+            return False
+
     def write_lane_ple_rows(
-        self, state: Qwen38TTNNTextModelLaneState, tokens: Sequence[int], contexts, keep: list | None = None
+        self,
+        state: Qwen38TTNNTextModelLaneState,
+        tokens: Sequence[int],
+        contexts,
+        keep: list | None = None,
+        proofs: list | None = None,
     ) -> tuple[tuple[int, int], ...]:
         """Host write of the PLE rows (outside any trace): lane u's ``tokens[u]`` looked up under ``contexts[u]``
         in one batched read into the persistent rows.  Returns the next context per lane; the caller keeps them
@@ -4550,16 +4676,58 @@ class Qwen38TTNNTextModel:
         tokens = [int(token) for token in tokens]
         if len(tokens) != lanes:
             raise ValueError(f"lane PLE rows need one token per lane: got {len(tokens)}, expected {lanes}")
+        split = LANE_PLE_SPLIT
+        if LANE_PLE_FAST:
+            if split:
+                import resource
+
+                ru0 = resource.getrusage(resource.RUSAGE_SELF)
+                c0 = time.thread_time()
+                t0 = time.perf_counter()
+            own = (
+                [] if proofs is None else proofs
+            )  # the caller proves after the replay enqueue; else here, inline-equivalent
+            rows, next_contexts = ple.host_lanes(tokens, contexts, proofs=own, vectorized=True)
+            if split:
+                t1 = time.perf_counter()
+                c1 = time.thread_time()
+                ru1 = resource.getrusage(resource.RUSAGE_SELF)
+                extra = dict(getattr(ple, "last_split", None) or {})
+                extra["ple_lookup_cpu"] = c1 - c0
+                extra["ple_minflt"] = ru1.ru_minflt - ru0.ru_minflt
+                extra["ple_majflt"] = ru1.ru_majflt - ru0.ru_majflt
+                self.ple_split_extra = extra
+            host = self._lane_ple_host_tensor(state, rows, keep)
+            if split:
+                t2 = time.perf_counter()
+            ttnn.copy_host_to_device_tensor(host, state.ple_rows.embedding_rows)
+            entry = self._lane_ple_hosts.get(id(state))
+            if entry is not None and entry[2] is host:
+                entry[3] = True  # the persistent buffer is not to be rewritten until a fence
+            if proofs is None:
+                self.prove_lane_ple_reads(own)
+            if split:
+                t3 = time.perf_counter()
+                self.ple_split = {"ple_lookup": t1 - t0, "ple_host": t2 - t1, "ple_h2d": t3 - t2}
+            return next_contexts
+        if split:
+            t0 = time.perf_counter()
         rows, next_contexts = ple.host_lanes(tokens, contexts)
+        if split:
+            t1 = time.perf_counter()
         host = ttnn.from_torch(
             rows.contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
         )
+        if split:
+            t2 = time.perf_counter()
         ttnn.copy_host_to_device_tensor(host, state.ple_rows.embedding_rows)
         if keep is not None:
             keep.append(host)
+        if split:
+            self.ple_split = {"ple_lookup": t1 - t0, "ple_host": t2 - t1, "ple_h2d": time.perf_counter() - t2}
         return next_contexts
 
     def _embed_residual_lanes_from_device_token(self, state: Qwen38TTNNTextModelLaneState):

@@ -43,7 +43,8 @@ def up(mesh, tensor, dtype):
 @MESH
 @PARAMS
 @pytest.mark.parametrize(
-    "page_size,pages,position", [(128, 24, 1024), (128, 24, 2044), (2048, 8, 2048), (2048, 8, 14336)]
+    "page_size,pages,position",
+    [(128, 24, 1024), (128, 24, 2044), (2048, 8, 2048), (2048, 8, 14336), (128, 2056, 262144)],  # last: 256k context
 )
 @pytest.mark.parametrize("page_table_row", [0, 2])
 def test_paged_gather_is_bitwise_equal_to_the_flat_gather(mesh_device, page_size, pages, position, page_table_row):

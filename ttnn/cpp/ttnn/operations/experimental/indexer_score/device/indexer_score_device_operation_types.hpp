@@ -142,6 +142,15 @@ struct operation_attributes_t {
     // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
     // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
     uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
+    // Length-aware scoring (classic factory only; see tensor_args_t::valid_length_tensor). Key rows per lane in the
+    // wide lanes form (lane u's keys start at u*valid_length_lane_rows); 0 = one lane spanning all of K. COMPILE-TIME
+    // + hashed (it is the kernels' lane stride).
+    uint32_t valid_length_lane_rows{0};
+    // Row-write (QWEN38_IDX_ROWWRITE, classic factory): 0 = the writer scatters all 32 rows of every key tile (default,
+    // byte-identical). c > 0 = the writer scatters only the consumed rows: c rows per key tile, starting at row
+    // lane*c where lane = key_tile / (valid_length_lane_rows / 32) when valid_length_lane_rows != 0, else rows 0..c-1.
+    // Other rows of the output are left UNWRITTEN. COMPILE-TIME + hashed (writer define).
+    uint32_t consumed_rows{0};
     // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
     uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
     uint32_t key_stripe_chunk() const {
@@ -175,6 +184,13 @@ struct tensor_args_t {
     // the k pool blocks of logical batch b in order. nullopt = k is the contiguous cache.
     std::optional<Tensor> page_table{std::nullopt};
     bool has_page_table() const { return page_table.has_value(); }
+
+    // Optional length-aware scoring (classic factory only): UINT32 ROW_MAJOR DRAM [1,1,1,N] (N <= 32), one value per
+    // lane = the SAME tensor topk_large_indices reads as its valid_length_tensor (lane value = kv_block_start, offset
+    // 32). The reader, compute and writer read it at kernel start and skip every K work unit whose tiles all lie at or
+    // past the lane's bound of (value >> 5) + 1 tiles. Skipped output columns are left unwritten.
+    std::optional<Tensor> valid_length_tensor{std::nullopt};
+    bool has_valid_length() const { return valid_length_tensor.has_value(); }
 };
 
 // Shape every consumer of k's extent (T, batch slots, kv_len bound, causal geometry, output width) must use: k's

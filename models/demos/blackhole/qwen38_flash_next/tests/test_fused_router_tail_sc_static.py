@@ -67,6 +67,7 @@ def test_flag_off_is_todays_program_parts_unchanged(monkeypatch):
 @pytest.mark.parametrize("rows", [2, 5, 8, 32, 128])
 def test_flag_on_other_rows_fall_back(monkeypatch, rows):
     monkeypatch.setenv(sc.SORTCORE_ENV, "1")
+    monkeypatch.setenv(sc.LANES_ENV, "0")  # QWEN38_ROUTER_SC_LANES now defaults on and serves rows 2..32
     monkeypatch.setattr(rt, "program_parts", lambda *a, **k: "today")
     assert not sc.enabled(rows)
     assert sc.program_parts("l", "i", "s", "x", rows=rows, top_k=10) == "today"

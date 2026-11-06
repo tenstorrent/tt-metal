@@ -312,8 +312,135 @@ def _tensor_key(tensor) -> tuple[str, int]:
     return ("ttnn", int(tensor_id)) if tensor_id is not None else ("python", id(tensor))
 
 
+TOPK_CLASSIC_MAX_WIDTH = (
+    16384  # topk_large_indices runs its one-core-per-row Classic body past this width (32 chunks of 512)
+)
+TOPK_SEG_DEFAULT_WIDTH = 8192
+LOCAL_SEGMENT_LOG2 = 9  # log2(BLOCK_TOPK)
+
+
+def _topk_seg_width(width: int, k: int) -> int:
+    """Segment width of the two-stage top-k for a score row of ``width`` blocks, or 0 when the single-stage call is used.
+    QWEN38_TOPK_SEG=1 turns it on (default "0": every call is today's single topk_large_indices call).  The width
+    depends on ``width`` and ``k`` only (never on the row count), so a row's result does not depend on the batch."""
+
+    if os.environ.get("QWEN38_TOPK_SEG", "1") != "1":
+        return 0
+    if width <= TOPK_CLASSIC_MAX_WIDTH or k != BLOCK_TOPK:
+        return 0
+    seg = int(os.environ.get("QWEN38_TOPK_SEG_W", str(TOPK_SEG_DEFAULT_WIDTH)))
+    # power of two (the global id is local | seg << log2(seg width)), divides the row, holds k, and the stage-2 row
+    # (width / seg * k candidates) must itself fit the fused body (<= 32 chunks of k) so its ties follow candidate order
+    if seg < k or seg & (seg - 1) or width % seg or (width // seg) * k > TOPK_CLASSIC_MAX_WIDTH:
+        return 0
+    return seg
+
+
+def _release_reshaped(source, result) -> None:
+    """Free ``source`` after ttnn.reshape unless the reshape returned a view of it (same buffer)."""
+
+    if source is not result and source.buffer_address() != result.buffer_address():
+        ttnn.deallocate(source)
+
+
+def qsa_topk_block_ids(scores, *, k: int = BLOCK_TOPK, **kwargs):
+    """The QSA block top-k: UINT32 ROW_MAJOR block ids [..., k], sorted by descending score.
+
+    With QWEN38_TOPK_SEG unset/"0" (or a width <= 16384) this IS ``ttnn.experimental.topk_large_indices(scores, k=k,
+    **kwargs)``, the same call, same arguments.  With QWEN38_TOPK_SEG=1 and width W > 16384 (the one-core Classic body)
+    it runs two stages:
+
+    1. the rows are viewed as [rows * NS, SW] (NS = W / SW segments, SW = 8192) and each segment's top-k is taken
+       (many short rows, so the fused body and the row split apply, spread over many cores);
+    2. the candidates [rows, NS * k] (segment-major per row, values gathered at the stage-1 ids) go through a second
+       top-k; its ids index the candidate row, and the global block id is local id | (candidate // k) * SW.
+
+    No valid_length / valid_length_tensor reaches either stage: the masked blocks already carry INDEXER_MASK_VALUE
+    (-3.39e38 after score_merge / the unfused add), so they rank below every live block, and the slots past the live
+    count are overwritten by the callers' row_keep_bits / row_fill exactly as for the bounded call.  Ties: the candidate
+    row order is segment-major and the stage widths depend on W only, so a row's result does not depend on how many
+    rows share the call; ties may still differ from the single-stage Classic body (whose tie order is not index order).
+    """
+
+    shape = tuple(int(d) for d in scores.shape)
+    width = shape[-1]
+    seg = _topk_seg_width(width, k)
+    if seg == 0:
+        return ttnn.experimental.topk_large_indices(scores, k=k, **kwargs)
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    segments = width // seg
+    rows = 1
+    for dim in shape[:-1]:
+        rows *= dim
+    flat = ttnn.reshape(scores, (1, 1, rows * segments, seg))  # [rows*NS, SW]: row r, segment s -> row r*NS + s
+    local_ids = ttnn.experimental.topk_large_indices(flat, k=k)  # [1,1,rows*NS,k] UINT32, segment-local ids
+    local_values = ttnn.gather(flat, 3, local_ids, memory_config=dram)  # [1,1,rows*NS,k] BF16
+    cand_values = ttnn.reshape(local_values, (1, 1, rows, segments * k))  # segment-major per row
+    _release_reshaped(local_values, cand_values)
+    cand_ids = ttnn.reshape(local_ids, (1, 1, rows, segments * k))
+    _release_reshaped(local_ids, cand_ids)
+    picked = ttnn.experimental.topk_large_indices(cand_values, k=k)  # [1,1,rows,k] UINT32 candidate positions
+    _deallocate(cand_values)
+    local_of_picked = ttnn.gather(cand_ids, 3, picked, memory_config=dram)
+    _deallocate(cand_ids)
+    seg_base = ttnn.bitwise_left_shift(
+        ttnn.bitwise_right_shift(picked, LOCAL_SEGMENT_LOG2, memory_config=dram),
+        seg.bit_length() - 1,
+        memory_config=dram,
+    )
+    _deallocate(picked)
+    ids = ttnn.bitwise_or(local_of_picked, seg_base, memory_config=dram)
+    _deallocate(local_of_picked, seg_base)
+    return ttnn.reshape(ids, shape[:-1] + (k,)) if len(shape) != 4 else ids
+
+
 def _score_live_rows_enabled() -> bool:
     return os.environ.get("QWEN38_QSA_SCORE_LIVE_ROWS", "1") == "1"
+
+
+def _idx_kc() -> int:
+    """QWEN38_IDX_KC (default 1, capped at 8): key tiles per indexer work unit (k_chunk_size = 32 * KC).  KC > 1 batches
+    the unit's K reads, matmuls and output writes (one barrier per unit); the per-key math is the same."""
+    try:
+        return max(1, min(8, int(os.environ.get("QWEN38_IDX_KC", "1"))))
+    except ValueError:
+        return 1
+
+
+def _idx_kc_kwargs() -> dict:
+    """The indexer call's ``program_config`` for QWEN38_IDX_KC > 1, else nothing (the op's default config)."""
+    kc = _idx_kc()
+    if kc <= 1:
+        return {}
+    return {"program_config": ttnn.IndexerScoreProgramConfig(k_chunk_size=ttnn.TILE_SIZE * kc)}
+
+
+def _idx_rowwrite_kwargs(consumed_rows: int, lane_rows: int = 0) -> dict:
+    """QWEN38_IDX_ROWWRITE=1 (default 0): the indexer writes only the score rows the caller reads (``consumed_rows`` per
+    key tile: rows lane * consumed_rows ... when ``lane_rows`` > 0, else rows 0 ...); the other rows are left unwritten.
+    """
+    if os.environ.get("QWEN38_IDX_ROWWRITE", "1") != "1":
+        return {}
+    kwargs = {"consumed_rows": consumed_rows}
+    if lane_rows:
+        kwargs["valid_length_lane_rows"] = lane_rows
+    return kwargs
+
+
+def _sparse_sdpa_key_splits(device, rows: int) -> int:
+    """key_splits for a decode sparse_sdpa call over ``rows`` query tokens: N cores share each token's selected keys
+    (the op combines the partials on device).  1 (today's one core per token) unless QWEN38_SDPA_KSPLIT=1;
+    then N = QWEN38_SDPA_KSPLIT_N (default 8), the SAME for every ``rows`` so a lane's output does not depend on the
+    batch (the op runs the S*N units in turns when they exceed the grid).  N <= 1 means no split; N is clamped to
+    [1, min(64, grid cores)].  Prefill and the generic call never use it."""
+
+    del rows  # batch invariance: N must not depend on the row count
+    if os.environ.get("QWEN38_SDPA_KSPLIT", "1") != "1":
+        return 1
+    n = int(os.environ.get("QWEN38_SDPA_KSPLIT_N", "8"))
+    grid = device.compute_with_storage_grid_size()
+    return max(1, min(n, 64, grid.x * grid.y))
 
 
 def _deallocate(*tensors) -> None:
@@ -4809,6 +4936,7 @@ class Qwen38TTNNQSA:
             # axis gives every TP coordinate the same causal query position;
             # [] would incorrectly add the flat TP rank to that position.
             seq_shard_axes=[STAGING_AXIS],
+            **_idx_kc_kwargs(),
         )
         if not query_view:
             _deallocate(query_tile)
@@ -4835,7 +4963,7 @@ class Qwen38TTNNQSA:
         # All BLOCK_TOPK slots are expanded at fixed width; slots past the
         # selected count (top-k sentinels below the valid length) are masked
         # out of every row built from the result, so no per-position slice.
-        block_ids_rm = ttnn.experimental.topk_large_indices(
+        block_ids_rm = qsa_topk_block_ids(
             scores,
             k=BLOCK_TOPK,
             valid_length=complete_blocks,
@@ -5438,6 +5566,15 @@ class Qwen38TTNNQSA:
         tile_shape = ttnn.Shape((1, INDEX_QUERY_HEADS_PER_DEVICE, ttnn.TILE_SIZE, INDEX_HEAD_DIM))
         query_tile = ttnn.reshape(index_query, tile_shape, tile_shape)
         _retag_tensor(query_tile, reference=index_query, shard_dim=1)
+        # QWEN38_IDX_LEN=1: hand the op the tensor the top-k reads as its valid length (kv_block_start), so scoring
+        # skips key work units wholly past the top-k search bound ((kv_block_start >> 5) + 1 tiles).
+        # Default on; =0 turns it off.
+        # The paged chain scores its row of the pool through cache_batch_idx, which the length-aware form rejects.
+        length_kwargs = (
+            {"valid_length_tensor": position.kv_block_start}
+            if os.environ.get("QWEN38_IDX_LEN", "1") == "1" and not self._generic_paged(state)
+            else {}
+        )
         local_scores = ttnn.experimental.indexer_score_dsa(
             query_tile,
             state.compressed_index_cache,
@@ -5446,6 +5583,9 @@ class Qwen38TTNNQSA:
             compute_kernel_config=self.indexer_compute_config,
             seq_shard_axes=[STAGING_AXIS],
             **self._paged_indexer_kwargs(state),
+            **length_kwargs,
+            **_idx_kc_kwargs(),
+            **_idx_rowwrite_kwargs(1),  # the row-0 slice / trim below reads row 0 only
         )
         pages = self.allocated_compressed_blocks // SCORE_GATHER_PAGE
         if self._trim_score_pages and self._trim_score_pages.admits(local_scores, self.allocated_compressed_blocks):
@@ -5512,7 +5652,7 @@ class Qwen38TTNNQSA:
         if os.environ.get("QWEN38_QSA_LIVE", "1") == "1" and rows == 1 and (page_table is None or single_user):
             # QWEN38_QSA_LIVE: search (P & ~31) + 32 columns, read on device from kv_block_start each replay; that is at
             # least the live block count (P + 1) >> 2, and the columns past it hold masked finite scores
-            block_ids = ttnn.experimental.topk_large_indices(
+            block_ids = qsa_topk_block_ids(
                 masked_scores, k=BLOCK_TOPK, valid_length_tensor=position.kv_block_start, valid_length_offset=32
             )
         elif os.environ.get("QWEN38_QSA_LIVE", "1") == "1" and rows > 1 and page_table is not None:
@@ -5521,13 +5661,13 @@ class Qwen38TTNNQSA:
             lengths = position.kv_block_start
             if rows != CHUNK_ROWS:
                 lengths = ttnn.slice(lengths, (0, 0, 0, 0), (1, 1, 1, rows), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            block_ids = ttnn.experimental.topk_large_indices(
+            block_ids = qsa_topk_block_ids(
                 masked_scores, k=BLOCK_TOPK, valid_length_tensor=lengths, valid_length_offset=32
             )
             if rows != CHUNK_ROWS:
                 _deallocate(lengths)
         else:
-            block_ids = ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)
+            block_ids = qsa_topk_block_ids(masked_scores, k=BLOCK_TOPK)
         _deallocate(masked_scores)
         _require_shape(block_ids, (1, 1, rows, BLOCK_TOPK), "top-k QSA block IDs")
         sparse_indices = self._selection_row_fused(
@@ -5616,6 +5756,14 @@ class Qwen38TTNNQSA:
         _retag_tensor(sparse_query, reference=state.packed_kv_cache, shard_dim=1)
         return sparse_query, qg_ws
 
+    @staticmethod
+    def _sparse_sdpa_ksplit_kwargs(device, rows: int) -> dict:
+        """sparse_sdpa kwargs for a decode call (QWEN38_SDPA_KSPLIT=1 adds key_splits; empty otherwise, so the op
+        call is exactly today's)."""
+
+        n = _sparse_sdpa_key_splits(device, rows)
+        return {"key_splits": n} if n > 1 else {}
+
     def _sparse_value_attention_fused(
         self, sparse_query, qg_ws, sparse_indices, state, *, qg_first: int = 0, rows: int = 1
     ):
@@ -5633,6 +5781,7 @@ class Qwen38TTNNQSA:
             scale=HEAD_DIM**-0.5,
             k_chunk_size=ttnn.TILE_SIZE,
             compute_kernel_config=self.compute_config,
+            **self._sparse_sdpa_ksplit_kwargs(state.packed_kv_cache.device(), rows),
         )
         _deallocate(sparse_query)
         if self._trim_post_attention and self._trim_post_attention.admits(sparse_output, qg_ws, qg_first):
@@ -5739,6 +5888,8 @@ class Qwen38TTNNQSA:
             compute_kernel_config=self.indexer_compute_config,
             seq_shard_axes=[STAGING_AXIS],
             **self._paged_indexer_kwargs(state),
+            **_idx_kc_kwargs(),
+            **_idx_rowwrite_kwargs(1),  # the row-0 slice below reads row 0 only
         )
         # query_tile shares index_query's buffer; the caller releases index_query.
         score_row = ttnn.slice(
@@ -5777,7 +5928,7 @@ class Qwen38TTNNQSA:
         # Fixed k; the valid blocks form the sorted prefix because every masked
         # score is below any ReLU score.  Slots >= lo are then overwritten by
         # the position-derived row of tail ids and sentinels.
-        block_ids = ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)
+        block_ids = qsa_topk_block_ids(masked_scores, k=BLOCK_TOPK)
         _deallocate(masked_scores)
         _require_shape(block_ids, (1, 1, 1, BLOCK_TOPK), "top-k QSA block IDs")
         if block_ids.dtype != ttnn.uint32 or block_ids.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -6943,6 +7094,7 @@ class Qwen38TTNNQSA:
             scale=HEAD_DIM**-0.5,
             k_chunk_size=ttnn.TILE_SIZE,
             compute_kernel_config=self.compute_config,
+            **self._sparse_sdpa_ksplit_kwargs(state.packed_kv_cache.device(), rows),
         )
         _deallocate(sparse_query)
         if qg_ws is not None:
@@ -8476,6 +8628,8 @@ class Qwen38TTNNQSA:
                 compute_kernel_config=self.indexer_compute_config,
                 seq_shard_axes=[STAGING_AXIS],
                 **self._lane_indexer_kwargs(state, lane_constants, count=count, wide=True),
+                **_idx_kc_kwargs(),
+                **_idx_rowwrite_kwargs(1, rows),  # lane u reads row u of its own columns only
             )
             for lane in range(count):
                 lane_rows.append(
@@ -8498,6 +8652,7 @@ class Qwen38TTNNQSA:
                     compute_kernel_config=self.indexer_compute_config,
                     seq_shard_axes=[STAGING_AXIS],
                     **self._lane_indexer_kwargs(state, lane_constants, count=count, wide=False),
+                    **_idx_kc_kwargs(),
                 )
                 lane_rows.append(
                     ttnn.slice(
@@ -8552,7 +8707,7 @@ class Qwen38TTNNQSA:
         # The chunk's row materialization with lane u's KV offset folded into its block-offset row: the expanded
         # ids and the tail ids (lanes.row_fill) address lane u's region of the flat cache; the sentinels are
         # untouched (the offset rows are added before the keep mask and the OR).
-        block_ids = ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)
+        block_ids = qsa_topk_block_ids(masked_scores, k=BLOCK_TOPK)
         _deallocate(masked_scores)
         _require_shape(block_ids, (1, 1, MAX_LANES, BLOCK_TOPK), "top-k QSA lane block IDs")
         if block_ids.dtype != ttnn.uint32 or block_ids.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -8966,6 +9121,10 @@ class Qwen38TTNNQSA:
             compute_kernel_config=self.indexer_compute_config,
             seq_shard_axes=[STAGING_AXIS],
             **page_kwargs,
+            **_idx_kc_kwargs(),
+            # lane u's R verify rows are rows u*R ... u*R+R-1 (lane_of_row r = r // R); the pad rows (>= count*R) are
+            # never read
+            **_idx_rowwrite_kwargs(lane_verify.rows, rows),
         )
         score_rows = self._lane_score_rows_of(local_scores, lane_verify.lanes_of_rows, count, rows, blocks)
         _deallocate(local_scores)
@@ -9205,6 +9364,15 @@ class Qwen38TTNNQSA:
             else:
                 view_kwargs = {"kv_len": count * rows} if state.is_view and not state.lane_prefix else {}
                 cache = state.compressed_index_cache_flat
+            if os.environ.get("QWEN38_IDX_LEN", "1") == "1":
+                # QWEN38_IDX_LEN=1: the per-lane lengths the lanes' top-k reads (lane u: kv_block_start[u]); lane u's
+                # keys start at row u * rows, so the op skips key work units past each lane's (kv_block_start >> 5) + 1
+                # tiles
+                view_kwargs["valid_length_tensor"] = lanes.kv_block_start
+                view_kwargs["valid_length_lane_rows"] = rows
+            # QWEN38_IDX_ROWWRITE=1: lane u reads row u of its own columns only (lane_score_rows); the lane stride is
+            # the same ``rows`` the length bound uses
+            view_kwargs.update(_idx_rowwrite_kwargs(1, rows))
             local_scores = ttnn.experimental.indexer_score_dsa(
                 query_tile,
                 cache,
@@ -9213,6 +9381,7 @@ class Qwen38TTNNQSA:
                 compute_kernel_config=self.indexer_compute_config,
                 seq_shard_axes=[STAGING_AXIS],
                 **view_kwargs,
+                **_idx_kc_kwargs(),
             )
             if self._lane_score_rows_fused is not None:
                 lane_rows.append(self._lane_score_rows_fused(local_scores, count, rows, blocks))
@@ -9231,6 +9400,7 @@ class Qwen38TTNNQSA:
                     compute_kernel_config=self.indexer_compute_config,
                     seq_shard_axes=[STAGING_AXIS],
                     **self._lane_indexer_kwargs(state, lane_constants, count=count, wide=False),
+                    **_idx_kc_kwargs(),
                 )
                 lane_rows.append(
                     ttnn.slice(

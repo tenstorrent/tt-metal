@@ -22,6 +22,8 @@ struct IndexerScoreSharedVariables {
     // This device's TP-rank along the TP axis (seq_shard_axes[1]; 0 when not 2D-sub-sharded); the 2D block-cyclic
     // geometry adds tp_index*Sq to the slab position. Stored for the same override recompute.
     uint32_t tp_index = 0;
+    // Reader common-arg slot holding the valid_length_tensor address (0 and unused when the tensor is absent).
+    uint32_t len_rt_index = 0;
 };
 
 // Native mesh-workload factory: one program per mesh coordinate so each device derives its own

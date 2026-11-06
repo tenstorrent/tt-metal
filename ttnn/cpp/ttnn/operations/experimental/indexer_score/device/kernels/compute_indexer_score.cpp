@@ -516,6 +516,19 @@ void kernel_main() {
         straddle_jump_tiles = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_straddle_jump_tiles_word);
         cb_derived.pop_front(1);
     }
+#ifdef INDEXER_LEN_TENSOR
+    // Per-lane live-tile bounds published by the reader (read here, before any zero-work return, so the
+    // mailbox is always consumed). Every TRISC gets the same words through read_tile_value.
+    uint32_t idx_bounds[IDX_LEN_NUM];
+    {
+        CircularBuffer cb_len(IDX_LEN_CB_COMPUTE);
+        cb_len.wait_front(1);
+        for (uint32_t i = 0; i < IDX_LEN_NUM; ++i) {
+            idx_bounds[i] = ckernel::read_tile_value(IDX_LEN_CB_COMPUTE, 0, i);
+        }
+        cb_len.pop_front(1);
+    }
+#endif
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
@@ -533,6 +546,9 @@ void kernel_main() {
 
     WorkUnitSpan span;
     span.set_valid_k_len_tiles(kv_len_tiles);
+#ifdef INDEXER_LEN_TENSOR
+    span.lane_bounds = idx_bounds;
+#endif
     ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_key_stripes, shard_physical_sp> shard_span;
     shard_span.set_valid_k_len_tiles(kv_len_tiles);
 

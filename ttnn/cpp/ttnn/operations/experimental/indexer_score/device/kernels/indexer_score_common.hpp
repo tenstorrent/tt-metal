@@ -99,6 +99,13 @@ struct WorkUnitSpan {
     uint32_t group = 0;
     uint32_t band = 0;
     uint32_t valid_k_len_tiles = k_len_tiles;  // populated key prefix this dispatch; default = full buffer
+#ifdef INDEXER_LEN_TENSOR
+    // Length-aware scoring (valid_length_tensor). Per-lane bound IN TILES: key tile t belongs to lane
+    // t / IDX_LEN_LANE_TILES and is live iff (t % IDX_LEN_LANE_TILES) < lane_bounds[lane]. nullptr = off. Reader,
+    // compute and writer all take k_tiles() from this one struct, so they apply the identical skip rule and every
+    // CB push/pop count matches.
+    const uint32_t* lane_bounds = nullptr;
+#endif
 
     void set(uint32_t g, uint32_t b) {
         group = g;
@@ -112,8 +119,34 @@ struct WorkUnitSpan {
     uint32_t k_tiles() const {  // valid k-tiles in this cell: < full on the edge, 0 entirely past kv_len
         const uint32_t start = k_tile_start();
         const uint32_t left = valid_k_len_tiles > start ? valid_k_len_tiles - start : 0;
-        return left < k_tiles_per_unit ? left : k_tiles_per_unit;
+        const uint32_t n = left < k_tiles_per_unit ? left : k_tiles_per_unit;
+#ifdef INDEXER_LEN_TENSOR
+        // A unit with no live tile does no K/output work; a unit with any live tile runs whole (its tiles past
+        // a lane bound compute like the unmodified op, so every column below a bound is bit-identical).
+        if (n != 0 && lane_bounds != nullptr && !any_live_tile(start, n)) {
+            return 0;
+        }
+#endif
+        return n;
     }
+#ifdef INDEXER_LEN_TENSOR
+    bool any_live_tile(uint32_t start, uint32_t n) const {
+        uint32_t t = start;
+        const uint32_t end = start + n;
+        while (t < end) {
+            const uint32_t lane = t / IDX_LEN_LANE_TILES;
+            if (lane >= IDX_LEN_NUM) {
+                return true;  // no bound for this lane: keep the work
+            }
+            const uint32_t in_lane = t - lane * IDX_LEN_LANE_TILES;
+            if (in_lane < lane_bounds[lane]) {
+                return true;
+            }
+            t = (lane + 1) * IDX_LEN_LANE_TILES;  // next lane's tile 0 (always live: bounds are >= 1)
+        }
+        return false;
+    }
+#endif
 };
 
 /** One fused Ring Indexer work unit in shard-major physical order. Consecutive physical tiles stay within

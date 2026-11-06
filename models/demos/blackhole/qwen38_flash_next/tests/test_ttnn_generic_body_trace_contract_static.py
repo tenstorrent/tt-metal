@@ -74,9 +74,11 @@ SHAPE_OPS = {
     "squeeze",
     "unsqueeze",
 }
-STATIC_CALLS = {"ttnn.Shape", "tuple", "list", "int", "min", "max"}  # static when every argument is
+STATIC_CALLS = {"ttnn.Shape", "tuple", "list", "int", "min", "max", "_topk_seg_width"}  # static when every argument is
 # Read a tensor's shape (fixed per capture); _validate_logits returns int(logits.global_shape[2]).
 SHAPE_READERS = {"_shape", "len", "self._validate_logits"}
+# Parameters that are module constants at every captured call site (qsa_topk_block_ids(k=BLOCK_TOPK)).
+STATIC_PARAMETERS = {"k"}
 SHAPE_ATTRIBUTES = {"shape", "padded_shape", "logical_shape", "global_shape"}
 BUFFER_BINDINGS = {"output_tensor"}  # a preallocated output binds a buffer, not a shape
 # Teardown and Python container methods: many classes define them, none shapes a program.
@@ -178,10 +180,15 @@ def _static_locals(function: ast.FunctionDef) -> set[str]:
             assignments.setdefault(node.targets[0].id, []).append(node.value)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
             assignments.setdefault(node.target.id, []).append(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            # ``x op= v`` stays static when v is (x itself is judged by its plain assignments)
+            assignments.setdefault(node.target.id, []).append(node.value)
         elif isinstance(node, (ast.For, ast.comprehension)):
+            # a loop variable is static when it walks a static iterable (a tensor's shape), else a host loop value
+            walked = node.iter
             for name in [n for n in ast.walk(node.target) if isinstance(n, ast.Name)]:
-                assignments.setdefault(name.id, []).append(ast.Name(id="__loop__", ctx=ast.Load()))
-    static: set[str] = set()
+                assignments.setdefault(name.id, []).append(walked)
+    static: set[str] = {a.arg for a in function.args.args + function.args.kwonlyargs if a.arg in STATIC_PARAMETERS}
     while True:
         grown = {name for name, values in assignments.items() if all(_is_static(v, static) for v in values)}
         if grown <= static:
@@ -200,6 +207,8 @@ def _is_static(node: ast.expr, static_locals: set[str]) -> bool:
         return root in {"ttnn", "torch", "self"} or root.isupper() or node.attr in SHAPE_ATTRIBUTES
     if isinstance(node, ast.Subscript):
         return _is_static(node.value, static_locals) and _is_static(node.slice, static_locals)
+    if isinstance(node, ast.Slice):
+        return all(part is None or _is_static(part, static_locals) for part in (node.lower, node.upper, node.step))
     if isinstance(node, (ast.Tuple, ast.List)):
         return all(_is_static(item, static_locals) for item in node.elts)
     if isinstance(node, ast.BinOp):
@@ -208,6 +217,8 @@ def _is_static(node: ast.expr, static_locals: set[str]) -> bool:
         return _is_static(node.operand, static_locals)
     if isinstance(node, ast.Starred):
         return _is_static(node.value, static_locals)
+    if isinstance(node, ast.GeneratorExp):
+        return _is_static(node.elt, static_locals) and all(_is_static(g.iter, static_locals) for g in node.generators)
     if isinstance(node, ast.Call):
         if ast.unparse(node.func) in SHAPE_READERS:
             return True

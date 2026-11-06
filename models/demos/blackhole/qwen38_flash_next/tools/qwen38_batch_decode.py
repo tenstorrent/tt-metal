@@ -56,6 +56,7 @@ from ttnn.tools.trace_allocation_tracker import (
 )
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_host_spin as host_spin
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_pack_plan as pack_plan
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
@@ -179,6 +180,7 @@ def page_table_rows(page_rows: Sequence[Sequence[int]], lanes: int) -> list[list
 
 
 STEP_SPLIT = os.environ.get("QWEN38_STEP_SPLIT") == "1"  # per-part step timings (read once)
+LANE_PLE_FAST = os.environ.get("QWEN38_LANE_PLE_FAST", "1") == "1"  # PLE host work off the critical path (read once)
 
 
 class Qwen38PageAllocator:
@@ -1339,7 +1341,14 @@ class Qwen38PlainLaneDecoder:
         for u in idle:
             self.contexts[u] = None
         kept = {} if keep is None else {"keep": keep}
-        self.contexts[:r] = list(model.write_lane_ple_rows(bucket.ls, tokens[:r], self.contexts[:r], **kept))
+        proofs: list | None = None
+        if LANE_PLE_FAST:
+            proofs = []  # the shard identity proofs run behind the replay enqueue
+            self.contexts[:r] = list(
+                model.write_lane_ple_rows(bucket.ls, tokens[:r], self.contexts[:r], proofs=proofs, **kept)
+            )
+        else:
+            self.contexts[:r] = list(model.write_lane_ple_rows(bucket.ls, tokens[:r], self.contexts[:r], **kept))
         for u in idle:
             self.contexts[u] = None
         if split:
@@ -1348,16 +1357,34 @@ class Qwen38PlainLaneDecoder:
             model.write_lane_tokens(bucket.ls, tokens[:r], **kept)
         if split:
             t2 = time.perf_counter()
-        ttnn._ttnn_execute_trace(mesh, bucket.trace_id, cq_id=0, blocking=blocking)
+        spin = blocking and host_spin.SPIN  # QWEN38_BATCH_SPIN: enqueue, then busy-wait on the token-row read
+        ttnn._ttnn_execute_trace(mesh, bucket.trace_id, cq_id=0, blocking=blocking and not spin)
+        if spin:
+            host_spin.spin_until_done(mesh, ttnn.get_device_tensors(ls.token_row)[0])
         if split:
             t3 = time.perf_counter()
+        if LANE_PLE_FAST:
+            if blocking:
+                model.mark_lane_ple_fenced()  # the replay has finished: its PLE upload has been read
+            model.prove_lane_ple_reads(proofs)
         ls.position.advance_replayed()  # the shared position row: the trace added 1 to all 32 entries
         self.active = bucket
         self.bucket_steps[r] += 1
         if split:
             t4 = time.perf_counter()
             self.step_split = {"ple": t1 - t0, "tok": t2 - t1, "exe": t3 - t2, "adv": t4 - t3, "read": 0.0}
+            sub_times = getattr(model, "ple_split", None)
+            if sub_times:
+                self.step_split.update(sub_times)
+                self.step_split["ple_other"] = (t1 - t0) - sum(sub_times.values())
+                self.step_split.update(getattr(model, "ple_split_extra", None) or {})
         return r
+
+    def fence_ple(self) -> None:
+        """The newest enqueued replay's event has been waited: the persistent PLE host buffers are free again."""
+
+        if LANE_PLE_FAST:
+            self.model.mark_lane_ple_fenced()
 
     def finish_step(self, r: int) -> list[int]:
         """The device-to-host half of :meth:`step`: the blocking read of the token row's first ``r`` lanes (the lanes'
@@ -1377,7 +1404,8 @@ class Qwen38PlainLaneDecoder:
         non-blocking copy into a fresh host tensor, then two events on cq 0 after it (one the adapter waits, one the
         plugin's output thread waits).  Returns ``(host, adapter_event, plugin_event)``."""
 
-        host = ttnn.from_device(ttnn.get_device_tensors(self.ls.token_row)[0], blocking=False)
+        shard = ttnn.get_device_tensors(self.ls.token_row)[0]
+        host = host_spin.start_read(shard) if host_spin.SPIN else ttnn.from_device(shard, blocking=False)
         return host, ttnn.record_event(self.mesh, cq_id=0), ttnn.record_event(self.mesh, cq_id=0)
 
     # -- release -----------------------------------------------------------------------------------

@@ -269,6 +269,44 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
                 .set_page_size(cb_pt, pt_bytes));
     }
 
+    // Length-aware scoring (optional valid_length_tensor): two one-page mailbox CBs (reader -> compute, reader ->
+    // writer) holding the per-lane bounds in tiles, plus kernel defines. Absent: no CB, no define, so the three
+    // kernel binaries and the program are exactly the pre-existing ones.
+    const bool has_len = tensors.has_valid_length();
+    std::map<std::string, std::string> len_defines;
+    uint32_t len_lanes = 0;
+    if (has_len) {
+        len_lanes = static_cast<uint32_t>(tensors.valid_length_tensor->logical_volume());
+        const uint32_t lane_tiles =
+            args.valid_length_lane_rows ? args.valid_length_lane_rows / tt::constants::TILE_WIDTH : Tt;
+        const auto make_len_cb = [&]() {
+            const uint32_t idx = next_cb_index++;
+            tt::tt_metal::CreateCircularBuffer(
+                program,
+                core_ranges,
+                tt::tt_metal::CircularBufferConfig(128, {{idx, tt::DataFormat::UInt32}}).set_page_size(idx, 128));
+            return idx;
+        };
+        const uint32_t cb_len_compute = make_len_cb();
+        const uint32_t cb_len_writer = make_len_cb();
+        len_defines = {
+            {"INDEXER_LEN_TENSOR", "1"},
+            {"IDX_LEN_LANE_TILES", std::to_string(lane_tiles)},
+            {"IDX_LEN_NUM", std::to_string(len_lanes)},
+            {"IDX_LEN_CB_COMPUTE", std::to_string(cb_len_compute)},
+            {"IDX_LEN_CB_WRITER", std::to_string(cb_len_writer)},
+            // Common-arg slot of the length tensor address: right after the multicast x/y axes.
+            {"IDX_LEN_RT", std::to_string(indexer_common::reader::Count + cols_used + rows_used)}};
+    }
+
+    // Row-write (optional consumed_rows): writer-only defines, absent by default so all binaries stay unchanged.
+    std::map<std::string, std::string> writer_defines = len_defines;
+    if (args.consumed_rows != 0) {
+        writer_defines["IDX_ROW_WRITE"] = std::to_string(args.consumed_rows);
+        writer_defines["IDX_ROW_LANE_TILES"] =
+            std::to_string(args.valid_length_lane_rows ? args.valid_length_lane_rows / tt::constants::TILE_WIDTH : 0u);
+    }
+
     // Common dimensions (including compressed-key ratio), then CB indices. chunk_t stays a runtime arg.
     std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles, args.key_compression_ratio};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
@@ -341,6 +379,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // This path rejects metadata mode, so 0 is inert -- but the WIDTH must match the reader.
     reader_ct.push_back(0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    if (has_len) {
+        // Read only under INDEXER_LEN_TENSOR; appended last so every earlier offset is unchanged.
+        tt::tt_metal::TensorAccessorArgs(*tensors.valid_length_tensor->buffer()).append_to(reader_ct);
+    }
 
     // Page-table tail (INDEXER_PAGED binary only; the unpaged reader CT layout is unchanged): log2(tiles per
     // block), page-table row entries (W), logical tiles per user (S/32), scratch CB, then the page table accessor.
@@ -395,6 +437,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         {"schedule_cols", cols_used},
         {"schedule_rotate", 0u}};
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
+    reader_defines.insert(len_defines.begin(), len_defines.end());  // the length-aware defines join the paged ones
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
         kdir + "reader_indexer_score.cpp",
@@ -404,7 +447,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         program,
         kdir + "writer_indexer_score.cpp",
         core_ranges,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct, {}, schedule_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct, writer_defines, schedule_args));
     auto compute_id = tt::tt_metal::CreateKernel(
         program,
         kdir + "compute_indexer_score.cpp",
@@ -415,6 +458,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_ct,
+            .defines = len_defines,
             .named_compile_args = schedule_args});
 
     // One core identity per kernel; geometry and multicast axes are shared.
@@ -428,6 +472,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         reader_values[indexer_common::reader::PageTable] = tensors.page_table->buffer()->address();
     }
     append_multicast_axes(reader_values, phys);
+    uint32_t len_rt_index = 0;
+    if (has_len) {
+        len_rt_index = static_cast<uint32_t>(reader_values.size());
+        TT_FATAL(
+            len_rt_index == indexer_common::reader::Count + cols_used + rows_used,
+            "indexer_score: valid_length common-arg slot {} drifted from the reader define",
+            len_rt_index);
+        reader_values.push_back(tensors.valid_length_tensor->buffer()->address());
+    }
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_id, reader_values);
     tt::tt_metal::SetCommonRuntimeArgs(
         program, compute_id, {kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
@@ -452,7 +505,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             .compute_kernel = compute_id,
             .writer_kernel = writer_id,
             .device_index = device_index,
-            .tp_index = tp_index}};
+            .tp_index = tp_index,
+            .len_rt_index = len_rt_index}};
 }
 
 IndexerScoreProgramFactory::cached_mesh_workload_t IndexerScoreProgramFactory::create_mesh_workload(
@@ -505,6 +559,10 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         const std::array<uint32_t, indexer_common::compute::Count> causal_values = {
             kv_len_tiles, geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles};
         std::copy(reader_values.begin(), reader_values.end(), reader_args.data());
+        if (tensors.has_valid_length()) {
+            // Trace-stable address, but a cache hit may hand a different tensor.
+            reader_args[shared.len_rt_index] = tensors.valid_length_tensor->buffer()->address();
+        }
         std::copy(causal_values.begin(), causal_values.end(), compute_args.data());
         writer_args[indexer_common::writer::Output] = out_address;
         std::copy(causal_values.begin(), causal_values.end(), writer_args.data() + indexer_common::writer::KvLength);

@@ -61,6 +61,53 @@ inline void write_strip(
     cb.pop_front(k_tiles_per_unit);
 }
 
+#ifdef IDX_ROW_WRITE
+/** Row-write variant of write_strip (host define IDX_ROW_WRITE = consumed rows per key tile R; the program factory sets
+ *  it only for consumed_rows > 0, so the default program is unchanged). Writes only the rows the consumer reads:
+ *  - IDX_ROW_LANE_TILES != 0 (wide lanes form, flat cache of lanes of IDX_ROW_LANE_TILES key tiles each): key tile t
+ *    belongs to lane t / IDX_ROW_LANE_TILES (the same lane map the Fix-4 length bound uses: lane u's keys are rows
+ *    [u*lane_rows, (u+1)*lane_rows)); the consumer of lane u reads rows [u*R, u*R+R) (R = 1: row u; MTP lanes: R rows).
+ *  - IDX_ROW_LANE_TILES == 0 (one lane): rows [0, R).
+ *  A KC > 1 unit may straddle lanes, so the strip is cut into per-lane runs of consecutive tiles; each run is one
+ *  write per consumed row. Per-key values are the compute kernel's, untouched; other rows are left unwritten. */
+template <typename OutAcc>
+inline void write_strip_rows(
+    Noc noc, const OutAcc& out_acc, uint32_t page_row_start, uint32_t k_tile_start, uint32_t valid_w) {
+    CircularBuffer cb(cb_out_strip);
+    cb.wait_front(k_tiles_per_unit);  // always pop the full KC strip
+    if (valid_w != 0) {
+        const uint32_t src0 = cb.get_read_ptr();
+        const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;
+        uint32_t c = 0;
+        while (c < valid_w) {
+            uint32_t lane = 0;
+            uint32_t run = valid_w - c;
+#if IDX_ROW_LANE_TILES != 0
+            const uint32_t t = k_tile_start + c;
+            lane = t / IDX_ROW_LANE_TILES;
+            const uint32_t to_lane_end = (lane + 1) * IDX_ROW_LANE_TILES - t;
+            run = run < to_lane_end ? run : to_lane_end;
+#endif
+            for (uint32_t j = 0; j < IDX_ROW_WRITE; ++j) {
+                const uint32_t rr = lane * IDX_ROW_WRITE + j;
+                if (rr >= tt::constants::TILE_HEIGHT) {
+                    break;
+                }
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(src0 + rr * row_pitch + c * frag_bytes),
+                    out_acc,
+                    run * frag_bytes,
+                    {},
+                    {.page_id = page_row_start + rr, .offset_bytes = (k_tile_start + c) * frag_bytes});
+            }
+            c += run;
+        }
+        noc.async_write_barrier();
+    }
+    cb.pop_front(k_tiles_per_unit);
+}
+#endif
+
 /** Scatter one shard-major packed strip back to logical K columns. Consecutive physical tiles map to short
  *  logical runs; coalesce each run so a KC-sized work unit needs only a few writes per output row rather than
  *  one write per score tile. */
@@ -272,6 +319,21 @@ void kernel_main() {
 
     WorkUnitSpan span;
     span.set_valid_k_len_tiles(kv_len_tiles);
+#ifdef INDEXER_LEN_TENSOR
+    // Per-lane live-tile bounds from the reader's mailbox: the same skip rule as reader and compute.
+    uint32_t idx_bounds[IDX_LEN_NUM];
+    {
+        CircularBuffer cb_len(IDX_LEN_CB_WRITER);
+        cb_len.wait_front(1);
+        invalidate_l1_cache();
+        const auto words = CoreLocalMem<volatile uint32_t>(cb_len.get_read_ptr());
+        for (uint32_t i = 0; i < IDX_LEN_NUM; ++i) {
+            idx_bounds[i] = words[i];
+        }
+        cb_len.pop_front(1);
+    }
+    span.lane_bounds = idx_bounds;
+#endif
     ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_key_stripes, shard_physical_sp> shard_span;
     shard_span.set_valid_k_len_tiles(kv_len_tiles);
 
@@ -330,7 +392,11 @@ void kernel_main() {
                         if constexpr (fused_ring_enabled && shard_block_cyclic) {
                             write_shard_major_strip(noc, out_acc, page_row_start, shard_span, valid_w);
                         } else {
+#ifdef IDX_ROW_WRITE
+                            write_strip_rows(noc, out_acc, page_row_start, k_tile0, valid_w);
+#else
                             write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
+#endif
                         }
                     }
                 }

@@ -166,6 +166,13 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
             return conv_split.run_cs(
                 sys.modules[__name__], projected, older, newest, taps, constants, norm, recurrent, out
             )
+    if debug is None and os.environ.get("QWEN38_GDN_LANE_SPLIT", "1") == "1":
+        from . import lane_split
+
+        if lane_split.admits(rows, mesh):
+            return lane_split.run_lane_split(
+                sys.modules[__name__], projected, older, newest, taps, constants, norm, recurrent, out
+            )
     items = [(lane, head) for lane in range(rows) for head in range(HEADS)]
     work = fp.split_work(len(items), mesh)
     cores = fp.core_set(work)
@@ -206,7 +213,16 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
         defines.append(("DEBUG_TAPS", "1"))
         cbs.append(fp.cb_descriptor(CB_DEBUG, FP32, fp.TILE_BYTES[FP32], DEBUG_TILES, cores))
 
-    reader = fp.reader_kernel(READER, cores, reader_cta, [(w.core, [*reader_addrs, w.count, *pairs(w)]) for w in work])
+    # QWEN38_GDN_ROWREAD=1: the per-item reads of lane-row tiles (conv slots, projection, z, a, b) and of the
+    # taps' row 0 move only those rows (bf16 TILE), and the newest slot is written one row per item
+    reader_defines = [("GDN_ROWREAD", "1")] if os.environ.get("QWEN38_GDN_ROWREAD", "1") == "1" else []
+    reader = fp.reader_kernel(
+        READER,
+        cores,
+        reader_cta,
+        [(w.core, [*reader_addrs, w.count, *pairs(w)]) for w in work],
+        defines=reader_defines,
+    )
     writer = fp.writer_kernel(
         WRITER, cores, writer_cta, [(w.core, [*writer_addrs, w.count, *pairs(w)]) for w in work], defines=defines
     )

@@ -558,6 +558,7 @@ def test_fast_batch_reads_one_preadv_per_row_and_proves_each_file_at_its_first_r
     at later lookups; ``prove_touched`` re-proves every touched file once."""
 
     monkeypatch.delenv("QWEN38_PLE_FAST", raising=False)
+    monkeypatch.setenv("QWEN38_PLE_MMAP", "0")  # the pin is the preadv path; the mmap lookup is default now
     weight_map = _synthetic_corpus(tmp_path, parts_per_file=parts_per_file)
     checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
     host = _synthetic_host_embedding(checkpoint)

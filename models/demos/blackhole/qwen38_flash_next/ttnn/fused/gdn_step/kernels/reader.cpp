@@ -44,6 +44,31 @@ uint32_t read_tiles(uint32_t cb, const Acc& acc, const uint32_t* ids, uint32_t c
     return l1;
 }
 
+#ifdef GDN_ROWREAD
+// bf16 TILE page, row `row` only: two 32 B pieces (face 0|1 or 2|3), to the same offsets in the L1 page
+template <typename Acc>
+FORCE_INLINE void read_row(const Acc& acc, uint32_t page, uint32_t l1_page, uint32_t row) {
+    const uint32_t off = (row >> 4) * 1024 + (row & 15) * 32;
+    noc_async_read(acc.get_noc_addr(page, off), l1_page + off, 32);
+    noc_async_read(acc.get_noc_addr(page, off + 512), l1_page + off + 512, 32);
+}
+
+template <typename Acc>
+FORCE_INLINE void write_row(const Acc& acc, uint32_t page, uint32_t l1_page, uint32_t row) {
+    const uint32_t off = (row >> 4) * 1024 + (row & 15) * 32;
+    noc_async_write(l1_page + off, acc.get_noc_addr(page, off), 32);
+    noc_async_write(l1_page + off + 512, acc.get_noc_addr(page, off + 512), 32);
+}
+
+// zero `bytes` of L1 at `l1` from the core's zero region (512 B reads); the caller waits on a read barrier
+void zero_l1(uint32_t l1, uint32_t bytes) {
+    const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+    for (uint32_t o = 0; o < bytes; o += MEM_ZEROS_SIZE) {
+        noc_async_read(zeros, l1 + o, MEM_ZEROS_SIZE);
+    }
+}
+#endif
+
 void fill_words(uint32_t l1, uint32_t words, uint32_t value) {
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
     for (uint32_t k = 0; k < words; ++k) {
@@ -94,6 +119,16 @@ void kernel_main() {
     const auto state = TensorAccessor(state_args, state_addr);
     const auto newest = TensorAccessor(newest_args, newest_addr);
 
+#ifdef GDN_ROWREAD
+    // ROWREAD reads one row per page (lane rows; taps: row 0): every page of the changed CBs starts as finite zeros
+    // (CB sizes from CBS in __init__.py: P 12, S 36, T 48, Z 4, AB 2 bf16 pages)
+    zero_l1(get_write_ptr(CB_P), 12 * BF16_TILE);
+    zero_l1(get_write_ptr(CB_S), 36 * BF16_TILE);
+    zero_l1(get_write_ptr(CB_T), 48 * BF16_TILE);
+    zero_l1(get_write_ptr(CB_Z), 4 * BF16_TILE);
+    zero_l1(get_write_ptr(CB_AB), 2 * BF16_TILE);
+    noc_async_read_barrier();
+#endif
     {
         FUSED_ZONE("fz_gs_r_setup");
         uint32_t ids[HT] = {0, 1, 2, 3};
@@ -131,6 +166,17 @@ void kernel_main() {
         const uint32_t s_l1 = get_write_ptr(CB_S);
         const uint32_t t_l1 = get_write_ptr(CB_T);
         auto issue_group = [&](uint32_t t) {
+#ifdef GDN_ROWREAD
+            read_row(p, ids[t], p_l1 + t * BF16_TILE, lane);
+            read_row(s0, ids[t], s_l1 + (3 * t + 0) * BF16_TILE, lane);
+            read_row(s1, ids[t], s_l1 + (3 * t + 1) * BF16_TILE, lane);
+            read_row(s2, ids[t], s_l1 + (3 * t + 2) * BF16_TILE, lane);
+            // taps are one row (row 0, used as a row broadcast)
+            read_row(t0, ids[t], t_l1 + (4 * t + 0) * BF16_TILE, 0);
+            read_row(t1, ids[t], t_l1 + (4 * t + 1) * BF16_TILE, 0);
+            read_row(t2, ids[t], t_l1 + (4 * t + 2) * BF16_TILE, 0);
+            read_row(t3, ids[t], t_l1 + (4 * t + 3) * BF16_TILE, 0);
+#else
             noc_async_read_page(ids[t], p, p_l1 + t * BF16_TILE);
             noc_async_read_page(ids[t], s0, s_l1 + (3 * t + 0) * BF16_TILE);
             noc_async_read_page(ids[t], s1, s_l1 + (3 * t + 1) * BF16_TILE);
@@ -139,6 +185,7 @@ void kernel_main() {
             noc_async_read_page(ids[t], t1, t_l1 + (4 * t + 1) * BF16_TILE);
             noc_async_read_page(ids[t], t2, t_l1 + (4 * t + 2) * BF16_TILE);
             noc_async_read_page(ids[t], t3, t_l1 + (4 * t + 3) * BF16_TILE);
+#endif
         };
         issue_group(0);
         for (uint32_t t = 0; t < QKV_TILES; ++t) {
@@ -146,7 +193,11 @@ void kernel_main() {
                 issue_group(t + 1);
             }
             noc_async_read_barrier();  // groups <= t + 1 landed; group t goes to the compute, P[t] to the newest slot
+#ifdef GDN_ROWREAD
+            write_row(newest, ids[t], p_l1 + t * BF16_TILE, lane);  // only lane's row of P is valid
+#else
             noc_async_write_page(ids[t], newest, p_l1 + t * BF16_TILE);
+#endif
             cb_push_back(CB_P, 1);
             cb_push_back(CB_S, 3);
             cb_push_back(CB_T, 4);
@@ -156,9 +207,21 @@ void kernel_main() {
         for (uint32_t c = 0; c < HT; ++c) {
             z_ids[c] = Z_TILE0 + head * HT + c;
         }
+#ifdef GDN_ROWREAD
+        cb_reserve_back(CB_Z, HT);
+        const uint32_t z_l1 = get_write_ptr(CB_Z);
+        for (uint32_t c = 0; c < HT; ++c) {
+            read_row(p, z_ids[c], z_l1 + c * BF16_TILE, lane);
+        }
+        cb_reserve_back(CB_AB, 2);
+        const uint32_t ab_l1 = get_write_ptr(CB_AB);
+        read_row(p, A_TILE, ab_l1, lane);
+        read_row(p, B_TILE, ab_l1 + BF16_TILE, lane);
+#else
         read_tiles(CB_Z, p, z_ids, HT, BF16_TILE);
         const uint32_t ab_ids[2] = {A_TILE, B_TILE};
         const uint32_t ab_l1 = read_tiles(CB_AB, p, ab_ids, 2, BF16_TILE);
+#endif
         const uint32_t dtna_ids[2] = {head, HEADS + head};
         read_tiles(CB_DTNA, dtna, dtna_ids, 2, FP32_TILE);
         uint32_t state_ids[STATE_TILES];

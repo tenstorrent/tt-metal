@@ -359,6 +359,17 @@ def test_decoder_park_idle_writes_only_when_an_idle_lane_is_off_zero():
     assert decoder.park_idle([]) is False
 
 
+@pytest.fixture(autouse=True)
+def _lane_ple_fast_off(monkeypatch):
+    """QWEN38_LANE_PLE_FAST now defaults on: the step then passes ``proofs=`` to write_lane_ple_rows, which the fake
+    write_ple here does not take; QWEN38_BATCH_SPIN now defaults on and needs a non-blocking token-row copy the fake
+    ttnn does not model. The tests of this file cover the plain PLE write and the blocking read."""
+    from models.demos.blackhole.qwen38_flash_next.tools import qwen38_batch_decode as module
+
+    monkeypatch.setattr(module, "LANE_PLE_FAST", False)
+    monkeypatch.setattr(module.host_spin, "SPIN", False)
+
+
 def test_decoder_step_resets_idle_lane_ple_contexts():
     decoder, _ = host_decoder()
     decoder.positions[0], decoder.contexts[0] = 10, (7, 8)

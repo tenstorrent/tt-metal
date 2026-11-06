@@ -343,6 +343,67 @@ void validate_scalar_metadata_tensor(const Tensor& m, const Tensor& q, std::stri
     TT_FATAL(m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: {} must be in DRAM", name);
 }
 
+// Length-aware scoring (valid_length_tensor): classic factory only. The VALUES are read on-device; only the container
+// and the lane geometry can be checked here.
+void validate_valid_length(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.consumed_rows != 0) {
+        TT_FATAL(
+            attrs.consumed_rows <= tt::constants::TILE_HEIGHT && !attrs.has_fused_ring() && attrs.block_size == 0 &&
+                !attrs.has_block_cyclic(),
+            "indexer_score: consumed_rows {} must be <= 32 and is supported only on the classic non-pooled factory",
+            attrs.consumed_rows);
+        if (attrs.valid_length_lane_rows != 0) {
+            const uint32_t Tk = logical_k_shape(attrs, t)[2];
+            TT_FATAL(
+                attrs.valid_length_lane_rows % tt::constants::TILE_WIDTH == 0 && Tk % attrs.valid_length_lane_rows == 0,
+                "indexer_score: consumed_rows {} needs a tile-multiple valid_length_lane_rows {} dividing T {} "
+                "(lanes whose rows would pass 32 are not written)",
+                attrs.consumed_rows,
+                attrs.valid_length_lane_rows,
+                Tk);
+        }
+    }
+    if (!t.has_valid_length()) {
+        TT_FATAL(
+            attrs.valid_length_lane_rows == 0 || attrs.consumed_rows != 0,
+            "indexer_score: valid_length_lane_rows requires valid_length_tensor");
+        return;
+    }
+    const auto& m = *t.valid_length_tensor;
+    TT_FATAL(!attrs.has_fused_ring(), "indexer_score: valid_length_tensor is supported only on the classic factory");
+    TT_FATAL(
+        !attrs.has_indexed_kv_cache() && !t.has_cache_slot_metadata() && !t.has_chunk_start_metadata(),
+        "indexer_score: valid_length_tensor cannot be combined with cache_batch_idx or the metadata tensors");
+    TT_FATAL(attrs.block_size == 0, "indexer_score: valid_length_tensor does not support block-max-pooling");
+    TT_FATAL(!attrs.has_block_cyclic(), "indexer_score: valid_length_tensor does not support the block-cyclic layout");
+    TT_FATAL(
+        m.storage_type() == StorageType::DEVICE && m.is_allocated(),
+        "indexer_score: valid_length_tensor must be allocated on device");
+    TT_FATAL(m.device() == t.q.device(), "indexer_score: valid_length_tensor must be on the same device as q");
+    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: valid_length_tensor must be UINT32 (got {})", m.dtype());
+    TT_FATAL(
+        m.layout() == Layout::ROW_MAJOR, "indexer_score: valid_length_tensor must be ROW_MAJOR (got {})", m.layout());
+    TT_FATAL(
+        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+            m.memory_config().buffer_type() == BufferType::DRAM,
+        "indexer_score: valid_length_tensor must be interleaved DRAM");
+    const uint32_t lanes = m.logical_volume();
+    TT_FATAL(
+        lanes >= 1 && lanes <= 32 && m.logical_shape()[-1] == lanes,
+        "indexer_score: valid_length_tensor must be one row of 1..32 values (got volume {})",
+        lanes);
+    const uint32_t T = logical_k_shape(attrs, t)[2];
+    if (attrs.valid_length_lane_rows == 0) {
+        TT_FATAL(lanes == 1, "indexer_score: valid_length_tensor with {} values needs valid_length_lane_rows", lanes);
+    } else {
+        TT_FATAL(
+            attrs.valid_length_lane_rows % tt::constants::TILE_WIDTH == 0 && T % attrs.valid_length_lane_rows == 0,
+            "indexer_score: valid_length_lane_rows {} must be a tile multiple dividing T {}",
+            attrs.valid_length_lane_rows,
+            T);
+    }
+}
+
 // Validate metadata properties available without reading its device-resident value.
 void validate_chunk_start_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
     if (!t.has_chunk_start_metadata()) {
@@ -522,6 +583,12 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.paged_user_rows,   // bakes the reader's per-user tile count
         attrs.paged_wide,
         attrs.key_stripe_split,  // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
+        // Length-aware scoring: presence + lane count select the kernel defines/CBs; the lane stride is a compile-time
+        // arg.
+        tensor_args.has_valid_length(),
+        tensor_args.has_valid_length() ? static_cast<uint32_t>(tensor_args.valid_length_tensor->logical_volume()) : 0u,
+        attrs.valid_length_lane_rows,
+        attrs.consumed_rows,  // writer define: row-write on/off + rows per tile
         tensor_args);
 }
 
@@ -533,6 +600,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     validate_fused_runtime_values(attrs, tensor_args);
     validate_metadata_mode(attrs, tensor_args);
     validate_cache_slot_metadata(attrs, tensor_args);
+    validate_valid_length(attrs, tensor_args);
 }
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
@@ -567,6 +635,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_fused_runtime_values(attrs, tensor_args);
     validate_metadata_mode(attrs, tensor_args);
     validate_cache_slot_metadata(attrs, tensor_args);
+    validate_valid_length(attrs, tensor_args);
 
     // Fused ring: k is the [B,1,T,D] gathered buffer (validated above); additionally require the per-chip LOCAL
     // K shard k_local [B,1,sll,D] (the all-gather INPUT), single-head, matching head dim, tile-aligned.
@@ -991,7 +1060,11 @@ ttnn::Tensor launch_indexer_score(
     std::optional<ttnn::Tensor> page_table = std::nullopt,
     std::optional<uint32_t> paged_block_rows = std::nullopt,
     std::optional<uint32_t> paged_user_rows = std::nullopt,
-    bool paged_wide = false) {
+    bool paged_wide = false,
+    // Length-aware scoring (classic factory): per-lane valid length tensor + key rows per lane (0 = one lane).
+    std::optional<ttnn::Tensor> valid_length_tensor = std::nullopt,
+    uint32_t valid_length_lane_rows = 0,
+    uint32_t consumed_rows = 0) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
@@ -1231,6 +1304,9 @@ ttnn::Tensor launch_indexer_score(
     operation_attributes.paged_block_rows = paged_block_rows;
     operation_attributes.paged_user_rows = paged_user_rows;
     operation_attributes.paged_wide = paged_wide;
+    tensor_args.valid_length_tensor = std::move(valid_length_tensor);
+    operation_attributes.valid_length_lane_rows = valid_length_lane_rows;
+    operation_attributes.consumed_rows = consumed_rows;
     operation_attributes.index_cache_num_layers = index_cache_num_layers;
     operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -1255,7 +1331,10 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<uint32_t> paged_block_rows,
     std::optional<uint32_t> paged_user_rows,
-    bool paged_wide) {
+    bool paged_wide,
+    const std::optional<ttnn::Tensor>& valid_length_tensor,
+    uint32_t valid_length_lane_rows,
+    uint32_t consumed_rows) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -1287,7 +1366,10 @@ ttnn::Tensor indexer_score_dsa(
         page_table,
         paged_block_rows,
         paged_user_rows,
-        paged_wide);
+        paged_wide,
+        valid_length_tensor,
+        valid_length_lane_rows,
+        consumed_rows);
 }
 
 ttnn::Tensor indexer_score_msa(

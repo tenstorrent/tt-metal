@@ -183,6 +183,20 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     TT_FATAL(TOPK % attrs.k_chunk_size == 0, "k_chunk_size must divide TOPK");
     TT_FATAL(attrs.scale > 0.0f, "scale must be > 0");
 
+    // Key-split: one group of N cores per token; groups beyond the grid run in turns (factory). N <= cores, N <= 64.
+    TT_FATAL(attrs.key_splits >= 1, "sparse_sdpa: key_splits must be >= 1");
+    if (attrs.key_splits > 1) {
+        const auto grid = q.device()->compute_with_storage_grid_size();
+        TT_FATAL(attrs.key_splits <= 64, "sparse_sdpa: key_splits ({}) must be <= 64", attrs.key_splits);
+        TT_FATAL(
+            attrs.key_splits <= grid.x * grid.y,
+            "sparse_sdpa: key_splits ({}) must be <= the {} cores of the grid",
+            attrs.key_splits,
+            grid.x * grid.y);
+        TT_FATAL(!attrs.has_scaled_kv(), "sparse_sdpa: key_splits > 1 does not support the scaled-FP8 cache");
+        TT_FATAL(!(kv_is_fp8 || q_is_fp8), "sparse_sdpa: key_splits > 1 supports only bf16 q/kv");
+    }
+
     // Row-byte alignment: each Q/K/index/output row is a DRAM page the reader DMAs from / the writer DMAs
     // to (and tensors are unpadded, so the page == one row). The row byte count must be a multiple of the
     // DRAM access alignment; that also covers the in-L1 row offsets (DRAM alignment >= L1 alignment).
@@ -267,7 +281,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype(),
-        t.attention_sink);
+        t.attention_sink,
+        attrs.key_splits);
 }
 
 Tensor sparse_sdpa(
@@ -281,7 +296,8 @@ Tensor sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
-    const std::optional<Tensor>& attention_sink) {
+    const std::optional<Tensor>& attention_sink,
+    uint32_t key_splits) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -292,6 +308,7 @@ Tensor sparse_sdpa(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
+            .key_splits = key_splits,
         },
         OperationType::tensor_args_t{
             .q = q,

@@ -133,6 +133,10 @@ constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 4>();
 constexpr uint32_t vend_ct_base = slot_meta_args.next_compile_time_args_offset();
 constexpr uint32_t vend_rt_base = get_compile_time_arg_val(vend_ct_base);
 constexpr auto vend_args = TensorAccessorArgs<vend_ct_base + 1>();
+#ifdef INDEXER_LEN_TENSOR
+// Length-aware scoring: the valid_length_tensor accessor, appended last by the classic factory.
+constexpr auto idx_len_args = TensorAccessorArgs<vend_args.next_compile_time_args_offset()>();
+#endif
 
 #ifdef INDEXER_PAGED
 // Page-table mode (host: indexer_score_dsa page_table). k is a block pool; the logical k tile G = batch_tile_offset +
@@ -140,7 +144,12 @@ constexpr auto vend_args = TensorAccessorArgs<vend_ct_base + 1>();
 // t = G % user_tiles and lives at physical tile pt[b][t >> log2(tpb)] * tpb + (t & (tpb - 1)). CT tail after the vend
 // accessor: log2(tpb), page-table row entries (W, the table stride per user), logical tiles per user (S/32), scratch
 // CB, page-table accessor. Only the k-reading core loads the table.
+// The host appends the valid_length accessor (INDEXER_LEN_TENSOR) before the page-table tail.
+#ifdef INDEXER_LEN_TENSOR
+constexpr uint32_t paged_ct_base = idx_len_args.next_compile_time_args_offset();
+#else
 constexpr uint32_t paged_ct_base = vend_args.next_compile_time_args_offset();
+#endif
 constexpr uint32_t paged_tpb_log2 = get_compile_time_arg_val(paged_ct_base);
 constexpr uint32_t pt_row_entries = get_compile_time_arg_val(paged_ct_base + 1);
 constexpr uint32_t user_tiles = get_compile_time_arg_val(paged_ct_base + 2);
@@ -841,6 +850,9 @@ void kernel_main() {
 
     // The gate exists only on the fused branch. Passing a pointer into one shared loop keeps all fused runtime
     // argument reads behind if constexpr, so the regular binary never touches the fused-only tail.
+#ifdef INDEXER_LEN_TENSOR
+    uint32_t idx_bounds[IDX_LEN_NUM];  // per-lane live-tile bound, filled below before run()
+#endif
     const auto run = [&](const FusedRingGate* gate) {
         build_mask_tiles(noc);
         if constexpr (block_pool) {
@@ -852,6 +864,9 @@ void kernel_main() {
 
         WorkUnitSpan span;
         span.set_valid_k_len_tiles(kv_len_tiles);
+#ifdef INDEXER_LEN_TENSOR
+        span.lane_bounds = idx_bounds;
+#endif
         ShardMajorWorkUnitSpan<block_cyclic, bc_chunk_local, bc_sp, fused_physical_sp> shard_span;
         shard_span.set_valid_k_len_tiles(kv_len_tiles);
         const uint32_t band_iters = stream_heads ? max_bands : num_bands;
@@ -1047,6 +1062,36 @@ void kernel_main() {
         clobber_all_memory();
         cb_wmeta.push_back(1);
     }
+
+#ifdef INDEXER_LEN_TENSOR
+    {
+        // Read the per-lane valid lengths ONCE (same discipline as the ring metadata read above), convert to
+        // per-lane live-tile bounds = min((len >> 5) + 1, tiles per lane) -- top-k searches block columns
+        // [0, len + 32), i.e. tiles [0, len/32 + 1) -- and publish them to compute and writer through two
+        // one-page mailbox CBs, so all three kernels apply the identical skip rule.
+        CircularBuffer cb_len_c(IDX_LEN_CB_COMPUTE);
+        cb_len_c.reserve_back(1);
+        const uint32_t len_l1 = cb_len_c.get_write_ptr();
+        const auto len_acc = TensorAccessor(idx_len_args, get_common_arg_val<uint32_t>(IDX_LEN_RT));
+        noc.async_read(len_acc, CoreLocalMem<uint8_t>(len_l1), IDX_LEN_NUM * sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+        CircularBuffer cb_len_w(IDX_LEN_CB_WRITER);
+        cb_len_w.reserve_back(1);
+        CoreLocalMem<volatile uint32_t> len_c(len_l1);
+        CoreLocalMem<volatile uint32_t> len_w(cb_len_w.get_write_ptr());
+        for (uint32_t i = 0; i < IDX_LEN_NUM; ++i) {
+            uint32_t bound = (len_c[i] >> 5) + 1;
+            bound = bound < IDX_LEN_LANE_TILES ? bound : IDX_LEN_LANE_TILES;
+            idx_bounds[i] = bound;
+            len_c[i] = bound;
+            len_w[i] = bound;
+        }
+        clobber_all_memory();
+        cb_len_c.push_back(1);
+        cb_len_w.push_back(1);
+    }
+#endif
 
     if constexpr (fused_ring_enabled) {
         // Ring/dir/semaphore fields are common arguments in the compact fused layout.

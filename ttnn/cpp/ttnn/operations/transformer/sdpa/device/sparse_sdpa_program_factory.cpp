@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_tree.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
@@ -13,6 +14,7 @@
 #include <array>
 #include <bit>
 #include <string>
+#include <variant>
 
 namespace ttnn::prim {
 
@@ -50,6 +52,20 @@ enum SparseCB : uint32_t {
     cb_sink_scratch,    // writer scratch for gathering sink scalars
     cb_count
 };
+
+// Key-split (key_splits > 1) CB ids. Compute kernels address CBs 0..31 only, so the combine buffers reuse ids that are
+// idle in a key-split program: the scaled-FP8 CBs (key_splits > 1 requires a plain cache) and cb_corr after the
+// last chunk. N == 1 programs never see these. A non-root rank sends its partial through cb_out_rm (enlarged by
+// 2*Sqt tiles; one token per core), so the writer's read pointer stays in step with compute's write pointer.
+constexpr uint32_t cb_ks_red = cb_count;  // reducer: one (l, m, o) slot per tree round (children write, writer reads)
+constexpr uint32_t cb_ks_l_in = cb_count + 1;  // received child l (row sum), staged for compute
+constexpr uint32_t cb_ks_m_in = cb_count + 2;  // received child m (row max)
+static_assert(cb_ks_m_in < 32, "compute kernels address only CBs 0..31");
+constexpr uint32_t cb_ks_o_in = cb_k_rope_rm;         // received child o (unnormalized out)
+constexpr uint32_t cb_ks_cur_max = cb_k_scale_bcast;  // correction_block outputs / scratch
+constexpr uint32_t cb_ks_cur_sum = cb_k_latent_tile;
+constexpr uint32_t cb_ks_exp2 = cb_k_rope_tile;
+constexpr uint32_t cb_ks_exp1 = cb_corr;
 
 tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::create_descriptor(
     const SparseSDPAParams& attrs, const SparseSDPAInputs& t, Tensor& output) {
@@ -113,6 +129,20 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const uint32_t num_cores = grid.x * grid.y;
     const uint32_t base = S / num_cores;
     const uint32_t extra = S % num_cores;
+    // Key-split: core c serves token c / N as rank c % N (cores c >= S*N idle). N == 1 keeps the token split above.
+    const uint32_t N = attrs.key_splits;
+    const bool ksplit = N > 1;
+    const uint32_t ks_rounds = ksplit ? ::sparse_sdpa::ceil_log2(N) : 0;
+    TT_FATAL(
+        !ksplit || (N <= 64 && N <= num_cores && !scaled_kv),
+        "sparse_sdpa key_splits={} needs N <= min(64, {} cores) and a plain (non-scaled) cache",
+        N,
+        num_cores);
+    // Units (token, rank) may outnumber the cores: G = floor(C / N) whole groups run per turn, group (= token) t runs
+    // in turn t / G on group slot t % G (core slot * N + rank). turns == 1 (S <= G) is today's one-unit-per-core map.
+    const uint32_t ks_groups = ksplit ? num_cores / N : 0;
+    const uint32_t ks_turns = ksplit ? (S + ks_groups - 1) / ks_groups : 0;
+    const bool ks_turned = ks_turns > 1;
 
     // ---- CBs (fixed ids = SparseCB enum; descriptor insertion order is irrelevant) ----
     const auto cb = [&](uint32_t id, uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
@@ -160,7 +190,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_out_b, tile_bytes, Sqt * vDHt, bf);
     cb(cb_corr, tile_bytes, Sqt, bf);
     cb(cb_out_im, tile_bytes, Sqt * vDHt, bf);
-    cb(cb_out_rm, out_tile_bytes, Sqt * vDHt, out_df);
+    cb(cb_out_rm, out_tile_bytes, Sqt * vDHt + (ksplit ? 2 * Sqt : 0), out_df);  // ksplit: + l, m of a partial
     cb(cb_idx, topk * idx_elem_bytes, 1, bf);
     cb(cb_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_col_identity, tile_bytes, 1, bf);
@@ -176,6 +206,29 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     if (use_attention_sink) {
         cb(cb_attention_sink, tile_bytes, Sqt, bf);
         cb(cb_sink_scratch, H * sizeof(uint16_t), 1, bf);
+    }
+
+    if (ksplit) {
+        // All combine buffers are bf16 tiles, like the in-core accumulators (cb_out_im / max / sum).
+        const uint32_t slot_tiles = Sqt * vDHt + 2 * Sqt;  // one round's (l, m, o)
+        cb(cb_ks_red, tile_bytes, ks_rounds * slot_tiles, bf);
+        cb(cb_ks_l_in, tile_bytes, Sqt, bf);
+        cb(cb_ks_m_in, tile_bytes, Sqt, bf);
+        cb(cb_ks_o_in, tile_bytes, Sqt * vDHt, bf);
+        cb(cb_ks_cur_max, tile_bytes, Sqt, bf);
+        cb(cb_ks_cur_sum, tile_bytes, Sqt, bf);
+        cb(cb_ks_exp2, tile_bytes, Sqt, bf);
+        // One reducer semaphore on every core, init 0: a 4-bit nibble per tree round (sdpa_decode protocol).
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = 0, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+        if (ks_turned) {
+            // Multi-turn only: id 1 = epoch (turns whose receive phase this core has finished; senders poll their
+            // parent's), id 2 = the landing word of that remote poll.
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = 1, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = 2, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+        }
     }
 
     // ---- compile-time args ----
@@ -269,6 +322,27 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         compute_ct.end(),
         {static_cast<uint32_t>(scaled_kv), cb_k_rope_rm, cb_k_scale_bcast, cb_k_latent_tile, cb_k_rope_tile});
 
+    // Key-split kernel defines (absent for N == 1: the kernels compile to today's program).
+    std::vector<std::pair<std::string, std::string>> ks_defines;
+    if (ksplit) {
+        const auto def = [&](const char* name, uint32_t v) { ks_defines.emplace_back(name, std::to_string(v)); };
+        def("SPARSE_KSPLIT", N);
+        def("SPARSE_KSPLIT_SEM_ID", 0);
+        def("SPARSE_KSPLIT_CB_RED", cb_ks_red);
+        def("SPARSE_KSPLIT_CB_L_IN", cb_ks_l_in);
+        def("SPARSE_KSPLIT_CB_M_IN", cb_ks_m_in);
+        def("SPARSE_KSPLIT_CB_O_IN", cb_ks_o_in);
+        def("SPARSE_KSPLIT_CB_CUR_MAX", cb_ks_cur_max);
+        def("SPARSE_KSPLIT_CB_CUR_SUM", cb_ks_cur_sum);
+        def("SPARSE_KSPLIT_CB_EXP1", cb_ks_exp1);
+        def("SPARSE_KSPLIT_CB_EXP2", cb_ks_exp2);
+        if (ks_turned) {
+            def("SPARSE_KSPLIT_EPOCH", 1);
+            def("SPARSE_KSPLIT_EPOCH_SEM_ID", 1);
+            def("SPARSE_KSPLIT_POLL_SEM_ID", 2);
+        }
+    }
+
     // ---- kernels ----
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
     tt::tt_metal::KernelDescriptor reader_desc;
@@ -276,6 +350,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = reader_ct;
+    reader_desc.defines = ks_defines;
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     tt::tt_metal::KernelDescriptor writer_desc;
@@ -283,6 +358,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = writer_ct;
+    writer_desc.defines = ks_defines;
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Order matches get_compute_kernel_config_args: (fidelity, approx_mode, fp32_dest_acc, packer_l1_acc,
@@ -317,6 +393,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_ct;
+    compute_desc.defines = ks_defines;
     // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
@@ -351,7 +428,34 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.common_runtime_args.insert(reader_desc.common_runtime_args.end(), reader_crt.begin(), reader_crt.end());
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
 
-    for (uint32_t i = 0; i < num_cores; ++i) {
+    if (ksplit) {
+        const auto core_of = [&](uint32_t i) { return tt::tt_metal::CoreCoord{i % grid.x, i / grid.x}; };
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            // Core i = group slot i / N, rank i % N; cores >= G * N idle. Turn k of the core serves token k * G + slot
+            // (>= S: an idle turn the kernels skip). Without turns (S <= G) the slot is the token, as before.
+            const bool works = ks_turned ? i < ks_groups * N : i < S * N;
+            const uint32_t tok = works ? i / N : 0;  // group slot (= token of turn 0)
+            const uint32_t rank = works ? i % N : 0;
+            // reader/writer: {slot, turns, rank, packed NOC (x << 16 | y) of every rank of the group[, G]}
+            std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> args = {
+                tok, works ? (ks_turned ? ks_turns : 1u) : 0u, rank};
+            for (uint32_t k = 0; k < N; ++k) {
+                if (works) {
+                    const auto noc = device->worker_core_from_logical_core(core_of(tok * N + k));
+                    args.push_back((static_cast<uint32_t>(noc.x) << 16) | static_cast<uint32_t>(noc.y));
+                } else {
+                    args.push_back(static_cast<uint32_t>(0));
+                }
+            }
+            if (ks_turned) {
+                args.push_back(ks_groups);
+            }
+            reader_desc.emplace_runtime_args(core_of(i), args);
+            writer_desc.emplace_runtime_args(core_of(i), args);
+            compute_desc.emplace_runtime_args(core_of(i), {tok, works ? (ks_turned ? ks_turns : 1u) : 0u});
+        }
+    }
+    for (uint32_t i = 0; i < num_cores && !ksplit; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);

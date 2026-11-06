@@ -427,6 +427,10 @@ void bind_sdpa(nb::module_& mod) {
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
             block_cyclic_cache_tp_sharded (bool): True = the cache is striped across ALL sp*tp devices (linear chip =
                 sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
+            key_splits (int): defaults to 1. N > 1 splits each token's selected keys over N cores (core c = token
+                c / N, rank c % N) and combines the partial softmax states with an on-device binary tree.
+                Needs S * N <= the cores of the compute grid, N <= 64, bf16 q/kv (no scaled FP8). Meant for decode
+                (S = 1..8 query tokens). N = 1 runs the unchanged one-core-per-token program.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -444,7 +448,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("key_splits") = 1);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

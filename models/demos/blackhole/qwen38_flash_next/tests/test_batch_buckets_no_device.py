@@ -17,6 +17,16 @@ PAGING = Qwen38LanePaging(64, 20, 128)
 BUCKETS = (1, 2, 4, 8, 16, 32)
 
 
+@pytest.fixture(autouse=True)
+def _lane_ple_fast_off(monkeypatch):
+    """QWEN38_LANE_PLE_FAST now defaults on: the step then passes ``proofs=`` to write_lane_ple_rows, which the fake
+    model's write_ple does not take. QWEN38_BATCH_SPIN now defaults on: the step then spins on a non-blocking token-row
+    copy (``copy_device_to_host_tensor(blocking=False)``) that the fake ttnn does not model. These tests cover the
+    bucket logic through the plain PLE write and the blocking reads."""
+    monkeypatch.setattr(batch, "LANE_PLE_FAST", False)
+    monkeypatch.setattr(batch.host_spin, "SPIN", False)
+
+
 class Rig:
     """A decoder with fake buckets: trace id 100 + R per bucket, fake model and fake trace calls (recorded)."""
 

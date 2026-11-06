@@ -50,11 +50,14 @@ def _policy(*names: str) -> prefill_glue.PrefillGluePolicy:
 
 
 def test_default_policy_is_the_bitwise_set_today_is_none_and_a_list_is_exact(expect_error, monkeypatch) -> None:
-    # Unset or empty: the two forms measured bitwise the previous slab body (2026-09-25) run.
+    # Unset or empty: the two bitwise forms (2026-09-25) and qsa_scores_rs_ag (2026-11-05, HF reference) run.
     default = prefill_glue.PrefillGluePolicy.from_environ({})
-    assert default.names == prefill_glue.DEFAULT_ON == {"gr_gather_generic", "qsa_mask_hoist"}
+    assert default.names == prefill_glue.DEFAULT_ON == {"gr_gather_generic", "qsa_mask_hoist", "qsa_scores_rs_ag"}
     assert prefill_glue.PrefillGluePolicy.from_environ({ENV: " "}).names == prefill_glue.DEFAULT_ON
-    assert all(prefill_glue.FORMS[name][0] == prefill_glue.BITWISE for name in prefill_glue.DEFAULT_ON)
+    assert all(
+        prefill_glue.FORMS[name][0] == prefill_glue.BITWISE
+        for name in prefill_glue.DEFAULT_ON - prefill_glue.TOLERANCE_DEFAULT_OK
+    )
     assert {cls for cls, _ in prefill_glue.FORMS.values()} == {prefill_glue.BITWISE, prefill_glue.TOLERANCE}
     # ``today``: the previous slab body, no form.
     today = _policy(prefill_glue.TODAY)
@@ -76,7 +79,7 @@ def test_default_policy_is_the_bitwise_set_today_is_none_and_a_list_is_exact(exp
     # The default set is checked at import: registered, bitwise, no exclusive pair.
     prefill_glue._check_default_on()
     for bad, match in (
-        ({"gr_gather_generic", "qsa_scores_rs_ag"}, "must be bitwise"),
+        ({"gr_gather_generic", "gr_partial_rs_ag"}, "must be bitwise"),
         ({"gr_gather_generic", "ple_slab_pass"}, "unregistered"),
         ({"gr_gather_generic", "gr_gather_tuned"}, "exclusive"),
     ):
@@ -175,7 +178,7 @@ def test_scores_rs_mask_value_is_exact_in_bf16_where_the_indexer_mask_overflows(
     assert float(torch.tensor([1234.5], dtype=torch.bfloat16) + value) == -(2.0**100)
     indexer = torch.tensor([qsa_module.INDEXER_MASK_VALUE], dtype=torch.bfloat16)
     assert float(indexer) == qsa_module.INDEXER_MASK_VALUE and math.isinf(float(indexer + indexer))
-    assert qsa_module.slab_scores_mask_value(_policy()) == qsa_module.INDEXER_MASK_VALUE
+    assert qsa_module.slab_scores_mask_value(_policy(prefill_glue.TODAY)) == qsa_module.INDEXER_MASK_VALUE
     assert qsa_module.slab_scores_mask_value(_policy("qsa_scores_rs_ag")) == qsa_module.SLAB_SCORES_RS_MASK_VALUE
 
 

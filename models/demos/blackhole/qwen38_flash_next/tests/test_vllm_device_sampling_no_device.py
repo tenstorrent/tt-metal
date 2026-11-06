@@ -230,6 +230,8 @@ def test_default_policy_lean_steps_use_the_sampler_set(monkeypatch):
 
 
 def test_default_policy_steady_steps_run_async_on_the_sampler_set(monkeypatch):
+    # QWEN38_BATCH_SPIN defaults on; the wait then polls host.to_numpy() of a non-blocking copy, which the fake host lacks.
+    monkeypatch.setattr(vllm_module.host_spin, "SPIN", False)
     d = Driver(monkeypatch)
     d.call(params())  # the first (lean, blocking) step admits the policy
     handles = [d.call(params(), reload=False) for _ in range(3)]
@@ -281,6 +283,8 @@ def test_slot_params_are_written_on_admission_and_changes_only(monkeypatch):
 
 
 def test_a_policy_change_between_steady_steps_goes_through_the_blocking_step(monkeypatch):
+    # QWEN38_BATCH_SPIN defaults on; the wait then polls host.to_numpy() of a non-blocking copy, which the fake host lacks.
+    monkeypatch.setattr(vllm_module.host_spin, "SPIN", False)
     d = Driver(monkeypatch)
     d.call(params(seed=1))
     assert isinstance(d.call(params(seed=1), reload=False), Qwen38AsyncStep)
