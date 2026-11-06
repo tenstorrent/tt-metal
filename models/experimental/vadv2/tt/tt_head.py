@@ -241,13 +241,21 @@ class TtVADHead:
         self._base_idx_cache = {}
         self._consts_frozen = False
         num_agents = self.query_embedding.weight.shape[0]
-        self._const_zeros((1, num_agents * self.fut_mode, 2), layout=ttnn.TILE_LAYOUT)
+        num_motion_queries = num_agents * self.fut_mode
+        self._const_zeros((1, num_motion_queries, 2), layout=ttnn.TILE_LAYOUT)
+        self._const_zeros((num_motion_queries, 1, self.embed_dims))
+        self._const_ones((num_motion_queries, 1, 2), layout=ttnn.TILE_LAYOUT)
+        self._const_zeros((num_motion_queries, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         self._const_zeros((1, 1, 2), layout=ttnn.TILE_LAYOUT)
         self._const_zeros((1, 1, self.embed_dims), dtype=ttnn.bfloat16)
         self._const_zeros((1, 1, 2), dtype=ttnn.bfloat16)
         self._const_ones((1, 1), dtype=ttnn.bfloat16)
         self._arange_base(self.map_num_vec, self.map_num_pts_per_vec)
         self._consts_frozen = True
+
+    def prepare_frame(self, img_metas):
+        """Host-side per-frame inputs; call before every forward."""
+        self.transformer.refill_frame(img_metas, grid_length=(self.real_h / self.bev_h, self.real_w / self.bev_w))
 
     def _const_tensor(self, create_fn, cache, shape, dtype=None, layout=None):
         key = (tuple(shape), dtype, layout)
@@ -1030,16 +1038,12 @@ class TtVADHead:
         num_batch = selected_padding_mask.shape[0]
         feat_dim = selected_map_query.shape[-1]
         if use_fix_pad:
-            pad_map_query = ttnn.zeros((num_batch, 1, feat_dim), device=self.device)
-            pad_map_pos = ttnn.ones((num_batch, 1, 2), device=self.device)
-            a = torch.tensor([False])
-            a = ttnn.from_torch(a, dtype=ttnn.bfloat16, device=self.device)
-            pad_lane_mask = ttnn.repeat(ttnn.unsqueeze(a, 0), [num_batch, 1])
+            pad_map_query = self._const_zeros((num_batch, 1, feat_dim))
+            pad_map_pos = self._const_ones((num_batch, 1, 2), layout=ttnn.TILE_LAYOUT)
+            pad_lane_mask = self._const_zeros((num_batch, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
             selected_map_query = ttnn.concat([selected_map_query, pad_map_query], dim=1)
-            pad_map_pos = ttnn.to_layout(pad_map_pos, layout=ttnn.TILE_LAYOUT)
             selected_map_pos = ttnn.concat([selected_map_pos, pad_map_pos], dim=1)
-            pad_lane_mask = ttnn.to_layout(pad_lane_mask, layout=ttnn.TILE_LAYOUT)
             selected_padding_mask = ttnn.concat([selected_padding_mask, pad_lane_mask], dim=1)
 
         if self._sap_use_cache:

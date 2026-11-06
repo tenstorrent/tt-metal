@@ -107,23 +107,25 @@ class TtVADPerceptionTransformer:
         self.map_num_pts_per_vec = map_num_pts_per_vec
 
         self.feat_hw = tuple(feat_hw)
+        self.bev_h = bev_h
+        self.bev_w = bev_w
 
-        # Persistent device buffers for the only dynamic per-call uploads in
-        # the warm path (shift / can_bus, built from img_metas). Allocated on
-        # first call; in-place updated via copy_host_to_device_tensor on
-        # subsequent calls. When `_skip_dynamic_upload` is True the inline
-        # update is bypassed (caller must seed buffers before begin_trace_capture).
-        self._shift_buffer = None
-        self._can_bus_buffer = None
-        self._skip_dynamic_upload = False
+        # Per-frame device inputs derived from img_metas. refill_frame() writes
+        # them before every forward, so the forward itself does no host work.
+        can_bus_dims = params.can_bus_mlp["0"].weight.shape[0]  # preprocess stores (in, out)
+        self._shift_buffer = ttnn.from_torch(
+            torch.zeros(1, 2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self._can_bus_buffer = ttnn.from_torch(
+            torch.zeros(1, can_bus_dims), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self._frame_ready = False
 
-    def update_dynamic_inputs(self, img_metas, bev_h, bev_w, grid_length=[0.512, 0.512]):
-        """Build shift / can_bus on host and write them into persistent device buffers.
+    def refill_frame(self, img_metas, grid_length):
+        """Write this frame's BEV shift and CAN-bus signals into the device buffers.
 
-        First call allocates the buffers via ttnn.from_torch. Subsequent calls reuse
-        the same device handles and update contents via copy_host_to_device_tensor —
-        the trace replay reads from these handles. Must be called outside any
-        trace-capture / execute_trace region.
+        Host work only plus two host-to-device copies; call it before every
+        forward, outside any trace capture or replay.
         """
         delta_x = np.array([each["can_bus"][0] for each in img_metas])
         delta_y = np.array([each["can_bus"][1] for each in img_metas])
@@ -133,25 +135,19 @@ class TtVADPerceptionTransformer:
         translation_length = np.sqrt(delta_x**2 + delta_y**2)
         translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
         bev_angle = ego_angle - translation_angle
-        shift_y = translation_length * np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
-        shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
+        shift_y = translation_length * np.cos(bev_angle / 180 * np.pi) / grid_length_y / self.bev_h
+        shift_x = translation_length * np.sin(bev_angle / 180 * np.pi) / grid_length_x / self.bev_w
         shift_y = shift_y * self.use_shift
         shift_x = shift_x * self.use_shift
         shift_torch = torch.tensor([shift_x, shift_y], dtype=torch.float32).permute(1, 0)
         can_bus_torch = torch.tensor([each["can_bus"] for each in img_metas], dtype=torch.float32)
 
-        if self._shift_buffer is None:
-            self._shift_buffer = ttnn.from_torch(
-                shift_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
-            self._can_bus_buffer = ttnn.from_torch(
-                can_bus_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
-        else:
-            shift_host = ttnn.from_torch(shift_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            can_bus_host = ttnn.from_torch(can_bus_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            ttnn.copy_host_to_device_tensor(shift_host, self._shift_buffer)
-            ttnn.copy_host_to_device_tensor(can_bus_host, self._can_bus_buffer)
+        for host, buffer in ((shift_torch, self._shift_buffer), (can_bus_torch, self._can_bus_buffer)):
+            assert tuple(host.shape) == tuple(
+                buffer.shape
+            ), f"frame {tuple(host.shape)} != buffer {tuple(buffer.shape)}"
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), buffer)
+        self._frame_ready = True
 
     def attn_bev_encode(
         self,
@@ -178,10 +174,8 @@ class TtVADPerceptionTransformer:
         bev_queries = ttnn.to_layout(bev_queries, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         bev_pos = ttnn.reshape(bev_pos, [bev_pos.shape[0], bev_pos.shape[1], bev_pos.shape[2] * bev_pos.shape[3]])
         bev_pos = ttnn.permute(bev_pos, (2, 0, 1))
-        # Populate persistent shift / can_bus device buffers from img_metas. Bypassed
-        # when a caller has already seeded the buffers (e.g. trace capture / replay).
-        if not self._skip_dynamic_upload:
-            self.update_dynamic_inputs(kwargs["img_metas"], bev_h, bev_w, grid_length)
+        assert self._frame_ready, "call refill_frame() with this frame's img_metas before the forward"
+        self._frame_ready = False
         # Clone so the encoder's ttnn.deallocate(shift) does not free the persistent buffer.
         shift = ttnn.clone(self._shift_buffer)
 
@@ -199,7 +193,6 @@ class TtVADPerceptionTransformer:
                     tmp_prev_bev = ttnn.reshape(tmp_prev_bev, (bev_h * bev_w, 1, -1))
                     prev_bev[:, i] = tmp_prev_bev[:, 0]
 
-        # add can bus signals (sourced from the persistent buffer; see update_dynamic_inputs)
         # Clone so downstream ops can't free the persistent buffer.
         can_bus = ttnn.clone(self._can_bus_buffer)
 
