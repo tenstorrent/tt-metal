@@ -99,7 +99,7 @@ int generate_unique_mesh_id() {
     return next_id++;
 }
 
-std::atomic<uint64_t> mesh_device_close_generation{1};
+std::atomic<uint64_t> mesh_device_close_count{0};
 
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
@@ -1131,11 +1131,11 @@ bool MeshDeviceImpl::close() {
     return false;
 }
 
-uint64_t MeshDeviceImpl::close_generation() { return mesh_device_close_generation.load(std::memory_order_acquire); }
+uint64_t MeshDeviceImpl::close_count() { return mesh_device_close_count.load(std::memory_order_acquire); }
 
 bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     TTZoneScopedD(MISC);
-    mesh_device_close_generation.fetch_add(1, std::memory_order_acq_rel);
+    mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 

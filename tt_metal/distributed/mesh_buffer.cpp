@@ -392,7 +392,7 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     unique_id_(std::exchange(other.unique_id_, std::nullopt)),
     state_(std::move(other.state_)),
     built_device_buffers_(std::move(other.built_device_buffers_)),
-    cache_generation_(other.cache_generation_.load(std::memory_order_relaxed)) {
+    cached_close_count_(other.cached_close_count_.load(std::memory_order_relaxed)) {
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
@@ -412,7 +412,7 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         unique_id_ = std::exchange(other.unique_id_, std::nullopt);
         state_ = std::move(other.state_);
         built_device_buffers_ = std::move(other.built_device_buffers_);
-        cache_generation_.store(other.cache_generation_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        cached_close_count_.store(other.cached_close_count_.load(std::memory_order_relaxed), std::memory_order_relaxed);
 
         other.state_ = DeallocatedState{};
         other.address_ = 0;
@@ -502,8 +502,8 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     // Built entries skip the lock and the MeshDevice reference while no MeshDevice has closed since they were cached.
     // A close that overlaps the call is not caught: callers keep the MeshDevice open, as they must for the result.
     const size_t index = device_coord.to_linear_index(buffers_.shape());
-    const uint64_t generation = MeshDeviceImpl::close_generation();
-    if (built_device_buffers_ && cache_generation_.load(std::memory_order_acquire) == generation) {
+    const uint64_t close_count = MeshDeviceImpl::close_count();
+    if (built_device_buffers_ && cached_close_count_.load(std::memory_order_acquire) == close_count) {
         Buffer* built = built_device_buffers_[index].load(std::memory_order_acquire);
         if (built != nullptr && built->device()->is_initialized()) {
             return built;
@@ -532,7 +532,7 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     }
     if (built_device_buffers_) {
         built_device_buffers_[index].store(device_buffer.get(), std::memory_order_release);
-        cache_generation_.store(generation, std::memory_order_release);
+        cached_close_count_.store(close_count, std::memory_order_release);
     }
     return device_buffer.get();
 }
