@@ -34,14 +34,16 @@ struct FusedRecurrentGatedDeltaRuleParams {
     // The state output IS initial_state, written in place: a [Bs, HV, K, V] tensor whose rows [0:B] are the batch.
     // Head h's tiles are its pages h*kv .. h*kv + kv - 1 in either rank, so the kernels address it as [BH, K, V].
     bool inplace_final_state;
+    bool use_qk_l2norm_in_kernel;  // raw q, k rows in; the kernel folds 1/|k| and scale/|q| into its passes
+    float scale;                   // the query scale, folded into the kernel with the norm
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
 // The input tensors are the layer's own: TILE layout, 32x32 tiles, interleaved (DRAM or L1), bf16 or fp32 (q, k and
 // v of one dtype; g and beta each bf16 or fp32). The reader gathers each core's rows and does the GQA mapping; the
-// compute kernel does the recurrence, exp(g) included. The L2-norm and the q-scale are still host ops.
-//   q, k : [B, T, H, K]   (q already scaled by `scale`; both already L2-normalized over K)
+// compute kernel does the recurrence, exp(g), the optional L2 norm and the q-scale included.
+//   q, k : [B, T, H, K]   (raw with use_qk_l2norm_in_kernel, else L2-normalized over K by the caller; never scaled)
 //   v    : [B, T, HV, V]
 //   g    : [B, T, HV]     (the log decay g_t)
 //   beta : [B, T, HV]

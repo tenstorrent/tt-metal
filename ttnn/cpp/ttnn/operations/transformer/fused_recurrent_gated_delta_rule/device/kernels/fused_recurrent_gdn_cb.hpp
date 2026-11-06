@@ -37,6 +37,8 @@
 //   c_20  S_mm       32x32  kv        matmul view of c_6 (same L1, never pushed)      pass 1 in1
 //   c_21  s2_mm      32x32  kv        matmul view of c_14 (same L1, never pushed)     pass 1 in1
 //   c_22  s3_mm      32x32  kv        matmul view of c_15 (same L1, never pushed)     pass 1 in1
+//   c_23  qk16_utd   16x32  Kt x 2    utd view of c_0 (same L1; read pointer synced)  constants pass copies (the norm)
+//   c_24  ncol16     16x32  1         column 0 rows 0-3 = ik, 0, s_q, 0               compute constants pass -> ebc16 (utd)
 // clang-format on
 // "utd": the factory lists the CB with UnpackToDestMode::UnpackToDestFp32 (it is only ever read by copy_tile into
 // DEST). Every CB sized exactly `count` tiles cycles through the same L1 slots token after token, so the reader writes
@@ -85,7 +87,9 @@ constexpr uint32_t S_mm = 20;   // matmul-operand id of S (same L1 as c_6)
 constexpr uint32_t s2_mm = 21;  // matmul-operand id of s2 (same L1 as c_14)
 constexpr uint32_t s3_mm = 22;  // matmul-operand id of s3 (same L1 as c_15)
 
-constexpr uint32_t num_cbs = 23;  // c_0 .. c_22 (blkidx is only allocated in ring mode)
+constexpr uint32_t qk16_utd = 23;  // the exact-copy view of qk16 for the norm's squares (never pushed; pointer synced)
+constexpr uint32_t ncol16 = 24;    // the norm scalars ik, 0, s_q, 0 in column 0 rows 0-3, compute-internal
+constexpr uint32_t num_cbs = 25;   // c_0 .. c_24 (blkidx only in ring mode, raw64 only with bf16 inputs)
 // A state CB under its two ids (see the note above). single(id) is the degenerate pair for a CB that is only ever
 // copied, never a matmul operand (a test's output CB).
 struct StateCb {
@@ -136,6 +140,8 @@ constexpr std::array<std::array<uint32_t, 2>, num_cbs> tile_dims = {{
     tile_32x32,  // c_20 S_mm
     tile_32x32,  // c_21 s2_mm
     tile_32x32,  // c_22 s3_mm
+    tile_16x32,  // c_23 qk16_utd
+    tile_16x32,  // c_24 ncol16
 }};
 
 // CBs read only by copy_tile into DEST: the factory lists them with UnpackToDestMode::UnpackToDestFp32.
@@ -163,6 +169,8 @@ constexpr std::array<bool, num_cbs> unpack_to_dest_fp32 = {{
     false,  // c_20 S_mm      (matmul view of c_6)
     false,  // c_21 s2_mm     (matmul view of c_14)
     false,  // c_22 s3_mm     (matmul view of c_15)
+    true,   // c_23 qk16_utd  (the utd view of c_0)
+    true,   // c_24 ncol16
 }};
 // Every state CB: the utd id unpacks to DEST, its matmul view does not, and the two share the tile dims.
 constexpr bool state_views_consistent() {
