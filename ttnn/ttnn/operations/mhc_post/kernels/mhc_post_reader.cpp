@@ -16,12 +16,20 @@
 //       as a combine consumer (leader / root) GRANT each row's gather slot set at the row start
 //       (after reserving it locally) and COLLECT it (arrival semaphore -> push to compute)
 //       after the mix of row + LAG (root: + 2*LAG). See mhc_post_combine.hpp.
+//   reuse multicast (kernel_lib McastArgs, host ttnn.Mcast; any channel may be ABSENT or roleless here):
+//     w_mc: the column group's injector reads each first-row block's W slice and multicasts it to the
+//       group (no handshake, Counter signal: the resident slice is written once); receivers skip the
+//       W reads and wait round b.
+//     coef_mc / coef_tail_mc: the row segment's sender reads the coefficient source page(s) and
+//       multicasts them to the segment's cb_coef_src (handshake: the scratch is reused per row);
+//       receivers skip the reads. A core with no role on any channel reads for itself.
 
 #include <stdint.h>
 
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_combine.hpp"
 
 namespace {
@@ -65,6 +73,14 @@ constexpr auto post_args = TensorAccessorArgs<x_args.next_compile_time_args_offs
 constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
 constexpr auto w_args = TensorAccessorArgs<comb_args.next_compile_time_args_offset()>();
 constexpr auto pre_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+constexpr auto w_mc = dataflow_kernel_lib::
+    McastArgs<get_named_compile_time_arg_val("w_mc_ct_offset"), get_named_compile_time_arg_val("w_mc_rt_offset")>();
+constexpr auto coef_mc = dataflow_kernel_lib::McastArgs<
+    get_named_compile_time_arg_val("coef_mc_ct_offset"),
+    get_named_compile_time_arg_val("coef_mc_rt_offset")>();
+constexpr auto coef_tail_mc = dataflow_kernel_lib::McastArgs<
+    get_named_compile_time_arg_val("coef_tail_mc_ct_offset"),
+    get_named_compile_time_arg_val("coef_tail_mc_rt_offset")>();
 constexpr uint32_t PRE_COEF_BASE = n + n * n;  // P_i at cb_coef_cols tile n + n^2 + i
 static_assert(!collapse || n_src >= 1, "collapse reads a P window");
 
@@ -126,6 +142,31 @@ void kernel_main() {
     const uint32_t src_pre_l1 = src_post_l1 + pre_slot * coef_tile_bytes;
 
     const uint32_t num_blocks = (num_c + block_c - 1) / block_c;
+
+    // --- reuse-multicast roles (runtime; a core with none reads for itself) ---
+    Noc noc;
+    auto w_tx = w_mc.optional_sender(noc);
+    auto w_rx = w_mc.optional_receiver(noc);
+    auto coef_tx = coef_mc.optional_sender(noc);
+    auto coef_rx = coef_mc.optional_receiver(noc);
+    auto coef_tail_tx = coef_tail_mc.optional_sender(noc);
+    auto coef_tail_rx = coef_tail_mc.optional_receiver(noc);
+    const bool w_reads = !w_rx.has_value();
+    const bool coef_reads = !coef_rx.has_value() && !coef_tail_rx.has_value();
+    const uint32_t coef_bytes = n_src * coef_tile_bytes;
+    // Hand the row's coefficient page(s) across the segment (after the sender's read barrier).
+    auto share_coefficients = [&]() {
+        if (coef_tx.has_value()) {
+            coef_tx->send(src_post_l1, src_post_l1, coef_bytes);
+        } else if (coef_rx.has_value()) {
+            coef_rx->receive();
+        }
+        if (coef_tail_tx.has_value()) {
+            coef_tail_tx->send(src_post_l1, src_post_l1, coef_bytes);
+        } else if (coef_tail_rx.has_value()) {
+            coef_tail_rx->receive();
+        }
+    };
 
     // --- fused: resident W slice, block-major [b][j][c] (compact K = n * extent per block) ---
     const auto geo = mhc_post_combine::Geometry::of(g_c, Q, COMBINE_FANIN);
@@ -231,7 +272,7 @@ void kernel_main() {
             }
         }
         if constexpr (fused) {
-            if (first_row) {
+            if (first_row && w_reads) {
                 for (uint32_t j = 0; j < n; ++j) {
                     for (uint32_t c = 0; c < extent; ++c) {
                         noc_async_read_tile(j * tensor_c_tiles + c0 + c, w_acc, w_l1);
@@ -241,12 +282,20 @@ void kernel_main() {
             }
         }
     };
+    uint32_t w_sent_l1 = fused ? w_l1 : 0;  // start of the next block's W slice (multicast source/landing)
     auto push_block = [&](uint32_t b, bool first_row) {
         cb_push_back(cb_f_tiles, block_c);
         cb_push_back(cb_x_tiles, n * block_c);
         if constexpr (fused) {
             if (first_row) {
                 const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
+                const uint32_t w_block_bytes = n * extent * w_tile_bytes;
+                if (w_tx.has_value()) {
+                    w_tx->send(w_sent_l1, w_sent_l1, w_block_bytes);
+                } else if (w_rx.has_value()) {
+                    w_rx->receive(b);
+                }
+                w_sent_l1 += w_block_bytes;
                 cb_push_back(cb_w_slice, n * extent);
             }
         }
@@ -262,19 +311,23 @@ void kernel_main() {
         }
         const uint32_t row = row_start + r;
 
-        // load_coefficients: source reads + the row's first block, one barrier.
-        noc_async_read_tile(row * post_width_tiles + post_col / 32, post_acc, src_post_l1);
-        if constexpr (comb_slot != 0) {
-            noc_async_read_tile(row * comb_width_tiles + comb_col / 32, comb_acc, src_comb_l1);
-        }
-        if constexpr (collapse && pre_slot != 0 && pre_slot != comb_slot) {
-            noc_async_read_tile(row * pre_width_tiles, pre_acc, src_pre_l1);  // P at columns 0..n-1
+        // load_coefficients: source reads (sender / roleless core) + the row's first block, one
+        // barrier, then the segment multicast.
+        if (coef_reads) {
+            noc_async_read_tile(row * post_width_tiles + post_col / 32, post_acc, src_post_l1);
+            if constexpr (comb_slot != 0) {
+                noc_async_read_tile(row * comb_width_tiles + comb_col / 32, comb_acc, src_comb_l1);
+            }
+            if constexpr (collapse && pre_slot != 0 && pre_slot != comb_slot) {
+                noc_async_read_tile(row * pre_width_tiles, pre_acc, src_pre_l1);  // P at columns 0..n-1
+            }
         }
         issue_block(row, 0, r == 0);
         if constexpr (fused) {
             grant(r);
         }
         noc_async_read_barrier();
+        share_coefficients();
 
         cb_reserve_back(cb_coef_cols, n_coef_cols);
         const uint32_t coef_l1 = get_write_ptr(cb_coef_cols);

@@ -61,6 +61,12 @@ IO_DEPTH = 2  # cb_f_tiles / cb_x_tiles depth, in blocks
 OUT_DEPTH = 2  # cb_out_tiles depth, in blocks (design: 1; 2 measured -8..10% on DM-bound shapes)
 COEF_DEPTH = 2  # cb_coef_cols depth, in rows (2: the reader expands row r+1 while compute mixes row r)
 BLOCK_ROWS = 1  # rows per block (see op_design.md "Why block_rows = 1")
+# Reuse multicast (Refinement 4). W_MCAST: the R cores sharing a column group get their W slice from
+# one injector per column group (fused, R > 1, band layout fits the grid) instead of R DRAM reads.
+# COEF_MCAST: the coefficient source page(s) of a row are read once per row segment and multicast to
+# the segment's cb_coef_src instead of once per core. Both use the kernel_lib multicast helper.
+W_MCAST = True
+COEF_MCAST = True
 
 # CB indices (semantic names; any distinct values)
 CB_COEF_SRC = 0
@@ -250,6 +256,39 @@ def _core_ranges(num_cores, gx):
     return ttnn.CoreRangeSet(ranges)
 
 
+def core_layout(R, Q, gx, gy, fused):
+    """Placement of core k = g_r * Q + g_c on the logical grid, and its multicast groups.
+
+    rows: row-major k -> (k % gx, k // gx). A row group is Q consecutive cores in row-major order, so
+          the coefficient channel is one RowMajor group of Q per row group; W is read per core.
+    band: (g_r, g_c) -> (g_c % gx, g_r + R * (g_c // gx)), M = ceil(Q / gx) bands of R grid rows. A
+          column group is R consecutive cores down one grid column (W channel: ColumnMajor groups of R);
+          a row group is M grid-row segments (coefficient channels: the full-width segments, and the
+          narrower tail segments). Used for the fused modes when R > 1 and R * M <= gy.
+
+    Returns (pos, cores, w_group, coef_groups): pos(k) -> (x, y); cores = the program's CoreRangeSet;
+    w_group = (receiver CoreRangeSet, group size) or None; coef_groups = list of (receiver
+    CoreRangeSet, group size)."""
+    M = -(-Q // gx)
+    if W_MCAST and fused and R > 1 and R * M <= gy:
+        pos = lambda k: ((k % Q) % gx, (k // Q) + R * ((k % Q) // gx))  # noqa: E731
+        tail = Q - (M - 1) * gx
+        full_rows = R * (M if tail == gx else M - 1)
+        rect = lambda x1, y0, y1: ttnn.CoreRangeSet(  # noqa: E731
+            [ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord(x1, y1))]
+        )
+        coef = []
+        if full_rows:
+            coef.append((rect(gx - 1, 0, full_rows - 1), gx))
+        if tail != gx:
+            coef.append((rect(tail - 1, R * (M - 1), R * M - 1), tail))
+        all_cores = ttnn.CoreRangeSet([r for crs, _ in coef for r in crs.ranges()])
+        return pos, all_cores, (all_cores, R), (coef if COEF_MCAST else [])
+    pos = lambda k: (k % gx, k // gx)  # noqa: E731
+    all_cores = _core_ranges(R * Q, gx)
+    return pos, all_cores, None, ([(all_cores, Q)] if COEF_MCAST else [])
+
+
 def _cb(index, dtype, page_size, num_pages, core_ranges):
     return ttnn.CBDescriptor(
         total_size=num_pages * page_size,
@@ -372,7 +411,7 @@ def create_program_descriptor(
         per_c_bytes = plain_per_c_bytes(f_tile, x_tile)
     block_c = choose_block_c(core_c_max, core_rows_max, fixed_bytes=fixed_bytes, per_c_bytes=per_c_bytes, x_tile=x_tile)
     num_cores = R * Q
-    core_ranges = _core_ranges(num_cores, gx)
+    pos, core_ranges, w_group, coef_groups = core_layout(R, Q, gx, gy, fused)
 
     slots, num_groups = combine_geometry(Q)
     fanin = combine_fanin(Q) or COMBINE_FANINS[-1]
@@ -483,7 +522,7 @@ def create_program_descriptor(
 
     # --- physical coordinates of every core of the program (combine transport) ---
     def phys(k):
-        c = device.worker_core_from_logical_core(ttnn.CoreCoord(k % gx, k // gx))
+        c = device.worker_core_from_logical_core(ttnn.CoreCoord(*pos(k)))
         return [c.x, c.y]
 
     # --- runtime args (balanced contiguous 2-D split) ---
@@ -497,7 +536,7 @@ def create_program_descriptor(
     h_addr = hc_output.buffer_address() if collapse else 0
     hc_rt = list(hc_param_block) if collapse else []
     for k in range(num_cores):
-        x, y = k % gx, k // gx
+        x, y = pos(k)
         g_r, g_c = k // Q, k % Q
         row_start, row_end = (g_r * Rt) // R, ((g_r + 1) * Rt) // R
         c_start, c_end = (g_c * Ct) // Q, ((g_c + 1) * Ct) // Q
@@ -581,4 +620,45 @@ def create_program_descriptor(
     semaphores = []
     if fused:
         semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=core_ranges, initial_value=0) for i in range(n_sems)]
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+    _attach_mcasts(descriptor, reader, device, w_group, coef_groups, n_sems if fused else 0)
+    descriptor.kernels = [reader, writer, compute]
+    return descriptor
+
+
+# Reader multicast channels, in kernel order (mhc_post_reader.cpp McastArgs prefixes).
+MCAST_PREFIXES = ("w_mc", "coef_mc", "coef_tail_mc")
+
+
+def _attach_mcasts(descriptor, reader, device, w_group, coef_groups, first_sem):
+    """Attach the W channel (no handshake, Counter signal: the resident W slice is written once, so the
+    injector never waits for its receivers) and up to two coefficient channels (handshake: cb_coef_src is
+    a per-row scratch the receivers must have finished expanding). Absent channels are tagged ABSENT;
+    channels that would exceed MAX_SEMAPHORES are dropped (the reader falls back to its own reads)."""
+    channels = [None, None, None]
+    if w_group is not None:
+        channels[0] = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(handshake=False, data_ready=ttnn.McastDataReady.Counter),
+            w_group[0],
+            w_group[1],
+            ttnn.McastFixedSenderConfig(placement=ttnn.McastSenderPlacement.Staggered),
+            ttnn.McastCoreOrder.ColumnMajor,
+        )
+    for i, (crs, size) in enumerate(coef_groups[:2]):
+        channels[1 + i] = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(handshake=True),
+            crs,
+            size,
+            ttnn.McastFixedSenderConfig(),
+            ttnn.McastCoreOrder.RowMajor,
+        )
+    sem = first_sem
+    for prefix, mc in zip(MCAST_PREFIXES, channels):
+        need = 1 if prefix == "w_mc" else 2
+        if mc is None or sem + need > MAX_SEMAPHORES:
+            ttnn.attach_absent_mcast(reader, prefix)
+            continue
+        mc.attach(descriptor, prefix, [reader], sem)
+        sem = mc.next_semaphore_id()
