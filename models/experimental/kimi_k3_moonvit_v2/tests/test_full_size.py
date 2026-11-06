@@ -6,7 +6,7 @@
 its own, the full 27-layer encoder and the full model against reference outputs saved by `goldens.py`,
 real weights only.
 
-The reference outputs are fp32 (`goldens.py --dtype fp32`, the default): the bf16 reference's own
+The reference outputs are fp32 (`goldens.py`): the bf16 reference's own
 rounding is larger than the device's error in deeper layers. The CPU reference is slow at this
 length, so it is not recomputed here: generate it once with
 `python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens`.

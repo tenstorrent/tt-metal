@@ -1,5 +1,6 @@
-# SPDX-FileCopyrightText: © 2025-2026 The Moonshot AI Team and The HuggingFace Inc. team.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2025-2026 The Moonshot AI Team.
+# SPDX-License-Identifier: LicenseRef-LICENSE-FILE
+# Vendored from https://huggingface.co/moonshotai/Kimi-K3 under the Kimi K3 License (LICENSE-Kimi-K3 beside this file).
 
 """Image processor class for Kimi-K3.
 """

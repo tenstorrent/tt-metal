@@ -26,28 +26,14 @@ from models.experimental.kimi_k3_moonvit_v2.tests.goldens import to_fp32
 from models.experimental.kimi_k3_moonvit_v2.tt.vision_model import TT_MoonViT_Vision_Model
 
 
-def build(mesh_device, sp_axis, num_links, config, reference) -> TT_MoonViT_Vision_Model:
-    sequence_parallel, ccl = ring_parallel(mesh_device, sp_axis, num_links)
-    tt = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=sequence_parallel, ccl=ccl)
-    tt.load_torch_state_dict(reference.state_dict())
-    return tt
-
-
-@RING
-@SYNTHETIC
-@REAL
-def test_load_weights(mesh_device, sp_axis, num_links, config, reference):
-    tt = build(mesh_device, sp_axis, num_links, config, reference)
-    assert tt.is_loaded()
-    assert torch.equal(tt.vision_tower.patch_embed.pos_emb_weight, reference.vision_tower.patch_embed.pos_emb.weight)
-
-
 @RING
 @SYNTHETIC
 @REAL
 @ATTENTION_GRIDS
 def test_vision_model(mesh_device, sp_axis, num_links, config, reference, grid):
-    tt = build(mesh_device, sp_axis, num_links, config, reference)
+    sequence_parallel, ccl = ring_parallel(mesh_device, sp_axis, num_links)
+    tt = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=sequence_parallel, ccl=ccl)
+    tt.load_torch_state_dict(reference.state_dict())
     pixels, grid_thws = random_patches(config, grid)
     with torch.no_grad():
         (golden,) = to_fp32(copy.deepcopy(reference))(pixels.float(), grid_thws)
