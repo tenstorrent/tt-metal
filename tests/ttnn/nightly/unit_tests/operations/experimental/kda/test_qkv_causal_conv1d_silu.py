@@ -27,6 +27,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     qkv_to_device,
     qkv_device_inputs,
+    qkv_host_inputs,
     qkv_reference,
 )
 
@@ -242,6 +243,62 @@ def test_qkv_causal_conv1d_silu_work_distribution(
         ("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs, strict=True
     ):
         assert_accurate(golden, ttnn.to_torch(output), name=name, pcc_threshold=0.999, nrmse_threshold=0.008)
+
+
+@pytest.mark.parametrize("streams", [1, 8, 17, 32, 64])
+@pytest.mark.parametrize(
+    ("widths", "channel_chunk_size"),
+    [
+        pytest.param((512, 512, 1536), 512, id="qwen-tp4"),
+        pytest.param((512, 512, 1536), 32, id="qwen-tp4-one-tile-blocks"),
+        pytest.param((512, 256, 128), 896, id="asymmetric-split"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_per_row_history(
+    zero_actual_start, device: ttnn.Device, streams: int, widths: tuple[int, int, int], channel_chunk_size: int
+) -> None:
+    """A [T, 3, C] history makes each input row its own one-token stream, as in batched decode.
+
+    Every row must match the reference and be bit identical to running that stream alone.
+    """
+    inputs, history, taps = qkv_host_inputs(sequence=1, batch=streams, widths=widths)
+    channels = sum(widths)
+    rows_tt = qkv_to_device(inputs.reshape(1, streams, channels), device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    history_tt = qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    taps_tt = tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps)
+    outputs = _run(
+        rows_tt,
+        history_tt,
+        taps_tt,
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        actual_start=zero_actual_start,
+    )
+
+    expected = qkv_reference(inputs, history, taps, widths)
+    for name, golden, output, width in zip(("q", "k", "v"), expected, outputs, widths, strict=True):
+        actual = ttnn.to_torch(output)
+        assert tuple(actual.shape) == (1, streams, width)
+        assert_accurate(
+            golden.reshape(1, streams, width), actual, name=name, pcc_threshold=0.999, nrmse_threshold=0.008
+        )
+
+    for stream in (0, streams - 1):
+        padded = torch.zeros(1, 32, channels, dtype=torch.bfloat16)
+        padded[0, 0] = inputs[stream, 0]
+        single_history_tt = qkv_to_device(history[stream : stream + 1], device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        single = _run(
+            qkv_to_device(padded, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+            single_history_tt,
+            taps_tt,
+            widths=widths,
+            channel_chunk_size=channel_chunk_size,
+            actual_start=zero_actual_start,
+        )
+        for name, alone, output in zip(("q", "k", "v"), single, outputs, strict=True):
+            assert_bit_identical(
+                ttnn.to_torch(alone)[:, :1], ttnn.to_torch(output)[:, stream : stream + 1], name=f"{name} row {stream}"
+            )
 
 
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
