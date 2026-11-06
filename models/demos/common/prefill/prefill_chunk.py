@@ -10,7 +10,7 @@ uint32, ``8 + 12 * F`` bytes; records past ``num_chunks`` are ``(INVALID_SLOT, 0
 with ``SHUTDOWN_WORD`` / ``WARMUP_WORD``.
 
 With media (``max_refs`` > 0) the first rank's H2D metadata continues with ``n_refs`` (uint32) and ``max_refs``
-MediaRef records of ``REF_BYTES``: ``chunk_index``, ``start_pos``, ``num_tokens`` (uint32) and a 32-byte
+MediaRef records of ``REF_BYTES``: ``chunk_index``, ``start_pos``, ``end_pos`` (uint32) and a 32-byte
 ``media_key``. Records past ``n_refs`` are zero; a sentinel fills these words too. ``max_refs`` = 0 keeps the bytes
 above unchanged.
 
@@ -57,21 +57,26 @@ EMPTY_CHUNK = PrefillChunk(0, 0, 0)
 
 @dataclass(frozen=True)
 class MediaRef:
-    """A media item's tokens [start_pos, start_pos + num_tokens), absolute KV positions in the slot of chunk
+    """A media item's tokens [start_pos, end_pos), half-open, in absolute KV positions of the slot of chunk
     ``chunk_index`` of the forward. Names the whole item, also when only part of it falls in that chunk."""
 
     chunk_index: int
     start_pos: int
-    num_tokens: int
+    end_pos: int
     media_key: bytes
 
     @property
-    def end_pos(self) -> int:
-        return self.start_pos + self.num_tokens
+    def num_tokens(self) -> int:
+        return self.end_pos - self.start_pos
 
 
 def media_refs_size_bytes(max_refs: int) -> int:
     return _REF_COUNT.size + max_refs * REF_BYTES if max_refs else 0
+
+
+def max_media_refs(forward_chunks: int, page_bytes: int) -> int:
+    """Most refs whose H2D metadata fits ``page_bytes``, the socket page it must fit."""
+    return max(0, (page_bytes - metadata_size_bytes(forward_chunks) - _REF_COUNT.size) // REF_BYTES)
 
 
 def metadata_size_bytes(forward_chunks: int, max_refs: int = 0) -> int:
@@ -127,9 +132,7 @@ def pack_media_refs(refs, max_refs: int) -> bytes:
     for i, r in enumerate(refs):
         if len(r.media_key) != MEDIA_KEY_BYTES:
             raise ValueError(f"media key of {len(r.media_key)} B, want {MEDIA_KEY_BYTES}")
-        _MEDIA_REF.pack_into(
-            out, _REF_COUNT.size + i * REF_BYTES, r.chunk_index, r.start_pos, r.num_tokens, r.media_key
-        )
+        _MEDIA_REF.pack_into(out, _REF_COUNT.size + i * REF_BYTES, r.chunk_index, r.start_pos, r.end_pos, r.media_key)
     return bytes(out)
 
 
@@ -197,7 +200,7 @@ def validate_media_refs(refs, chunks) -> None:
         if not 0 <= r.chunk_index < len(chunks) or chunks[r.chunk_index].is_empty:
             raise ValueError(f"{r}: no non-empty chunk {r.chunk_index} in the forward")
         c = chunks[r.chunk_index]
-        if r.num_tokens < 1 or not (r.start_pos < c.actual_end and r.end_pos > c.actual_start):
+        if r.end_pos <= r.start_pos or not (r.start_pos < c.actual_end and r.end_pos > c.actual_start):
             raise ValueError(f"{r}: does not overlap {c}")
         if prev is not None and prev.chunk_index == r.chunk_index and prev.end_pos > r.start_pos:
             raise ValueError(f"{r}: overlaps {prev}")

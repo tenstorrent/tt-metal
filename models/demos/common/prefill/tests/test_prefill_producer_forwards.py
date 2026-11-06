@@ -249,7 +249,7 @@ def test_payload_lists_media(env, monkeypatch, forward_chunks):
     monkeypatch.setattr(producer, "MEDIA", [(1000, 100), (3000, 10)])
     pool = list(range(2 * C))
     pushes = [producer.ChunkPush(0, k, k * C, (k + 1) * C, 2 * C) for k in range(2)]
-    image = (1000, 100, stub_media_key(100, 0))
+    image = (1000, 1100, stub_media_key(100, 0))
     if forward_chunks == 1:
         forwards = [([p], [MediaRef(0, *image)]) for p in pushes]
     else:
@@ -272,7 +272,7 @@ def test_media_config_needs_max_refs(monkeypatch, expect_error):
         "GLOBAL_MESH_SHAPE",
         "CHUNK_SIZE",
         "FORWARD_CHUNKS",
-        "CHUNK_METADATA_SIZE_BYTES",
+        "H2D_METADATA_SIZE_BYTES",
         "MEDIA",
         "MEDIA_MAX_REFS",
     ):
@@ -346,7 +346,7 @@ def test_packed_respects_max_requests(env, interleave):
 
 
 def test_import_config_defers_budget_check(monkeypatch, expect_error):
-    for name in ("GLOBAL_MESH_SHAPE", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "CHUNK_METADATA_SIZE_BYTES"):
+    for name in ("GLOBAL_MESH_SHAPE", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "H2D_METADATA_SIZE_BYTES"):
         monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reloads below
     monkeypatch.delenv("PREFILL_CHUNK_SIZE", raising=False)
     monkeypatch.setenv("PREFILL_FORWARD_TOKENS_BUDGET", str(8 * C))
