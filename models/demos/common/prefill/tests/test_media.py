@@ -15,7 +15,7 @@ C = SP * LOCAL
 
 
 def ref(chunk_index, start, n, key):
-    return MediaRef(chunk_index, start, n, bytes([key]) * 32)
+    return MediaRef(chunk_index, start, start + n, bytes([key]) * 32)
 
 
 def u16(t):

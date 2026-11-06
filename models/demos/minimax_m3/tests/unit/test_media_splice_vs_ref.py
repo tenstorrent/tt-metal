@@ -115,7 +115,7 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, 
         )
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
-        refs = [MediaRef(0, s, n, key) for s, n, key in images if s < end and s + n > start]
+        refs = [MediaRef(0, s, s + n, key) for s, n, key in images if s < end and s + n > start]
         if refs:
             x = TtPrefillRuntime._splice_media(runtime, x, [PrefillChunk(0, start, end)], refs)
         out.append(ttnn.to_torch(ttnn.get_device_tensors(x)[0]).reshape(CHUNK, -1)[: end - start])
@@ -174,7 +174,7 @@ def test_one_batched_fetch_per_forward(monkeypatch):
     a, b = bytes([1]) * 32, bytes([2]) * 32
     embs = {a: torch.randn(100, HIDDEN).to(torch.bfloat16), b: torch.randn(20, HIDDEN).to(torch.bfloat16)}
     chunks = [PrefillChunk(0, 0, chunk), PrefillChunk(0, chunk, 2 * chunk)]
-    refs = [MediaRef(0, 100, 100, a), MediaRef(1, 100, 100, a), MediaRef(1, 220, 20, b)]
+    refs = [MediaRef(0, 100, 200, a), MediaRef(1, 100, 200, a), MediaRef(1, 220, 240, b)]
     store = SharedBufferStore(embs)
     runtime = runtime_with(store, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
 
