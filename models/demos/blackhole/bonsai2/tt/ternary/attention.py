@@ -327,7 +327,19 @@ class _DecodeTransformer:
 
     def paged_scaled_dot_product_attention_decode(self, *args, **kwargs):
         pc = kwargs.get("program_config")
-        if pc is not None and os.environ.get("BONSAI_DECODE_SDPA_GRID", "1") == "1":
+        from models.demos.blackhole.bonsai2.tt import core_ranges
+        from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+        if pc is not None and stream_decode.active():  # the stream's receivers only
+            rx = stream_decode.STATE.st.rx_order
+            kwargs["program_config"] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(len(rx) // 8, 8),
+                sub_core_grids=core_ranges.rects(rx),
+                q_chunk_size=pc.q_chunk_size,
+                k_chunk_size=pc.k_chunk_size,
+                exp_approx_mode=pc.exp_approx_mode,
+            )
+        elif pc is not None and os.environ.get("BONSAI_DECODE_SDPA_GRID", "1") == "1":
             kwargs["program_config"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=kwargs["page_table_tensor"].device().compute_with_storage_grid_size(),
                 q_chunk_size=pc.q_chunk_size,
@@ -382,7 +394,7 @@ class TernaryAttentionTtnn:
         return ttnn.chunk(t, n, dim=dim)
 
     def transpose(self, t, *args, **kwargs):
-        if isinstance(t, _TM):
+        if isinstance(t, (_TM, _KVSh)):  # _KVSh: q, already token-major
             return t
         if isinstance(t, _NormRope):
             if t.head_major:
@@ -417,7 +429,19 @@ class TernaryAttentionTtnn:
     def apply_rope(self, q, k, cos, sin, orig):
         """Stands in for the shared apply_rotary_pos_emb_ttnn (attention/decode.py swaps it in)."""
         if isinstance(q, _NormRope) and q.head_major and isinstance(k, _NormRope) and k.head_major:
-            qo = q.op(q.t, cos, sin)
+            from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+            if stream_decode.active():
+                # q token-major in a height-sharded L1 tile row: the decode SDPA's q as is (the stock transpose would
+                # run on the stream's sender cores too)
+                from models.demos.blackhole.bonsai2.tt.tprefill.qk_rope import kv_shards
+
+                _, Hq, _, Dq = list(q.t.shape)
+                (q_sh,) = kv_shards(q.t.device(), Hq, Dq, n=1)
+                q.op(q.t, cos, sin, kv_out=(q_sh, None, None))
+                qo = _KVSh(q_sh)
+            else:
+                qo = q.op(q.t, cos, sin)
             ttnn.deallocate(q.t)
             v = getattr(self._t, "v_raw", None)
             if v is not None and os.environ.get("BONSAI_KV_DIRECT", "1") == "1":

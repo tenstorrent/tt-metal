@@ -34,6 +34,11 @@ def set_layout(order, defines=()):
         ttnn.generic_op = generic_op
 
 
+def available(grid_cores: int) -> int:
+    """Cores the ops may use: the layout's, else the whole grid."""
+    return len(_LAYOUT) if _LAYOUT is not None else grid_cores
+
+
 def core_xy(i: int, grid_x: int) -> ttnn.CoreCoord:
     if _LAYOUT is not None:
         return _LAYOUT[i]

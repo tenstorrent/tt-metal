@@ -37,7 +37,9 @@ BATCH = 4
 NBANKS = 8
 PER_BANK = 2
 SCHED_CHUNK = 256
-SEG_SLOTS = int(os.environ.get("STREAM_SEG_SLOTS", "4096"))  # slots per sender per segment (128 MB per bank)
+SEG_SLOTS = int(
+    os.environ.get("STREAM_SEG_SLOTS", "256")
+)  # slots per sender per segment (8 MB per bank: DRAM is fragmented)
 PAIR = os.environ.get("STREAM_PAIR", "horizontal")  # schedule entries the writer reads at a time
 _DEFS = [(d, "1") for d in os.environ.get("STREAM_DEFINES", "").split(",") if d]
 
@@ -181,6 +183,15 @@ class Stream:
         self.ring = sharded(shard_order, ring_slots * slot // 4)
         self.rcount = sharded(shard_order, 16)  # filled at +0, consumed at +32
         self.scount = sharded(self.senders, 2 * 4 * per)  # freed[r] at 16 r, sent[r] at 16 (per + r)
+
+    def deactivate(self):
+        """Back to the default sub-device manager (e.g. for prefill, whose ops use the whole grid)."""
+        self.device.reset_sub_device_stall_group()
+        self.device.clear_loaded_sub_device_manager()
+
+    def activate(self):
+        self.device.load_sub_device_manager(self.manager)
+        self.device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
 
     def close(self):
         self.device.reset_sub_device_stall_group()

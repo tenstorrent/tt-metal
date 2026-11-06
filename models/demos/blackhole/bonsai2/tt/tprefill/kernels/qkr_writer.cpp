@@ -46,7 +46,7 @@ void kernel_main() {
             noc_async_writes_flushed();
             cb_pop_front(cb_out, 1);
         }
-        for (uint32_t j = 0; j < Dt; ++j) {
+        for (uint32_t j = 0; v_sh != 0 && j < Dt; ++j) {  // v_sh 0: no V (q)
             const uint64_t s = vs.get_noc_addr(h * Dt + j);
             noc_async_read(s, scratch, 64);  // face 0 rows 0-1 (64-B DRAM reads)
             noc_async_read(s + 512, scratch + 64, 64);

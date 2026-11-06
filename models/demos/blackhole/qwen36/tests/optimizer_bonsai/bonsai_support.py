@@ -99,11 +99,16 @@ def build_model(device, n_layers=None):
 
 
 def after_prefill(model) -> None:
-    """Between the prefill and the decode steps: swap in the ternary decode MLPs when BONSAI_TERNARY_MLP=1."""
+    """Between the prefill and the decode steps: swap in the ternary decode MLPs when BONSAI_TERNARY_MLP=1; with
+    BONSAI_STREAM=1, build and switch on the decode weight stream (bonsai2/tt/stream/decode.py)."""
     if os.environ.get("BONSAI_TERNARY_MLP") == "1":
         from models.demos.blackhole.bonsai2.tt.ternary.mlp import swap_in_ternary_mlp
 
         swap_in_ternary_mlp(model)
+    from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+    if stream_decode.setup(model) is not None:  # BONSAI_STREAM=1: decode on the weight stream
+        stream_decode.STATE.activate()
 
 
 def prefill_traced(model, prompt_ids, page_table) -> torch.Tensor:
@@ -188,6 +193,12 @@ def device_argmax(tt_output, vocab_size: int) -> int:
 
     while isinstance(tt_output, (list, tuple)):  # [per data-parallel group] of (logits, log-probs)
         tt_output = tt_output[0]
+    from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+    if stream_decode.active():  # one op on the decode cores (bonsai2/tt/ternary/argmax.py)
+        from models.demos.blackhole.bonsai2.tt.ternary.argmax import row0_argmax
+
+        return int(ttnn.to_torch(row0_argmax(tt_output, vocab_size)).reshape(-1)[0])
     rank = len(tt_output.shape)
     logits = ttnn.slice(tt_output, [0] * rank, [1] * (rank - 1) + [vocab_size])  # row 0 (user 0), real vocab
     logits = ttnn.reshape(logits, (1, 1, 1, vocab_size))

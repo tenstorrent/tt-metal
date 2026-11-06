@@ -67,8 +67,9 @@ class QKNormRope:
         wr_def = []
         if kv_out is not None:
             sh = device.worker_core_from_logical_core(out.memory_config().shard_spec.grid.ranges()[0].start)
-            wr_ct += ttnn.TensorAccessorArgs(v).get_compile_time_args()
-            wr_c += [sh.x, sh.y, out.buffer_address(), v_sh.buffer_address(), v.buffer_address()]
+            wr_ct += ttnn.TensorAccessorArgs(v if v is not None else out).get_compile_time_args()
+            wr_c += [sh.x, sh.y, out.buffer_address()]
+            wr_c += [v_sh.buffer_address(), v.buffer_address()] if v is not None else [0, 0]
             wr_def = [("TOKEN_MAJOR", "1")]
         wr_kernel = ttnn.KernelDescriptor(
             kernel_source=KERNELS + "qkr_writer.cpp",
@@ -111,17 +112,19 @@ class QKNormRope:
             cbs=[cb(0, bf, 2 * Dt), cb(1, f32, 1 + Dt), cb(2, bf, 8), cb(3, f32, Dt), cb(4, f32, 1), cb(16, bf, 8)]
             + ([cb(17, bf, 1)] if kv_out is not None else []),
         )
-        ttnn.generic_op([x, self.consts, cos, sin] + ([v, v_sh] if kv_out is not None else []) + [out], program)
+        extra = [v, v_sh] if kv_out is not None and v is not None else []
+        ttnn.generic_op([x, self.consts, cos, sin] + extra + [out], program)
         return out
 
 
 _KV_SH = {}
 
 
-def kv_shards(device, H, D):
+def kv_shards(device, H, D, n=2):
     """Persistent token-major K and V decode buffers ([1, 1, H, D] bf16, one tile row, height-sharded on core (0, 0), as the paged
     cache update takes them), zero once: the norm + RoPE op writes only the head rows, the padding rows stay zero."""
-    if (H, D) not in _KV_SH:
+    key = (H, D, n, core_xy(0, 1).x, core_xy(0, 1).y)  # the shard core follows the core layout
+    if key not in _KV_SH:
         mc = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -131,10 +134,10 @@ def kv_shards(device, H, D):
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        _KV_SH[(H, D)] = tuple(
+        _KV_SH[key] = tuple(
             ttnn.from_torch(
                 torch.zeros(1, 1, H, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
             )
-            for _ in range(2)
+            for _ in range(n)
         )
-    return _KV_SH[(H, D)]
+    return _KV_SH[key]
