@@ -39,8 +39,7 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    // Slots 5/6/11/12/14/34 carry the per-chip length geometry. With dynamic_local_n they are 0 and the live
-    // values come from one common runtime word (see local_n below); otherwise they are the constants.
+    // Length-geometry slots (the _ct values): placeholders with dynamic_local_n, see ring_joint_derived_slots.hpp.
     constexpr uint32_t q_local_padded_Nt_ct = get_compile_time_arg_val(5);
     constexpr uint32_t kv_local_padded_Nt_ct = get_compile_time_arg_val(6);
     constexpr uint32_t logical_n_compile = get_compile_time_arg_val(7);

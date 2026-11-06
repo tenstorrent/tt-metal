@@ -208,9 +208,8 @@ struct RingAccumulatorState {
 // their CB tile INDICES stay compile-time.
 // Only the ring_joint_sdpa producer uses it; exp_ring keeps the plain LightweightMaskContext —
 // sdpa_ring_v2's MaskCtx template param is deduced per caller.
-// The local tail is runtime on the dynamic-length path (the per-chip length moves it), a constant elsewhere.
-// The setter is what the producer calls on both paths (kernel_main is not a template, so an `if constexpr`
-// there would still have to compile an assignment to the constant).
+// The local tail is a runtime field on the dynamic path and a constant with a no-op setter otherwise, so the
+// producer calls the setter on both paths (kernel_main is not a template, so it cannot `if constexpr` it away).
 template <bool Dynamic, uint32_t Ct>
 struct LocalNPaddedTilesField {
     uint32_t local_n_padded_tiles = Ct;
@@ -2635,11 +2634,10 @@ void sdpa_ring_v2(
     const uint32_t packed_newest_rows = 0,
     // Padded multicast slots the reader runs after this core's Q chunks; their K/V entries are drained.
     const uint32_t padded_q_slots = 0,
-    // Live per-chip KV length in tiles; the template value is a 0 placeholder on the dynamic-length path.
+    // Live per-chip KV length in tiles; a 0 template value marks the dynamic path (ring_joint_derived_slots.hpp).
     const uint32_t local_padded_Nt_rt = local_padded_Nt) {
     init_sdpa_streaming_semaphores();
     const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
-    // Static path (nonzero template value): the constant, so the plan and the liveness checks fold as before.
     constexpr bool local_n_is_dynamic = local_padded_Nt == 0;
     const ring_joint::PackedKVGroupPlan packed_kv = ring_joint::packed_kv_pass_plan(
         {ring_joint::packed_kv_source_tiles(
