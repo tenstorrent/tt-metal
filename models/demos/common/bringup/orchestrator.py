@@ -2277,9 +2277,32 @@ class Orchestrator:
                 task, role, self.failure_text(pre) if pre else ""
             ):
                 return STOPPED
+        if satisfied(self.led.status(tid)):  # F260: a new golden (or a drift file) reaches the mirror before a test
+            self.sync_goldens(always=task.get("step") == "goldens")
         if self.needs_human(task):
             return self._human(task, self.needs_human(task))
         return self._after(task) if satisfied(self.led.status(tid)) else STOPPED
+
+    def sync_goldens(self, always: bool = True) -> None:
+        """F260: copy the shared goldens the ladder reads into the node-local mirror tests read (reference/golden.py
+        sync). always=False: only when a dir is stale (one stat walk per dir). Never stops the run: a failed copy
+        leaves the tests on the shared copy, with a warning per golden."""
+        if self.spec.golden_mirror_root is None:
+            return
+        try:
+            from models.demos.common.bringup.reference import golden as GD
+
+            if not always and all(GD.unit_problem(self.spec, n) is None for n in GD.golden_units(self.spec)):
+                return
+            t0 = time.time()
+            res = GD.sync(self.spec, echo=lambda m: None)
+            bad = {k: v for k, v in res.items() if v.startswith("FAILED") or "only in the mirror" in v}
+            self.echo(
+                f"goldens mirror: {len(res)} dirs, {time.time() - t0:.0f}s"
+                + ("".join(f"\n  {k}: {v}" for k, v in bad.items()) if bad else ", complete")
+            )
+        except Exception as e:  # noqa: BLE001 -- the mirror is an optimisation; the shared copy is always there
+            self.echo(f"goldens mirror: sync failed ({type(e).__name__}: {e}); tests read the shared copy")
 
     def ran_final(self) -> bool:
         """F188: the final measurement (a perf task without a role) has passed, so it will not run the quick-accepted
@@ -2747,6 +2770,8 @@ def main(argv=None) -> int:
     TL.record(orch.run_dir, "start", command=a.command)
     rc = None
     try:
+        if a.command in ("run", "resume"):  # F260: before any device task, the goldens on node-local disk
+            orch.sync_goldens()
         rc = orch.run(until=a.until, only=a.only)
         return rc
     finally:

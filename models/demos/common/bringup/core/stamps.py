@@ -31,6 +31,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from models.demos.common.bringup.core.spec import GOLDEN_MIRROR_FILE
+
 # F120: files that cannot change what a run measures (the orchestration, its docs and selftests, any markdown)
 NO_MEASURE = tuple(
     f"models/demos/common/bringup/{p}"
@@ -287,8 +289,10 @@ def goldens_key(spec) -> str:
         return ""
     if not root.is_dir():
         return ""
-    parts = [
-        f"{f.relative_to(root)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}" for f in sorted(root.glob("*/*.json"))
+    parts = [  # F260: not mirror.json (sizes and mtimes for the node-local mirror; a resync is not a new golden)
+        f"{f.relative_to(root)}\0{hashlib.sha256(f.read_bytes()).hexdigest()}"
+        for f in sorted(root.glob("*/*.json"))
+        if f.name != GOLDEN_MIRROR_FILE
     ]
     return sha16("\n".join(parts)) if parts else ""
 

@@ -125,7 +125,10 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
    from the checkout being brought up (it pins TT_METAL_HOME / PYTHONPATH / TT_METAL_CACHE / PYTHON_ENV_DIR to that
    checkout itself, F68), in a tmux session (`tmux new-session -d -s <name> "<command>"`; it survives the session; to restart, kill the
    session and start a new one: keys sent to a finished session's pane go nowhere), then arm the watch (section 4,
-   "Always be watching"). The first task, R.1, builds the canonical prompt and runs the HF sanity gate (revision,
+   "Always be watching"). Goldens on shared storage (paths.golden on NFS) are read from a node-local mirror (F260):
+   on a new box, run `python -m models.demos.common.bringup.reference.golden sync --spec <spec>` once before the launch
+   (tens of GB at idle I/O priority; the orchestrator also syncs at run / resume start and after each golden task,
+   fast when in sync). A `WARNING (F260)` line in a test log means it read the shared copy (slow): sync. The first task, R.1, builds the canonical prompt and runs the HF sanity gate (revision,
    usage-example smoke, next-token accuracy floor).
 6. The serving contract comes first. Task SC.1 runs the `serving-contract` agent (`agents/serving-contract.md`): it
    reads how tt-d-gen drives a prefill model at its latest commit and writes `serving_contract.md` (a how-to for
@@ -593,7 +596,8 @@ start over and never copy the model: write the seeded spec (README "Full bring-u
 context of the accuracy check (the goldens' longest rung) and of deployment (memory only), where goldens are made
 (the CPU cost: real size takes hours per rung) and where they are copied. Index each golden where it is made
 (`reference.golden_import --rung <r> --index`) before copying, and make the `seed` rung's drift there too
-(`reference.drift --rung seed`). Supervise as section 4; W.1 and M.1 are agent tasks (role `port`): a failing layer is
+(`reference.drift --rung seed`). On the box that runs it, `reference.golden sync --spec <spec>` copies them to the
+node-local mirror the tests read (F260). Supervise as section 4; W.1 and M.1 are agent tasks (role `port`): a failing layer is
 located with the seed's component and swap tests at that layer and the CPU at the device's formats, then fixed in
 place so the seed box keeps working.
 

@@ -2671,3 +2671,34 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Selftest: test_one_process.py (planner, per-run env / log / result isolation and restore, stop-on-fail, the shared
   model loaded once and the reload warning, the shared mesh fixture through a real in-process pytest, the A/B side in
   one process with per-item results, per-switch processes, a hang keeping the finished items, off by default).
+
+## F260: goldens read from a node-local mirror of the shared copy, synced at run start (owner 2026-11-06)
+- Problem: every ladder / profile / contract test read its goldens from paths.golden, for DeepSeek-V4.1's galaxy spec
+  /data/$USER/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4 on NFS (85 GB; the s56320 rung tens of GB a run).
+- Fix: paths.golden (spec.golden_root) stays the source of truth (generated, pinned, frozen there; survives a change
+  of box). spec.golden_mirror_root (paths.golden_local; default: when the shared root is outside art, art / the shared
+  path after the model's dir name, so DS41's is /scratch/$USER/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4;
+  none when the goldens are already under art, on a scaled run or with goldens.mirror: false). Each shared golden dir
+  carries mirror.json ({relative path: [size, mtime_ns]}, plus the sha256 files.json already has; derived, so not in
+  content_hash nor in the stamps' goldens key), written by generate_golden (after the rename, and after the drift
+  files with --set) and refreshed by sync. reference/golden.py read_dir (Golden.for_rung) returns the mirror's rung
+  dir when, for it and its -official sibling (tests open `<dir>-official` beside it), the mirror's mirror.json lists
+  the shared files as they are now (a stat walk: 0.06 s for all 357 DS41 files on NFS) and every mirror file matches
+  its line; else the shared dir with one `WARNING (F260)` line per golden per process (never silent, never a failure).
+  Writers use the shared copy: rung_dir / official_dir as before, Golden.shared_dir (official_floor.json now goes
+  there, not into the dir read). `python -m models.demos.common.bringup.reference.golden sync --spec S [--rung R]`:
+  nice + ionice -c3 rsync -a shared -> mirror for the ladder's dirs, then verify; a complete dir costs two stat walks;
+  files only in the mirror are reported. The orchestrator syncs at run / resume start (before any task) and after
+  every passed task when a dir went stale (always after a goldens task); a failed sync is one line, the run goes on.
+  The bringup skill's launch step syncs on a new box.
+- Frozen files (tasks.yaml frozen.files, keyed by the /data path) stay checked on the shared copy: the keys are the
+  same on every box, the frozen golden files are small JSON (manifest, drift) so hashing them on NFS is cheap, and the
+  mirror is only read when its files match the shared ones (size + mtime_ns, rsync -a), so the bytes checked are the
+  bytes read; a drift file rewritten in the shared copy makes the mirror stale until the next sync.
+- Not changed: DS41's tests/bringup/official_final_norm.py and contract/official_kv.py generators write into
+  `<Golden.dir>-official`, the mirror when it is complete; sync reports such files ("only in the mirror"); they
+  should write to `Golden.shared_dir` (model code, left to its owner).
+- Selftest: test_golden_mirror.py (mirror path default / override / none, a missing mirror -> shared + warning once,
+  sync -> mirror read and idempotent, a changed shared file -> stale until the next sync, a mirror file edited or
+  missing and a manifest mismatch detected, the -official sibling part of completeness, mirror-only files reported,
+  frozen check and goldens key unchanged by sync, the orchestrator syncing only a stale mirror).
