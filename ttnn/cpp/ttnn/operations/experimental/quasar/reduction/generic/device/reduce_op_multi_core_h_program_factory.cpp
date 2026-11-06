@@ -4,6 +4,7 @@
 
 #include "reduce_op_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_h_row_output.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -22,8 +23,7 @@ namespace ttnn::prim::qsr {
 // Metal 2.0 port of the multi-core H reduce factory — SCOPED to the resnet-reachable path.
 //
 // Only the interleaved, non-negate H-reduce path is on Metal 2.0 (this is what pool_sum / avg_pool2d
-// reaches: Sum over H, INTERLEAVED in/out, no negate). It also covers Int32-MAX (reduce_metal2 routes
-// Int32 to the SFPU path internally). The remaining branches of the legacy factory — the row-major
+// reaches: Sum over H, INTERLEAVED in/out, no negate). The remaining branches of the legacy factory — the row-major
 // dense path (rm_path, currently perf-disabled upstream), width-sharding (re-routed to INTERLEAVED
 // upstream), and the negate/MIN path (dual SFPU/FPU with self-loop acc/ineg) — are NOT yet ported and
 // TT_FATAL here. They stay on the legacy ProgramDescriptor path until ported (see METAL2_PORT_REPORT.md).
@@ -93,6 +93,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const DFBSpecName IN{"in"};          // legacy c_0
     const DFBSpecName SCALER{"scaler"};  // legacy c_2
     const DFBSpecName OUT{"out"};        // legacy c_3
+    const ScratchpadSpecName FULL_TILE{"full_tile"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
@@ -110,11 +111,24 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .entry_size = scaler_single_tile_size,
         .num_entries = 1,
         .data_format_metadata = scaler_cb_data_format};
-    DataflowBufferSpec out_dfb{
-        .unique_id = OUT,
-        .entry_size = dst_single_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = dst_cb_data_format};
+    // The FPU column reduce writes its result to DEST as a 1x32 tile, so `out` holds 1x32 tiles and the compute packs
+    // that one row into it; the writer expands each into the output's 32x32 page (see reduce_h_row_output.hpp). Only
+    // bf16 MIN (SFPU column reduce) keeps the full-tile layout and the plain writer.
+    const bool pack_1x32_row = ttnn::prim::reduce_h_row_output::packs_1x32_row(
+        device.arch(), a.dtype(), operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN);
+    if (pack_1x32_row) {
+        ttnn::prim::reduce_h_row_output::check_supported(tile_height, tile_width, dst_cb_data_format, "Reduce H");
+    }
+    const uint32_t dst_datum_bytes = tt::datum_size(dst_cb_data_format);
+    DataflowBufferSpec out_dfb =
+        pack_1x32_row
+            ? DataflowBufferSpec{.unique_id = OUT, .entry_size = tt::constants::TILE_WIDTH * dst_datum_bytes, .num_entries = 2, .data_format_metadata = dst_cb_data_format, .tile_format_metadata = tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH})}
+            : DataflowBufferSpec{
+                  .unique_id = OUT,
+                  .entry_size = dst_single_tile_size,
+                  .num_entries = 2,
+                  .data_format_metadata = dst_cb_data_format};
+    ScratchpadSpec full_tile_scratch{.unique_id = FULL_TILE, .size_per_node = dst_single_tile_size};
 
     TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
@@ -152,10 +166,16 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
 
     KernelSpec writer{
         .unique_id = WRITER,
-        .source = kdir / "dataflow/writer_unary_interleaved_start_id_metal2.cpp",
+        .source = pack_1x32_row ? std::filesystem::path(ttnn::prim::reduce_h_row_output::kRowExpandWriter)
+                                : kdir / "dataflow/writer_unary_interleaved_start_id_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .scratchpad_bindings = pack_1x32_row ? Group<ScratchpadBinding>{ScratchpadBinding{
+                                                   .scratchpad_spec_name = FULL_TILE, .accessor_name = "full_tile"}}
+                                             : Group<ScratchpadBinding>{},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .compile_time_args = pack_1x32_row ? KernelSpec::CompileTimeArgs{{"datum_bytes", dst_datum_bytes}}
+                                           : KernelSpec::CompileTimeArgs{},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -250,6 +270,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .name = "reduce_multi_core_h",
         .kernels = std::move(kernels),
         .dataflow_buffers = {in_dfb, scaler_dfb, out_dfb},
+        .scratchpads = pack_1x32_row ? Group<ScratchpadSpec>{full_tile_scratch} : Group<ScratchpadSpec>{},
         .tensor_parameters = {input_param, output_param},
         .work_units = std::move(work_units),
     };

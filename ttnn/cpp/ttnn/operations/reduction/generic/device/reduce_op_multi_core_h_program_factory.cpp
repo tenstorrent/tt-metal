@@ -4,6 +4,7 @@
 
 #include "reduce_op_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_h_row_output.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <tt-metalium/allocator.hpp>
@@ -21,11 +22,21 @@ namespace ttnn::prim {
 
 namespace {
 
+// True when compute packs a 1x32 row per output tile and the writer expands it (Quasar FPU column reduce).
+bool reduce_h_packs_1x32_row(const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a) {
+    return reduce_h_row_output::packs_1x32_row(
+        a.device().arch(), a.dtype(), attrs.math_op == tt::tt_metal::ReduceOpMath::MIN);
+}
+
 // The width-sharded fast path, which aliases the I/O CBs onto the tensors. It also pins the
 // workers to the shard grid, so create_program_artifacts and the cache-hit override both call
 // this: a disagreement here is a disagreement about how many core groups exist.
-bool reduce_h_use_width_sharding(const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
-    return reduce_h_uses_width_sharded_fast_path(a.memory_config(), output.memory_config());
+// A 1x32-row output cannot be packed in place into a 32x32 output shard, so those reduces take the
+// general path, which reaches sharded tensors through TensorAccessor.
+bool reduce_h_use_width_sharding(
+    const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
+    return reduce_h_uses_width_sharded_fast_path(a.memory_config(), output.memory_config()) &&
+           !reduce_h_packs_1x32_row(attrs, a);
 }
 
 // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result. Mirrors the
@@ -41,7 +52,7 @@ uint32_t reduce_h_num_cols(
     if (!attrs.row_major_h_dense_path) {
         // The TILE H-axis split slices the reduce axis too, on the same gate and clamp the factory
         // applies; without this the override would size the split off an unsliced column count.
-        const bool tile_h_split = !reduce_h_use_width_sharding(a, output) && attrs.num_h_slices > 1;
+        const bool tile_h_split = !reduce_h_use_width_sharding(attrs, a, output) && attrs.num_h_slices > 1;
         const uint32_t Ht = tt::div_up(shape[2], tile_height);
         const uint32_t num_h_slices = tile_h_split ? std::min(attrs.num_h_slices, Ht) : 1u;
         return NC * num_h_slices * Wt;
@@ -72,7 +83,7 @@ auto reduce_h_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTens
 // and naming a kernel it lacks is fatal, so it asks the shared split instead.
 bool reduce_h_has_second_core_group(
     const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
-    if (reduce_h_use_width_sharding(a, output)) {
+    if (reduce_h_use_width_sharding(attrs, a, output)) {
         return false;
     }
     return !std::get<3>(reduce_h_split_work(attrs, a, reduce_h_num_cols(attrs, a, output))).ranges().empty();
@@ -121,7 +132,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const tt_metal::distributed::MeshDevice& device = a.device();
 
     // Fast path aliases I/O CBs onto the tensors; CBs are L1-only.
-    const bool use_width_sharding = reduce_h_use_width_sharding(a, output);
+    const bool use_width_sharding = reduce_h_use_width_sharding(operation_attributes, a, output);
 
     // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
     // a single struct so the per-site formulas don't drift between this factory and the W one.
@@ -167,6 +178,23 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
+    // Quasar FPU column reduce: compute packs a 1x32 row per output tile into OUT_DFB and the writer
+    // expands it back to a 32x32 page (see reduce_h_row_output.hpp). Only the plain interleaved
+    // path does that; reduce() in reduce_op.cpp routes Quasar off the others, so reaching one here
+    // is a caller bug rather than an unsupported shape.
+    const bool pack_1x32_row = reduce_h_packs_1x32_row(operation_attributes, a);
+    if (pack_1x32_row) {
+        TT_FATAL(
+            !rm_path && !tile_h_split && !use_fpu_negate,
+            "Reduce H on Quasar supports only the tiled, unsplit, non-negate path "
+            "(row_major_h_dense_path={}, num_h_slices={}, negate={})",
+            rm_path,
+            operation_attributes.num_h_slices,
+            operation_attributes.negate);
+        reduce_h_row_output::check_supported(tile_height, tile_width, dst_cb_data_format, "Reduce H");
+    }
+    const uint32_t dst_datum_bytes = pack_1x32_row ? tt::datum_size(dst_cb_data_format) : 0;
+
     auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
     auto num_cols = NC * num_h_slices * Wt;
@@ -198,6 +226,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const DFBSpecName INEG_DFB{"ineg"};
     const DFBSpecName RM_DFB{"rm"};
     const DFBSpecName CLEAR_VALUE_DFB{"clear_value"};
+    const ScratchpadSpecName FULL_TILE{"full_tile"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE_G1{"compute_g1"};
@@ -315,6 +344,17 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             .data_format_metadata = dst_cb_data_format,
             .borrowed_from = OUTPUT_TENSOR,
         });
+    } else if (pack_1x32_row) {
+        // Each entry is exactly one 1x32 tile: Quasar pack addresses entries by the tile shape's size, not
+        // entry_size. FULL_TILE is the writer's staging page for the expanded 32x32 tile.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = OUT_DFB,
+            .entry_size = tt::constants::TILE_WIDTH * dst_datum_bytes,
+            .num_entries = 2,
+            .data_format_metadata = dst_cb_data_format,
+            .tile_format_metadata = tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH}),
+        });
+        spec.scratchpads.push_back(ScratchpadSpec{.unique_id = FULL_TILE, .size_per_node = dst_single_tile_size});
     } else {
         uint32_t num_output_tiles = use_fpu_negate ? chunk_size : 2;
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -554,6 +594,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     KernelSpec::CompileTimeArgs writer_ct_args;
     Group<std::string> writer_rta_names;
     Group<TensorBinding> writer_tensor_bindings;
+    Group<ScratchpadBinding> writer_scratchpad_bindings;
     KernelSpec::CompilerOptions::Defines writer_defines;
 
     if (rm_path || tile_h_split) {
@@ -571,6 +612,13 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             "writer_unary_sharded_metal2.cpp";
         writer_rta_names = {"num_units"};
         // No tensor binding: the output is written in place through the borrowed OUT_DFB.
+    } else if (pack_1x32_row) {
+        writer_source = reduce_h_row_output::kRowExpandWriter;
+        writer_ct_args = {{"datum_bytes", dst_datum_bytes}};
+        writer_rta_names = {"num_pages", "start_id"};
+        writer_tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}};
+        writer_scratchpad_bindings = {
+            ScratchpadBinding{.scratchpad_spec_name = FULL_TILE, .accessor_name = "full_tile"}};
     } else {
         writer_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
@@ -588,6 +636,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             .accessor_name = "out",
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
+        .scratchpad_bindings = std::move(writer_scratchpad_bindings),
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
@@ -899,9 +948,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                 AddRuntimeArgsForNode(
                     reader_run_args.runtime_arg_values,
                     core,
-                    {{"col_start_tile_id", num_cols_read},
-                     {"curr_col_in_batch", 0u},
-                     {"num_cols", num_cols_per_core}});
+                    {{"col_start_tile_id", num_cols_read}, {"curr_col_in_batch", 0u}, {"num_cols", num_cols_per_core}});
                 AddRuntimeArgsForNode(
                     writer_run_args.runtime_arg_values,
                     core,
