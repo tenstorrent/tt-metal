@@ -286,7 +286,24 @@ jobs:
           git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
           git -C vllm-source checkout --detach FETCH_HEAD
 
+      - name: 🔀 Same-machine A/B
+        if: ${{ matrix.test-group.ab-driver }}
+        timeout-minutes: 300
+        env:
+          AB_MODEL: ${{ matrix.test-group.model }}
+          AB_COMMON_ENV: ${{ matrix.test-group.extra-env }}
+          AB_COMMON_ARGS: ${{ matrix.test-group.additional-server-args }}
+          AB_ENV_A: ${{ matrix.test-group.ab-env-a }}
+          AB_ARGS_A: ${{ matrix.test-group.ab-args-a }}
+          AB_ENV_B: ${{ matrix.test-group.ab-env-b }}
+          AB_ARGS_B: ${{ matrix.test-group.ab-args-b }}
+          AB_TT_CONFIG: ${{ matrix.test-group.tt-config }}
+          AB_CHAT_KWARGS: ${{ matrix.test-group.default-chat-template-kwargs }}
+          AB_SERVER_TIMEOUT: ${{ matrix.test-group.server-timeout }}
+        run: bash .github/scripts/vllm/qwen38_galaxy_ab_same_machine.sh
+
       - name: 🚀 Run server
+        if: ${{ !matrix.test-group.ab-driver }}
         timeout-minutes: 1
         run: |
           TT_CONFIG_RAW='${{ matrix.test-group.tt-config }}'
@@ -452,6 +469,7 @@ jobs:
           echo $! > ${FILE_SERVER_PID}
 
       - name: ⏰ Wait for server to be ready
+        if: ${{ !matrix.test-group.ab-driver }}
         run: |
           echo "Waiting for server..."
 
@@ -523,6 +541,7 @@ jobs:
           exit 1
 
       - name: 📐 Run benchmark
+        if: ${{ !matrix.test-group.ab-driver }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
@@ -547,6 +566,7 @@ jobs:
               --result-filename output/vllm_result.json \
               "${ADDITIONAL_BENCHMARK_ARGS[@]}"
       - name: Verify benchmark
+        if: ${{ !matrix.test-group.ab-driver }}
         run: |
           # `vllm bench serve` exits 0 even when individual requests fail (a crashed
           # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
@@ -818,7 +838,7 @@ jobs:
               --tt-chunked-prefill-budget="$BUDGET"
 
       - name: 🧹 Cleanup server process
-        if: always()
+        if: ${{ !matrix.test-group.ab-driver && (always()) }}
         run: |
           if [ -f "${FILE_SERVER_PID}" ]; then
             pid=$(cat "${FILE_SERVER_PID}")
