@@ -178,7 +178,9 @@ def test_chain_refusals(mesh_device, expect_error):
     rows = 160
     cos, sin, trans = _tables(mesh, rows, False, 71)
     qb = _flat_q(mesh, rows, 4, 512, 72)
-    with expect_error(RuntimeError, "needs kv_actual_global 0, no seq_subshard_axis and no concat_prefix"):
+    with expect_error(
+        RuntimeError, "needs kv_actual_global 0, no seq_subshard_axis, no concat_prefix and no row_major_output"
+    ):
         ttnn.bringup.rotary_embedding_indexed(
             qb, cos, sin, trans, 32, 0, rotary_dim=R, rotary_offset=448, input_heads=4, uniform=True
         )
