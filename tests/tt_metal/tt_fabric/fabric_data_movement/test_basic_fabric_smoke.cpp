@@ -176,13 +176,10 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
         const auto routers = BaseFabricFixture::get_master_routers();
         BaseFabricFixture::DoTearDownTestSuite();
         for (const auto& router : routers) {
-            EXPECT_EQ(
+            ASSERT_EQ(
                 BaseFabricFixture::wait_for_router_terminated(router, kTerminateTimeout),
                 static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED))
                 << "chip " << router.chip << " router " << router.logical.str();
-        }
-        if (::testing::Test::HasFailure()) {
-            return;
         }
         BaseFabricFixture::DoSetUpTestSuite(fabric_config);
     }
