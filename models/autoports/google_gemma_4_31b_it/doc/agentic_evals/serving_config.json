@@ -166,7 +166,10 @@
       "source": "new model registration on stock-main harness",
       "task_resources": "task definition; no overrides"
     },
-    "reason": "Pinned GPQA limits; newly registered conservative tool defaults, no prior requested tool protocol exists."
+    "reason": "Pinned GPQA limits; newly registered conservative tool defaults, no prior requested tool protocol exists.",
+    "agent_timeout_s": 21600,
+    "request_timeout_s": 3600,
+    "output_cap_tokens": 32768
   },
   "agent_time_limit": {
     "r1_gpqa_diamond": null,
@@ -340,5 +343,9 @@
     "file_cap_bytes": 4294967296,
     "local_exactness": "runs/ci-phase-autoexport/paired-audit.json",
     "live_ci_artifact_confirmation": "runs/swe-phase-accounting-confirmation/result.json"
-  }
+  },
+  "agent_timeout_s": 21600,
+  "request_timeout_s": 3600,
+  "output_cap_tokens": 32768,
+  "flat_limits_scope": "Common minimum across applicable suite settings for checker interoperability, not a uniform dispatch setting. Exact per-suite release_limits and agent_time_limit/request_time_limit/output_cap maps remain authoritative; GPQA request14400/output126976, no agent timeout."
 }

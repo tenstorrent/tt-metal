@@ -274,11 +274,26 @@
         "psf__requests-1766",
         "pydata__xarray-4966",
         "astropy__astropy-14598"
+      ],
+      "smoke2-swe-activation-repair": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265"
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562736+00:00",
     "selection_note": "Inputs has no task_lists; requested tool suites absent from model config. GPQA has no explicit nightly task list, so skill default10 is used rather than an implicit full-dataset run.",
-    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score."
+    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score.",
+    "repeat_runs": {
+      "smoke2-swe-activation-repair": {
+        "source": "default_rule",
+        "tasks": [
+          "pylint-dev__pylint-7080",
+          "django__django-11265"
+        ],
+        "source_run": "smoke2-swe-native-parser",
+        "reason": "Same frozen smoke; validity retry before larger rung."
+      }
+    }
   },
   "terminal_bench_2_1": {
     "source": "default_rule",
@@ -319,16 +334,5 @@
     "selected_before_scores_at": "2026-11-06T04:49:25.562738+00:00",
     "selection_note": "Inputs has no task_lists; requested tool suites absent from model config. GPQA has no explicit nightly task list, so skill default10 is used rather than an implicit full-dataset run.",
     "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score."
-  },
-  "repeat_runs": {
-    "smoke2-swe-activation-repair": {
-      "source": "default_rule",
-      "tasks": [
-        "pylint-dev__pylint-7080",
-        "django__django-11265"
-      ],
-      "source_run": "smoke2-swe-native-parser",
-      "reason": "Same frozen smoke; validity retry before larger rung."
-    }
   }
 }

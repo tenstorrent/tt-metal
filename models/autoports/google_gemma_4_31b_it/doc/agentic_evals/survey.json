@@ -245,6 +245,20 @@
       "hours": null,
       "reason": "Idle-host107585 cold48.065s/overlap49.259s; anchor28tokens. Prior HF-contended72.683/78.910s preserved. Actual release overlap frequency/generation share unknown; no fabricated release saving.",
       "evidence": "runs/measured-workload-idle-regime/RESULT.md; runs/measured-workload-prefill/RESULT.md"
+    },
+    {
+      "problem": "Required dual tied-weight representations",
+      "hours": 0,
+      "basis": "calculated",
+      "reason": "Zero avoidable release time assigned: BF16 lookup and BFP4 tiled vocabulary projection require distinct layouts and cannot alias; neither is an avoidable duplicate hot-path copy. This is a design-based zero saving estimate, not measured counterfactual startup time.",
+      "evidence": "../agentic_serving.json ledger; datatype_sweep selected policy"
+    },
+    {
+      "problem": "Fixed KV pool rather than free-DRAM sizing",
+      "hours": 0,
+      "basis": "guess",
+      "reason": "Conservative zero added release time estimate at selectedC2: real-history replay and longer syntheticC2 observe zero preemptions and high reuse. Reprice if larger cohorts/concurrency reveal poolpressure; no claim of maximal physical capacity.",
+      "evidence": "runs/real-history-capacity/REPLAY_RESULT.json; runs/local-long-context/growing.json"
     }
   ],
   "last_updated": "2026-11-06T10:02:30.826022+00:00",

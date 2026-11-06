@@ -1496,20 +1496,28 @@
     "hit_fraction_of_ceiling": 0.9946692694646745,
     "pool_bound": false,
     "growing_contexts": {
-      "concurrency": 32,
-      "final_context_tokens": 32768,
-      "late_hit_fraction": 0.9965343876604676,
+      "concurrency": 2,
+      "final_context_tokens": 131072,
+      "late_hit_fraction": 0.9991333748336934,
       "pool_bound": false,
-      "elapsed_seconds": 345.1835248179268,
+      "elapsed_seconds": 140.41494534397498,
       "preemptions": 0.0,
       "context_schedule": [
         4096,
-        8192,
-        16384,
-        24576,
-        32768
+        32768,
+        65536,
+        98304,
+        131072
       ],
-      "output_tokens_per_turn": 8
+      "output_tokens_per_turn": 8,
+      "prefilled_tokens": 262656,
+      "final_context_token_sum": 262144,
+      "prefilled_to_final_context_ratio": 1.001953125,
+      "trace_captures_after_warmup": 0,
+      "scope": "synthetic growing conversation cache traffic; raw continuation stress, not a qualitative verdict",
+      "evidence": "doc/agentic_evals/runs/local-long-context/growing.json",
+      "real_history_followup": "doc/agentic_evals/runs/real-history-capacity/REPLAY_RESULT.json",
+      "limitation": "Synthetic2histories through131072 measured before native histories available; subsequent6 real C2 calls cover asymmetric107474/33461prompt peaks, not two equal107585token agents or greater capacity."
     },
     "trace_captures_after_warmup": {
       "decode": 0,
@@ -1687,6 +1695,22 @@
       },
       "evidence": "readiness_vllm/stage10_final_load_v2/load_costs.json",
       "timing": "HTTP TTFT/input rate, not device time; typical context4096 shares the4096 row."
+    },
+    "prior_stage10_growing_contexts": {
+      "concurrency": 32,
+      "final_context_tokens": 32768,
+      "late_hit_fraction": 0.9965343876604676,
+      "pool_bound": false,
+      "elapsed_seconds": 345.1835248179268,
+      "preemptions": 0.0,
+      "context_schedule": [
+        4096,
+        8192,
+        16384,
+        24576,
+        32768
+      ],
+      "output_tokens_per_turn": 8
     }
   },
   "datatype_sweep_stage_review": "datatype_sweep/stage_review.md",

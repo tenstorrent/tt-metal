@@ -1278,9 +1278,16 @@
       "goal": "Replay recorded long SWE histories at conservativeC2 and quantify prefix reuse without maximum-capacity claims.",
       "plan": "runs/real-history-capacity/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.05,
-        "basis": "guess"
+        "basis": "guess",
+        "saving_reason": "No runtime change or confirmed release speed benefit; zero conservative planning credit, not measured zero impact.",
+        "schema_reconciliation_at": "2026-11-06T11:58:39.365237+00:00",
+        "original_saving_hours_unavailable": true
       },
       "confirm": {
         "method": "Stockagent_replay with six actual prefixes; check usage parity, phase intervals and preemptions",
@@ -1306,9 +1313,16 @@
       "goal": "Measure coldprefill at observedmedian31755 and observedworking107585 plus actualC2decodeinterference.",
       "plan": "runs/measured-workload-prefill/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.15,
-        "basis": "guess"
+        "basis": "guess",
+        "saving_reason": "No runtime change or confirmed release speed benefit; zero conservative planning credit, not measured zero impact.",
+        "schema_reconciliation_at": "2026-11-06T11:58:39.365248+00:00",
+        "original_saving_hours_unavailable": true
       },
       "confirm": {
         "method": "Existingmeasurementclient on full60B8, cold distinctprefixes, oneanchor pluslongrequest; no taskscore",
@@ -1376,10 +1390,17 @@
       "goal": "Keep GPQA198 and SWE5 candidates ready on current TTI2f69c37 without delaying eligible rungs.",
       "plan": "runs/next-rung-after-terminal/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
         "basis": "calculated",
-        "reason": "Host-only rebase of tested model cohorts; no speed credit."
+        "reason": "Host-only rebase of tested model cohorts; no speed credit.",
+        "saving_reason": "No runtime change or confirmed release speed benefit; zero conservative planning credit, not measured zero impact.",
+        "schema_reconciliation_at": "2026-11-06T11:58:39.365250+00:00",
+        "original_saving_hours_unavailable": true
       },
       "confirm": {
         "method": "Resolved configs/tree parity with alreadytested candidates; affected checks if any resulting source differs.",
@@ -1465,10 +1486,17 @@
       "goal": "Confirm actual CI phase export completeness and obtain honest host-boundary accounting.",
       "plan": "runs/swe-phase-accounting-confirmation/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
         "basis": "calculated",
-        "reason": "Analyze existing normal rung; no extra device job."
+        "reason": "Analyze existing normal rung; no extra device job.",
+        "saving_reason": "No runtime change or confirmed release speed benefit; zero conservative planning credit, not measured zero impact.",
+        "schema_reconciliation_at": "2026-11-06T11:58:39.365252+00:00",
+        "original_saving_hours_unavailable": true
       },
       "confirm": {
         "method": "Consecutive unique submission/completion IDs, identical metadata, zero errors/truncation/pending at end; full model identity and phase counts.",
@@ -1498,10 +1526,17 @@
       "goal": "Prepare deterministic nested larger task lists from the exact pinned default rule before their scores exist.",
       "plan": "runs/larger-cohort-preparation/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
         "basis": "calculated",
-        "reason": "Host-only selection preparation, no speed credit."
+        "reason": "Host-only selection preparation, no speed credit.",
+        "saving_reason": "No runtime change or confirmed release speed benefit; zero conservative planning credit, not measured zero impact.",
+        "schema_reconciliation_at": "2026-11-06T11:58:39.365253+00:00",
+        "original_saving_hours_unavailable": true
       },
       "confirm": {
         "method": "Reproduce nightly prefixes, exact pinned catalog counts and unique nested lists; retain task resources.",
@@ -1526,10 +1561,17 @@
       "goal": "Measure valid SWE API workload and agent-time partition without using contaminated trajectories as the score baseline.",
       "plan": "runs/swe-valid-runtime-analysis/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
         "basis": "calculated",
-        "reason": "Existing evidence analysis only"
+        "reason": "Existing evidence analysis only",
+        "saving_reason": "No runtime change or confirmed release speed benefit; zero conservative planning credit, not measured zero impact.",
+        "schema_reconciliation_at": "2026-11-06T11:58:39.365255+00:00",
+        "original_saving_hours_unavailable": true
       },
       "confirm": {
         "method": "All91 native model calls and task timings reconciled; overlap and unobserved generation timing explicit.",
@@ -1556,9 +1598,16 @@
       "goal": "Resolve stock CI task-storage admission evidence without adding checks or modifying workflow.",
       "plan": "runs/ci-disk-admission-basis/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
-        "basis": "calculated"
+        "basis": "calculated",
+        "saving_reason": "No runtime change or confirmed release speed benefit; zero conservative planning credit, not measured zero impact.",
+        "schema_reconciliation_at": "2026-11-06T11:58:39.365256+00:00",
+        "original_saving_hours_unavailable": true
       },
       "unblocks": [
         "release_preflight"
@@ -1591,10 +1640,17 @@
       "goal": "Measure same actual-workload prefill protocol without HF CPU reference to separate host regime.",
       "plan": "runs/measured-workload-idle-regime/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.2,
         "basis": "guess",
-        "reason": "Prior .2758h includes failed retry and concurrent CPU reference; no release speed credit."
+        "reason": "Prior .2758h includes failed retry and concurrent CPU reference; no release speed credit.",
+        "saving_reason": "No runtime change or confirmed release speed benefit; zero conservative planning credit, not measured zero impact.",
+        "schema_reconciliation_at": "2026-11-06T11:58:39.365257+00:00",
+        "original_saving_hours_unavailable": true
       },
       "confirm": {
         "method": "Exact five previous requests and serving settings, complete overlap and recorded idle-host regime.",
