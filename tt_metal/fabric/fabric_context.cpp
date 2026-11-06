@@ -292,12 +292,16 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
 // ============ Builder Context Access ============
 
 FabricBuilderContext& FabricContext::get_builder_context() {
+    // Builder context is lazily initialized on first access. Wrap in std::call_once to prevent race conditions when
+    // this function is called by multiple threads.
     std::call_once(
         builder_context_init_flag_, [this]() { builder_context_ = std::make_unique<FabricBuilderContext>(*this); });
     return *builder_context_;
 }
 
 const FabricBuilderContext& FabricContext::get_builder_context() const {
+    // Builder context is lazily initialized on first access. Wrap in std::call_once to prevent race conditions when
+    // this function is called by multiple threads.
     std::call_once(
         builder_context_init_flag_, [this]() { builder_context_ = std::make_unique<FabricBuilderContext>(*this); });
     return *builder_context_;

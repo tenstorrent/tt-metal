@@ -10,6 +10,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_config.h"
 
+// When NoC Address Translation Tables are enabled, address generation goes through the ATT rather than sharded
+// page-to-address translation. ShardedAddrGen is both unused and causes a namespace collision with
+// tt::tt_fabric::experimental in this compilation mode, so we disable it.
 #ifndef NOC_ATT_ENABLED
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 // ShardedAddrGen is declared under a global experimental namespace. So when you try to use experimental::ShardedAddrGen

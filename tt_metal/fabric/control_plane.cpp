@@ -1945,6 +1945,12 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
         }
     }
 
+    // Stub: For mock or emulated devices, return a synthetic FabricNodeId for any unmapped chip
+    // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
+    if (this->cluster_.get().is_mock_or_emulated()) {
+        return FabricNodeId(MeshId{0}, physical_chip_id);
+    }
+
     TT_FATAL(
         false,
         "Physical chip id {} not found in control plane chip mapping. You are calling for a chip outside of the fabric "

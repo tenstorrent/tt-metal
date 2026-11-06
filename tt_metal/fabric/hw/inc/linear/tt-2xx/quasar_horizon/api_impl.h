@@ -18,16 +18,22 @@
 using namespace tt::tt_fabric::common::experimental;
 namespace tt::tt_fabric::linear::experimental {
 
-// static FORCE_INLINE void fabric_set_unicast_route(
-//     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
-//     volatile PACKET_HEADER_TYPE* packet_header,
-//     uint8_t i) {}
+static FORCE_INLINE void fabric_set_unicast_route(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t i) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
-// static FORCE_INLINE void fabric_set_mcast_route(
-//     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
-//     volatile PACKET_HEADER_TYPE* packet_header,
-//     uint8_t* range,
-//     uint8_t i) {}
+static FORCE_INLINE void fabric_set_mcast_route(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t* range,
+    uint8_t i) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 #ifdef FABRIC_2D
 // Route-manager variant: dst_dev_id / dst_mesh_id come from connection_manager slots.
@@ -37,7 +43,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
-    /* TODO: To be implemented */
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
 }
 #endif  // FABRIC_2D
 
@@ -52,7 +59,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t num_hops) {
-    /* TODO: To be implemented */
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
 }
 
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
@@ -62,7 +70,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t* num_hops) {
-    /* TODO: To be implemented */
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
 }
 
 template <
@@ -74,7 +83,10 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
@@ -82,14 +94,20 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t num_hops,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
@@ -97,7 +115,10 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     uint8_t route_id,
     uint8_t* num_hops,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 // --- Unicast atomic inc ---
 
@@ -106,13 +127,19 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
-    uint8_t num_hops) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t num_hops) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
-    uint8_t* num_hops) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t* num_hops) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
@@ -121,8 +148,10 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_atomic_inc_command_header =
-        nullptr) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
@@ -130,16 +159,19 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_atomic_inc_command_header =
-        nullptr) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
     typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t num_hops,
-    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t num_hops, CommandHeaderT command_header) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
@@ -148,7 +180,10 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint8_t* num_hops,
-    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    CommandHeaderT command_header) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 // --- Unicast scatter write ---
 
@@ -159,7 +194,10 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
-    uint8_t num_hops) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t num_hops) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -167,7 +205,10 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
-    uint8_t* num_hops) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t* num_hops) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
@@ -178,7 +219,10 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
@@ -188,14 +232,20 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t num_hops,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
@@ -203,7 +253,10 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     uint8_t route_id,
     uint8_t* num_hops,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 // --- Unicast fused scatter write + atomic inc ---
 
@@ -214,7 +267,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint8_t num_hops) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t num_hops) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -222,7 +278,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint8_t* num_hops) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t* num_hops) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask = UnicastFusedScatterWriteAtomicIncUpdateMask::None,
@@ -233,7 +292,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask = UnicastFusedScatterWriteAtomicIncUpdateMask::None,
@@ -243,14 +305,20 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t num_hops,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
@@ -258,7 +326,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
     uint8_t route_id,
     uint8_t* num_hops,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 // --- Unicast inline write ---
 
@@ -267,13 +338,19 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
-    uint8_t num_hops) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t num_hops) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
-    uint8_t* num_hops) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t* num_hops) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastInlineWriteUpdateMask UpdateMask = UnicastInlineWriteUpdateMask::None,
@@ -282,8 +359,10 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_inline_write_command_header =
-        nullptr) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastInlineWriteUpdateMask UpdateMask = UnicastInlineWriteUpdateMask::None,
@@ -291,21 +370,27 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_inline_write_command_header =
-        nullptr) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t num_hops,
-    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t num_hops, CommandHeaderT command_header) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint8_t* num_hops,
-    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    CommandHeaderT command_header) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 // --- Unicast fused unicast write + atomic inc ---
 
@@ -316,7 +401,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
-    uint8_t num_hops) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t num_hops) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -324,7 +412,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
-    uint8_t* num_hops) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t* num_hops) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
@@ -335,7 +426,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
@@ -345,14 +439,20 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t num_hops,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
@@ -360,7 +460,10 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t route_id,
     uint8_t* num_hops,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 // --- Multicast unicast write ---
 
@@ -372,7 +475,10 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t start_distance,
-    uint8_t range) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t range) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_multicast_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -381,7 +487,10 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t* start_distance,
-    uint8_t* range) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t* range) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None,
@@ -392,7 +501,10 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
@@ -400,7 +512,10 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
@@ -408,7 +523,10 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     uint8_t start_distance,
     uint8_t range,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
@@ -417,7 +535,10 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     uint8_t* start_distance,
     uint8_t* range,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 // --- Multicast atomic inc ---
 
@@ -427,14 +548,20 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t start_distance,
-    uint8_t range) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t range) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t* start_distance,
-    uint8_t* range) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t* range) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
@@ -443,8 +570,10 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_atomic_inc_command_header =
-        nullptr) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
@@ -452,17 +581,19 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_atomic_inc_command_header =
-        nullptr) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
     typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t start_distance,
-    uint8_t range,
-    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t start_distance, uint8_t range, CommandHeaderT command_header) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
@@ -472,7 +603,10 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     uint8_t route_id,
     uint8_t* start_distance,
     uint8_t* range,
-    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    CommandHeaderT command_header) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 // --- Multicast scatter write ---
 
@@ -484,7 +618,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
     uint8_t start_distance,
-    uint8_t range) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t range) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -493,7 +630,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
     uint8_t* start_distance,
-    uint8_t* range) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t* range) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
@@ -504,7 +644,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
@@ -514,7 +657,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
@@ -522,7 +668,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint8_t start_distance,
     uint8_t range,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
@@ -531,7 +680,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint8_t* start_distance,
     uint8_t* range,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 // --- Multicast inline write ---
 
@@ -541,14 +693,20 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t start_distance,
-    uint8_t range) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t range) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t* start_distance,
-    uint8_t* range) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint8_t* range) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastInlineWriteUpdateMask UpdateMask = UnicastInlineWriteUpdateMask::None,
@@ -557,8 +715,10 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_inline_write_command_header =
-        nullptr) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <
     UnicastInlineWriteUpdateMask UpdateMask = UnicastInlineWriteUpdateMask::None,
@@ -566,15 +726,17 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_inline_write_command_header =
-        nullptr) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t start_distance,
-    uint8_t range,
-    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t start_distance, uint8_t range, CommandHeaderT command_header) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
@@ -582,7 +744,10 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     uint8_t route_id,
     uint8_t* start_distance,
     uint8_t* range,
-    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    CommandHeaderT command_header) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 // --- Multicast fused unicast write + atomic inc ---
 
@@ -594,7 +759,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
     uint8_t start_distance,
-    uint8_t range) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t range) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -603,7 +771,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
     uint8_t* start_distance,
-    uint8_t* range) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t* range) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
@@ -614,7 +785,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
@@ -624,7 +798,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
@@ -632,7 +809,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t start_distance,
     uint8_t range,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
@@ -641,7 +821,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t* start_distance,
     uint8_t* range,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 // --- Multicast fused scatter write + atomic inc ---
 
@@ -653,7 +836,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
     uint8_t start_distance,
-    uint8_t range) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t range) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -662,7 +848,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
     uint8_t* start_distance,
-    uint8_t* range) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint8_t* range) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask = UnicastFusedScatterWriteAtomicIncUpdateMask::None,
@@ -673,7 +862,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <
     UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask = UnicastFusedScatterWriteAtomicIncUpdateMask::None,
@@ -683,7 +875,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
@@ -691,7 +886,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
     uint8_t start_distance,
     uint8_t range,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
@@ -700,7 +898,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
     uint8_t* start_distance,
     uint8_t* range,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63263) */ }
+    uint16_t packet_size_bytes) {
+    /* TODO: To be implemented (tracked in issue #63263) */
+    ASSERT(false);
+}
 
 // --- Sparse multicast ---
 
@@ -711,7 +912,10 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint16_t hops) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t hops) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -719,7 +923,10 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint16_t* hops) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t* hops) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 template <typename FabricSenderType>
 FORCE_INLINE void fabric_sparse_multicast_noc_scatter_write(
@@ -728,6 +935,9 @@ FORCE_INLINE void fabric_sparse_multicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocSparseMulticastWriteCommandHeader sparse_mcast_command_header,
-    uint16_t hops) { /* TODO: To be implemented (tracked in issue #61515) */ }
+    uint16_t hops) {
+    /* TODO: To be implemented (tracked in issue #61515) */
+    ASSERT(false);
+}
 
 }  // namespace tt::tt_fabric::linear::experimental
