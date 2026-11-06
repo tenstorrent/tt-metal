@@ -485,7 +485,7 @@ class KDARecurrence:
         # With sequence parallelism the SP prefix is a relay along the SP axis: each rank forwards its successor the
         # entry state (the last rank hands the final state to the first), and the final carry runs as its own program.
         # Each head is one group: the summary emits every chunk's output terms and the entry correction forms the chunk
-        # outputs from the relayed entry state, with the terms in its cores' L1.
+        # outputs from the relayed entry state, with the terms in L1 when they fit and streamed from DRAM otherwise.
         self._affine_relay = None
         self._relay_final_carry = None
         self._entry_correction = None

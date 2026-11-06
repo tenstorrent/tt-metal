@@ -392,8 +392,7 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 18 + 12 + 12),
-      # with 2 min added to [1/4] for the AttnRes determinism tests.
+      # Exactly the sum of the per-section bounds (12 + 18 + 12 + 12).
       timeout: 54
       tier: 2
       release_ready: false
