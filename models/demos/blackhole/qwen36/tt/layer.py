@@ -408,10 +408,18 @@ class Qwen36DecoderLayer:
         w = self._tokpar
         M, K = x.shape[-2], x.shape[-1]
         F = w["w1"].shape[-1]
+        _fid = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2, "hifi4": ttnn.MathFidelity.HiFi4}
+        _gu, _dn = os.environ.get("QWEN36_TOKPAR_MLP_FID_GU"), os.environ.get("QWEN36_TOKPAR_MLP_FID_DOWN")
         ck = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=tpc.mlp_fidelity(getattr(self.args, "mlp_math_fidelity", None)),
+            math_fidelity=_fid[_gu] if _gu else tpc.mlp_fidelity(getattr(self.args, "mlp_math_fidelity", None)),
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+        # QWEN36_TOKPAR_MLP_FID_GU / _DOWN (lofi | hifi2 | hifi4): per-matmul fidelity of the token-parallel MLP
+        ck_dn = (
+            ttnn.WormholeComputeKernelConfig(math_fidelity=_fid[_dn], fp32_dest_acc_en=True, packer_l1_acc=True)
+            if _dn
+            else None
         )
         dram = ttnn.DRAM_MEMORY_CONFIG
         x8 = x
@@ -466,7 +474,7 @@ class Qwen36DecoderLayer:
         out = ttnn.linear(
             hidden,
             w["w2"],
-            compute_kernel_config=ck,
+            compute_kernel_config=ck_dn or ck,
             memory_config=(
                 ttnn.L1_MEMORY_CONFIG
                 if os.environ.get("QWEN36_TOKPAR_MLP_OUT_L1", "0") == "1"
