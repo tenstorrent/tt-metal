@@ -331,14 +331,16 @@ class ApiTree:
     """Files under the API root, indexed once so that include_target needs no per-include stat.
 
     Each call to resolve() or is_file() is a filesystem round trip, which is slow on network
-    mounts. Only file symlinks are resolved up front. A directory symlink, or a target that
-    leaves the root, falls back to include_target.
+    mounts. File symlinks are resolved up front, including a link whose target is absent:
+    dropping that link classifies the include by its spelling. A directory symlink, or a
+    target that leaves the root, falls back to include_target.
     """
 
     def __init__(self, root: Path):
         self.root = root
         self.real_root = root.resolve()
         self.files: dict[str, str | None] = {}
+        self.sources: list[str] = []
         self.has_dir_links = False
         if root.is_dir():
             self._scan(root, "")
@@ -352,16 +354,21 @@ class ApiTree:
                 elif entry.is_symlink():
                     if os.path.isdir(entry.path):
                         self.has_dir_links = True
-                    elif os.path.isfile(entry.path):
+                    else:
+                        # isfile() is false when the target is absent. The link still names
+                        # an API path, and resolve() follows it.
                         try:
                             self.files[rel] = Path(entry.path).resolve().relative_to(self.real_root).as_posix()
-                        except ValueError:
+                        except (OSError, ValueError):
                             self.files[rel] = None
+                        if os.path.isfile(entry.path):
+                            self.sources.append(rel)
                 elif entry.is_file():
                     self.files[rel] = rel
+                    self.sources.append(rel)
 
     def paths(self) -> list[Path]:
-        return [self.root / rel for rel in self.files]
+        return [self.root / rel for rel in self.sources]
 
     def target(self, source: Path, name: str, quoted: bool) -> str | None:
         # Follow a directory symlink before removing `..`. Lexical normpath turns

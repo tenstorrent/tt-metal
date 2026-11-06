@@ -258,11 +258,26 @@ def scan(path, providers):
 
 
 def tree_headers():
-    """The LLK headers and their ttnn copies. Listed from the git index when it can answer:
-    walking all of ttnn/ for kernel_includes/ directories is slow on a network mount."""
+    """The LLK headers and their ttnn copies. Listed from git when it can answer:
+    walking all of ttnn/ for kernel_includes/ directories is slow on a network mount.
+
+    ``--cached`` is the index. ``--others`` adds headers that are not tracked yet, which a
+    recursive glob used to see. ``--exclude-standard`` leaves ignored build output out.
+    """
     try:
         res = subprocess.run(
-            ["git", "-C", REPO, "ls-files", "-z", "--", *TREE_PATHSPECS],
+            [
+                "git",
+                "-C",
+                REPO,
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                *TREE_PATHSPECS,
+            ],
             capture_output=True,
             text=True,
         )

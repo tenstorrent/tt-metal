@@ -298,6 +298,12 @@ class ApiValidationTests(unittest.TestCase):
         (self.root / "tt-metalium/alias.hpp").symlink_to("../internal/private.hpp")
         self.assertTrue(any("must not include internal" in error for error in self.errors()))
 
+    def test_dangling_symlink_is_classified_by_its_target(self):
+        # The target is absent, so isfile() is false. The include is still internal.
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias.hpp>\n")
+        (self.root / "tt-metalium/alias.hpp").symlink_to("../internal/private.hpp")
+        self.assertTrue(any("must not include internal" in error for error in self.errors()))
+
     def test_directory_symlink_does_not_hide_internal_target(self):
         self.header("internal/private.hpp")
         self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias/private.hpp>\n")
