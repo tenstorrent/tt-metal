@@ -52,12 +52,11 @@ _PERF_MARGIN = 0.03
 # Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
 # through device synchronization. SP8xTP1 and SP4xTP1 open FABRIC_1D_RING, every other case a 2D fabric with K3's
 # payload (kda_device_params).
-# TODO: measure the SP8xTP1 and SP4xTP1 references for the forward_slot gate.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        # Kimi-K3 HiFi3 (scan, affine prefix, output projection), composed, not measured on this base: 1.169 x 1.035,
-        # the traced HiFi3 / HiFi2 ratio over 3 interleaved rounds on bh-lb-18 (before the relay prefix).
-        "SP8xTP1": 1.210,
+        # forward_slot 1.185 ms from CI (before HiFi3) x 1.035, Kimi-K3 HiFi3's traced ratio on LoudBox; composed, not
+        # measured on this base.
+        "SP8xTP1": 1.226,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
@@ -72,9 +71,9 @@ _PERF_REFERENCE_MS = {
 _DEVICE_PERF_MARGIN = 0.05
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        # Kimi-K3 HiFi3, composed, not measured on this base: 1.181 x 1.035, assuming LoudBox SP8xTP1's ratio (same
-        # per-chip workload); not measured on QuietBox.
-        "SP4xTP1": 1.222,
+        # forward_slot 1.179 ms from CI (before HiFi3) x 1.035, assuming LoudBox SP8xTP1's HiFi3 ratio (same per-chip
+        # workload); composed, not measured on this base.
+        "SP4xTP1": 1.220,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
@@ -88,7 +87,7 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
 # untraced call also pays its host dispatch, which a block of 10 calls does not fully hide. Host dispatch varies more
 # from run to run than the device does, hence the untraced gate's wider margin.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.322, "untraced": 1.453}
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.355, "untraced": 1.429}
 _GALAXY_UNTRACED_PERF_MARGIN = 0.06
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
