@@ -39,7 +39,9 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 # unflattened), 2026-11-04. Since 1336.2: the MoE dispatch and combine as two generated ops
 # (nomic_moe_dispatch, nomic_moe_combine), 2026-11-04. Since 1380.2: router_front_end,
 # routing_metadata and the dispatch as one generated op (nomic_moe_route_dispatch), 2026-11-05.
-EXPECTED_SEQUENCES_PER_S = 1399.4
+# Since 1399.4: unmasked attention on a generated op (nomic_sdpa) instead of SDPA's streaming
+# kernel, 2026-11-06.
+EXPECTED_SEQUENCES_PER_S = 1461.0
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
