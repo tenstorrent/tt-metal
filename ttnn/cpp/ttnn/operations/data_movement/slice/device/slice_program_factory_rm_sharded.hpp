@@ -13,16 +13,14 @@
 namespace ttnn::prim {
 
 struct SliceRmShardedProgramFactory {
-    // Both DFBs are built on borrowed memory (borrowed_from the input / output TensorParameter);
-    // their backing L1 address resolves from the corresponding TensorArgument each dispatch. DFB
-    // entry_size / num_entries are NOT re-applied on a cache hit — padded_shape is folded into
-    // compute_program_hash() so each unique sizing gets its own cache entry.
+    // The reader binds the input and output tensors. Each tensor binding takes its base address from the
+    // matching TensorArgument on every dispatch.
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 
     // Cache-hit hook: the reader args depend only on shapes / slice_start / shard specs, all
-    // cache-keyed, so the only per-dispatch state is the two borrowed-memory backing addresses,
-    // which travel as tensor bindings.
+    // cache-keyed, so the only per-dispatch state is the input and output base addresses, which
+    // travel as tensor bindings.
     static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const SliceParams& args,
         const SliceInputs& tensor_args,

@@ -138,7 +138,7 @@ def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_er
     assert runtime.calls == []
 
 
-def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
+def test_index_endpoints_use_the_d2d_metadata(monkeypatch):
     made = []
     services = SimpleNamespace(
         create_receiver=lambda **kw: made.append(kw["metadata_size_bytes"]),
@@ -149,7 +149,7 @@ def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
     monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
     monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
     runner.build_d2d_index_endpoints(None, 1, (1, 1, 32, 8), inbound=True, outbound=True)
-    assert made == [12, 12]
+    assert made == [16, 16]
 
 
 def _request_ids(forwards):
@@ -164,12 +164,24 @@ class _PerChunkRuntime(_PackedRuntime):
         self.calls.append((request_id, PrefillChunk(slot_id, actual_start, actual_end)))
 
 
-@pytest.mark.parametrize("per_chunk, rank, size", [(True, 0, 12), (True, 1, 12), (False, 0, 56), (False, 1, 60)])
-def test_layer_ack_record_size(monkeypatch, per_chunk, rank, size):
-    monkeypatch.setattr(runner, "PER_CHUNK_FORWARDS", per_chunk)
-    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", 56)
-    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 60)
+# Above one chunk per forward every ack names one chunk (12 B), whether the runner or prefill_forward runs the chunks.
+@pytest.mark.parametrize("forward_chunks, rank, size", [(4, 0, 12), (4, 1, 12), (1, 0, 12), (1, 1, 16)])
+def test_layer_ack_record_size(monkeypatch, forward_chunks, rank, size):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", forward_chunks)
+    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", 56 if forward_chunks > 1 else 12)
+    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 60 if forward_chunks > 1 else 16)
     assert runner._layer_ack_record_bytes(rank) == size
+
+
+@pytest.mark.parametrize(
+    "use_trace, packed, size",
+    [(False, True, 4096), (True, False, 4096), (True, True, 16384)],  # 60 records x 64 B: 3840 -> 4 KiB; x4 -> 16 KiB
+)
+def test_layer_ack_fifo_holds_the_warm_pass(monkeypatch, use_trace, packed, size):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", 4)
+    monkeypatch.setattr(runner, "LAYER_ACK_FIFO_SIZE_BYTES", 4096)
+    monkeypatch.setattr(runner, "ADAPTER", SimpleNamespace(supports_packed_forward=packed))
+    assert runner._layer_ack_fifo_bytes(60, use_trace) == size
 
 
 def test_per_chunk_forwards_run_each_chunk_once(loop, monkeypatch):

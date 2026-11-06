@@ -9,6 +9,7 @@
 
 #include "device_fixture.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>

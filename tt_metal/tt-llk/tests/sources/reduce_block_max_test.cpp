@@ -128,10 +128,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // One scaler face for the whole block, then one full operand tile per UNPACR.
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            if constexpr (perf_mock_mop<PERF_RUN_TYPE>()) // Wormhole: the same handshakes as one MOP stream
             {
-                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1 /*iterations*/);
-                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(REDUCE_BLOCK_CT_DIM /*iterations*/);
+                _perf_mock_srcb_reuse_<true>(REDUCE_BLOCK_CT_DIM, LOOP_FACTOR);
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1 /*iterations*/);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(REDUCE_BLOCK_CT_DIM /*iterations*/);
+                }
             }
         }
         else
@@ -279,7 +286,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
 #endif
     TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
-    constexpr bool sync_with_pack                                      = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
+    constexpr bool sync_with_pack = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
 
     {
         START_PERF_MEASURE("INIT")
@@ -294,13 +301,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // The reduce clears SrcA after every tile and the scaler SrcB once per block.
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            if constexpr (perf_mock_mop<PERF_RUN_TYPE>()) // Wormhole UNPACK_ISOLATE: the same handshakes as one MOP stream
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(REDUCE_BLOCK_CT_DIM /*iterations*/);
-                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
+                _perf_mock_srcb_reuse_<false>(REDUCE_BLOCK_CT_DIM, LOOP_FACTOR);
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(REDUCE_BLOCK_CT_DIM /*iterations*/);
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
+                }
             }
         }
         else
@@ -402,7 +416,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
+            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 // Single output tile: the per-row maxima live in column [0] of DEST[0].
