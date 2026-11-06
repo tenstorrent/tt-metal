@@ -70,7 +70,11 @@ void kernel_main() {
                     tile_id++;
                     read_offset += tile_bytes;
                 }
+#ifdef FLUSH_WRITES
+                noc.async_writes_flushed();
+#else
                 noc.async_write_barrier();
+#endif
                 dfb_id_out0_obj.pop_front(static_cast<uint16_t>(rem));
             }
             if (out0_pad > 0) {
@@ -78,5 +82,8 @@ void kernel_main() {
                 dfb_id_out0_obj.pop_front(static_cast<uint16_t>(out0_pad));
             }
         }
+#ifdef FLUSH_WRITES
+        noc.async_write_barrier();
+#endif
     }
 }

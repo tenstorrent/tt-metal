@@ -66,6 +66,7 @@ void kernel_main() {
 
     const Noc noc;
 
+#ifndef READ_BATCH
     {
         constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
         constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
@@ -78,13 +79,20 @@ void kernel_main() {
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW>();
     }
+#endif
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     const std::uint32_t i_tile = 0;
     std::uint32_t curr_tile = tile_offset;
+#ifdef READ_BATCH
+    const std::uint32_t rbk = in0_t < Wt ? blk : (READ_BATCH < in0_t ? READ_BATCH : in0_t);
+    bool scalers_done = false;
+#else
+    const std::uint32_t rbk = blk;
+#endif
     for (std::uint32_t i = 0; i < num_blks; ++i) {
-        for (std::uint32_t j = 0; j < Wt; j += blk) {
-            const std::uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
+        for (std::uint32_t j = 0; j < Wt; j += rbk) {
+            const std::uint32_t rem = (j + rbk > Wt) ? (Wt - j) : rbk;  // clamped final block
             dfb_id_in0_obj.reserve_back(static_cast<uint16_t>(rem));
             std::uint32_t write_offset = 0;
             for (std::uint32_t r = 0; r < rem; ++r) {
@@ -93,6 +101,21 @@ void kernel_main() {
                 curr_tile++;
                 write_offset += src0_tile_bytes;
             }
+#ifdef READ_BATCH
+            if (!scalers_done) {
+                constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
+                constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                    dfb_max_scaler,
+                    ckernel::PoolType::MAX,
+                    ckernel::ReduceDim::REDUCE_ROW>();
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                    dfb_sum_scaler,
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW>();
+                scalers_done = true;
+            }
+#endif
             noc.async_read_barrier();
             dfb_id_in0_obj.push_back(static_cast<uint16_t>(rem));
         }

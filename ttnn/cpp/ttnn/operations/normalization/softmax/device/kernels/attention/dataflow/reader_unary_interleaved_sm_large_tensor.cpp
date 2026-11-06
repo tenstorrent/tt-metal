@@ -101,8 +101,13 @@ void kernel_main() {
 #elif defined(FUSED_SCALE_MASK)
             mask_index = mask_id_offset;
 #endif
-            for (std::uint32_t wt = 0; wt < Wt; wt += blk) {
-                const std::uint32_t rem = (wt + blk > Wt) ? (Wt - wt) : blk;  // clamped final block
+#ifdef READ_BATCH
+            const std::uint32_t lrbk = (dfb_length_t % READ_BATCH == 0) ? READ_BATCH : blk;
+#else
+            const std::uint32_t lrbk = blk;
+#endif
+            for (std::uint32_t wt = 0; wt < Wt; wt += lrbk) {
+                const std::uint32_t rem = (wt + lrbk > Wt) ? (Wt - wt) : lrbk;  // clamped final block
                 dfb_id_in0_obj.reserve_back(static_cast<uint16_t>(rem));
                 std::uint32_t write_offset = 0;
 #ifdef FUSED_SCALE_MASK
