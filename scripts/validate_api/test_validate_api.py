@@ -2,18 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from unittest.mock import patch
+
 from validate_api import (
     ALLOWED_PREFIXES,
     ALLOWED_UMD_HEADERS,
     BANNED_HEADERS,
     SKIP_FILES,
+    _paths_from_name_status,
     load_exceptions,
+    skip_unrelated_commit,
     source_lines,
     validate,
 )
@@ -298,6 +303,16 @@ class ApiValidationTests(unittest.TestCase):
         (self.root / "tt-metalium/alias").symlink_to("../internal")
         self.assertTrue(any("must not include internal" in error for error in self.errors()))
 
+    def test_directory_symlink_parent_traversal_is_not_collapsed_first(self):
+        # normpath("tt-metalium/alias/../private.hpp") is the stable header. The
+        # symlink has to be followed before `..` is removed, or the include looks stable.
+        self.header("internal/private.hpp")
+        self.header("tt-metalium/private.hpp")
+        (self.root / "internal/deep").mkdir()
+        (self.root / "tt-metalium/alias").symlink_to("../internal/deep")
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias/../private.hpp>\n")
+        self.assertTrue(any("must not include internal" in error for error in self.errors()))
+
     def test_macro_include_cannot_silently_escape_check(self):
         self.header("tt-metalium/a.hpp", "#pragma once\n#include PRIVATE_HEADER\n")
         self.assertTrue(any("literal #include" in error for error in self.errors()))
@@ -469,6 +484,35 @@ class ApiValidationTests(unittest.TestCase):
             "must not include internal",
         ):
             self.assertIn(diagnostic, result.stdout)
+
+
+class PrecommitSkipTests(unittest.TestCase):
+    def test_name_status_keeps_a_deleted_path_and_both_sides_of_a_rename(self):
+        payload = "D\0tt_metal/api/tt-metalium/old.hpp\0R100\0tt_metal/api/tt-metalium/a.hpp\0elsewhere/a.hpp\0"
+        self.assertEqual(
+            _paths_from_name_status(payload),
+            [
+                "tt_metal/api/tt-metalium/old.hpp",
+                "tt_metal/api/tt-metalium/a.hpp",
+                "elsewhere/a.hpp",
+            ],
+        )
+
+    def _skip(self, payload, filenames=()):
+        with patch.dict(os.environ, {"PRE_COMMIT": "1"}, clear=False):
+            os.environ.pop("PRE_COMMIT_FROM_REF", None)
+            os.environ.pop("PRE_COMMIT_TO_REF", None)
+            with patch("validate_api.subprocess.check_output", return_value=payload):
+                return skip_unrelated_commit(list(filenames))
+
+    def test_deletion_of_an_api_header_still_validates(self):
+        self.assertFalse(self._skip("D\0tt_metal/api/tt-metalium/a.hpp\0"))
+
+    def test_unrelated_commit_skips(self):
+        self.assertTrue(self._skip("M\0ttnn/foo.py\0"))
+
+    def test_a_passed_filename_does_not_skip(self):
+        self.assertFalse(self._skip("M\0ttnn/foo.py\0", ["tt_metal/api/tt-metalium/a.hpp"]))
 
 
 if __name__ == "__main__":

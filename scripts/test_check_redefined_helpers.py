@@ -373,12 +373,21 @@ def test_diff_parser_counts_only_additions(monkeypatch):
     monkeypatch.delenv("PRE_COMMIT_FROM_REF", raising=False)
     monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
     monkeypatch.delenv("PRE_COMMIT", raising=False)
-    monkeypatch.setattr(chk, "_git_diff", lambda args: head_diff if args == ["HEAD"] else None)
+    monkeypatch.setattr(chk, "_git_diff", lambda args, paths=None: head_diff if args == ["HEAD"] else None)
     assert chk.commit_added_lines() == {"ttnn/a.cpp": {1}, "ttnn/b.cpp": {3}}
 
+    # pre-commit run --files does not stash. An unstaged edit must still be in the diff,
+    # so PRE_COMMIT selects `git diff HEAD -- <files>`, not the index.
+    calls = []
+
+    def record(args, paths=None):
+        calls.append((args, paths))
+        return head_diff if args == ["HEAD"] else ""
+
     monkeypatch.setenv("PRE_COMMIT", "1")
-    monkeypatch.setattr(chk, "_git_diff", lambda args: head_diff if args == ["--cached"] else None)
-    assert chk.commit_added_lines() == {"ttnn/a.cpp": {1}, "ttnn/b.cpp": {3}}
+    monkeypatch.setattr(chk, "_git_diff", record)
+    assert chk.commit_added_lines(["ttnn/a.cpp", "ttnn/b.cpp"]) == {"ttnn/a.cpp": {1}, "ttnn/b.cpp": {3}}
+    assert calls[0] == (["HEAD"], ["ttnn/a.cpp", "ttnn/b.cpp"])
 
 
 def test_list_mentions_both_sides(capsys):

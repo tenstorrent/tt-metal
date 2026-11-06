@@ -12,6 +12,7 @@ import json
 import os
 import posixpath
 import re
+import subprocess
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from pathlib import Path
@@ -360,6 +361,11 @@ class ApiTree:
         return [self.root / rel for rel in self.files]
 
     def target(self, source: Path, name: str, quoted: bool) -> str | None:
+        # Follow a directory symlink before removing `..`. Lexical normpath turns
+        # `alias/../private.hpp` into a stable header when `alias` points at an
+        # internal directory, and the boundary check then misses the include.
+        if self.has_dir_links:
+            return include_target(self.root, source, name, quoted)
         candidates = [posixpath.normpath(name)]
         if quoted:
             source_dir = source.parent.relative_to(self.root).as_posix()
@@ -368,7 +374,7 @@ class ApiTree:
             if candidate in self.files:
                 return self.files[candidate]
         fallback = candidates[-1] if name.startswith(("tt-metalium/", "internal/")) else candidates[0]
-        if self.has_dir_links or fallback in (".", "..") or fallback.startswith(("../", "/")):
+        if fallback in (".", "..") or fallback.startswith(("../", "/")):
             return include_target(self.root, source, name, quoted)
         return fallback
 
@@ -524,11 +530,93 @@ def validate(
     return errors, header_count
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_HOOK_PREFIXES = ("tt_metal/api/", "scripts/validate_api/")
+_REV_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./^+~-")
+
+
+def _safe_rev(rev: str | None) -> str | None:
+    if not rev or len(rev) > 256 or rev[0] in "-." or any(char not in _REV_CHARS for char in rev):
+        return None
+    return rev
+
+
+def _interesting(path: str) -> bool:
+    path = path.replace("\\", "/")
+    return path.startswith(_HOOK_PREFIXES)
+
+
+def _paths_from_name_status(payload: str) -> list[str]:
+    """Both sides of a rename, and the single path of every other status, from `git diff -z`."""
+    parts = payload.split("\0")
+    paths = []
+    index = 0
+    while index < len(parts) and parts[index]:
+        status = parts[index]
+        if status[0] in "RC":
+            if index + 2 >= len(parts):
+                break
+            paths.extend(parts[index + 1 : index + 3])
+            index += 3
+        else:
+            if index + 1 >= len(parts):
+                break
+            paths.append(parts[index + 1])
+            index += 2
+    return paths
+
+
+def _changed_paths() -> list[str] | None:
+    """Paths in this pre-commit diff, including deletions. None when git cannot answer."""
+    from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
+    to_ref = os.environ.get("PRE_COMMIT_TO_REF")
+    if from_ref or to_ref:
+        safe_from, safe_to = _safe_rev(from_ref), _safe_rev(to_ref)
+        if safe_from is None or safe_to is None:
+            return None
+        arguments = [safe_from, safe_to]
+    else:
+        arguments = ["--cached"]
+    try:
+        payload = subprocess.check_output(
+            ["git", "diff", "--name-status", "-z", "--no-ext-diff", *arguments],
+            cwd=_REPO_ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return _paths_from_name_status(payload)
+
+
+def skip_unrelated_commit(filenames: list[str]) -> bool:
+    """True when pre-commit invoked the hook for a change outside the API and the checker.
+
+    Pre-commit omits deletions from the filenames it matches, so a commit that only
+    deletes an API header arrives with an empty list. The name-status diff still
+    contains that deletion, and a stale include exception has to fail the commit.
+    """
+    if not os.environ.get("PRE_COMMIT") or filenames:
+        return False
+    paths = _changed_paths()
+    if paths is None:
+        return False
+    return not any(_interesting(path) for path in paths)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path, help="API root, normally tt_metal/api")
+    parser.add_argument(
+        "filenames",
+        nargs="*",
+        help="Matching files from pre-commit. Ignored except as a signal that the API changed.",
+    )
     parser.add_argument("--exceptions", type=Path, default=Path(__file__).with_name(EXCEPTIONS.name))
     args = parser.parse_args()
+    if skip_unrelated_commit(args.filenames):
+        print("API validation: skipped, this change does not touch the API or the checker")
+        return 0
     try:
         exceptions = load_exceptions(args.exceptions)
         errors, count = validate(args.directory, exceptions)

@@ -259,11 +259,19 @@ def tree_headers():
             text=True,
         )
         if res.returncode == 0 and res.stdout:
-            return sorted(
-                os.path.normpath(os.path.join(REPO, p))
-                for p in res.stdout.split("\0")
-                if p
+            # ls-files still names a header after it is deleted in the work tree.
+            # Opening that path raises, so keep only files that are still there.
+            present = sorted(
+                path
+                for path in (
+                    os.path.normpath(os.path.join(REPO, p))
+                    for p in res.stdout.split("\0")
+                    if p
+                )
+                if os.path.isfile(path)
             )
+            if present:
+                return present
     except OSError:
         pass
     return sorted(

@@ -453,6 +453,33 @@ def test_recorded_wait_in_a_helper_does_not_cover_callers(tmp_path):
     assert "MOVD2B with no SRCB_VLD wait" in run(f).stdout
 
 
+def test_tree_headers_drops_index_entries_missing_on_disk(monkeypatch):
+    """git ls-files still lists a header deleted in the work tree; opening it must not raise."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_dest_to_src_wait_under_test", SCRIPT
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    present = os.path.join(mod.REPO, "tt_metal/tt-llk/tt_llk_blackhole/keep.h")
+
+    class Result:
+        returncode = 0
+        stdout = (
+            "tt_metal/tt-llk/tt_llk_blackhole/gone.h\0"
+            "tt_metal/tt-llk/tt_llk_blackhole/keep.h\0"
+        )
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(
+        mod.os.path,
+        "isfile",
+        lambda path: os.path.normpath(path) == os.path.normpath(present),
+    )
+    assert mod.tree_headers() == [os.path.normpath(present)]
+
+
 def test_shipped_tree_never_fails():
     """Whole-tree run (no files) exits 0 whether or not findings remain."""
     g = runpy.run_path(SCRIPT)
