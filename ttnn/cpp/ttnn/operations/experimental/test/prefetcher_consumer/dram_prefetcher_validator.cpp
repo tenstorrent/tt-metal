@@ -24,8 +24,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include <unordered_map>
 
@@ -405,7 +405,7 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
 
     std::vector<metal_exp::PrefetcherPipeParamName> names;
     std::vector<metal_exp::PrefetcherPipeParameter> parameters;
-    metal_exp::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     for (size_t i = 0; i < prefetcher_pipes.size(); ++i) {
         metal_exp::PrefetcherPipeParamName name{fmt::format("pipe_{}", i)};
         names.push_back(name);
@@ -414,12 +414,13 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
              .receivers = prefetcher_pipes[i]->receiver_cores(),
              .ring_size = prefetcher_pipes[i]->ring_size(),
              .entry_size = geom.page_bytes_per_recv});
-        run_args.advanced_options.prefetcher_pipe_args.emplace(name, metal_exp::PrefetcherPipeArgument{*prefetcher_pipes[i]});
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            name, metal_exp::PrefetcherPipeArgument{*prefetcher_pipes[i]});
     }
-    const metal_exp::TensorParamName source_name{"source_tensor"};
-    const metal_exp::ScratchpadSpecName scratch_name{"expected"};
-    metal_exp::KernelSpec receiver{
-        .unique_id = metal_exp::KernelSpecName{"receiver"},
+    const TensorParamName source_name{"source_tensor"};
+    const ScratchpadSpecName scratch_name{"expected"};
+    KernelSpec receiver{
+        .unique_id = KernelSpecName{"receiver"},
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_validator_receiver.cpp"}};
     receiver.tensor_bindings = {{.tensor_parameter_name = source_name, .accessor_name = "source_tensor"}};
@@ -438,24 +439,22 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
         "n_per_recv_tiles",
         "n_col_start",
         "lead_block"};
-    receiver.hw_config = metal_exp::DataMovementHardwareConfig{
-        .config_1xx = metal_exp::DataMovementHardwareConfig::DataMovement1XXConfig{
+    receiver.hw_config = DataMovementHardwareConfig{
+        .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
-    metal_exp::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "tensor_prefetcher_pipe_validator",
         .kernels = {std::move(receiver)},
         .scratchpads = {{.unique_id = scratch_name, .size_per_node = geom.page_bytes_per_recv}},
         .tensor_parameters = {{.unique_id = source_name, .spec = source_tensor.tensor_spec()}},
         .work_units =
-            {{.name = "receiver_wu",
-              .kernels = {metal_exp::KernelSpecName{"receiver"}},
-              .target_nodes = receiver_cores}},
+            {{.name = "receiver_wu", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = receiver_cores}},
         .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
     Program program = metal_exp::MakeProgramFromSpec(*mesh_device, spec);
 
-    metal_exp::ProgramRunArgs::KernelRunArgs kernel_args{.kernel = metal_exp::KernelSpecName{"receiver"}};
+    ProgramRunArgs::KernelRunArgs kernel_args{.kernel = KernelSpecName{"receiver"}};
     for (const auto& plan : geom.receivers) {
-        metal_exp::AddRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             kernel_args.runtime_arg_values,
             plan.core,
             {{"bank_id", plan.bank_id},
@@ -467,7 +466,7 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
              {"lead_block", lead_block_for(rotation, plan.ring_pos)}});
     }
     run_args.kernel_run_args.push_back(std::move(kernel_args));
-    run_args.tensor_args.emplace(source_name, metal_exp::TensorArgument{source_tensor.mesh_tensor()});
+    run_args.tensor_args.emplace(source_name, TensorArgument{source_tensor.mesh_tensor()});
     metal_exp::SetProgramRunArgs(program, run_args);
 
     tt::tt_metal::distributed::MeshWorkload workload;

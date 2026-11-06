@@ -7,11 +7,11 @@
 #include <functional>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Represent hardware infomation/ context needed for validation.
 // This is intended to allow black-box validation of programs.
@@ -79,4 +79,4 @@ void ValidateKernelHardwareConfig(const KernelSpec& kernel, const ValidationCont
 // program_spec.cpp
 void ValidateProgramMisc(const ValidationContext& ctx);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

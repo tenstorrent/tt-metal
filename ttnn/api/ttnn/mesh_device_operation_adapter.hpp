@@ -11,7 +11,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <algorithm>
 #include <iterator>
@@ -836,7 +836,7 @@ public:
     // ONLY create_program_artifacts, returning a single ProgramArtifacts (one
     // ProgramSpec + ProgramRunArgs + any op-owned tensors). The adapter maps
     // that same ProgramSpec onto every range in tensor_coords via
-    // experimental::MakeMeshWorkloadFromSpecs (occupancy = mesh devices that
+    // tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs (occupancy = mesh devices that
     // hold a tensor shard). A factory whose programs vary across the mesh is a
     // MeshWorkloadSpecFactoryConcept instead.
     //
@@ -850,7 +850,7 @@ public:
     //
     // On cache hit: the adapter enumerates fresh io tensors, appends the parked
     // op-owned tensors, rebuilds a TensorArgument for every binding using the
-    // stored indices, and applies via experimental::UpdateTensorArgs — no Program
+    // stored indices, and applies via tt::tt_metal::experimental::UpdateTensorArgs — no Program
     // rebuild. Op-owned tensors are re-patched even though their address is
     // unchanged, because UpdateTensorArgs is currently all-or-nothing; this
     // stepping-stone concept accepts that redundancy.
@@ -861,8 +861,8 @@ public:
     // Binding machinery shared by every spec-path adapter: it depends only on the op's tensor
     // types, not on which factory concept produced the artifacts.
     struct SpecBindingSupport {
-        using TensorParamName = tt::tt_metal::experimental::TensorParamName;
-        using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
+        using TensorParamName = tt::tt_metal::TensorParamName;
+        using TensorArgument = tt::tt_metal::ProgramRunArgs::TensorArgument;
         using PrefetcherPipeParamName = tt::tt_metal::experimental::PrefetcherPipeParamName;
         using PrefetcherPipeArgument = tt::tt_metal::experimental::PrefetcherPipeArgument;
 
@@ -918,7 +918,7 @@ public:
                     }
                 }
 
-                tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
+                tt::tt_metal::Table<TensorParamName, TensorArgument> fresh_tensor_args;
                 for (const auto& b : sv.bindings) {
                     fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
                 }
@@ -940,7 +940,7 @@ public:
                     if (sv.pipe_bindings.empty()) {
                         continue;
                     }
-                    tt::tt_metal::experimental::ProgramRunArgs run_args;
+                    tt::tt_metal::ProgramRunArgs run_args;
                     for (const auto& b : sv.pipe_bindings) {
                         TT_FATAL(
                             b.pipe_idx < prefetcher_pipes.size(),
@@ -998,7 +998,7 @@ public:
         // TensorArgument table each dispatch. Both costs are fixable by mirroring the descriptor
         // adapter's compile-time-unrolled walker + SmallVector + cached storage pattern.
         static std::vector<ResolvedTensorBinding> resolve_bindings(
-            const tt::tt_metal::experimental::Table<TensorParamName, TensorArgument>& factory_tensor_args,
+            const tt::tt_metal::Table<TensorParamName, TensorArgument>& factory_tensor_args,
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
@@ -1014,7 +1014,7 @@ public:
             std::vector<bool> claimed(mesh_tensors.size(), false);
             // The name is the Table key; the TensorArgument value carries only the tensor ref.
             for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
-                const auto* target = &tt::tt_metal::experimental::mesh_tensor_of(tensor_arg);
+                const auto* target = &tt::tt_metal::mesh_tensor_of(tensor_arg);
                 std::size_t idx = 0;
                 for (; idx < mesh_tensors.size(); ++idx) {
                     if (!claimed[idx] && &mesh_tensors[idx].get() == target) {
@@ -1036,7 +1036,7 @@ public:
         // so that every cache hit rebinds it (refresh_prefetcher_pipe_args). Throws when an argument's
         // pipe is not there, since a hit could not supply it. Cache-miss path only.
         static std::vector<ResolvedPipeBinding> resolve_pipe_bindings(
-            const tt::tt_metal::experimental::Table<PrefetcherPipeParamName, PrefetcherPipeArgument>& factory_pipe_args,
+            const tt::tt_metal::Table<PrefetcherPipeParamName, PrefetcherPipeArgument>& factory_pipe_args,
             const operation_attributes_t& attrs) {
             if (factory_pipe_args.empty()) {
                 return {};
@@ -1070,8 +1070,8 @@ public:
     // -----------------------------------------------------------------------
     template <typename SpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter : SpecBindingSupport {
-        using TensorParamName = tt::tt_metal::experimental::TensorParamName;
-        using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
+        using TensorParamName = tt::tt_metal::TensorParamName;
+        using TensorArgument = tt::tt_metal::ProgramRunArgs::TensorArgument;
         using ResolvedTensorBinding = typename SpecBindingSupport::ResolvedTensorBinding;
 
         // MeshWorkloadSpecFactoryConcept keys on &T::create_mesh_workload_artifacts, which is
@@ -1123,8 +1123,8 @@ public:
 
             // What each occupied range runs, plus the TTNN cache state (bindings and parked
             // op-owned tensors) the cache-hit path needs — held independently of the MeshWorkload.
-            std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec> program_specs;
-            std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::experimental::ProgramRunArgs> run_params;
+            std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec> program_specs;
+            std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs> run_params;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
             // One ProgramArtifacts mapped onto every occupied range; bindings and op-owned tensors
@@ -1206,8 +1206,8 @@ public:
     // -----------------------------------------------------------------------
     template <MeshWorkloadSpecFactoryConcept WorkloadSpecFactory>
     struct MeshWorkloadSpecFactoryAdapter : SpecBindingSupport {
-        using TensorParamName = tt::tt_metal::experimental::TensorParamName;
-        using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
+        using TensorParamName = tt::tt_metal::TensorParamName;
+        using TensorArgument = tt::tt_metal::ProgramRunArgs::TensorArgument;
         using ResolvedTensorBinding = typename SpecBindingSupport::ResolvedTensorBinding;
 
         using shared_variables_t = typename SpecBindingSupport::SpecSharedVariables;
@@ -1243,8 +1243,8 @@ public:
 
             const auto mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
 
-            std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec> program_specs;
-            std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::experimental::ProgramRunArgs> run_params;
+            std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec> program_specs;
+            std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs> run_params;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (auto& per_coord : artifacts.programs) {
                 // Metal catches overlapping ranges but never sees an exact duplicate, and it only

@@ -27,16 +27,16 @@ using namespace tt::tt_metal;
 
 namespace {
 
-const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
-const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
-const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-const experimental::TensorParamName IN0_T{"in0_tensor"};
-const experimental::TensorParamName IN1_T{"in1_tensor"};
-const experimental::TensorParamName OUT_T{"out_tensor"};
-const experimental::KernelSpecName READER{"reader"};
-const experimental::KernelSpecName WRITER{"writer"};
-const experimental::KernelSpecName COMPUTE{"compute"};
-const experimental::SemaphoreSpecName PROGRAM_SEM{"program_sem"};
+const DFBSpecName IN0_DFB{"in0_dfb"};
+const DFBSpecName IN1_DFB{"in1_dfb"};
+const DFBSpecName OUT_DFB{"out_dfb"};
+const TensorParamName IN0_T{"in0_tensor"};
+const TensorParamName IN1_T{"in1_tensor"};
+const TensorParamName OUT_T{"out_tensor"};
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+const KernelSpecName COMPUTE{"compute"};
+const SemaphoreSpecName PROGRAM_SEM{"program_sem"};
 
 // A single BFloat16 tile in interleaved DRAM. HostTensor::from_vector / to_vector take and
 // return row-major data and handle the tilization against this spec, so the host code below
@@ -73,7 +73,7 @@ int main() {
 
     // We will only be using one Tensix node for this particular example. As Tenstorrent processors are a 2D grid of
     // nodes we can specify the node coordinates as (0, 0).
-    constexpr experimental::NodeCoord node = {0, 0};
+    constexpr NodeCoord node = {0, 0};
 
     // Most data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
     // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
@@ -96,8 +96,8 @@ int main() {
     // operations and leading to better performance. However there is a trade off: the more entries, the more memory
     // is used, and dataflow buffers are backed by L1 (SRAM) memory, which is a precious resource.
     constexpr uint32_t num_tiles = 1;
-    auto make_dfb_spec = [&](const experimental::DFBSpecName& name) {
-        return experimental::DataflowBufferSpec{
+    auto make_dfb_spec = [&](const DFBSpecName& name) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = single_tile_size,
             .num_entries = num_tiles,
@@ -108,9 +108,9 @@ int main() {
     // The same hardware configs serve Wormhole / Blackhole and Quasar: the runtime reads only the part matching the
     // active architecture. The data movement configs pin the conventional Gen1 placement (reader on RISCV_1, writer
     // on RISCV_0), which Quasar ignores -- it has 8 data movement cores per cluster, allocated by the implementation.
-    const experimental::DataMovementHardwareConfig reader_dm_config = experimental::CreateReaderDataMovementConfig();
-    const experimental::DataMovementHardwareConfig writer_dm_config = experimental::CreateWriterDataMovementConfig();
-    const experimental::ComputeHardwareConfig compute_hw_config{.fpu_math_fidelity = MathFidelity::HiFi4};
+    const DataMovementHardwareConfig reader_dm_config = CreateReaderDataMovementConfig();
+    const DataMovementHardwareConfig writer_dm_config = CreateWriterDataMovementConfig();
+    const ComputeHardwareConfig compute_hw_config{.fpu_math_fidelity = MathFidelity::HiFi4};
 
     // Describe the reader, writer and compute kernels. The sibling ttnn_add_integers_hang app runs
     // these same three kernel sources through its own TTNN program factory.
@@ -123,20 +123,20 @@ int main() {
     // These kernels work together to form a pipeline. The reader reads data from DRAM and makes it available to the
     // compute kernel. The compute kernel does math and pushes the result to the writer kernel. The writer kernel
     // writes the result back to DRAM.
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/reader_binary_1_tile.cpp",
-        .dfb_bindings = {experimental::ProducerOf(IN0_DFB, "in0"), experimental::ProducerOf(IN1_DFB, "in1")},
+        .dfb_bindings = {ProducerOf(IN0_DFB, "in0"), ProducerOf(IN1_DFB, "in1")},
         .tensor_bindings =
             {{.tensor_parameter_name = IN0_T, .accessor_name = "in0"},
              {.tensor_parameter_name = IN1_T, .accessor_name = "in1"}},
         .hw_config = reader_dm_config,
     };
 
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/writer_1_tile.cpp",
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "out")},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "out")},
         .semaphore_bindings = {{.semaphore_spec_name = PROGRAM_SEM, .accessor_name = "program_sem"}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
         .runtime_arg_schema = {.common_runtime_arg_names = {"incremented_semaphore"}},
@@ -144,16 +144,13 @@ int main() {
     };
 
     // This kernel performs the actual addition of the two input tiles
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/compute/add_2_tiles_hang.cpp",
         // Metal 2.0's type-agnostic default opt level is O2; a compute kernel used to get O3, so
         // state it explicitly to keep the generated code the same as before.
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-        .dfb_bindings =
-            {experimental::ConsumerOf(IN0_DFB, "in0"),
-             experimental::ConsumerOf(IN1_DFB, "in1"),
-             experimental::ProducerOf(OUT_DFB, "out")},
+        .dfb_bindings = {ConsumerOf(IN0_DFB, "in0"), ConsumerOf(IN1_DFB, "in1"), ProducerOf(OUT_DFB, "out")},
         .hw_config = compute_hw_config,
     };
 
@@ -163,7 +160,7 @@ int main() {
     auto global_semaphore = CreateGlobalSemaphore(*mesh_device, CoreRange(node), 3);
     auto incremented_semaphore = CreateGlobalSemaphore(*mesh_device, CoreRange(node), 5);
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "add_2_integers_hang",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {make_dfb_spec(IN0_DFB), make_dfb_spec(IN1_DFB), make_dfb_spec(OUT_DFB)},
@@ -177,27 +174,27 @@ int main() {
 
     // A MeshWorkload is a collection of programs that are executed on a MeshDevice. Building it from the ProgramSpec
     // compiles the kernels; the specific physical devices the workload runs on are determined by the mesh shape.
-    distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload = tt_metal::experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     // Bind the tensors the kernels operate on. The reader and writer get their buffer addresses from these tensor
     // arguments and the compute kernel needs none; the writer's one runtime arg is the GlobalSemaphore it bumps.
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
             .common_runtime_arg_values =
                 {{"incremented_semaphore", static_cast<uint32_t>(incremented_semaphore.address())}},
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {IN0_T, experimental::TensorArgument{src0_tensor}},
-        {IN1_T, experimental::TensorArgument{src1_tensor}},
-        {OUT_T, experimental::TensorArgument{dst_tensor}},
+        {IN0_T, TensorArgument{src0_tensor}},
+        {IN1_T, TensorArgument{src1_tensor}},
+        {OUT_T, TensorArgument{dst_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     // Create the data that will be used as input to the kernels.
     // src0 is a vector of bfloat16 values initialized to random values between 0.0f and 14.0f.

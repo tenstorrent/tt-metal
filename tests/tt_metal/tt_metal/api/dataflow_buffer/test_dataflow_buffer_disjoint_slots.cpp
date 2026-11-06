@@ -16,8 +16,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include "device_fixture.hpp"
@@ -31,9 +31,8 @@
 namespace tt::tt_metal {
 namespace {
 
-namespace m2 = experimental;
-using experimental::test_helpers::MakeMinimalDFB;
-using experimental::test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalWorkUnit;
 
 void require_at_least_two_nodes(distributed::MeshDevice& mesh_device) {
     if (mesh_device.compute_with_storage_grid_size().x < 2) {
@@ -43,19 +42,19 @@ void require_at_least_two_nodes(distributed::MeshDevice& mesh_device) {
     }
 }
 
-void apply_gen1_dm_configs(m2::KernelSpec& producer, m2::KernelSpec& consumer, distributed::MeshDevice& mesh_device) {
+void apply_gen1_dm_configs(KernelSpec& producer, KernelSpec& consumer, distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == ARCH::QUASAR) {
         return;
     }
-    producer.hw_config = m2::DataMovementHardwareConfig{
+    producer.hw_config = DataMovementHardwareConfig{
         .config_1xx =
-            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_0,
             },
     };
-    consumer.hw_config = m2::DataMovementHardwareConfig{
+    consumer.hw_config = DataMovementHardwareConfig{
         .config_1xx =
-            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::NOC_1,
             },
@@ -81,16 +80,16 @@ void expect_no_slot_collision_on_core(Program& program, const CoreCoord& core) {
     }
 }
 
-m2::KernelSpec make_touch_producer(const std::string& name, uint32_t num_dfbs, distributed::MeshDevice& mesh_device) {
+KernelSpec make_touch_producer(const std::string& name, uint32_t num_dfbs, distributed::MeshDevice& mesh_device) {
     const bool implicit_sync = mesh_device.arch() == ARCH::QUASAR;
     auto kernel = make_dm_kernel(
-        m2::KernelSpecName{name}, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_touch_producer.cpp");
+        KernelSpecName{name}, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_touch_producer.cpp");
     kernel.compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}};
     kernel.compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}};
     if (!implicit_sync) {
-        kernel.hw_config = m2::DataMovementHardwareConfig{
+        kernel.hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = DataMovementProcessor::RISCV_0,
                 },
         };
@@ -98,18 +97,18 @@ m2::KernelSpec make_touch_producer(const std::string& name, uint32_t num_dfbs, d
     return kernel;
 }
 
-m2::KernelSpec make_touch_consumer(
+KernelSpec make_touch_consumer(
     const std::string& name, uint32_t num_dfbs, uint32_t touched_magic, distributed::MeshDevice& mesh_device) {
     const bool implicit_sync = mesh_device.arch() == ARCH::QUASAR;
     auto kernel = make_dm_kernel(
-        m2::KernelSpecName{name}, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_touch_consumer.cpp");
+        KernelSpecName{name}, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_touch_consumer.cpp");
     kernel.compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}};
     kernel.compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}, {"touched_magic", touched_magic}};
     kernel.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
     if (!implicit_sync) {
-        kernel.hw_config = m2::DataMovementHardwareConfig{
+        kernel.hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = DataMovementProcessor::RISCV_1,
                     .noc = NOC::NOC_1,
                 },
@@ -142,19 +141,18 @@ void expect_touch_results(
     }
 }
 
-void bind_touch_dfbs(
-    m2::KernelSpec& prod, m2::KernelSpec& cons, const std::string& dfb_spec_name, uint32_t local_index) {
+void bind_touch_dfbs(KernelSpec& prod, KernelSpec& cons, const std::string& dfb_spec_name, uint32_t local_index) {
     const std::string accessor = "dfb_" + std::to_string(local_index);
-    const m2::DFBSpecName dfb{dfb_spec_name};
-    prod.dfb_bindings.push_back(m2::DFBBinding{
+    const DFBSpecName dfb{dfb_spec_name};
+    prod.dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = dfb,
         .accessor_name = accessor,
-        .endpoint_type = m2::DFBEndpointType::PRODUCER,
+        .endpoint_type = DFBEndpointType::PRODUCER,
     });
-    cons.dfb_bindings.push_back(m2::DFBBinding{
+    cons.dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = dfb,
         .accessor_name = accessor,
-        .endpoint_type = m2::DFBEndpointType::CONSUMER,
+        .endpoint_type = DFBEndpointType::CONSUMER,
     });
 }
 
@@ -164,9 +162,9 @@ void bind_touch_dfbs(
 // Quasar TxnIdAllocator is program-wide over DFB pool [8, 31] (24 IDs); each implicit-sync
 // DFB takes 4 IDs. Large programs (16+16) disable host implicit sync entirely and keep the
 // kernel on the probe path so we never exhaust the pool or hang in finish()/ISR drain.
-m2::ProgramSpec make_split_touch_spec(distributed::MeshDevice& mesh_device, uint32_t num_dfbs_per_half) {
-    const m2::NodeCoord node_a{0, 0};
-    const m2::NodeCoord node_b{1, 0};
+ProgramSpec make_split_touch_spec(distributed::MeshDevice& mesh_device, uint32_t num_dfbs_per_half) {
+    const NodeCoord node_a{0, 0};
+    const NodeCoord node_b{1, 0};
     constexpr uint32_t touched_magic = 0xA11CED00u;
 
     auto prod_a = make_touch_producer("prod_a", num_dfbs_per_half, mesh_device);
@@ -174,7 +172,7 @@ m2::ProgramSpec make_split_touch_spec(distributed::MeshDevice& mesh_device, uint
     auto prod_b = make_touch_producer("prod_b", num_dfbs_per_half, mesh_device);
     auto cons_b = make_touch_consumer("cons_b", num_dfbs_per_half, touched_magic, mesh_device);
 
-    m2::ProgramSpec spec;
+    ProgramSpec spec;
     spec.name = "dfb_disjoint_split_touch";
     const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;
     for (uint32_t i = 0; i < num_dfbs_per_half * 2; ++i) {
@@ -191,8 +189,8 @@ m2::ProgramSpec make_split_touch_spec(distributed::MeshDevice& mesh_device, uint
         // 16+16 exhausts TxnIdAllocator if every DFB stays on implicit sync; probe path
         // does not need host ISR credits.
         if (is_quasar) {
-            disable_implicit_sync_for(prod, m2::DFBSpecName{name});
-            disable_implicit_sync_for(cons, m2::DFBSpecName{name});
+            disable_implicit_sync_for(prod, DFBSpecName{name});
+            disable_implicit_sync_for(cons, DFBSpecName{name});
         }
     }
     spec.kernels = {prod_a, cons_a, prod_b, cons_b};
@@ -210,8 +208,8 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
     constexpr uint32_t per_half = 3;
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t num_entries = 4;
-    const m2::NodeCoord node_a{0, 0};
-    const m2::NodeCoord node_b{1, 0};
+    const NodeCoord node_a{0, 0};
+    const NodeCoord node_b{1, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
     std::vector<MeshTensor> inputs;
@@ -225,14 +223,14 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
 
     auto make_triple_prod = [&](const std::string& name) {
         auto kernel = make_dm_kernel(
-            m2::KernelSpecName{name}, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_triple_producer.cpp");
+            KernelSpecName{name}, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_triple_producer.cpp");
         kernel.compile_time_args = {{"num_entries_per_producer", num_entries}, {"implicit_sync", is_quasar ? 1u : 0u}};
         kernel.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
         return kernel;
     };
     auto make_triple_cons = [&](const std::string& name) {
         auto kernel = make_dm_kernel(
-            m2::KernelSpecName{name}, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_triple_consumer.cpp");
+            KernelSpecName{name}, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_triple_consumer.cpp");
         kernel.compile_time_args = {{"num_entries_per_consumer", num_entries}, {"implicit_sync", is_quasar ? 1u : 0u}};
         kernel.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
         return kernel;
@@ -245,9 +243,9 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
     apply_gen1_dm_configs(prod_a, cons_a, this->device());
     apply_gen1_dm_configs(prod_b, cons_b, this->device());
 
-    m2::ProgramSpec spec;
+    ProgramSpec spec;
     spec.name = "half_grid_3plus3_dataflow";
-    std::vector<m2::TensorParameter> tensor_params;
+    std::vector<TensorParameter> tensor_params;
     for (uint32_t i = 0; i < per_half * 2; ++i) {
         const std::string dfb_name = "dfb_" + std::to_string(i);
         const uint32_t local = i % per_half;
@@ -256,61 +254,57 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
         auto& cons = left ? cons_a : cons_b;
 
         spec.dataflow_buffers.push_back({
-            .unique_id = m2::DFBSpecName{dfb_name},
+            .unique_id = DFBSpecName{dfb_name},
             .entry_size = entry_size,
             .num_entries = num_entries,
             .data_format_metadata = tt::DataFormat::Float16_b,
         });
-        const m2::DFBSpecName dfb{dfb_name};
+        const DFBSpecName dfb{dfb_name};
         prod.dfb_bindings.push_back({
             .dfb_spec_name = dfb,
             .accessor_name = "out_" + std::to_string(local),
-            .endpoint_type = m2::DFBEndpointType::PRODUCER,
+            .endpoint_type = DFBEndpointType::PRODUCER,
         });
         cons.dfb_bindings.push_back({
             .dfb_spec_name = dfb,
             .accessor_name = "in_" + std::to_string(local),
-            .endpoint_type = m2::DFBEndpointType::CONSUMER,
+            .endpoint_type = DFBEndpointType::CONSUMER,
         });
 
         const std::string in_name = "in_" + std::to_string(i);
         const std::string out_name = "out_" + std::to_string(i);
-        tensor_params.push_back({.unique_id = m2::TensorParamName{in_name}, .spec = inputs[i].tensor_spec()});
-        tensor_params.push_back({.unique_id = m2::TensorParamName{out_name}, .spec = outputs[i].tensor_spec()});
+        tensor_params.push_back({.unique_id = TensorParamName{in_name}, .spec = inputs[i].tensor_spec()});
+        tensor_params.push_back({.unique_id = TensorParamName{out_name}, .spec = outputs[i].tensor_spec()});
         prod.tensor_bindings.push_back({
-            .tensor_parameter_name = m2::TensorParamName{in_name},
+            .tensor_parameter_name = TensorParamName{in_name},
             .accessor_name = "src_" + std::to_string(local),
         });
         cons.tensor_bindings.push_back({
-            .tensor_parameter_name = m2::TensorParamName{out_name},
+            .tensor_parameter_name = TensorParamName{out_name},
             .accessor_name = "dst_" + std::to_string(local),
         });
     }
     spec.kernels = {prod_a, cons_a, prod_b, cons_b};
     spec.tensor_parameters = std::move(tensor_params);
     spec.work_units = {
-        {.name = "wu_a",
-         .kernels = {m2::KernelSpecName{"prod_a"}, m2::KernelSpecName{"cons_a"}},
-         .target_nodes = node_a},
-        {.name = "wu_b",
-         .kernels = {m2::KernelSpecName{"prod_b"}, m2::KernelSpecName{"cons_b"}},
-         .target_nodes = node_b},
+        {.name = "wu_a", .kernels = {KernelSpecName{"prod_a"}, KernelSpecName{"cons_a"}}, .target_nodes = node_a},
+        {.name = "wu_b", .kernels = {KernelSpecName{"prod_b"}, KernelSpecName{"cons_b"}}, .target_nodes = node_b},
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     expect_half_grid_slots_packed(program, per_half, is_quasar);
     expect_no_slot_collision_on_core(program, CoreCoord{0, 0});
     expect_no_slot_collision_on_core(program, CoreCoord{1, 0});
 
-    auto rtas = [&](const m2::NodeCoord& node) {
-        return m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
+    auto rtas = [&](const NodeCoord& node) {
+        return MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
     };
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        {.kernel = m2::KernelSpecName{"prod_a"}, .runtime_arg_values = rtas(node_a)},
-        {.kernel = m2::KernelSpecName{"cons_a"}, .runtime_arg_values = rtas(node_a)},
-        {.kernel = m2::KernelSpecName{"prod_b"}, .runtime_arg_values = rtas(node_b)},
-        {.kernel = m2::KernelSpecName{"cons_b"}, .runtime_arg_values = rtas(node_b)},
+        {.kernel = KernelSpecName{"prod_a"}, .runtime_arg_values = rtas(node_a)},
+        {.kernel = KernelSpecName{"cons_a"}, .runtime_arg_values = rtas(node_a)},
+        {.kernel = KernelSpecName{"prod_b"}, .runtime_arg_values = rtas(node_b)},
+        {.kernel = KernelSpecName{"cons_b"}, .runtime_arg_values = rtas(node_b)},
     };
     const uint32_t words = num_entries * entry_size / sizeof(uint32_t);
     std::vector<std::vector<uint32_t>> expected(per_half * 2);
@@ -318,10 +312,10 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
         expected[i] = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, words);
         slow_dispatch::WriteToBuffer(inputs[i].mesh_buffer(), expected[i]);
         m2_writeshard_barrier_uint32(this->device(), inputs[i], expected[i]);
-        params.tensor_args.insert({m2::TensorParamName{"in_" + std::to_string(i)}, std::cref(inputs[i])});
-        params.tensor_args.insert({m2::TensorParamName{"out_" + std::to_string(i)}, std::cref(outputs[i])});
+        params.tensor_args.insert({TensorParamName{"in_" + std::to_string(i)}, std::cref(inputs[i])});
+        params.tensor_args.insert({TensorParamName{"out_" + std::to_string(i)}, std::cref(outputs[i])});
     }
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     LaunchProgram(this->device(), std::move(program));
 
@@ -340,10 +334,10 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid16Plus16DFBsOnDevice) {
 
     constexpr uint32_t per_half = 16;
     constexpr uint32_t touched_magic = 0xA11CED00u;
-    m2::ProgramSpec spec = make_split_touch_spec(this->device(), per_half);
+    ProgramSpec spec = make_split_touch_spec(this->device(), per_half);
     auto device_range = distributed::MeshCoordinateRange(this->device().shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, m2::MakeProgramFromSpec(this->device(), spec));
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(this->device(), spec));
     Program& program = workload.get_programs().at(device_range);
 
     expect_half_grid_slots_packed(program, per_half, is_quasar);
@@ -351,17 +345,17 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid16Plus16DFBsOnDevice) {
     expect_no_slot_collision_on_core(program, CoreCoord{1, 0});
 
     const uint32_t result_addr = touch_result_l1_addr(this->device(), per_half);
-    auto cons_rtas = [&](const m2::NodeCoord& node) {
-        return m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_addr}});
+    auto cons_rtas = [&](const NodeCoord& node) {
+        return MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_addr}});
     };
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        {.kernel = m2::KernelSpecName{"prod_a"}},
-        {.kernel = m2::KernelSpecName{"cons_a"}, .runtime_arg_values = cons_rtas(m2::NodeCoord{0, 0})},
-        {.kernel = m2::KernelSpecName{"prod_b"}},
-        {.kernel = m2::KernelSpecName{"cons_b"}, .runtime_arg_values = cons_rtas(m2::NodeCoord{1, 0})},
+        {.kernel = KernelSpecName{"prod_a"}},
+        {.kernel = KernelSpecName{"cons_a"}, .runtime_arg_values = cons_rtas(NodeCoord{0, 0})},
+        {.kernel = KernelSpecName{"prod_b"}},
+        {.kernel = KernelSpecName{"cons_b"}, .runtime_arg_values = cons_rtas(NodeCoord{1, 0})},
     };
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> left_slots(per_half), right_slots(per_half);
@@ -394,47 +388,47 @@ TEST_F(UnitMeshAnyDispatchFixture, Pack22DFBsUseSharedTCSlotPool) {
     static_assert(num_dm_dfbs <= ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM);
     static_assert(num_intra_dfbs * ::dfb::TILE_COUNTERS_PER_INTRA_TENSIX_DFB <= ::dfb::NUM_TENSIX_ONLY_TILE_COUNTERS);
 
-    const m2::KernelSpecName pack_name{"pack"};
+    const KernelSpecName pack_name{"pack"};
     auto pack = make_compute_kernel(
         pack_name, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_pack_multi_touch.cpp", /*num_threads=*/1);
     pack.compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}};
 
     auto dm = make_touch_producer("dm_consumer", num_dm_dfbs, this->device());
 
-    m2::ProgramSpec spec;
+    ProgramSpec spec;
     spec.name = "pack_22_dfb_tc_slot_pool";
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const std::string name = "dfb_" + std::to_string(i);
-        const m2::DFBSpecName dfb{name};
+        const DFBSpecName dfb{name};
         auto dfb_spec = MakeMinimalDFB(name, /*entry_size=*/32, /*num_entries=*/2);
         dfb_spec.data_format_metadata = tt::DataFormat::Float16_b;
         spec.dataflow_buffers.push_back(dfb_spec);
         pack.dfb_bindings.push_back({
             .dfb_spec_name = dfb,
             .accessor_name = name,
-            .endpoint_type = m2::DFBEndpointType::PRODUCER,
+            .endpoint_type = DFBEndpointType::PRODUCER,
         });
         if (i < num_dm_dfbs) {
             dm.dfb_bindings.push_back({
                 .dfb_spec_name = dfb,
                 .accessor_name = name,
-                .endpoint_type = m2::DFBEndpointType::CONSUMER,
+                .endpoint_type = DFBEndpointType::CONSUMER,
             });
             disable_implicit_sync_for(dm, dfb);
         } else {
             pack.dfb_bindings.push_back({
                 .dfb_spec_name = dfb,
                 .accessor_name = name + "_in",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER,
+                .endpoint_type = DFBEndpointType::CONSUMER,
             });
         }
     }
     spec.kernels = {pack, dm};
     spec.work_units = {
-        MakeMinimalWorkUnit("wu", m2::NodeCoord{0, 0}, {"pack", "dm_consumer"}),
+        MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"pack", "dm_consumer"}),
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     LaunchProgram(this->device(), std::move(program));
 }
 
@@ -445,8 +439,8 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
 
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t num_entries = 8;
-    const m2::NodeCoord node_a{0, 0};
-    const m2::NodeCoord node_b{1, 0};
+    const NodeCoord node_a{0, 0};
+    const NodeCoord node_b{1, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
     auto in_a = MeshTensor::allocate_on_device(this->device(), tensor_spec);
@@ -454,16 +448,16 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
     auto in_b = MeshTensor::allocate_on_device(this->device(), tensor_spec);
     auto out_b = MeshTensor::allocate_on_device(this->device(), tensor_spec);
 
-    const m2::DFBSpecName dfb_a{"dfb_a"};
-    const m2::DFBSpecName dfb_b{"dfb_b"};
-    const m2::KernelSpecName prod_a{"producer_a"};
-    const m2::KernelSpecName cons_a{"consumer_a"};
-    const m2::KernelSpecName prod_b{"producer_b"};
-    const m2::KernelSpecName cons_b{"consumer_b"};
-    const m2::TensorParamName in_a_name{"in_a"};
-    const m2::TensorParamName out_a_name{"out_a"};
-    const m2::TensorParamName in_b_name{"in_b"};
-    const m2::TensorParamName out_b_name{"out_b"};
+    const DFBSpecName dfb_a{"dfb_a"};
+    const DFBSpecName dfb_b{"dfb_b"};
+    const KernelSpecName prod_a{"producer_a"};
+    const KernelSpecName cons_a{"consumer_a"};
+    const KernelSpecName prod_b{"producer_b"};
+    const KernelSpecName cons_b{"consumer_b"};
+    const TensorParamName in_a_name{"in_a"};
+    const TensorParamName out_a_name{"out_a"};
+    const TensorParamName in_b_name{"in_b"};
+    const TensorParamName out_b_name{"out_b"};
 
     auto producer_a = make_dm_dfb_producer(prod_a, dfb_a, in_a_name, num_entries, is_quasar);
     auto consumer_a =
@@ -474,7 +468,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
     apply_gen1_dm_configs(producer_a, consumer_a, this->device());
     apply_gen1_dm_configs(producer_b, consumer_b, this->device());
 
-    m2::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "half_grid_dataflow_1dfb",
         .kernels = {producer_a, consumer_a, producer_b, consumer_b},
         .dataflow_buffers =
@@ -502,14 +496,14 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
             },
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"))->device_slot, 0u);
     EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"))->device_slot, 0u);
 
-    auto rtas = [&](const m2::NodeCoord& node) {
-        return m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
+    auto rtas = [&](const NodeCoord& node) {
+        return MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
     };
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
         {.kernel = prod_a, .runtime_arg_values = rtas(node_a)},
         {.kernel = cons_a, .runtime_arg_values = rtas(node_a)},
@@ -522,7 +516,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
         {in_b_name, std::cref(in_b)},
         {out_b_name, std::cref(out_b)},
     };
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     const uint32_t words = num_entries * entry_size / sizeof(uint32_t);
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, words);
@@ -547,9 +541,9 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
         GTEST_SKIP() << "Needs at least coordinator + 2 workers (got " << grid.x << "x" << grid.y << ")";
     }
 
-    const m2::NodeCoord coordinator{0, 0};
-    const m2::NodeCoord worker_start{1, 0};
-    const m2::NodeCoord worker_end{static_cast<size_t>(grid.x - 1), 0};
+    const NodeCoord coordinator{0, 0};
+    const NodeCoord worker_start{1, 0};
+    const NodeCoord worker_end{static_cast<size_t>(grid.x - 1), 0};
 
     // Coordinator: wide + coord-only (2). Workers: wide + 3 worker-only (4).
     constexpr uint32_t touched_magic = 0xA11CED00u;
@@ -558,7 +552,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
     auto worker_prod = make_touch_producer("worker_prod", 4, this->device());
     auto worker_cons = make_touch_consumer("worker_cons", 4, touched_magic, this->device());
 
-    m2::ProgramSpec spec;
+    ProgramSpec spec;
     spec.name = "dfb_sort_shape_touch";
 
     auto add_dfb = [&](const std::string& name) {
@@ -582,10 +576,10 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
     spec.kernels = {coord_prod, coord_cons, worker_prod, worker_cons};
     spec.work_units = {
         MakeMinimalWorkUnit("wu_coord", coordinator, {"coord_prod", "coord_cons"}),
-        MakeMinimalWorkUnit("wu_workers", m2::NodeRange{worker_start, worker_end}, {"worker_prod", "worker_cons"}),
+        MakeMinimalWorkUnit("wu_workers", NodeRange{worker_start, worker_end}, {"worker_prod", "worker_cons"}),
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     const auto& impl = program.impl();
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_coord"))->id, 4u);
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_wide"))->device_slot, 0u);
@@ -596,21 +590,21 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
     expect_no_slot_collision_on_core(program, CoreCoord{0, 0});
     expect_no_slot_collision_on_core(program, CoreCoord{1, 0});
 
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     const uint32_t coord_result_addr = touch_result_l1_addr(this->device(), 2);
     const uint32_t worker_result_addr = touch_result_l1_addr(this->device(), 4);
-    m2::KernelRunArgs::RuntimeArgValues worker_cons_rtas;
+    KernelRunArgs::RuntimeArgValues worker_cons_rtas;
     for (size_t x = worker_start.x; x <= worker_end.x; ++x) {
-        m2::AddRuntimeArgsForNode(worker_cons_rtas, m2::NodeCoord{x, 0}, {{"result_l1_addr", worker_result_addr}});
+        AddRuntimeArgsForNode(worker_cons_rtas, NodeCoord{x, 0}, {{"result_l1_addr", worker_result_addr}});
     }
     params.kernel_run_args = {
-        {.kernel = m2::KernelSpecName{"coord_prod"}},
-        {.kernel = m2::KernelSpecName{"coord_cons"},
-         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(coordinator, {{"result_l1_addr", coord_result_addr}})},
-        {.kernel = m2::KernelSpecName{"worker_prod"}},
-        {.kernel = m2::KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
+        {.kernel = KernelSpecName{"coord_prod"}},
+        {.kernel = KernelSpecName{"coord_cons"},
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(coordinator, {{"result_l1_addr", coord_result_addr}})},
+        {.kernel = KernelSpecName{"worker_prod"}},
+        {.kernel = KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
     };
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload coord_worker_workload;
     coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);
@@ -645,9 +639,9 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerGappedSlotsOnDevice) {
         GTEST_SKIP() << "Needs at least coordinator + 2 workers (got " << grid.x << "x" << grid.y << ")";
     }
 
-    const m2::NodeCoord coordinator{0, 0};
-    const m2::NodeCoord worker_start{1, 0};
-    const m2::NodeCoord worker_end{static_cast<size_t>(grid.x - 1), 0};
+    const NodeCoord coordinator{0, 0};
+    const NodeCoord worker_start{1, 0};
+    const NodeCoord worker_end{static_cast<size_t>(grid.x - 1), 0};
 
     constexpr uint32_t touched_magic = 0xA11CED00u;
     auto coord_prod = make_touch_producer("coord_prod", 2, this->device());
@@ -655,7 +649,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerGappedSlotsOnDevice) {
     auto worker_prod = make_touch_producer("worker_prod", 4, this->device());
     auto worker_cons = make_touch_consumer("worker_cons", 4, touched_magic, this->device());
 
-    m2::ProgramSpec spec;
+    ProgramSpec spec;
     spec.name = "dfb_gapped_slot_touch";
 
     auto add_dfb = [&](const std::string& name) {
@@ -679,10 +673,10 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerGappedSlotsOnDevice) {
     spec.kernels = {coord_prod, coord_cons, worker_prod, worker_cons};
     spec.work_units = {
         MakeMinimalWorkUnit("wu_coord", coordinator, {"coord_prod", "coord_cons"}),
-        MakeMinimalWorkUnit("wu_workers", m2::NodeRange{worker_start, worker_end}, {"worker_prod", "worker_cons"}),
+        MakeMinimalWorkUnit("wu_workers", NodeRange{worker_start, worker_end}, {"worker_prod", "worker_cons"}),
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     const auto& impl = program.impl();
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_0"))->device_slot, 0u);
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_1"))->device_slot, 1u);
@@ -692,21 +686,21 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerGappedSlotsOnDevice) {
     expect_no_slot_collision_on_core(program, CoreCoord{0, 0});
     expect_no_slot_collision_on_core(program, CoreCoord{1, 0});
 
-    m2::ProgramRunArgs params;
+    ProgramRunArgs params;
     const uint32_t coord_result_addr = touch_result_l1_addr(this->device(), 2);
     const uint32_t worker_result_addr = touch_result_l1_addr(this->device(), 4);
-    m2::KernelRunArgs::RuntimeArgValues worker_cons_rtas;
+    KernelRunArgs::RuntimeArgValues worker_cons_rtas;
     for (size_t x = worker_start.x; x <= worker_end.x; ++x) {
-        m2::AddRuntimeArgsForNode(worker_cons_rtas, m2::NodeCoord{x, 0}, {{"result_l1_addr", worker_result_addr}});
+        AddRuntimeArgsForNode(worker_cons_rtas, NodeCoord{x, 0}, {{"result_l1_addr", worker_result_addr}});
     }
     params.kernel_run_args = {
-        {.kernel = m2::KernelSpecName{"coord_prod"}},
-        {.kernel = m2::KernelSpecName{"coord_cons"},
-         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(coordinator, {{"result_l1_addr", coord_result_addr}})},
-        {.kernel = m2::KernelSpecName{"worker_prod"}},
-        {.kernel = m2::KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
+        {.kernel = KernelSpecName{"coord_prod"}},
+        {.kernel = KernelSpecName{"coord_cons"},
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(coordinator, {{"result_l1_addr", coord_result_addr}})},
+        {.kernel = KernelSpecName{"worker_prod"}},
+        {.kernel = KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
     };
-    m2::SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
     distributed::MeshWorkload coord_worker_workload;
     coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);

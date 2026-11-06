@@ -279,23 +279,22 @@ static std::string int_to_hex(int value) {
 
 // Builds the compute-kernel program for the specified test configuration.
 static Program make_writer_program(distributed::MeshDevice& mesh_device, const ConfigRegPrintTestConfig& config) {
-    experimental::ComputeHardwareConfig hw_config;
-    hw_config = experimental::ComputeHardwareConfig{};
+    ComputeHardwareConfig hw_config;
+    hw_config = ComputeHardwareConfig{};
 
-    const experimental::KernelSpecName kKernel{"config_reg_writer"};
-    experimental::ProgramSpec spec{
+    const KernelSpecName kKernel{"config_reg_writer"};
+    ProgramSpec spec{
         .name = "dprint_config_reg",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = kKernel,
             .source = std::filesystem::path{config.write_kernel},
             .num_threads = 1,
             .compile_time_args = {{"register_name", config.register_name}},
             .hw_config = hw_config,
         }},
-        .work_units = {experimental::WorkUnitSpec{
-            .name = "main", .kernels = {kKernel}, .target_nodes = experimental::NodeCoord{config.core}}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = NodeCoord{config.core}}},
     };
-    return experimental::MakeProgramFromSpec(mesh_device, spec);
+    return tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
 }
 
 static std::string generate_golden_output(

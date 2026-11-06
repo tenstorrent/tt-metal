@@ -110,49 +110,49 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
     const uint32_t result_addr = static_cast<uint32_t>(result_buffer->address());
     const CoreCoord core{0, 0};
     const CoreRangeSet crs(CoreRange(core, core));
-    const experimental::NodeCoord node{core.x, core.y};
+    const NodeCoord node{core.x, core.y};
 
-    const experimental::DFBSpecName DFB_NAME{"cache_dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
-    const experimental::SemaphoreSpecName SEM_RELEASE{"cache_release"};  // multi-consumer-ALL publisher->waiters
+    const DFBSpecName DFB_NAME{"cache_dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
+    const SemaphoreSpecName SEM_RELEASE{"cache_release"};  // multi-consumer-ALL publisher->waiters
 
-    experimental::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = p.entry_size,
         .num_entries = p.num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    const auto consumer_pattern = (p.cap == dfb::AccessPattern::ALL) ? experimental::DFBAccessPattern::ALL
-                                                                     : experimental::DFBAccessPattern::STRIDED;
+    const auto consumer_pattern =
+        (p.cap == dfb::AccessPattern::ALL) ? DFBAccessPattern::ALL : DFBAccessPattern::STRIDED;
 
     const std::vector<std::string> rta_names = {
         "is_active", "test_mode", "lock_n", "num_entries", "ring_base", "result_addr", "new_val", "num_rounds"};
 
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_scoped_lock_cache_producer.cpp",
         .num_threads = static_cast<uint8_t>(p.num_producers),
-        .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+        .dfb_bindings = {ProducerOf(DFB_NAME, "out")},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_scoped_lock_cache_consumer.cpp",
         .num_threads = static_cast<uint8_t>(p.num_consumers),
         .dfb_bindings = {{
             .dfb_spec_name = DFB_NAME,
             .accessor_name = "in",
-            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+            .endpoint_type = DFBEndpointType::CONSUMER,
             .access_pattern = consumer_pattern,
         }},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    std::vector<experimental::SemaphoreSpec> semaphores;
+    std::vector<SemaphoreSpec> semaphores;
     if (p.multi_all) {
         // Compile both kernels' multi-consumer-ALL path; publisher releases the waiters via a Program-scope
         // semaphore (single core: local up(1) is seen by every waiter's wait(1)).
@@ -174,8 +174,8 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
         disable_implicit_sync_for(consumer_spec, DFB_NAME);
     }
 
-    experimental::WorkUnitSpec wu{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = crs};
-    experimental::ProgramSpec spec{
+    WorkUnitSpec wu{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = crs};
+    ProgramSpec spec{
         .name = "dfb_scoped_lock_cache",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
@@ -185,7 +185,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     auto make_node_args = [&](bool active) {
-        return experimental::MakeRuntimeArgsForSingleNode(
+        return MakeRuntimeArgsForSingleNode(
             node,
             {{"is_active", active ? 1u : 0u},
              {"test_mode", static_cast<uint32_t>(p.mode)},
@@ -196,11 +196,11 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
              {"new_val", DFB_CACHE_NEW_BASE},
              {"num_rounds", p.num_rounds}});
     };
-    experimental::ProgramRunArgs run_args;
-    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    ProgramRunArgs run_args;
+    ProgramRunArgs::KernelRunArgs producer_params{};
     producer_params.kernel = PRODUCER;
     producer_params.runtime_arg_values = make_node_args(p.active_is_producer);
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;
     consumer_params.runtime_arg_values = make_node_args(!p.active_is_producer);
     run_args.kernel_run_args = {producer_params, consumer_params};
@@ -470,40 +470,39 @@ std::vector<uint32_t> run_scoped_lock_cache_test(distributed::MeshDevice& mesh_d
 
     const CoreCoord core{0, 0};
     const CoreRangeSet crs(CoreRange(core, core));
-    const experimental::NodeCoord node{core.x, core.y};
-    const experimental::KernelSpecName KERNEL{"scoped_lock_cache_kernel"};
-    const experimental::ScratchpadSpecName PAD{"pad"};
+    const NodeCoord node{core.x, core.y};
+    const KernelSpecName KERNEL{"scoped_lock_cache_kernel"};
+    const ScratchpadSpecName PAD{"pad"};
 
-    experimental::KernelSpec kernel{
+    KernelSpec kernel{
         .unique_id = KERNEL,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cache.cpp",
         .num_threads = 1,
         .runtime_arg_schema =
             {.runtime_arg_names = {"mode", "region_base", "result_addr", "lock_off_lines", "lock_n_lines"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
     kernel.compiler_options.defines = {{scoped_lock_cache_abstraction_define(p.abstraction), "1"}};
 
-    std::vector<experimental::ScratchpadSpec> scratchpads;
+    std::vector<ScratchpadSpec> scratchpads;
     if (p.abstraction == ScopedLockCacheAbstraction::Scratchpad) {
         kernel.scratchpad_bindings.push_back(
-            experimental::KernelSpec::ScratchpadBinding{.scratchpad_spec_name = PAD, .accessor_name = "pad"});
-        scratchpads.push_back(
-            experimental::ScratchpadSpec{.unique_id = PAD, .size_per_node = SCOPED_LOCK_CACHE_REGION_BYTES});
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = PAD, .accessor_name = "pad"});
+        scratchpads.push_back(ScratchpadSpec{.unique_id = PAD, .size_per_node = SCOPED_LOCK_CACHE_REGION_BYTES});
     }
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "scoped_lock_cache",
         .kernels = {kernel},
         .scratchpads = scratchpads,
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {KERNEL}, .target_nodes = crs}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {KERNEL}, .target_nodes = crs}},
     };
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
-    run_args.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node,
             {{"mode", static_cast<uint32_t>(p.mode)},
              {"region_base", region_base},

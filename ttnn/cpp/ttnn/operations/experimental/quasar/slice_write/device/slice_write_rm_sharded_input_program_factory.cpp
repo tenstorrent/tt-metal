@@ -16,14 +16,14 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace {
 
@@ -103,7 +103,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     log_debug(tt::LogOp, "Slice Write Padded Sticks: {}", padded_sticks_str);
     log_debug(tt::LogOp, "Accumulated Input : {}", accumulated_input_total_per_dim);
 
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();

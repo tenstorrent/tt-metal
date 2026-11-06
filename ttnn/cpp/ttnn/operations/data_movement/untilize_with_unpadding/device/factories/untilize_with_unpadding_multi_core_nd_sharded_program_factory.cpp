@@ -13,15 +13,15 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::prim {
 

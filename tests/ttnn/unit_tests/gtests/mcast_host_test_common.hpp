@@ -9,8 +9,8 @@
 #include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
 #include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -23,7 +23,7 @@ using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
 namespace wire = dataflow_kernel_lib::mcast_wire;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using dataflow_kernel_lib::SenderMcastMode;
 using dataflow_kernel_lib::TransferMode;
 class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixture> {};

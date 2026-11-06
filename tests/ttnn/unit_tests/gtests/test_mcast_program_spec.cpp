@@ -279,7 +279,7 @@ void run_spec_device_contract(
     // Named RT values may be declared after attach: generated get_vararg must use
     // the final named-argument offset, preserving both the caller prefix and helper slices.
     spec.kernels.front().runtime_arg_schema.runtime_arg_names = {"seed", "report_addr"};
-    auto workload = m2::MakeMeshWorkloadFromSpec(device, spec);
+    auto workload = m2::experimental::MakeMeshWorkloadFromSpec(device, spec);
     auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         const uint32_t seed = 19 + run * 173;
@@ -295,7 +295,7 @@ void run_spec_device_contract(
             tt::tt_metal::detail::WriteToDeviceL1(physical, node, report_addr, zero);
         }
         for (auto& [region, program] : workload.get_programs()) {
-            m2::SetProgramRunArgs(program, invocation);
+            m2::experimental::SetProgramRunArgs(program, invocation);
         }
         EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
         for (auto node : placed) {

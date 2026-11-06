@@ -9,8 +9,8 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -25,16 +25,16 @@ constexpr const char* kDeepseekMoeGateKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/device/kernels/deepseek_moe_gate_kernel.cpp";
 
 // The one unified kernel source, built once per RISC.
-const tt::tt_metal::experimental::KernelSpecName kReaderKernel{"reader"};
-const tt::tt_metal::experimental::KernelSpecName kWriterKernel{"writer"};
-const tt::tt_metal::experimental::KernelSpecName kComputeKernel{"compute"};
+const tt::tt_metal::KernelSpecName kReaderKernel{"reader"};
+const tt::tt_metal::KernelSpecName kWriterKernel{"writer"};
+const tt::tt_metal::KernelSpecName kComputeKernel{"compute"};
 
 // Tensor-backed dataflow buffers, one per io tensor.
-const tt::tt_metal::experimental::DFBSpecName kInputDfb{"input"};
-const tt::tt_metal::experimental::DFBSpecName kBiasDfb{"bias"};
-const tt::tt_metal::experimental::DFBSpecName kOutputDfb{"output"};
-const tt::tt_metal::experimental::DFBSpecName kInputIndicesDfb{"input_indices"};
-const tt::tt_metal::experimental::DFBSpecName kOutputIndicesDfb{"output_indices"};
+const tt::tt_metal::DFBSpecName kInputDfb{"input"};
+const tt::tt_metal::DFBSpecName kBiasDfb{"bias"};
+const tt::tt_metal::DFBSpecName kOutputDfb{"output"};
+const tt::tt_metal::DFBSpecName kInputIndicesDfb{"input_indices"};
+const tt::tt_metal::DFBSpecName kOutputIndicesDfb{"output_indices"};
 
 uint32_t float_bits_u32(float value) {
     static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32 bits to pack into a compile-time arg");
@@ -43,9 +43,9 @@ uint32_t float_bits_u32(float value) {
 
 // A dataflow buffer on the tensor's own sharded L1 memory: the whole per-core shard, split into tile-sized
 // entries (or a single entry when the tile size does not divide the shard).
-tt::tt_metal::experimental::DataflowBufferSpec make_tensor_backed_dfb(
-    const tt::tt_metal::experimental::DFBSpecName& dfb_name,
-    const tt::tt_metal::experimental::TensorParamName& tensor_name,
+tt::tt_metal::DataflowBufferSpec make_tensor_backed_dfb(
+    const tt::tt_metal::DFBSpecName& dfb_name,
+    const tt::tt_metal::TensorParamName& tensor_name,
     const ttnn::Tensor& tensor) {
     const auto& spec = tensor.tensor_spec();
     const auto& tile = spec.tile();
@@ -53,7 +53,7 @@ tt::tt_metal::experimental::DataflowBufferSpec make_tensor_backed_dfb(
     uint32_t tile_size = tile.get_tile_size(data_format);
     uint32_t total_size = tensor.buffer()->aligned_size_per_bank();
     uint32_t entry_size = (total_size % tile_size == 0) ? tile_size : total_size;
-    return tt::tt_metal::experimental::DataflowBufferSpec{
+    return tt::tt_metal::DataflowBufferSpec{
         .unique_id = dfb_name,
         .entry_size = entry_size,
         .num_entries = total_size / entry_size,
@@ -67,7 +67,7 @@ tt::tt_metal::experimental::DataflowBufferSpec make_tensor_backed_dfb(
 
 ttnn::device_operation::ProgramArtifacts build_moe_gate_program_artifacts(
     const tensor_args_t& tensor_args, const operation_attributes_t& operation_attrs) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     using tt::tt_metal::CoreRangeSet;
     using tt::tt_metal::DataType;
 

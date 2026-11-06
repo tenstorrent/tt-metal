@@ -18,7 +18,7 @@
 
 #include "impl/metal2_host_api/helpers.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ----------------------------------------------------------------------------
 // ReservePrefetcherPipeSlots: PrefetcherPipeParameters -> Program slots
@@ -49,7 +49,8 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
     }
 
     // Per-parameter placement, accumulated across the accessor groups that name it.
-    std::unordered_map<PrefetcherPipeParamName, detail::ProgramImpl::PrefetcherPipeParameterBinding> placements;
+    std::unordered_map<experimental::PrefetcherPipeParamName, detail::ProgramImpl::PrefetcherPipeParameterBinding>
+        placements;
     for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
         placements[pipe.unique_id] = detail::ProgramImpl::PrefetcherPipeParameterBinding{
             .device = &mesh_device,
@@ -59,11 +60,11 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
     }
 
     // Relay DFBs keyed by their (sorted) relayed pipe set, so a group can find its relay.
-    auto sorted_names = [](std::vector<PrefetcherPipeParamName> names) {
+    auto sorted_names = [](std::vector<experimental::PrefetcherPipeParamName> names) {
         std::sort(names.begin(), names.end());
         return names;
     };
-    std::map<std::vector<PrefetcherPipeParamName>, const DataflowBufferSpec*> relay_by_pipe_set;
+    std::map<std::vector<experimental::PrefetcherPipeParamName>, const DataflowBufferSpec*> relay_by_pipe_set;
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.advanced_options.prefetcher_pipe_relays.empty()) {
             continue;
@@ -84,11 +85,11 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
         }
         const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
         for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
-            const PrefetcherPipeParameter* first =
+            const experimental::PrefetcherPipeParameter* first =
                 collected.prefetcher_pipe_by_name.at(binding.pipe_parameter_names[0]);
             NodeRangeSet group_receivers;
             for (const auto& pipe_name : binding.pipe_parameter_names) {
-                const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+                const experimental::PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
                 group_receivers = group_receivers.merge(to_node_range_set(pipe->receivers));
             }
             const NodeRangeSet role_nodes = prefetcher_pipe_role_nodes(nodes, binding);
@@ -106,7 +107,7 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
             // Sender role: the spec does not say which of the kernel's nodes hosts which pipe, so
             // every pipe's placement names all of them; the bind narrows it to the pipe's sender.
             for (const auto& pipe_name : binding.pipe_parameter_names) {
-                const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+                const experimental::PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
                 placements.at(pipe_name).slots.push_back(
                     {.prefetcher_pipe_id = prefetcher_pipe_id,
                      .cores = is_sender_role ? role_nodes : to_node_range_set(pipe->receivers),
@@ -155,4 +156,4 @@ std::unordered_map<DFBSpecName, uint8_t> RecordRelayPipeIds(
     return dfb_name_to_prefetcher_pipe_id;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

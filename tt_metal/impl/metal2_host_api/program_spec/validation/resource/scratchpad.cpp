@@ -11,7 +11,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch) {
     TT_FATAL(
@@ -68,4 +68,4 @@ void ValidateScratchpadsUsed(const ValidationContext& ctx) {
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -6,13 +6,12 @@
 #include <cstdint>
 #include <utility>
 
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 namespace ttnn::experimental::prim::stockham_spec {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 inline constexpr uint32_t kTileElems = 1024u;
 inline constexpr uint32_t kTileBytesFp32 = 4096u;

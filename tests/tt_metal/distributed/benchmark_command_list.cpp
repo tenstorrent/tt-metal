@@ -16,8 +16,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
@@ -26,7 +26,7 @@
 namespace tt::tt_metal::experimental::bench {
 namespace {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 using m2::test_helpers::BindTensorParameterToKernel;
 using m2::test_helpers::MakeMinimalGen1DMKernel;
@@ -123,7 +123,7 @@ BenchList make_list(MeshDevice& mesh_device, bool tensor, uint32_t num_programs,
         if (tensor) {
             spec.tensor_parameters = {m2::TensorParameter{.unique_id = m2::TensorParamName{"io"}, .spec = tensor_spec}};
         }
-        auto workload = m2::MakeMeshWorkloadFromSpec(mesh_device, spec);
+        auto workload = MakeMeshWorkloadFromSpec(mesh_device, spec);
         auto& program = workload.get_programs().begin()->second;
 
         m2::ProgramRunArgs::KernelRunArgs kernel_args{
@@ -139,7 +139,7 @@ BenchList make_list(MeshDevice& mesh_device, bool tensor, uint32_t num_programs,
             }
         }
         args.kernel_run_args = {kernel_args};
-        m2::SetProgramRunArgs(program, args);
+        SetProgramRunArgs(program, args);
 
         CmdListParameters parameters;
         if (tensor) {

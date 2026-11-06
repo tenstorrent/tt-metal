@@ -14,7 +14,7 @@
 #include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in override_runtime_arguments()
 #include "ttnn/metal_v2_artifacts.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -48,7 +48,7 @@ struct NlpCreateHeadsDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
@@ -61,7 +61,7 @@ struct NlpCreateHeadsDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,

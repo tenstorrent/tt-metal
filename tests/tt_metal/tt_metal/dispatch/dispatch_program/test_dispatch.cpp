@@ -573,20 +573,20 @@ std::optional<CoreCoord> quasar_dispatch_s_virtual_core(distributed::MeshDevice&
 }
 
 Program create_quasar_l1_write_program(
-    distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t l1_address, uint32_t value) {
-    const experimental::KernelSpecName dm_kernel_name{"dispatch_s_test_dm"};
-    experimental::KernelSpec dm_kernel_spec{
+    distributed::MeshDevice& mesh_device, const NodeCoord& node, uint32_t l1_address, uint32_t value) {
+    const KernelSpecName dm_kernel_name{"dispatch_s_test_dm"};
+    KernelSpec dm_kernel_spec{
         .unique_id = dm_kernel_name,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "quasar_dispatch_s_test",
         .kernels = {dm_kernel_spec},
-        .work_units = {experimental::WorkUnitSpec{
+        .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {dm_kernel_name},
             .target_nodes = node,
@@ -594,10 +594,10 @@ Program create_quasar_l1_write_program(
     };
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = dm_kernel_name,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", l1_address}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", l1_address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
     experimental::SetProgramRunArgs(program, params);
@@ -640,7 +640,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     EXPECT_EQ(dispatch_s_logical.x, dispatch_logical.x);
     EXPECT_EQ(dispatch_s_logical.y, dispatch_logical.y);
 
-    const experimental::NodeCoord worker_node{0, 0};
+    const NodeCoord worker_node{0, 0};
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     constexpr uint32_t test_value = 0xdeadbeef;

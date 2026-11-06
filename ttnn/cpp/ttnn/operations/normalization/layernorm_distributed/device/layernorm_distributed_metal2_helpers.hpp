@@ -12,16 +12,16 @@
 #include <tt-umd/types/arch.hpp>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
 
 // Helpers shared by the layernorm_distributed program factories. They live in a header because the
 // factories are unity-built into one translation unit, where per-file anonymous namespaces merge and
 // duplicate definitions collide.
 namespace ttnn::prim::layernorm_distributed_metal2 {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 // Build a DataflowBufferSpec holding num_tiles entries of one tile each.
 inline m2::DataflowBufferSpec make_dfb(

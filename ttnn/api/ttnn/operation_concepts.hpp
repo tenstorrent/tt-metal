@@ -14,7 +14,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <cstdint>
 
@@ -76,8 +76,8 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // Metal 2.0 op-porting stepping-stone factory concept: factories that return
 // ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
 // create_program_artifacts. The framework adapter maps that same ProgramSpec onto
-// tensor_coords via experimental::MakeMeshWorkloadFromSpecs on cache miss, and
-// patches every TensorArg (io and op-owned alike) via experimental::UpdateTensorArgs
+// tensor_coords via tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs on cache miss, and
+// patches every TensorArg (io and op-owned alike) via tt::tt_metal::experimental::UpdateTensorArgs
 // on cache hit.
 //
 // NOTE: Each TensorArgument in ProgramRunArgs MUST reference a MeshTensor reachable from
@@ -111,7 +111,7 @@ template <typename T>
 concept HasSpecRuntimeArgsOverride = requires {
     requires std::same_as<
         typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
-        tt::tt_metal::experimental::ProgramRunArgs>;
+        tt::tt_metal::ProgramRunArgs>;
 };
 }  // namespace detail
 

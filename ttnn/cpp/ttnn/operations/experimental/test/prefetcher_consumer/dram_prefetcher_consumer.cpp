@@ -20,8 +20,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 namespace ttnn::operations::experimental::test {
 
@@ -109,7 +109,7 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
             metal_exp::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(pipes));
         std::vector<metal_exp::PrefetcherPipeParamName> names;
         std::vector<metal_exp::PrefetcherPipeParameter> parameters;
-        metal_exp::ProgramRunArgs run_args;
+        ProgramRunArgs run_args;
         for (size_t i = 0; i < pipes.size(); ++i) {
             const metal_exp::PrefetcherPipeParamName name = pipe_param_name(i);
             names.push_back(name);
@@ -120,23 +120,21 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
                  .entry_size = operation_attributes.page_size_bytes});
             run_args.advanced_options.prefetcher_pipe_args.emplace(name, metal_exp::PrefetcherPipeArgument{*pipes[i]});
         }
-        metal_exp::KernelSpec receiver{
-            .unique_id = metal_exp::KernelSpecName{"receiver"},
+        KernelSpec receiver{
+            .unique_id = KernelSpecName{"receiver"},
             .source = std::filesystem::path{
                 "tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_bench_discard_receiver.cpp"}};
         receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = names, .accessor_name = "in"}};
         receiver.compile_time_args = {
             {"num_iters", operation_attributes.num_iters}, {"hold_cycles", operation_attributes.hold_cycles}};
-        receiver.hw_config = metal_exp::DataMovementHardwareConfig{
-            .config_1xx = metal_exp::DataMovementHardwareConfig::DataMovement1XXConfig{
+        receiver.hw_config = DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
-        metal_exp::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "dram_prefetcher_pipe_consumer",
             .kernels = {std::move(receiver)},
             .work_units =
-                {{.name = "receiver_wu",
-                  .kernels = {metal_exp::KernelSpecName{"receiver"}},
-                  .target_nodes = receiver_cores}},
+                {{.name = "receiver_wu", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = receiver_cores}},
             .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
         program = metal_exp::MakeProgramFromSpec(*operation_attributes.mesh_device, spec);
         metal_exp::SetProgramRunArgs(program, run_args);
@@ -176,7 +174,7 @@ void DramPrefetcherConsumerDeviceOperation::ProgramFactory::override_runtime_arg
     if (operation_attributes.prefetcher_pipes.empty()) {
         return;
     }
-    metal_exp::ProgramRunArgs run_args;
+    tt::tt_metal::ProgramRunArgs run_args;
     for (size_t i = 0; i < operation_attributes.prefetcher_pipes.size(); ++i) {
         run_args.advanced_options.prefetcher_pipe_args.emplace(
             pipe_param_name(i), metal_exp::PrefetcherPipeArgument{*operation_attributes.prefetcher_pipes[i]});

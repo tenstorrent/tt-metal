@@ -6,8 +6,8 @@
 
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include "ttnn/distributed/types.hpp"
@@ -19,13 +19,13 @@ namespace ttnn::device_operation {
 // allocates for itself. Returned by a ProgramSpecFactoryConcept or
 // CustomProgramSpecFactoryConcept factory's
 // create_program_artifacts method; the framework adapter maps that same spec
-// onto tensor_coords via experimental::MakeMeshWorkloadFromSpecs.
+// onto tensor_coords via tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs.
 //
 // This artifact is SPMD-shaped: one program, replicated. Ops whose programs vary
 // across the mesh return MeshWorkloadArtifacts instead.
 struct ProgramArtifacts {
-    tt::tt_metal::experimental::ProgramSpec spec;
-    tt::tt_metal::experimental::ProgramRunArgs run_params;
+    tt::tt_metal::ProgramSpec spec;
+    tt::tt_metal::ProgramRunArgs run_params;
 
     // Op-owned device tensors the factory allocates for itself (scratch /
     // workspace). The adapter parks these in the program cache so their
@@ -45,8 +45,8 @@ struct MeshWorkloadArtifacts {
     // Range-keyed: a program uniform over part of the mesh is one entry covering that range.
     struct PerCoordProgram {
         ttnn::MeshCoordinateRange range;
-        tt::tt_metal::experimental::ProgramSpec spec;
-        tt::tt_metal::experimental::ProgramRunArgs run_params;
+        tt::tt_metal::ProgramSpec spec;
+        tt::tt_metal::ProgramRunArgs run_params;
     };
     std::vector<PerCoordProgram> programs;
 };
