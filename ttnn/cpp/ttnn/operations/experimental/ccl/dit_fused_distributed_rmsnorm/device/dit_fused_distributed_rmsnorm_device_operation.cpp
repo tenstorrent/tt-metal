@@ -388,8 +388,11 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "DitFusedDistributedRmsnormDeviceOperation::compute_program_hash");
     auto* mesh_device = tensor_args.input.device();
+    // sub_device_id is keyed through the worker core range set it resolves to.
     auto sd_id = args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    // multi_device_global_semaphore is excluded: callers ping-pong it per launch, and
+    // DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments re-applies it on every hit.
     return tt::tt_metal::operation::hash_operation<DitFusedDistributedRmsnormDeviceOperation>(
         args.epsilon,
         args.num_heads_per_device,

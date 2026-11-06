@@ -33,7 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, decode_tail
 
 
 @dataclass(frozen=True)
@@ -166,10 +166,15 @@ def reconstruct_convolution_at_sp_rank(
     sp_axis: int,
     tp_axis: int,
     sp_rank: int,
-    local_width: int,
+    config: KDAConfig,
+    page_channels: int | None,
 ) -> torch.Tensor:
-    """Reconstruct grouped Q/K/V convolution state at one sequence rank."""
-    shards = _device_shards(tensor)
+    """Reconstruct grouped Q/K/V convolution state at one sequence rank, as ``[1, K-1, W]`` rows.
+
+    ``page_channels`` is the layer's ``convolution_page_channels``, the layout of ``tensor``.
+    """
+    shards = [decode_tail(shard, page_channels) for shard in _device_shards(tensor)]
+    local_width = config.num_heads // tuple(mesh_device.shape)[tp_axis] * config.head_k_dim
     columns = tuple(mesh_device.shape)[1]
     tp_size = tuple(mesh_device.shape)[tp_axis]
     physical = []
@@ -228,6 +233,7 @@ def check_kimi_k3_accuracy(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     *,
+    page_channels: int | None,
     pcc_threshold: float,
     nrmse: LayerNrmseThresholds,
     valid_length: int | None = None,
@@ -240,7 +246,6 @@ def check_kimi_k3_accuracy(
     sequence_parallel_axis = 1 - tensor_parallel_axis
     mesh_shape = tuple(mesh_device.shape)
     sp_size = mesh_shape[sequence_parallel_axis]
-    tp_size = mesh_shape[tensor_parallel_axis]
     actual_output = reconstruct_sp_tp_tensor(
         output,
         mesh_device,
@@ -255,7 +260,6 @@ def check_kimi_k3_accuracy(
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
-    local_width = case.config.num_heads // tp_size * case.config.head_k_dim
     output_pcc, failures = compare_cpu_device(
         f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse.output
     )
@@ -270,7 +274,8 @@ def check_kimi_k3_accuracy(
             sequence_parallel_axis,
             tensor_parallel_axis,
             sp_rank,
-            local_width,
+            case.config,
+            page_channels,
         )
         recurrent_pcc, recurrent_failures = compare_cpu_device(
             f"{name} sp_rank={sp_rank} recurrent state",
@@ -432,13 +437,14 @@ def kimi_k3_tensor_cache_path(
 def make_small_kda_test_config(
     *,
     use_full_rank_gate: bool = False,
+    head_dim: int = 32,
 ) -> KDAConfig:
     """Return a reduced synthetic KDA config for fast contract tests, not a Kimi-K3 config."""
     return KDAConfig(
         hidden_size=64,
         num_heads=2,
-        head_k_dim=32,
-        head_v_dim=32,
+        head_k_dim=head_dim,
+        head_v_dim=head_dim,
         conv_kernel_size=4,
         norm_eps=1e-5,
         use_full_rank_gate=use_full_rank_gate,
@@ -509,6 +515,7 @@ def build_layer(
     *,
     active_seq_len: int,
     summary_group_chunks: int | None = None,
+    convolution_page_channels: int | None = None,
 ) -> ttKDA:
     if summary_group_chunks is None:
         # Explicit small-model configurations preserve the established geometry coverage.
@@ -525,6 +532,7 @@ def build_layer(
             recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
             gated_rms_output_dtype=ttnn.bfloat16,
             output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+            convolution_page_channels=convolution_page_channels,
         ),
         active_seq_len=active_seq_len,
     )
@@ -560,6 +568,7 @@ def assert_matches_reference(
     sp_axis: int,
     tp_axis: int,
     config: KDAConfig,
+    page_channels: int | None,
     label: str,
     nrmse: LayerNrmseThresholds,
     state_linf_threshold: float | None = 0.6,
@@ -582,8 +591,6 @@ def assert_matches_reference(
     expected_convolution = torch.cat(
         (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
-    local_heads = config.num_heads // tuple(mesh_device.shape)[tp_axis]
-    local_width = local_heads * config.head_k_dim
 
     for sp_rank in range(tuple(mesh_device.shape)[sp_axis]):
         assert_accurate(
@@ -596,7 +603,9 @@ def assert_matches_reference(
         )
         assert_accurate(
             expected_convolution,
-            reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
+            reconstruct_convolution_at_sp_rank(
+                state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, config, page_channels
+            ),
             name=f"{label} sp_rank={sp_rank} convolution",
             pcc_threshold=pcc_threshold,
             nrmse_threshold=nrmse.convolution,
