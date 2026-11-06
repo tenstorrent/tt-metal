@@ -59,7 +59,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
     tokenize,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
-from models.experimental.nomic_embed_text_v2_moe.tt.chunking import plan_chunks, plan_sorted_chunks
+from models.experimental.nomic_embed_text_v2_moe.tt.chunking import _padded, plan_chunks, plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     FUSED_ATTENTION_MAX_TILES,
     FUSED_ATTENTION_MIN_TILES,
@@ -306,18 +306,25 @@ def embed(
     pieces = []
     for chunk in chunks:
         rows = order[chunk.start : chunk.start + chunk.count]
-        # At least one token a row: a fully padded row pools to zeros either way.
-        width = max(chunk.seqlen, 1)
-        chunk_mask = attention_mask[rows, :width]
+        # The chunk runs at its longest text's length rounded up to whole tiles (at least one tile): at a width off
+        # the tile grid the generated norm, SDPA and MoE glue refuse the pass and the stock ones run, with a reshape
+        # copy before every router (a 10 x 358 pass 7.87 ms against 5.35 for 8 x 512, nomic-opt v12). The added
+        # slots are padding: the mask marks them, nomic_sdpa takes the real lengths and pooling skips them.
+        width = _padded(chunk.seqlen)
+        chunk_ids, chunk_mask = input_ids[rows, :width], attention_mask[rows, :width]
+        if chunk_ids.shape[-1] < width:  # the batch itself is narrower than the rounded width
+            extra = width - chunk_ids.shape[-1]
+            chunk_ids = torch.nn.functional.pad(chunk_ids, (0, extra), value=model.config.pad_token_id)
+            chunk_mask = torch.nn.functional.pad(chunk_mask, (0, extra), value=0)
         # Pooling needs a mask even where the backbone did not: padded positions must not enter the
         # mean, because the <pad> embedding is trained and non-zero, so counting it would make one
         # text's embedding depend on how long its batch-mates are.
         if model.tt_config.packed_pooling and width % ttnn.TILE_SIZE == 0:
             # The output stays in L1, read once by the pool and freed before the next chunk runs.
-            hidden = model(input_ids[rows, :width], chunk_mask, output_memory_config=ttnn.L1_MEMORY_CONFIG)
+            hidden = model(chunk_ids, chunk_mask, output_memory_config=ttnn.L1_MEMORY_CONFIG)
             pooled = pooling.packed_sum_pool(hidden, _packed_weights(model, chunk_mask), kernel_config)
         else:
-            hidden = model(input_ids[rows, :width], chunk_mask)
+            hidden = model(chunk_ids, chunk_mask)
             pooled = pooling.mean_pool(
                 hidden, pooling_mask(chunk_mask, model.device), compute_kernel_config=kernel_config
             )
