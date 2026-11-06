@@ -1892,6 +1892,21 @@
   team: shield
   budget_type: unit
 
+- name: ViT Blackhole unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    export TT_METAL_WATCHER=30
+    pytest --timeout 600 models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_hiRes_bh.py
+  model: vit
+  model_family: ViT
+  skus:
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U0B25UFEEAX # Milos Micic
+  team: models
+  budget_type: unit
+
 - name: EfficientDet-D0 unit tests
   cmd: TT_METAL_WATCHER=30 pytest --timeout 600 models/experimental/efficientdetd0/tests/pcc/test_efficient_det.py
   model: efficientdet-d0
