@@ -879,6 +879,30 @@ def test_a_multimodal_row_writes_its_checkpoints_from_position_0():
     assert eng._paged_plan(1024, 3000, "VISION", True, 0) is None
 
 
+@pytest.mark.parametrize(
+    "env, on",
+    [({}, True), ({"QWEN36_MAMBA_SPEC": "0"}, False), ({"X": "0"}, False)],
+)
+def test_the_tested_sub_flags_default_on_with_the_spec_flag(monkeypatch, env, on):
+    """QWEN36_MAMBA_SPEC=1 turns on chained moves, prefill checkpoints and the write / copy traces unless each is set
+    to 0; without QWEN36_MAMBA_SPEC they stay off."""
+    from models.demos.blackhole.qwen36.tt import tp_common as tc
+
+    names = {
+        "QWEN36_MAMBA_CHAIN_MOVES": tc.mamba_chain_moves_enabled,
+        "QWEN36_MAMBA_PREFILL_CKPT": tc.mamba_prefill_checkpoints_enabled,
+        "QWEN36_MAMBA_WRITE_TRACE": tc.mamba_write_trace_enabled,
+        "QWEN36_MAMBA_COPY_TRACE": tc.mamba_copy_trace_enabled,
+    }
+    monkeypatch.setenv("QWEN36_MAMBA_SPEC", env.get("QWEN36_MAMBA_SPEC", "1"))
+    for n in names:
+        monkeypatch.delenv(n, raising=False)
+    if "X" in env:
+        for n in names:
+            monkeypatch.setenv(n, "0")
+    assert {n: f() for n, f in names.items()} == {n: on for n in names}
+
+
 @pytest.mark.parametrize("mode", ["none", "align"])
 def test_rows_left_out_of_a_step_are_held_and_resume(tmp_path, mode):
     # A long prompt arriving mid-decode takes the step budget: running rows sit out steps (the TT runner runs prefill

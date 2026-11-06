@@ -78,33 +78,34 @@ def mamba_spec_enabled():
 
 
 def mamba_prefill_checkpoints_enabled():
-    """QWEN36_MAMBA_PREFILL_CKPT (default "0"; needs QWEN36_MAMBA_SPEC=1, mode align, the spec class): the GDN MambaSpec
-    declares one prefill checkpoint block, so vLLM no longer ends a prefill chunk at the prompt's last full block. The
-    prefill then also writes the GDN state after each of vLLM's checkpoint positions into the block vLLM names."""
-    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_PREFILL_CKPT", "0") == "1"
+    """QWEN36_MAMBA_PREFILL_CKPT (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off; mode align, the spec class):
+    the GDN MambaSpec declares one prefill checkpoint block, so vLLM no longer ends a prefill chunk at the prompt's last
+    full block. The prefill then also writes the GDN state after each of vLLM's checkpoint positions into the block
+    vLLM names."""
+    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_PREFILL_CKPT", "1") == "1"
 
 
 def mamba_chain_moves_enabled():
-    """QWEN36_MAMBA_CHAIN_MOVES (default "0"; needs QWEN36_MAMBA_SPEC=1 and the fused chain): the spec class declares
-    supports_mamba_chained_state_moves, so a chained verify in mode align runs its state moves on the device (the chain
-    body selects each row's start block and state window by the pending verify's accepted count) and block boundaries
-    no longer break the chain."""
-    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_CHAIN_MOVES", "0") == "1"
+    """QWEN36_MAMBA_CHAIN_MOVES (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off; the fused chain): the spec
+    class declares supports_mamba_chained_state_moves, so a chained verify in mode align runs its state moves on the
+    device (the chain body selects each row's start block and state window by the pending verify's accepted count) and
+    block boundaries no longer break the chain."""
+    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_CHAIN_MOVES", "1") == "1"
 
 
 def mamba_write_trace_enabled():
-    """QWEN36_MAMBA_WRITE_TRACE (default "0"; needs QWEN36_MAMBA_SPEC=1): the write of a prefill's GDN state into its
-    vLLM blocks (every GDN layer's recurrent pages and conv history from the bound B=1 scratch) replays one captured
-    trace through per-group page-table buffers instead of about 550 eager ops."""
-    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_WRITE_TRACE", "0") == "1"
+    """QWEN36_MAMBA_WRITE_TRACE (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off): the write of a prefill's GDN
+    state into its vLLM blocks (every GDN layer's recurrent pages and conv history from the bound B=1 scratch) replays
+    one captured trace through per-group page-table buffers instead of about 550 eager ops."""
+    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_WRITE_TRACE", "1") == "1"
 
 
 def mamba_copy_trace_enabled():
-    """QWEN36_MAMBA_COPY_TRACE (default "0"; needs QWEN36_MAMBA_SPEC=1): the GDN block copies (whole block, or page by
-    page between blocks of different phase), the chained copies, the conv history writes from the verify window and
-    the prefill block restore replay captured traces (device-indexed slices and page tables restaged per call) instead
-    of about 60 to 500 eager ops each."""
-    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_COPY_TRACE", "0") == "1"
+    """QWEN36_MAMBA_COPY_TRACE (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off): the GDN block copies (whole
+    block, or page by page between blocks of different phase), the chained copies, the conv history writes from the
+    verify window and the prefill block restore replay captured traces (device-indexed slices and page tables restaged
+    per call) instead of about 60 to 500 eager ops each."""
+    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_COPY_TRACE", "1") == "1"
 
 
 def verify_device_topk_m():
