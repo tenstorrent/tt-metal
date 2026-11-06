@@ -14,9 +14,14 @@ collection errors (an import error, nothing collected). A failing test is never 
 (owner, 2026-10-27); the only way to pass with one is an owner waiver in the spec, ``tests.fork_waivers: {<test id>:
 <reason>}`` (the node id as printed, or the source key), reported as WAIVED. Skips are listed with their reasons.
 
-Records fork_suite_failed (gate: == 0), fork_suite_passed, fork_suite_skipped, fork_suite_waived and writes the full
-list to ``<results>/<task>_fork_suite.json``. Owner (2026-10-27): it runs once, after a completed run (task F.1, after
-Z.1) and in the rebase skill, not on every fork change: it takes about an hour on a 2x2 QuietBox.
+F256: the box is the spec's (box.mesh): a unit test or model case whose mesh is not the box's is skipped, never run,
+with the reason "box: needs mesh RxC (this box RxC)", unless it declares it runs on a submesh (fork_tests.py). The
+source part is not filtered (the stock tests' own fixtures skip on a device count that does not match).
+
+Records fork_suite_failed (gate: == 0), fork_suite_passed, fork_suite_skipped (fork_suite_skipped_box of them for
+another box), fork_suite_waived and writes the full list to ``<results>/<task>_fork_suite.json``. Owner (2026-10-27):
+it runs once, after a completed run (task F.1, after Z.1) and in the rebase skill, not on every fork change: it takes
+about an hour on a 2x2 QuietBox.
 """
 
 from __future__ import annotations
@@ -38,12 +43,13 @@ def all_forks() -> list[str]:
     return sorted(p.parent.name for p in FORKS.glob("*/tests") if p.is_dir())
 
 
-def unit(fork: str, runner=None) -> dict:
+def unit(fork: str, runner=None, box=None) -> dict:
     t = FT.empty_tally()
     for f in sorted((FORKS / fork / "tests" / "unit").glob("test_*.py")):
-        nodes, errors = FT.collect([str(f.relative_to(REPO))])
+        nodes, errors, needs = FT.collect_needs([str(f.relative_to(REPO))])
         t["collect_errors"] += len(errors)
         t["problems"] += [f"collection error: {e}" for e in errors]
+        nodes = FT.box_filter(t, fork, nodes, needs, box, f"unit {f.name}")  # F256
         if nodes:
             env = dict(os.environ)
             env.pop("TT_VISIBLE_DEVICES", None)
@@ -105,17 +111,18 @@ def waive(t: dict, waivers: dict[str, str]) -> int:
     return n
 
 
-def run_suite(forks: list[str], waivers: dict[str, str], runner=None, parts=None) -> dict:
-    """{fork: {part: tally}} with the waivers applied. ``parts`` (selftests): {part: fn(fork) -> tally}."""
-    parts = parts or {"unit": lambda f: unit(f, runner), "cases": None, "source": source}
+def run_suite(forks: list[str], waivers: dict[str, str], runner=None, parts=None, box=None, grouper=None) -> dict:
+    """{fork: {part: tally}} with the waivers applied. ``parts`` (selftests): {part: fn(fork) -> tally}; ``box``:
+    (rows, cols), F256."""
+    parts = parts or {"unit": lambda f: unit(f, runner, box), "cases": None, "source": source}
     out = {}
     for fork in forks:
         out[fork] = {}
         for part, fn in parts.items():
             if part == "cases":
-                if not list((FORKS / fork / "tests").glob("test_*.py")):
+                if grouper is None and not list((FORKS / fork / "tests").glob("test_*.py")):
                     continue
-                t = FT.run([fork], runner=runner)[fork]
+                t = FT.run([fork], runner=runner, grouper=grouper, box=box)[fork]
             else:
                 t = fn(fork)
             t["waived"] = waive(t, waivers)
@@ -129,6 +136,7 @@ def totals(res: dict) -> dict:
         "fork_suite_failed": sum(FT.bad(t) for t in ts),
         "fork_suite_passed": sum(t["passed"] for t in ts),
         "fork_suite_skipped": sum(t["skipped"] for t in ts),
+        "fork_suite_skipped_box": sum(t.get("skipped_box", 0) for t in ts),
         "fork_suite_waived": sum(t.get("waived", 0) for t in ts),
     }
 
@@ -139,7 +147,8 @@ def report(res: dict) -> None:
         for part, t in parts.items():
             print(
                 f"  {fork:28} {part:6} passed {t['passed']:5}  failed {t['failed']:3}  errors {t['error']:3}  "
-                f"skipped {t['skipped']:4}  not run {t['not_run']:3}  collection errors {t['collect_errors']:2}"
+                f"skipped {t['skipped']:4} (box {t.get('skipped_box', 0):4})  not run {t['not_run']:3}  "
+                f"collection errors {t['collect_errors']:2}"
                 f"  waived {t.get('waived', 0)}"
             )
     for fork, parts in res.items():
@@ -153,13 +162,16 @@ def main(argv=None) -> int:
     ap.add_argument("--fork", action="append", help="only these forks (default: every fork with tests)")
     ap.add_argument("--spec", help="the model spec: its tests.fork_waivers, and the metrics go to its task")
     a = ap.parse_args(argv)
-    waivers = {}
+    waivers, box = {}, None
     a.spec = a.spec or os.environ.get("BRINGUP_SPEC")
     if a.spec:
         from models.demos.common.bringup.core.spec import Spec
 
-        waivers = dict(Spec.load(a.spec).get("tests.fork_waivers") or {})
-    res = run_suite(a.fork or all_forks(), waivers)
+        spec = Spec.load(a.spec)
+        waivers = dict(spec.get("tests.fork_waivers") or {})
+        box = FT.box_of(spec)
+    print(f"box: {f'{box[0]}x{box[1]}' if box else 'none (no spec): every test runs as before'}", flush=True)
+    res = run_suite(a.fork or all_forks(), waivers, box=box)
     report(res)
     st = totals(res)
     print(json.dumps(st))

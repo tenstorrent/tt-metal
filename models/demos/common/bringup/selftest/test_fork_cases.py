@@ -371,7 +371,13 @@ def test_every_model_case_is_counted_and_a_fork_without_cases_does_not_stop_the_
     assert (t["b"]["passed"], t["b"]["not_run"], t["b"]["collect_errors"]) == (1, 1, 1)
     assert t["c"]["collect_errors"] == 1 and "no tests/test_*.py" in t["c"]["problems"][0]
     st = fork_cases.tally_stats(t)
-    assert st == {"fork_tests_passed": 2, "fork_tests_failed": 4, "fork_tests_skipped": 1, "fork_tests_not_run": 3}
+    assert st == {
+        "fork_tests_passed": 2,
+        "fork_tests_failed": 4,
+        "fork_tests_skipped": 1,
+        "fork_tests_skipped_box": 0,
+        "fork_tests_not_run": 3,
+    }
     assert FT.bad(FT.empty_tally()) == 0
 
 
@@ -466,6 +472,7 @@ def test_the_fork_suite_counts_every_part_and_only_the_owner_waives(monkeypatch)
         "fork_suite_failed": 1,
         "fork_suite_passed": 8,
         "fork_suite_skipped": 2,
+        "fork_suite_skipped_box": 0,
         "fork_suite_waived": 1,
     }
     res = FS.run_suite(["a"], {}, parts=parts)
