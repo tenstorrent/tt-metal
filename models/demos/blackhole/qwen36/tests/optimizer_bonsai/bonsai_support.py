@@ -60,7 +60,8 @@ def build_model(device, n_layers=None):
     )
     print(f"BONSAI_MODEL_LOAD_S={time.time() - t0:.1f} layers={model.args.n_layers}", flush=True)
     kv_cache_shape = [NUM_BLOCKS, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]
-    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    kv_dtype = ttnn.bfloat8_b if os.environ.get("BONSAI_KV_BF8") == "1" else ttnn.bfloat16
+    model.allocate_kv_caches(kv_cache_shape, kv_dtype, batch_size=1)
     if os.environ.get("BONSAI_GDN_PREP") == "1":
         # GatedDeltaNet chunked prefill: the scan kernel's preprocessing in one op (bonsai2/tt/gdn_prefill).
         from models.demos.blackhole.bonsai2.tt.gdn_prefill.chunk_prep import install

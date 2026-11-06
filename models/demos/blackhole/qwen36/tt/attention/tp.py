@@ -169,7 +169,9 @@ class TPAttention:
         self._use_nlp_decode_heads = True
         # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
         # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
-        self.decode_sdpa_max_cores = None
+        # BONSAI_SDPA_MAX_CORES: per-instance override of the decode SDPA's cores per (batch, kv head)
+        _mc = os.environ.get("BONSAI_SDPA_MAX_CORES")
+        self.decode_sdpa_max_cores = int(_mc) if _mc else None
         self.k_caches = None
         self.v_caches = None
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
@@ -889,7 +891,8 @@ class TPAttention:
             compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
             exp_approx_mode=False,
             q_chunk_size=0,
-            k_chunk_size=0,
+            # BONSAI_SDPA_KCHUNK: a fixed K chunk (Bonsai, B=1, head_dim 256 at 4K: 128 beats the dynamic chunk by ~10%)
+            k_chunk_size=int(os.environ.get("BONSAI_SDPA_KCHUNK", "0")),
             **({} if self.decode_sdpa_max_cores is None else {"max_cores_per_head_batch": self.decode_sdpa_max_cores}),
         )
         if use_paged:
