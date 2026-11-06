@@ -805,11 +805,16 @@ def concat_heads(
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights, prefill=False):
-    """Apply output projection (no bias for Gemma4). ``prefill``: fp32-accumulation config."""
+def apply_output_projection(tensor, weights: AttentionWeights, prefill=False, keep_sharded=False, dtype=None):
+    """Apply output projection (no bias for Gemma4). ``prefill``: fp32-accumulation config.
+
+    ``keep_sharded`` / ``dtype``: a DRAM-sharded decode o_proj returns its partial sums in the kernel's L1
+    width-sharded output layout, in ``dtype``, for the one-shot all-reduce (``ccl.oneshot_matmul_kwargs``); the other
+    projections ignore them (their interleaved output takes the composite all-reduce).
+    """
     ckc = prefill_linear_compute_kernel_config(tensor.device()) if prefill else None
     if isinstance(weights.o_proj, DramShardedLinear):
-        out = weights.o_proj(tensor, compute_kernel_config=ckc, prefill=prefill)
+        out = weights.o_proj(tensor, compute_kernel_config=ckc, prefill=prefill, keep_sharded=keep_sharded, dtype=dtype)
     elif isinstance(weights.o_proj, DecodeLinear):
         out = weights.o_proj(tensor, compute_kernel_config=ckc, prefill=prefill)
     else:
@@ -818,12 +823,13 @@ def apply_output_projection(tensor, weights: AttentionWeights, prefill=False):
     return out
 
 
-def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
+def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int, slot=None, rows=None):
     """Apply tensor-parallel allreduce if TP > 1.
 
     Also sufficient under weight_fracture: attention replicates across the other axis.
+    ``slot`` / ``rows``: the decode call sites name their one-shot slot ("o") and logical row count (``ccl_allreduce``).
     """
-    return ccl_allreduce(tensor, mesh_config, ccl_manager)
+    return ccl_allreduce(tensor, mesh_config, ccl_manager, slot=slot, rows=rows)
 
 
 def _paged_fill_cache(cache, x, *args, **kwargs):

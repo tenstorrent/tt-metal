@@ -25,6 +25,7 @@ from models.demos.gemma4.custom_ops.paged_update_rows import PagedUpdateRows
 from models.demos.gemma4.custom_ops.paged_update_rows.op import ENV as PACKED_KV_WRITE_OP_ENV
 from models.demos.gemma4.custom_ops.paged_update_rows.op import enabled as packed_kv_write_op_enabled
 from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
+from models.demos.gemma4.tt.ccl import oneshot_matmul_kwargs
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
@@ -676,8 +677,12 @@ def decode_forward(
         mesh_device=mesh_device,
         o_proj=weights.o_proj,
     )
-    tt_out = apply_output_projection(tt_out, weights)
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
+    # GEMMA4_CCL_ONESHOT=1: the DRAM-sharded o_proj keeps its partial sums L1 width-sharded (in the payload dtype)
+    # and the all-reduce is the one-shot op on slot "o" (tt/ccl.py); otherwise the kwargs are empty and the
+    # interleaved output takes the composite all-reduce as before.
+    rows = int(tt_out.shape[-2])
+    tt_out = apply_output_projection(tt_out, weights, **oneshot_matmul_kwargs(mesh_config, ccl_manager))
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size, slot="o", rows=rows)
 
     return tt_out
 
@@ -1236,6 +1241,9 @@ def packed_decode_forward(
     tt_sdpa = ttnn.transpose(tt_sdpa, 1, 2)
     tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_sdpa)
-    tt_out = apply_output_projection(tt_out, weights)
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
+    # one-shot all-reduce (slot "o") when the B*P packed rows fit one row tile; above it the o_proj runs its
+    # prefill config and the interleaved output takes the composite all-reduce (see the single-token path)
+    rows = int(tt_out.shape[-2])
+    tt_out = apply_output_projection(tt_out, weights, **oneshot_matmul_kwargs(mesh_config, ccl_manager))
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size, slot="o", rows=rows)
     return tt_out

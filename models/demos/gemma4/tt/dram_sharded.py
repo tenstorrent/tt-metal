@@ -508,14 +508,16 @@ class DramShardedLinear:
         (the DRAM-sharded kernel; the 1D decode path reads interleaved rows)."""
         return self._decode_1d is None
 
-    def _decode_sharded_rows(self, x_sh, out_mc, compute_kernel_config, m_rows, keep_sharded=False):
-        """Decode on an activation that is already width-sharded in ``act_memory_config`` (no reshard program)."""
+    def _decode_sharded_rows(self, x_sh, out_mc, compute_kernel_config, m_rows, keep_sharded=False, dtype=None):
+        """Decode on an activation that is already width-sharded in ``act_memory_config`` (no reshard program).
+        ``dtype``: the kernel's output dtype (the one-shot all-reduce payload; None = the activation's)."""
         out = ttnn.linear(
             x_sh,
             self.weight,
             program_config=self._decode_pc,
             compute_kernel_config=self._decode_ckc(compute_kernel_config),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=dtype,
         )
         x_sh.deallocate(True)
         if keep_sharded:
@@ -527,10 +529,19 @@ class DramShardedLinear:
         return out
 
     def __call__(
-        self, x, compute_kernel_config=None, out_memory_config=None, keep_sharded=False, rows=None, prefill=False
+        self,
+        x,
+        compute_kernel_config=None,
+        out_memory_config=None,
+        keep_sharded=False,
+        rows=None,
+        prefill=False,
+        dtype=None,
     ):
         """``keep_sharded``: a decode (one row tile) result is returned in the kernel's L1 width-sharded output
-        layout (no sharded -> interleaved copy; the consumer reads the shards). ``rows``: the logical row count of
+        layout (no sharded -> interleaved copy; the consumer reads the shards), as 32 rows (the tile; a caller
+        with fewer logical rows presents them again). ``dtype``: that result's dtype (the one-shot all-reduce payload,
+        ``ccl.oneshot_matmul_kwargs``); None keeps the activation's. ``rows``: the logical row count of
         the result when the input is a width-sharded one-row-tile activation (its logical rows are the tile).
         ``prefill``: a tile-sized prefill (a 32-token prompt) takes the 2D prefill config, not the decode kernel."""
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
@@ -553,7 +564,12 @@ class DramShardedLinear:
             and x.memory_config() == self._act_memcfg
         ):
             return self._decode_sharded_rows(
-                x, out_mc, compute_kernel_config, M if rows is None else int(rows), keep_sharded=keep_sharded
+                x,
+                out_mc,
+                compute_kernel_config,
+                M if rows is None else int(rows),
+                keep_sharded=keep_sharded,
+                dtype=dtype,
             )
         flat_shape = [1, 1, M, n_in]
         x_work = x if x_shape == flat_shape else ttnn.reshape(x, flat_shape)
@@ -611,6 +627,7 @@ class DramShardedLinear:
                     program_config=self._decode_pc,
                     compute_kernel_config=self._decode_ckc(compute_kernel_config),
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    dtype=dtype,
                 )
                 x_sh.deallocate(True)
                 if keep_sharded:
