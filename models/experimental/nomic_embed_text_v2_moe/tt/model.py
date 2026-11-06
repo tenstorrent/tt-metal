@@ -183,6 +183,7 @@ class TtNomicBertModel(LightweightModule):
         # dtype is passed explicitly rather than left to the helper's default, so lowering
         # tt_config.activation_dtype moves the mask's fill value with it.
         mask = None
+        key_lengths = None
         if attention_mask is not None and not bool(attention_mask.all()):
             mask = additive_attention_mask(
                 attention_mask,
@@ -190,6 +191,7 @@ class TtNomicBertModel(LightweightModule):
                 dtype=self.tt_config.activation_dtype,
                 mask_dtype=self.tt_config.attention_mask_dtype,
             )
+            key_lengths = right_padded_lengths(attention_mask)
         rot_mats = self.rotary_tables(seqlen)
         fused_tables = None
         rows = input_ids.shape[0] * -(-seqlen // ttnn.TILE_SIZE)
@@ -211,6 +213,7 @@ class TtNomicBertModel(LightweightModule):
             normalized,
             rot_mats,
             mask,
+            key_lengths=key_lengths if self.tt_config.generated_sdpa_key_padding else None,
             free_input=True,
             hidden_sharded=normalized_sharded,
             fused_tables=fused_tables,
@@ -220,6 +223,16 @@ class TtNomicBertModel(LightweightModule):
         if mask is not None:
             ttnn.deallocate(mask)
         return out
+
+
+def right_padded_lengths(attention_mask: torch.Tensor) -> Optional[list[int]]:
+    """Each row's real length where every row of the (B, S) keep-mask is right-padded and keeps at least one token
+    (the generated attention's key_lengths), else None (the additive mask expresses it; stock SDPA takes it)."""
+    lengths = attention_mask.sum(dim=-1)
+    seqlen = attention_mask.shape[-1]
+    if bool((lengths < 1).any()) or not torch.equal(attention_mask.bool(), torch.arange(seqlen) < lengths[:, None]):
+        return None
+    return [int(length) for length in lengths]
 
 
 def encode(

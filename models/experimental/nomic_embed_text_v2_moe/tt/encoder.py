@@ -54,6 +54,7 @@ class TtNomicBertEncoder(LightweightModule):
         hidden_states: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         attn_mask: Optional[ttnn.Tensor] = None,
+        key_lengths: Optional[list[int]] = None,
         free_input: bool = False,
         hidden_sharded: Optional[ttnn.Tensor] = None,
         fused_tables=None,
@@ -65,6 +66,8 @@ class TtNomicBertEncoder(LightweightModule):
             hidden_states: (B, 1, S, H) post-embedding input.
             rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
             attn_mask: (B, 1, S, S) additive mask, or None.
+            key_lengths: each sequence's real length where attn_mask is a right padding, else None (tt.model:
+                right_padded_lengths); attention hands it to the generated nomic_sdpa in place of the mask.
             free_input: free hidden_states once the first block is done with it; otherwise it stays
                 the caller's.
             hidden_sharded: hidden_states in the split norms' layout (tt.common.layer_norm), handed to
@@ -87,6 +90,7 @@ class TtNomicBertEncoder(LightweightModule):
                     hidden_states,
                     rot_mats,
                     attn_mask,
+                    key_lengths=key_lengths,
                     free_input=free,
                     x_sharded=hidden_sharded,
                     fused_tables=fused_tables,
@@ -97,6 +101,7 @@ class TtNomicBertEncoder(LightweightModule):
                     hidden_states,
                     rot_mats,
                     attn_mask,
+                    key_lengths=key_lengths,
                     free_input=free,
                     x_sharded=hidden_sharded,
                     keep_sharded=True,

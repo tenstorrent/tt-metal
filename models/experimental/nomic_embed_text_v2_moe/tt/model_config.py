@@ -299,10 +299,14 @@ class TtModelConfig:
     # the residual's ND layout, for a one-pass layer of a window the generated glue takes (tt/experts.py:
     # route_dispatch). Off, or where the op refuses a call: router_front_end, routing_metadata and the dispatch.
     generated_route_dispatch: bool = True
-    # Attention without a mask on the generated nomic_sdpa (ttnn.operations): sequences of whole tiles up to 512, q, k,
-    # v and the concatenated output interleaved in L1 or DRAM (tt/attention.py: _generated_sdpa). Off, with a mask
-    # (padded batches) or where the op refuses a call: ttnn.transformer.scaled_dot_product_attention.
+    # Attention on the generated nomic_sdpa (ttnn.operations): sequences of whole tiles up to 512, q, k, v and the
+    # concatenated output interleaved in L1 or DRAM (tt/attention.py: _generated_sdpa). Off, with a mask it cannot
+    # express, or where the op refuses a call: ttnn.transformer.scaled_dot_product_attention.
     generated_sdpa: bool = True
+    # Right-padded batches on the generated nomic_sdpa too: the op takes each sequence's real length (key_lengths)
+    # instead of the additive mask, which is still built for the calls the op refuses. Off: padded batches run stock
+    # SDPA with the mask.
+    generated_sdpa_key_padding: bool = True
     # embed()'s pooling on chunks of whole tiles (tt/pooling.py: packed_sum_pool): the last block's output stays in L1,
     # one matmul of 0/1 keep-mask rows against all the chunk's tokens on 24 cores, and the L2 normalize on one packed
     # row block. Off, or on a chunk off the tile grid: mean_pool's batched matmul on the DRAM output.

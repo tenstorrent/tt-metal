@@ -394,6 +394,82 @@ def test_generated_sdpa_is_no_less_accurate_than_stock(device, tt_config, config
         ttnn.deallocate(tensor)
 
 
+def sorted_right_padded_lengths(batch, seqlen):
+    """Real lengths of a length-sorted right-padded batch as embed() builds one: the first row full, the rest falling
+    to a single token (lengths one under and one over a tile boundary included)."""
+    pattern = [seqlen, seqlen - 1, seqlen - 31, seqlen // 2 + 33, seqlen // 2, seqlen // 3, 33, 1]
+    return sorted((pattern[b % len(pattern)] for b in range(batch)), reverse=True)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "batch, seqlen, buffer, poison",
+    [
+        (2, 512, "l1", False),
+        (4, 512, "l1", False),
+        (8, 512, "l1", False),
+        (8, 256, "l1", False),
+        (16, 128, "dram", False),  # the reader produces [V | 1] (the DRAM carve-out with S_t <= 8)
+        (8, 512, "dram", False),
+        (8, 512, "l1", True),
+    ],
+)
+def test_generated_sdpa_with_key_lengths_is_no_less_accurate_than_stock(
+    device, tt_config, config, batch, seqlen, buffer, poison
+):
+    """nomic_sdpa with key_lengths against the float64 reference with keys j >= L_b dropped, next to stock SDPA with
+    the model's additive mask: PCC at least OPERATOR_PCC and a relative RMS error no worse than stock's (5% slack),
+    over every query row (padded queries attend the valid keys too). poison: the padded keys' K and V rows hold NaN,
+    which must take no part in the result."""
+    from ttnn.operations.nomic_sdpa import nomic_sdpa
+
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    memory_config = ttnn.L1_MEMORY_CONFIG if buffer == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    lengths = sorted_right_padded_lengths(batch, seqlen)
+    keep = torch.arange(seqlen) < torch.tensor(lengths)[:, None]  # (B, S)
+    query, key, value = model_attention_inputs(batch, heads, seqlen, head_dim)
+    if poison:
+        padded = ~keep[:, None, :, None]
+        key, value = key.masked_fill(padded, float("nan")), value.masked_fill(padded, float("nan"))
+    tensors = [to_device(t, device, memory_config=memory_config) for t in (query, key, value)]
+
+    generated = nomic_sdpa(*tensors, scale=1.0, key_lengths=lengths, memory_config=memory_config)
+
+    scores = query.double() @ key.nan_to_num().double().transpose(-1, -2)
+    scores = scores.masked_fill(~keep[:, None, None, :], float("-inf"))
+    ref = torch.softmax(scores, dim=-1) @ value.nan_to_num().double()
+    ref = ref.permute(0, 2, 1, 3).reshape(batch, 1, seqlen, heads * head_dim)
+
+    def relative_rms(out):
+        got = ttnn.to_torch(out).double().reshape(ref.shape)
+        return float((got - ref).pow(2).mean().sqrt() / ref.pow(2).mean().sqrt())
+
+    got = ttnn.to_torch(generated).float()
+    assert torch.isfinite(got).all(), "non-finite output"
+    assert tuple(generated.shape) == (batch, 1, seqlen, heads * head_dim)
+    assert_with_pcc(ref.float(), got, OPERATOR_PCC)
+    generated_error = relative_rms(generated)
+    if not poison:  # stock SDPA is moved by non-finite padded keys (test_sdpa_is_moved_by_non_finite_padded_keys)
+        mask = additive_attention_mask(keep.long(), device, mask_dtype=tt_config.attention_mask_dtype)
+        stock = ttnn.transformer.scaled_dot_product_attention(
+            *tensors,
+            attn_mask=mask,
+            is_causal=False,
+            scale=1.0,
+            memory_config=memory_config,
+            output_concat_heads=True,
+            **sdpa_kwargs(tt_config, config, batch, seqlen, masked=True),
+        )
+        stock_error = relative_rms(stock)
+        assert generated_error <= 1.05 * stock_error, f"relative RMS {generated_error:.5f} > stock's {stock_error:.5f}"
+        for tensor in (mask, stock):
+            ttnn.deallocate(tensor)
+    else:
+        assert generated_error < 0.03, f"relative RMS {generated_error:.5f}"
+    for tensor in (*tensors, generated):
+        ttnn.deallocate(tensor)
+
+
 @run_for_blackhole()
 @pytest.mark.parametrize("batch, seqlen", [(2, 37), (3, 400), (1, 1024)])
 def test_generated_sdpa_refuses_what_stock_sdpa_must_run(device, config, batch, seqlen, expect_error):

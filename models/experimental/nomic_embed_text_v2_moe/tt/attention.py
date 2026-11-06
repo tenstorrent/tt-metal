@@ -598,6 +598,7 @@ class TtNomicBertAttention(LightweightModule):
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         attn_mask: Optional[ttnn.Tensor] = None,
         fused_tables=None,
+        key_lengths: Optional[list[int]] = None,
     ) -> ttnn.Tensor:
         """Project, rotate, attend and project back.
 
@@ -613,6 +614,8 @@ class TtNomicBertAttention(LightweightModule):
             attn_mask: (B, 1, S, S) additive mask from tt.common.additive_attention_mask, or
                 None for no masking.
             fused_tables: nomic_qkv_rotary_heads' tables for at least S, or None for the chain.
+            key_lengths: each sequence's real length where attn_mask is a right padding, else None: the generated
+                nomic_sdpa takes it in place of the mask.
 
         Returns:
             ttnn.Tensor: (B, 1, S, H).
@@ -630,7 +633,7 @@ class TtNomicBertAttention(LightweightModule):
         rotated_query, rotated_key, value, program_config, heads_memory, floor, qkv_bank = heads
         head_bank = l1_head_bank_bytes(batch, seqlen, self.num_heads, self.head_dim, self.tt_config.l1_banks)
 
-        context = self._generated_sdpa(rotated_query, rotated_key, value, attn_mask, heads_memory)
+        context = self._generated_sdpa(rotated_query, rotated_key, value, attn_mask, key_lengths, heads_memory)
         if context is None:
             context = self._stock_sdpa(
                 x,
@@ -668,18 +671,26 @@ class TtNomicBertAttention(LightweightModule):
         ttnn.deallocate(context)
         return out
 
-    def _generated_sdpa(self, query, key, value, attn_mask, heads_memory) -> ttnn.Tensor | None:
-        """Attention on the generated nomic_sdpa (ttnn.operations) for an unmasked call: q, k, v and the (B, 1, S, 768)
-        output interleaved in heads_memory, at the op's own precision (HiFi2, fp32 DEST, its exp). None where the
-        flag is off, a mask is given (the op takes no additive mask) or the op refuses the call (SupportRefusal: S
-        not whole tiles, S > 512, its circular buffers not fitting below the live L1); stock SDPA runs then."""
-        if not self.tt_config.generated_sdpa or attn_mask is not None:
+    def _generated_sdpa(self, query, key, value, attn_mask, key_lengths, heads_memory) -> ttnn.Tensor | None:
+        """Attention on the generated nomic_sdpa (ttnn.operations): q, k, v and the (B, 1, S, 768) output interleaved
+        in heads_memory, at the op's own precision (HiFi2, fp32 DEST, its exp). A right-padded batch passes its
+        key_lengths in place of the additive mask. None where the flag is off, a mask comes without key_lengths (not a
+        right padding) or the op refuses the call (SupportRefusal: S not whole tiles, S > 512, its circular buffers
+        not fitting below the live L1); stock SDPA runs then, with the mask."""
+        if not self.tt_config.generated_sdpa or (attn_mask is not None and key_lengths is None):
             return None
         from ttnn.operations._op_contract import SupportRefusal
         from ttnn.operations.nomic_sdpa import nomic_sdpa
 
         try:
-            return nomic_sdpa(query, key, value, scale=1.0, memory_config=heads_memory)
+            return nomic_sdpa(
+                query,
+                key,
+                value,
+                scale=1.0,
+                key_lengths=key_lengths if attn_mask is not None else None,
+                memory_config=heads_memory,
+            )
         except SupportRefusal:
             return None
 
