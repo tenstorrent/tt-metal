@@ -4,9 +4,9 @@
 """
 Tier-1 PCC test for MiniMax-M3 RMSNorm vs a hand-written torch reference.
 
-M3 uses Gemma-style RMSNorm: out = x_normed * (1 + weight) (config use_gemma_norm=true),
-vs a plain RMSNorm: out = x_normed * weight. The tt RMSNorm class folds the +1 into the
-weight at load time; this test verifies both modes against the torch reference.
+M3 uses Gemma-style RMSNorm: out = x_normed * (1 + weight) (config use_gemma_norm=true, the only
+form the model accepts). The tt RMSNorm class folds the +1 into the weight at load time; this test
+verifies it against the torch reference.
 
 Depends ONLY on torch (no HuggingFace / AutoConfig / checkpoint), random weights — runs on a
 single Wormhole/Blackhole card. This is the oracle pattern for M3: self-authored torch
@@ -23,6 +23,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
+from models.demos.minimax_m3.tt.compute_configs import PRECISE_NORMS_ENV
 from models.demos.minimax_m3.tt.rms_norm import RMSNorm
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
@@ -40,7 +41,6 @@ def _torch_rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float, gemma: bo
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-@pytest.mark.parametrize("gemma", [True, False], ids=["gemma", "plain"])
 @pytest.mark.parametrize(
     "m, width",
     [
@@ -50,15 +50,15 @@ def _torch_rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float, gemma: bo
     ],
     ids=["h6144", "h128", "m32"],
 )
-def test_rms_norm_vs_ref(mesh_device, device_params, gemma, m, width, reset_seeds):
+def test_rms_norm_vs_ref(mesh_device, device_params, m, width, reset_seeds):
     """tt RMSNorm class (incl. the gemma (1+w) weight fold) vs torch reference, random weights."""
     eps = 1e-6
     x = torch.randn(1, 1, m, width)
     weight = torch.randn(width)
 
-    ref = _torch_rms_norm(x, weight, eps, gemma)
+    ref = _torch_rms_norm(x, weight, eps, gemma=True)
 
-    hf_config = SimpleNamespace(rms_norm_eps=eps, use_gemma_norm=gemma)
+    hf_config = SimpleNamespace(rms_norm_eps=eps)
     norm = RMSNorm(
         mesh_device=mesh_device,
         hf_config=hf_config,
@@ -79,8 +79,45 @@ def test_rms_norm_vs_ref(mesh_device, device_params, gemma, m, width, reset_seed
     out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).reshape(1, 1, m, width)
 
     passing, pcc = comp_pcc(ref, out, 0.99)
-    logger.info(f"rms_norm gemma={gemma} m={m} width={width}: {pcc}")
-    assert passing, f"PCC fail (gemma={gemma}, width={width}): {pcc}"
+    logger.info(f"rms_norm m={m} width={width}: {pcc}")
+    assert passing, f"PCC fail (width={width}): {pcc}"
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+def test_rms_norm_fp32_statistics(mesh_device, device_params, reset_seeds, monkeypatch):
+    """Residual-like rows at full emb (a few large channels, row scales over 4 decades): with precise norms the
+    per-token scale must match fp32 statistics. The bf16-DEST default sums x^2 in bf16 (1-2% per-token error on
+    real residuals)."""
+    monkeypatch.setenv(PRECISE_NORMS_ENV, "1")
+    m, width, eps = 1024, 6144, 1e-6
+    x = torch.randn(1, 1, m, width) * torch.logspace(-2, 2, m).reshape(1, 1, m, 1)
+    x[..., torch.randperm(width)[:8]] *= 30.0
+    x = x.bfloat16().float()
+    gain = (torch.randn(width) * 0.1 + 1.0).bfloat16().float()  # the gain as the device holds it
+    ref = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gain
+
+    norm = RMSNorm(
+        mesh_device=mesh_device,
+        hf_config=SimpleNamespace(rms_norm_eps=eps),
+        state_dict={"weight": gain - 1.0},  # the gemma fold adds the 1 back in fp32: exactly `gain`
+        tensor_cache_path=None,
+    )
+    x_tt = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    out = ttnn.to_torch(ttnn.get_device_tensors(norm(x_tt))[0]).reshape(1, 1, m, width).float()
+
+    scale = (out * ref).sum(-1) / ref.pow(2).sum(-1)  # per-token fit of out to ref
+    rel = ((out - ref).norm() / ref.norm()).item()
+    worst = (scale - 1).abs().max().item()
+    logger.info(f"rms_norm fp32 statistics: rel {rel:.5f}, worst per-token scale error {worst:.5f}")
+    assert worst < 5e-3, f"per-token scale error {worst:.5f}: statistics not fp32"
+    assert rel < 5e-3, f"rel error {rel:.5f}"
 
 
 # (8, 4) + linear_fabric: the production mesh (SP=8 rows, TP=4 cols) on FABRIC_1D — the plain-MESH
@@ -113,7 +150,7 @@ def test_rms_norm_distributed_interleaved(mesh_device, device_params, m, width, 
     weight = torch.randn(width)
     ref = _torch_rms_norm(x, weight, eps, gemma=True)
 
-    hf_config = SimpleNamespace(rms_norm_eps=eps, use_gemma_norm=True)
+    hf_config = SimpleNamespace(rms_norm_eps=eps)
     mesh_config = MeshConfig(tuple(mesh_device.shape), tp=tp)
     # Linear topology: valid on a ring-configured fabric (it just leaves the wrap link unused) and it is
     # what the single-galaxy FABRIC_1D model run uses.
