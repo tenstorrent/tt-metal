@@ -346,7 +346,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedRuntimeRowsProgramFactor
         .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
-    // One work unit over the full grid: the three kernels agree on the split by construction.
+    // One work unit over the full grid; each kernel derives its block range from the common row count.
     spec.work_units.push_back(WorkUnitSpec{
         .name = "all_cores",
         .kernels = {READER, WRITER, COMPUTE},
