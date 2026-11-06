@@ -286,8 +286,15 @@ jobs:
           git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
           git -C vllm-source checkout --detach FETCH_HEAD
 
+      - name: 🧪 Device unit tests
+        if: ${{ matrix.test-group.device-tests }}
+        timeout-minutes: 120
+        run: |
+          set -o pipefail
+          python3 -m pytest -p no:cacheprovider -rfEs ${{ matrix.test-group.device-tests }} 2>&1 | tee output/device_tests.log
+
       - name: 🔀 Same-machine A/B
-        if: ${{ matrix.test-group.ab-driver }}
+        if: ${{ matrix.test-group.ab-driver && !matrix.test-group.device-tests-only }}
         timeout-minutes: 300
         env:
           AB_MODEL: ${{ matrix.test-group.model }}
