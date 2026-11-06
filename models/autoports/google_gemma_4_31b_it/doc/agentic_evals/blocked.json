@@ -166,5 +166,20 @@
     "basis": "agentic-serving Stage order requires task storage+reserve vs free; device instructions prohibit new admission checks",
     "evidence": "runs/ci-disk-admission-basis/RESULT.md",
     "blocks": "final disk preflight only; normal rungs continue"
+  },
+  "gpqa_only_scope_update": {
+    "at": "2026-11-06T19:40:11.477519+00:00",
+    "go": [
+      "r1_gpqa_diamond"
+    ],
+    "stops": [
+      "swe_bench_verified",
+      "terminal_bench_2_1"
+    ],
+    "tool_dry_exception": "Not needed for current go set; no operator approval inferred",
+    "task_storage_required": 0,
+    "server_storage_free": null,
+    "server_storage_reason": "Stock server still uses Docker; no added admission wrapper/check authorized. Record actual stock evidence, never infer free space from zero task containers.",
+    "evidence": "runs/gpqa-only-release-preparation/plan.md"
   }
 }

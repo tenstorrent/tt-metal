@@ -1,0 +1,3 @@
+# Held GPQA80 preparation
+
+Coordinator goal: next one-rung40→80 source-only candidate ready conditional on measured valid40 and GPQA-only schedule admission. Host box0.2h/device0. Base6efe6739e6513d0edbf49a8ef39527b80a23784d, isolated worktree/branch prep/gpqa80-retained. Reproduce fixed seed SHA256 index ordering, prove exact first40 and unique80; record source/list before any scoring. Only model GPQA tasklist/nightlycount and corresponding tests may change. Preserve C4/B8, caps/context/sampling/seed/model retention/peers0/pins. Focused host tests/fullhooks/AST source audit then local commit. No push/dispatch/scores/central edits; held until20then40valid and schedule permits80. Final preparation evidence once.

@@ -18,21 +18,26 @@
     {
       "phase": "server_sized_larger_and_efforts",
       "start_hour": 7,
-      "end_hour": 22
+      "end_hour": 32
     },
     {
       "phase": "freeze_and_first_dry_run_reserve",
-      "start_hour": 22,
-      "end_hour": 33.1
+      "start_hour": 32,
+      "end_hour": 37.4
     },
     {
       "phase": "fix_reserve",
-      "start_hour": 33.1,
-      "end_hour": 34.1
+      "start_hour": 37.4,
+      "end_hour": 39.3
     },
     {
       "phase": "second_dry_run_reserve_if_needed",
-      "start_hour": 34.1,
+      "start_hour": 39.3,
+      "end_hour": 44.7
+    },
+    {
+      "phase": "freeze_decision_slack",
+      "start_hour": 44.7,
       "end_hour": 45.2
     },
     {
@@ -70,12 +75,20 @@
       "Qwen/Qwen3-32B"
     ],
     "benchmark_current_runtime_measurement": {
-      "source": "runs/retained-runtime-benchmark/RESULT.json",
-      "client_seconds": 27.08457288099453,
-      "device_job_hours": 0.09667890765859435,
-      "runtime": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
-      "note": "Target matrix unchanged; this latest normal validation includes separate headline and startup, not a frozen release."
-    }
+      "source": "runs/phase-archive-runtime-benchmark/RESULT.json",
+      "client_seconds": 27.09793480101507,
+      "device_job_hours": 0.07605465913249645,
+      "runtime": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+      "note": "Normal validation incl separate headline/startup; not frozen release."
+    },
+    "go_evals": [
+      "r1_gpqa_diamond"
+    ],
+    "stopped_evals": [
+      "swe_bench_verified",
+      "terminal_bench_2_1"
+    ],
+    "dry_procedure": "runs/gpqa-only-release-preparation/plan.md"
   },
   "runs": [
     {
@@ -1645,7 +1658,7 @@
       "batch_reason": "Smallest validated batch at orabove2",
       "arm": "nightly-swe-decode-retention",
       "workflow": "agentic",
-      "status": "device_job_in_progress",
+      "status": "completed_but_invalid_frozen_five",
       "queued_at": "2026-11-06T15:51:59.874014+00:00",
       "tt_metal_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
       "tti_sha": "bb16e00efd8bbc649d68d21b501acec1d53e42a9",
@@ -1664,16 +1677,16 @@
       "run_id": 42247098210,
       "submitted_at": "2026-11-06T15:52:34Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42247098210",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T18:49:34.687304+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-06T19:28:08.739157+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wvng9",
       "build_started_at": "2026-11-06T15:54:10Z",
       "build_completed_at": "2026-11-06T16:47:21Z",
       "runner": "120-qb2-p04t05",
       "device_job_id": 128021896449,
       "device_job_started_at": "2026-11-06T16:47:23Z",
-      "device_job_completed_at": null,
+      "device_job_completed_at": "2026-11-06T19:27:55Z",
       "start": "2026-11-06T16:47:23Z",
       "latest_projection": {
         "observed_at": "2026-11-06T17:33:15.300990+00:00",
@@ -1701,7 +1714,34 @@
         "qualification": "Completion-rate extrapolation with one active censored tail. Add full6h agent tail; score/limit classification awaits actual artifacts.",
         "evidence": "bringup/artifacts/stage12-swe-decode-current.log",
         "projected_workflow_hours": 9.985154028277776
-      }
+      },
+      "end": "2026-11-06T19:27:55Z",
+      "exit_status": 0,
+      "actual_hours": 2.6755555555555555,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 3.5894444444444447,
+      "audit": "runs/nightly-swe-decode-retention/audit.json",
+      "functional_at": 2,
+      "decision": "stop",
+      "stop_at": 5,
+      "valid": false,
+      "eval_hours": 2.275120817222222,
+      "eval_seconds": 8190.434942,
+      "score": {
+        "value": 0.2,
+        "correct": 1,
+        "completed_samples": 5,
+        "dataset_samples": 500,
+        "scope": "subset",
+        "wilson95": [
+          0.03622410863243014,
+          0.6244653702374747
+        ],
+        "valid": false,
+        "reason": "Sole passing Xarray task retrieved external data during model-selected reproduction; do not replace denominator or bank frozen five."
+      },
+      "completed_tasks": 5,
+      "disposition": "Measured validity stop: external retrieval invalidates frozen5. No archive-only retry or SWE10 advancement. Prior valid smoke2 retained."
     },
     {
       "arm": "retention-c4-lifecycle",
@@ -2167,10 +2207,21 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T18:49:36.248275+00:00",
+      "last_observed_at": "2026-11-06T19:40:19.099833+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-frkdx",
       "build_started_at": "2026-11-06T18:46:22Z",
-      "build_completed_at": null
+      "build_completed_at": null,
+      "image_build_observation": {
+        "build_job": 128084494246,
+        "source_inputs_seen": [
+          "ab2730c27e557b09b2eafe3494e47790adc210aa",
+          "37ee508969c730320c01259fafe340e6c2c14d4e",
+          "ca7a18246e4111629ed6cb4a7d1192002749fccf"
+        ],
+        "evidence": "bringup/artifacts/stage12-archive-repair-image-build-current.log",
+        "log_through": "2026-11-06T19:03:58.3323195Z",
+        "status": "build in progress; source input mentions only, no successful image/push/digest claim"
+      }
     },
     {
       "arm": "phase-archive-idle-race",
@@ -2193,8 +2244,8 @@
       "actual_device_hours": 0.05904627083333333
     }
   ],
-  "status": "same20_archive_repair_retry_and_SWE5_running",
-  "last_updated": "2026-11-06T18:51:58.460734+00:00",
+  "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
+  "last_updated": "2026-11-06T19:40:42.096895+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -2223,7 +2274,7 @@
     "job_limit_hours": 18,
     "run_limit_hours": 12
   },
-  "schedule_basis": "First dry start no later than stagehour22; efforts and larger rungs must fit before it. Preserve two11.1h contingency windows,1hfix,2.8hdispatch/queue; this is reserved time, not stale full198 fit claim. Current measured full198 stop retained. Exact tool dry route remains unresolved; no completed-score rehearsal exception assumed.",
+  "schedule_basis": "GPQA-only release preparation accepted: runs/gpqa-only-release-preparation/plan.md. Each dry5.4h includes full4h request tail,0.4h setup,0.5h queue,0.25h observation and0.25h cleanup; setup conservatively rounded from measurements, queue/lag/cleanup guesses. Fix1.9h includes0.9h build guess; release queue margin2.8h. Actual clean pre-score dry and frozen release remain mandatory.",
   "ci_queue_observations": [
     {
       "run_id": 42166117505,
@@ -2867,6 +2918,20 @@
       "matrix_client_seconds": 27.09793480101507,
       "headline_client_seconds": 34.79740667401347,
       "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json"
+    },
+    {
+      "arm": "nightly-swe-decode-retention",
+      "run_id": 42247098210,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 2.6755555555555555,
+      "workflow_wall_hours": 3.5894444444444447,
+      "predicted_workflow_hours": 8.544166666666667,
+      "workflow_conclusion": "success",
+      "eval_hours": 2.275120817222222,
+      "valid": false,
+      "disposition": "measured_stop_functional2",
+      "audit": "runs/nightly-swe-decode-retention/audit.json"
     }
   ],
   "local_idle_intervals": [
@@ -2973,24 +3038,67 @@
         }
       ],
       "basis": "Updated after valid Terminal smoke: GPQA and Terminal advance independently; SWE4.5h workflow retry forecast reaches aboutstagehour10.2. Overlapping nightly4\u201322 and server/larger7\u201330 retain dry30\u201336,fix36\u201340 and dispatch40\u201342 reserves. Rungs never wait for another suite or an effort. Queue margin remains6h before48h deadline."
+    },
+    {
+      "at": "2026-11-06T19:40:11.477519+00:00",
+      "schedule": [
+        {
+          "phase": "survey_preflight_and_smoke",
+          "start_hour": 0,
+          "end_hour": 11
+        },
+        {
+          "phase": "nightly",
+          "start_hour": 4,
+          "end_hour": 16
+        },
+        {
+          "phase": "server_sized_larger_and_efforts",
+          "start_hour": 7,
+          "end_hour": 22
+        },
+        {
+          "phase": "freeze_and_first_dry_run_reserve",
+          "start_hour": 22,
+          "end_hour": 33.1
+        },
+        {
+          "phase": "fix_reserve",
+          "start_hour": 33.1,
+          "end_hour": 34.1
+        },
+        {
+          "phase": "second_dry_run_reserve_if_needed",
+          "start_hour": 34.1,
+          "end_hour": 45.2
+        },
+        {
+          "phase": "release_dispatch_and_queue_margin",
+          "start_hour": 45.2,
+          "end_hour": 48
+        }
+      ],
+      "basis": "First dry start no later than stagehour22; efforts and larger rungs must fit before it. Preserve two11.1h contingency windows,1hfix,2.8hdispatch/queue; this is reserved time, not stale full198 fit claim. Current measured full198 stop retained. Exact tool dry route remains unresolved; no completed-score rehearsal exception assumed.",
+      "superseded_reason": "Confirmed SWE validity stop and Terminal timing stop leave GPQA HTTP-only plus benchmark release; early-stop dry reserve replaces full tool rehearsal contingency."
     }
   ],
   "dry_route_contingency": {
-    "authorization": "pending_operator_existing_question",
-    "provisional_cycle_hours": 11.1,
+    "authorization": "stock GPQA HTTP-only exact early-stop route; no rehearsal exception claimed",
+    "provisional_cycle_hours": 5.4,
     "basis": "Conservative retained contingency windows from prior plan; full198 is now measured stop. Actual frozen lists/projections must replace this before admission.",
-    "first_dry_start_hour": 22,
-    "efforts_end_hour": 22,
-    "fix_hours": 1,
+    "first_dry_start_hour": 32,
+    "efforts_end_hour": 32,
+    "fix_hours": 1.9,
     "second_cycle_reserved": true,
     "release_queue_margin_hours": 2.8,
-    "exact_early_stop_route": "If operator provides supported exact dry route, recalculate its measured shorter duration and release reserve; do not assume it exists.",
+    "exact_early_stop_route": "runs/gpqa-only-release-preparation/plan.md",
     "gpqa_only_exact_route": {
       "status": "available_conditional_on_no_tool_suites",
       "evidence": "runs/gpqa-only-dry-route/RESULT.md",
       "proof": "Frozenconfig + actualC active rows + successful partial replies k>=C,k<N, persisted before cancel/no final scores; localbenchmark reachability separately",
       "not_yet_clean_dry_run": true
-    }
+    },
+    "tool_suite_exception": "not applicable to current go set; historical operator question retained"
   },
   "next_ci_dispatch_image": {
     "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:b9d3be12a8eac85871beac53cd3ef3700656691efcb396ce04fb2f833907f2ca",
@@ -3002,7 +3110,6 @@
     ]
   },
   "active_runs": [
-    42247098210,
     42273660905
   ],
   "latest_live_progress": {
@@ -3199,6 +3306,18 @@
       "capacity_evidence": "runs/server-sized-gpqa-c2/audit.json",
       "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
       "scope": "Next nested larger rung at accepted C2; full198 stop retained; independent of scored C4 effort"
+    },
+    {
+      "arm": "prepared-larger80-c4-retained",
+      "eval": "r1_gpqa_diamond",
+      "status": "held_until_valid40_and_time_admission",
+      "planned_clients": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "tti_candidate_sha": "6ca5a1b89824bfcf1a197a1fcdc86f3e1d44fd8b",
+      "evidence": "runs/gpqa80-preparation/RESULT.json",
+      "not_dispatched": true,
+      "predicted_hours": null
     }
   ],
   "current_accepted_tti_sha": "f12b2682cb03e84555ba122dd647262ae399815f",

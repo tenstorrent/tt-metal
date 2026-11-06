@@ -1,0 +1,176 @@
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index 7ee08e9..a4d5086 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -12010,10 +12010,50 @@ _eval_config_list = [
+                     102,
+                     182,
+                     173,
++                    109,
++                    193,
++                    192,
++                    47,
++                    19,
++                    18,
++                    48,
++                    17,
++                    36,
++                    114,
++                    154,
++                    73,
++                    115,
++                    144,
++                    166,
++                    179,
++                    150,
++                    91,
++                    176,
++                    67,
++                    86,
++                    194,
++                    163,
++                    63,
++                    16,
++                    60,
++                    131,
++                    62,
++                    2,
++                    139,
++                    122,
++                    169,
++                    167,
++                    84,
++                    35,
++                    147,
++                    12,
++                    158,
++                    56,
++                    120,
+                 ],
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 40,
++                    EvalLimitMode.CI_NIGHTLY: 80,
+                 },
+             ),
+             EvalTask(
+diff --git a/tests/workflows/test_eval_config_mode_reference.py b/tests/workflows/test_eval_config_mode_reference.py
+index bd96484..0c9cd38 100644
+--- a/tests/workflows/test_eval_config_mode_reference.py
++++ b/tests/workflows/test_eval_config_mode_reference.py
+@@ -270,6 +270,46 @@ def test_gemma4_31b_autoport_smoke_preserves_references_without_score_gates():
+         102,
+         182,
+         173,
++        109,
++        193,
++        192,
++        47,
++        19,
++        18,
++        48,
++        17,
++        36,
++        114,
++        154,
++        73,
++        115,
++        144,
++        166,
++        179,
++        150,
++        91,
++        176,
++        67,
++        86,
++        194,
++        163,
++        63,
++        16,
++        60,
++        131,
++        62,
++        2,
++        139,
++        122,
++        169,
++        167,
++        84,
++        35,
++        147,
++        12,
++        158,
++        56,
++        120,
+     ]
+     assert gpqa.thinking is True
+     assert gpqa.score.published_score == 84.3
+@@ -278,7 +318,7 @@ def test_gemma4_31b_autoport_smoke_preserves_references_without_score_gates():
+     for mode in (EvalLimitMode.SMOKE_TEST, EvalLimitMode.CI_NIGHTLY):
+         # Dedicated CI publications may disable this suite to isolate another.
+         assert gpqa.limit_samples_map[mode] == (
+-            40 if mode == EvalLimitMode.CI_NIGHTLY else 2
++            80 if mode == EvalLimitMode.CI_NIGHTLY else 2
+         )
+         assert not resolve_eval_reference(gpqa.score, mode)["is_subset_reference"]
+ 
+diff --git a/tests/workflows/test_gemma4_autoport_smoke_suites.py b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+index d032036..0af9aae 100644
+--- a/tests/workflows/test_gemma4_autoport_smoke_suites.py
++++ b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+@@ -94,6 +94,46 @@ def test_stock_common_route_exact_gpqa_cohort(tmp_path, monkeypatch, mode):
+             102,
+             182,
+             173,
++            109,
++            193,
++            192,
++            47,
++            19,
++            18,
++            48,
++            17,
++            36,
++            114,
++            154,
++            73,
++            115,
++            144,
++            166,
++            179,
++            150,
++            91,
++            176,
++            67,
++            86,
++            194,
++            163,
++            63,
++            16,
++            60,
++            131,
++            62,
++            2,
++            139,
++            122,
++            169,
++            167,
++            84,
++            35,
++            147,
++            12,
++            158,
++            56,
++            120,
+         ]
+         if mode == "ci-nightly"
+         else [152, 189, 46]
+@@ -199,7 +239,7 @@ def test_only_prepared_candidate_enabled():
+     from reference_config.evals.eval_config import EvalLimitMode
+ 
+     assert [task.limit_samples_map[EvalLimitMode.CI_NIGHTLY] for task in TASKS] == [
+-        40,
++        80,
+         0,
+         0,
+     ]

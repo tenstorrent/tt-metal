@@ -79,15 +79,15 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. GPQA20 raw16/20 unbanked: tar discarded retained artifact. Local archive repair passed; same20 retry42273660905 building ab2730c2. SWE5 active. No dry/release."
+    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. GPQA20 raw16/20 unbanked: tar discarded retained artifact. Local archive repair passed; same20 retry42273660905 building ab2730c2. SWE5 completed but invalid external retrieval; measured stop5/functional2. Raw1/5 excluded from banked accuracy. No dry/release."
   },
   "notes": [
     "Repaired runtime ab2730c measured; no frozen release yet. No vLLM profiling.",
     "C4 same-ten scored pair9/10 each; C4 642.445722s versus C2 938.039050s. Repeated tasks are not additional independent accuracy samples.",
-    "SWE repeat5 raw1/5 in4041.919023s excluded from banked accuracy pending cap classification.",
     "Default-off model-owned token retention accepted by exact native paired outputs and583matched decode IDs; no client-emission identity claim.",
     "Local execution checkout remains without remotes; source-only publication uses separate authorized checkouts.",
     "Local saved-input GPQA replay confirms two repetitive tails; original unretained20 remains unbanked. Local archive repair passed exact native outputs and idle tar; CI confirmation pending.",
-    "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json."
+    "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json.",
+    "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json."
   ]
 }

@@ -1,0 +1,56 @@
+{
+  "effort": "gpqa80-preparation",
+  "status": "prepared_held",
+  "candidate_sha": "6ca5a1b89824bfcf1a197a1fcdc86f3e1d44fd8b",
+  "base_sha": "6efe6739e6513d0edbf49a8ef39527b80a23784d",
+  "branch": "prep/gpqa80-retained",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa80-retained",
+  "goal": "Prepare next deterministic nested GPQA40 to80 rung without advancing before valid40 and schedule admission",
+  "confirmation": {
+    "nested_first40": true,
+    "unique80": true,
+    "deterministic_rule_reproduced": true,
+    "production_ast_only_changes": [
+      "GPQA doc_ids40to80",
+      "GPQA nightly limit40to80"
+    ],
+    "focused_host_tests": {
+      "passed": 34,
+      "seconds": 3.42
+    },
+    "full_hooks": "ruff, ruff-format, pytest, copyright passed",
+    "diff_check": "passed"
+  },
+  "preserved": {
+    "planned_clients": 4,
+    "supported_batch": 8,
+    "max_num_seqs": 8,
+    "output_cap": 126976,
+    "request_timeout_seconds": 14400,
+    "context": 262144,
+    "peer_nightly_limits": [
+      0,
+      0
+    ],
+    "runtime_sampling_seed_pins_retention": "unchanged relative base; no runtime source changes"
+  },
+  "cohort_source": "cohort.json",
+  "device_hours_forecast": 0,
+  "device_hours_actual": 0,
+  "host_box_hours": 0.2,
+  "score": null,
+  "projection_hours": null,
+  "missing_reasons": [
+    "No scoring or timing run authorized for this preparation. Await valid40 and measured normal-route projection including queue/setup before any80 dispatch."
+  ],
+  "change": "Local source-only model eval configuration and two focused test files; no publication, dispatch or central edits.",
+  "acceptance": "Host preparation only; no scored rung advancement or runtime acceptance inferred.",
+  "evidence": [
+    "plan.md",
+    "cohort.json",
+    "source-audit.txt",
+    "hooks-final.log",
+    "candidate.patch",
+    "6ca5a1b89824bfcf1a197a1fcdc86f3e1d44fd8b"
+  ]
+}

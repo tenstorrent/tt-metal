@@ -1,0 +1,416 @@
+{
+  "source": "same_default_rule",
+  "seed": "gemma4-goal12-v3-842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "rule": "Sort indices0..197 by SHA256(UTF8(seed+NUL+str(index))); first80",
+  "doc_ids": [
+    152,
+    189,
+    46,
+    87,
+    52,
+    181,
+    31,
+    185,
+    50,
+    187,
+    153,
+    135,
+    81,
+    93,
+    7,
+    42,
+    24,
+    168,
+    20,
+    28,
+    13,
+    94,
+    61,
+    15,
+    123,
+    160,
+    27,
+    29,
+    90,
+    127,
+    121,
+    188,
+    136,
+    174,
+    184,
+    9,
+    80,
+    102,
+    182,
+    173,
+    109,
+    193,
+    192,
+    47,
+    19,
+    18,
+    48,
+    17,
+    36,
+    114,
+    154,
+    73,
+    115,
+    144,
+    166,
+    179,
+    150,
+    91,
+    176,
+    67,
+    86,
+    194,
+    163,
+    63,
+    16,
+    60,
+    131,
+    62,
+    2,
+    139,
+    122,
+    169,
+    167,
+    84,
+    35,
+    147,
+    12,
+    158,
+    56,
+    120
+  ],
+  "first40_exact": true,
+  "unique": true,
+  "harness_pin": "af401ef3dd3d2d90e55680990ed1f0c9f7892448",
+  "catalog_source": "Existing198 pinned harness document indices, inherited registered cohort; no gated dataset contents read",
+  "prior_cohort_source": "runs/gpqa40-preparation/cohort.json",
+  "score_independent": true,
+  "semantic_mapping": "Pinned task.doc_iterator filters by membership in ascending dataset order; logged evaluator doc_id uses supplied hash-order indices by ordinal and is therefore permuted. Actual index=sorted(doc_ids)[ordinal]; validate doc_hash/prompt_hash across rungs. Preserve configured hash order; no harness edits.",
+  "logged_to_actual_mapping": [
+    {
+      "logged_doc_id": 152,
+      "actual_dataset_index": 2
+    },
+    {
+      "logged_doc_id": 189,
+      "actual_dataset_index": 7
+    },
+    {
+      "logged_doc_id": 46,
+      "actual_dataset_index": 9
+    },
+    {
+      "logged_doc_id": 87,
+      "actual_dataset_index": 12
+    },
+    {
+      "logged_doc_id": 52,
+      "actual_dataset_index": 13
+    },
+    {
+      "logged_doc_id": 181,
+      "actual_dataset_index": 15
+    },
+    {
+      "logged_doc_id": 31,
+      "actual_dataset_index": 16
+    },
+    {
+      "logged_doc_id": 185,
+      "actual_dataset_index": 17
+    },
+    {
+      "logged_doc_id": 50,
+      "actual_dataset_index": 18
+    },
+    {
+      "logged_doc_id": 187,
+      "actual_dataset_index": 19
+    },
+    {
+      "logged_doc_id": 153,
+      "actual_dataset_index": 20
+    },
+    {
+      "logged_doc_id": 135,
+      "actual_dataset_index": 24
+    },
+    {
+      "logged_doc_id": 81,
+      "actual_dataset_index": 27
+    },
+    {
+      "logged_doc_id": 93,
+      "actual_dataset_index": 28
+    },
+    {
+      "logged_doc_id": 7,
+      "actual_dataset_index": 29
+    },
+    {
+      "logged_doc_id": 42,
+      "actual_dataset_index": 31
+    },
+    {
+      "logged_doc_id": 24,
+      "actual_dataset_index": 35
+    },
+    {
+      "logged_doc_id": 168,
+      "actual_dataset_index": 36
+    },
+    {
+      "logged_doc_id": 20,
+      "actual_dataset_index": 42
+    },
+    {
+      "logged_doc_id": 28,
+      "actual_dataset_index": 46
+    },
+    {
+      "logged_doc_id": 13,
+      "actual_dataset_index": 47
+    },
+    {
+      "logged_doc_id": 94,
+      "actual_dataset_index": 48
+    },
+    {
+      "logged_doc_id": 61,
+      "actual_dataset_index": 50
+    },
+    {
+      "logged_doc_id": 15,
+      "actual_dataset_index": 52
+    },
+    {
+      "logged_doc_id": 123,
+      "actual_dataset_index": 56
+    },
+    {
+      "logged_doc_id": 160,
+      "actual_dataset_index": 60
+    },
+    {
+      "logged_doc_id": 27,
+      "actual_dataset_index": 61
+    },
+    {
+      "logged_doc_id": 29,
+      "actual_dataset_index": 62
+    },
+    {
+      "logged_doc_id": 90,
+      "actual_dataset_index": 63
+    },
+    {
+      "logged_doc_id": 127,
+      "actual_dataset_index": 67
+    },
+    {
+      "logged_doc_id": 121,
+      "actual_dataset_index": 73
+    },
+    {
+      "logged_doc_id": 188,
+      "actual_dataset_index": 80
+    },
+    {
+      "logged_doc_id": 136,
+      "actual_dataset_index": 81
+    },
+    {
+      "logged_doc_id": 174,
+      "actual_dataset_index": 84
+    },
+    {
+      "logged_doc_id": 184,
+      "actual_dataset_index": 86
+    },
+    {
+      "logged_doc_id": 9,
+      "actual_dataset_index": 87
+    },
+    {
+      "logged_doc_id": 80,
+      "actual_dataset_index": 90
+    },
+    {
+      "logged_doc_id": 102,
+      "actual_dataset_index": 91
+    },
+    {
+      "logged_doc_id": 182,
+      "actual_dataset_index": 93
+    },
+    {
+      "logged_doc_id": 173,
+      "actual_dataset_index": 94
+    },
+    {
+      "logged_doc_id": 109,
+      "actual_dataset_index": 102
+    },
+    {
+      "logged_doc_id": 193,
+      "actual_dataset_index": 109
+    },
+    {
+      "logged_doc_id": 192,
+      "actual_dataset_index": 114
+    },
+    {
+      "logged_doc_id": 47,
+      "actual_dataset_index": 115
+    },
+    {
+      "logged_doc_id": 19,
+      "actual_dataset_index": 120
+    },
+    {
+      "logged_doc_id": 18,
+      "actual_dataset_index": 121
+    },
+    {
+      "logged_doc_id": 48,
+      "actual_dataset_index": 122
+    },
+    {
+      "logged_doc_id": 17,
+      "actual_dataset_index": 123
+    },
+    {
+      "logged_doc_id": 36,
+      "actual_dataset_index": 127
+    },
+    {
+      "logged_doc_id": 114,
+      "actual_dataset_index": 131
+    },
+    {
+      "logged_doc_id": 154,
+      "actual_dataset_index": 135
+    },
+    {
+      "logged_doc_id": 73,
+      "actual_dataset_index": 136
+    },
+    {
+      "logged_doc_id": 115,
+      "actual_dataset_index": 139
+    },
+    {
+      "logged_doc_id": 144,
+      "actual_dataset_index": 144
+    },
+    {
+      "logged_doc_id": 166,
+      "actual_dataset_index": 147
+    },
+    {
+      "logged_doc_id": 179,
+      "actual_dataset_index": 150
+    },
+    {
+      "logged_doc_id": 150,
+      "actual_dataset_index": 152
+    },
+    {
+      "logged_doc_id": 91,
+      "actual_dataset_index": 153
+    },
+    {
+      "logged_doc_id": 176,
+      "actual_dataset_index": 154
+    },
+    {
+      "logged_doc_id": 67,
+      "actual_dataset_index": 158
+    },
+    {
+      "logged_doc_id": 86,
+      "actual_dataset_index": 160
+    },
+    {
+      "logged_doc_id": 194,
+      "actual_dataset_index": 163
+    },
+    {
+      "logged_doc_id": 163,
+      "actual_dataset_index": 166
+    },
+    {
+      "logged_doc_id": 63,
+      "actual_dataset_index": 167
+    },
+    {
+      "logged_doc_id": 16,
+      "actual_dataset_index": 168
+    },
+    {
+      "logged_doc_id": 60,
+      "actual_dataset_index": 169
+    },
+    {
+      "logged_doc_id": 131,
+      "actual_dataset_index": 173
+    },
+    {
+      "logged_doc_id": 62,
+      "actual_dataset_index": 174
+    },
+    {
+      "logged_doc_id": 2,
+      "actual_dataset_index": 176
+    },
+    {
+      "logged_doc_id": 139,
+      "actual_dataset_index": 179
+    },
+    {
+      "logged_doc_id": 122,
+      "actual_dataset_index": 181
+    },
+    {
+      "logged_doc_id": 169,
+      "actual_dataset_index": 182
+    },
+    {
+      "logged_doc_id": 167,
+      "actual_dataset_index": 184
+    },
+    {
+      "logged_doc_id": 84,
+      "actual_dataset_index": 185
+    },
+    {
+      "logged_doc_id": 35,
+      "actual_dataset_index": 187
+    },
+    {
+      "logged_doc_id": 147,
+      "actual_dataset_index": 188
+    },
+    {
+      "logged_doc_id": 12,
+      "actual_dataset_index": 189
+    },
+    {
+      "logged_doc_id": 158,
+      "actual_dataset_index": 192
+    },
+    {
+      "logged_doc_id": 56,
+      "actual_dataset_index": 193
+    },
+    {
+      "logged_doc_id": 120,
+      "actual_dataset_index": 194
+    }
+  ]
+}

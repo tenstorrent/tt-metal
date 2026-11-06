@@ -29,7 +29,7 @@
     },
     "swe_bench_verified": {
       "decision": "stop",
-      "reason": "Repeated frozen5 completed; four tasks valid but one missing Astropy response aligns with32767 decode steps. Loop-versus-progress remains unknown, so full5 not banked. Model-owned retention hypothesis is being tested; no identical blind retry.",
+      "reason": "Current frozen5 repeats Xarray external data retrieval. Confirmed same model-selected reproduction as prior exhausted AutoFix; no admissible generic repair. Raw success quarantined; no retry-until-clean or larger10. Missing response evidence also remains, full audit pending.",
       "functional_at": 2,
       "projected_hours": null,
       "score": 0,
@@ -47,7 +47,11 @@
         "source": "runs/nightly-swe-decode-retention/manifest.json",
         "latest_projection_hours": 8.89957597861111,
         "progress_evidence": "runs/nightly-swe-decode-retention/eval-start-observation.json"
-      }
+      },
+      "evidence": [
+        "runs/swe-retained-network-confirmation/RESULT.json",
+        "runs/nightly-swe-network-reach/AUTOFIX.md"
+      ]
     },
     "terminal_bench_2_1": {
       "decision": "stop",
