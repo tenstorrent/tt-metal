@@ -367,7 +367,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
     if ((device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0) && use_welford &&
-        !sfpu_two_pass_l1_replay && a.layout() == Layout::TILE && a.buffer()->buffer_type() == BufferType::DRAM &&
+        !sfpu_two_pass_l1_replay && a.layout() == Layout::TILE && a.memory_config().buffer_type() == BufferType::DRAM &&
         per_core_Nt == 1 && num_actual_cols == num_virtual_cols && num_virtual_cols == device->num_dram_channels() &&
         Wt == num_virtual_cols && detail::preferred_noc_for_dram_read(device->arch()) == NOC::NOC_0) {
         // Each virtual column reads one DRAM bank. Keep NoC0 responses near their

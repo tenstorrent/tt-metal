@@ -19,7 +19,7 @@ void check_dram_operand(const Tensor& tensor, std::string_view name) {
     const bool nd_sharded_tiles =
         tensor.memory_config().nd_shard_spec().has_value() && tensor.layout() == tt::tt_metal::Layout::TILE;
     TT_FATAL(
-        tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM && (interleaved || nd_sharded_tiles),
+        tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM && (interleaved || nd_sharded_tiles),
         "{}: {} must be interleaved DRAM, or ND-sharded DRAM for TILE",
         kOperation,
         name);

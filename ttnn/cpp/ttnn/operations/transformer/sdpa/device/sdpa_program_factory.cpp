@@ -1932,8 +1932,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // 40% at bs16-32 (11x8, 12x10) and 13-14% at bs1 with L1-resident K/V and unicast chains. (Causal chains are
     // already off under retention, see kv_chain_mode_for.)
     constexpr uint32_t kMaxRetainChainBatch = 8;
-    const bool kv_in_l1 = input_tensor_k.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 &&
-                          input_tensor_v.buffer()->buffer_type() == tt::tt_metal::BufferType::L1;
+    const bool kv_in_l1 = input_tensor_k.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                          input_tensor_v.memory_config().buffer_type() == tt::tt_metal::BufferType::L1;
     const bool retain_skips_chains = kv_retain != 0 && B > kMaxRetainChainBatch;
     if (kv_chains_possible && !retain_skips_chains) {
         // Causal chains pool the Q heads of a KV head. With K/V retention the non-causal chains share its key, so a

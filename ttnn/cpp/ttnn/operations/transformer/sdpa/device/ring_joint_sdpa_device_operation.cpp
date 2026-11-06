@@ -241,7 +241,8 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args, uint32_t 
         TT_FATAL(tensor.dtype() == DataType::UINT32, "{} must have UINT32 dtype", name);
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "{} must use ROW_MAJOR layout", name);
         TT_FATAL(tensor.logical_volume() == 1, "{} must contain exactly one element", name);
-        TT_FATAL(tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "{} must be stored in DRAM", name);
+        TT_FATAL(
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM, "{} must be stored in DRAM", name);
     };
 
     validate_metadata_tensor(tensor_args.slot_id.value(), "slot_id");
@@ -546,7 +547,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(attention_sink.layout() == Layout::TILE, "Attention sink must be tilized");
         TT_FATAL(attention_sink.dtype() == DataType::BFLOAT16, "GPT-OSS attention sink must be BF16");
         TT_FATAL(
-            attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Attention sink must be in DRAM");
+            attention_sink.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Attention sink must be in DRAM");
 
         const auto& sink_shape = attention_sink.logical_shape();
         const auto& q_shape = input_tensor_q.logical_shape();
@@ -638,7 +640,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 

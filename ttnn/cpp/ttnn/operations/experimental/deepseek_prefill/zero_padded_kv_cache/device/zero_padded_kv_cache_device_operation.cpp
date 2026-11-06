@@ -206,7 +206,8 @@ void ZeroPaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache = tensor_args.cache;
     // cache storage is pinned in validate_runtime_args so it also runs on hits.
-    TT_FATAL(cache.buffer()->buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
+    TT_FATAL(
+        cache.memory_config().buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
     TT_FATAL(
         cache.layout() == Layout::TILE || cache.layout() == Layout::ROW_MAJOR,
         "cache layout must be TILE or ROW_MAJOR");

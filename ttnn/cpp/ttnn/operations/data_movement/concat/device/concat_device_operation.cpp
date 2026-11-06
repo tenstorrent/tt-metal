@@ -26,7 +26,7 @@ bool uses_zero_copy_sharded_factory(const std::vector<Tensor>& input_tensors, co
         return false;
     }
     for (const auto& input_tensor : input_tensors) {
-        if (input_tensor.buffer()->buffer_type() == BufferType::DRAM) {
+        if (input_tensor.memory_config().buffer_type() == BufferType::DRAM) {
             return false;
         }
     }
