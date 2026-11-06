@@ -6,7 +6,11 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import TILE_DIMENSIONS
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    TilizeGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     DestAccumulation,
     L1Accumulation,
@@ -53,7 +57,7 @@ def create_pack_dest_bank_config(
     num_tiles_in_block,
     variant_stimuli,
     *,
-    input_dimensions=None,
+    input_dimensions,
     loop_factor=1,
     is_perf=False,
     run_types=None,
@@ -65,12 +69,11 @@ def create_pack_dest_bank_config(
         raise ValueError("Functional pack destination-bank runs only support L1_TO_L1")
     if is_perf and tilize == Tilize.Yes:
         raise ValueError("Pack destination-bank perf runs do not support tilize")
-    if tilize == Tilize.Yes and input_dimensions is None:
-        raise ValueError("Pack destination-bank tilize requires input_dimensions")
     if is_perf and dest_index != 0:
         raise ValueError("Pack destination-bank perf runs require dest_index=0")
 
     runtimes = [
+        generate_input_dim(input_dimensions, input_dimensions),
         DEST_INDEX(dest_index),
         TILE_COUNT(tile_count),
         NUM_BLOCKS(num_blocks),
@@ -78,8 +81,6 @@ def create_pack_dest_bank_config(
         NUM_FACES(num_faces),
         L1_ACC(l1_acc),
     ]
-    if input_dimensions is not None:
-        runtimes.insert(0, generate_input_dim(input_dimensions, input_dimensions))
 
     return create_test_or_perf_config(
         is_perf=is_perf,
@@ -180,7 +181,7 @@ def get_valid_num_faces_datacopy(tilize):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
-    tilize=[Tilize.No],
+    tilize=get_valid_tilize_datacopy,
     dest_index=0,
     input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
 )
@@ -195,8 +196,11 @@ def test_pack_dest_bank(
         input_dimensions_B=input_dimensions,
     )
 
-    torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
+    if tilize == Tilize.No:
+        golden_tensor = src_A.to(format_dict[formats.output_format])
+    else:
+        generate_golden = get_golden_generator(TilizeGolden)
+        golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,

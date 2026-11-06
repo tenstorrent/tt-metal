@@ -78,6 +78,7 @@ def test_perf_pack_dest_bank(
             tile_count_res=tile_cnt,
             num_faces=num_faces,
         ),
+        input_dimensions=[32, 32 * tile_cnt],
         loop_factor=loop_factor,
         is_perf=True,
         run_types=[PerfRunType.PACK_ISOLATE],

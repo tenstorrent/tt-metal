@@ -78,7 +78,7 @@ void unpack_dest_bank_tiles(
     {
         for (std::uint32_t row = 0; row < block_rt_dim; ++row)
         {
-            const std::uint32_t read_offset = row * block_rt_dim;
+            const std::uint32_t read_offset = row * block_ct_dim;
             for (std::uint32_t column = 0; column < block_ct_dim; ++column)
             {
                 _llk_unpack_tilize_wrapper_(
@@ -107,10 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const Operand& buffer_A                = params.buffer_A;
 #endif
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t block_rt_dim = 0;
-    constexpr std::uint32_t block_ct_dim = 0;
-#elif !defined(SPEED_OF_LIGHT)
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t block_rt_dim = params.BLOCK_RT_DIM;
     const std::uint32_t block_ct_dim = params.BLOCK_CT_DIM;
 #else
