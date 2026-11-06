@@ -341,8 +341,8 @@ op_notes:
   op: linear
   what: 'gate logits: x @ gate^T (bf16 weights, fp32 accumulation)'
 - section: router
-  op: bringup.moe_grouped_topk
-  what: 'fused routing: sqrt(softplus), selection bias, top-6, renormalize, route scale (Marko''s op, fp32 selection)'
+  op: experimental.deepseek_prefill.moe_grouped_topk
+  what: 'fused routing: sqrt(softplus), selection bias, top-6, renormalize, route scale (Marko''s op, stock, fp32 selection)'
 - section: experts
   op: bringup.flat_routed_expert_with_program
   what: 'routed experts: dispatch, this chip''s 24 experts (bfp4 SwiGLU), weighted combine'

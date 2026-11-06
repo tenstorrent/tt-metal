@@ -42,6 +42,25 @@ def test_a_call_to_an_unknown_op_stops(tmp_path):
         fork_cases.check(cap, "m")
 
 
+def test_a_call_to_a_retired_fork_is_listed_apart(tmp_path, monkeypatch):
+    """A committed capture made before a fork was retired (deepseek_v41_flash_d_p results/fork_calls.json:
+    ttnn.bringup.moe_grouped_topk, retired 2026-11-06) is reported, not an unknown op; the live forks are still
+    checked."""
+    cap = tmp_path / "fork_calls.json"
+    calls = [
+        {"sig": "old", "count": 8, "op": "ttnn.bringup.moe_grouped_topk", "args": [], "kwargs": {}},
+        {"sig": "aaa", "count": 1, "op": "ttnn.bringup.dispatch", "args": [], "kwargs": {}},
+    ]
+    cap.write_text(json.dumps({"calls": calls}))
+    assert "ttnn.bringup.moe_grouped_topk" in fork_cases.retired_ops()
+    assert "ttnn.bringup.moe_grouped_topk" not in fork_cases.op_to_fork()
+    monkeypatch.setattr(fork_cases, "cases", lambda fork: [{"model": "m", "sig": "aaa"}] if fork == "dispatch" else [])
+    res, missing = fork_cases.check(cap, "m")
+    assert res["forks"] == ["dispatch"] and not missing
+    assert res["stats"] == {"forks_used": 1, "fork_calls": 1, "fork_calls_uncovered": 0}
+    assert [c["sig"] for c in res["retired"]] == ["old"] and "#60550" in res["retired"][0]["replaced_by"]
+
+
 def test_gate_commit_stages_the_task_extras_and_the_fork_calls(fx):
     from models.demos.common.bringup.core.gate import stage_paths
     from models.demos.common.bringup.core.ledger import Ledger

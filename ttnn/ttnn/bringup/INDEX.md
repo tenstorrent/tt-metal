@@ -19,8 +19,21 @@ source op's own tests (`tests/source.yaml`, run in place with `testing/fork_sour
 random-input case to those tests for each call it makes: `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`
 (bring-up task O.1).
 
-A person decides later whether a fork is ported back to the original op. When it is, the fork is deleted and its
-users are switched back.
+A person decides later whether a fork is ported back to the original op. When it is (or the original op now covers
+the same problem), the fork is deleted, its users are switched back, and it is listed under "Retired forks" and
+in `RETIRED_OPS` (`__init__.py`), so a model's fork-call capture made before that still reads (`fork_cases.py`).
+
+## Retired forks
+
+Deleted; use the op named instead. Their history is in git (the fork's CHANGELOG.md before the retiring commit).
+This section stays above `## Ops`: fork_op.py appends new forks at the end of the file.
+
+- retired `ttnn.bringup.moe_grouped_topk` (2026-11-06, owner): the fused MoE gate fork with fp32_selection's 23-bit
+  sort and opt-in fp32_activation (the fp32 softplus for sqrtsoftplus routers). Upstream #60550 (`e5e853c3cd1`) made
+  the stock `ttnn.experimental.deepseek_prefill.moe_grouped_topk` select in fp32 (keys, bias add, its own
+  fp32-accurate sqrt(softplus) on Blackhole); this branch's stock `fp32_selection` normalizes the weights in fp32. Its
+  only user, deepseek_v41_flash_d_p tt/router.py (ROUTER_IMPL=fused), calls the stock op; its model case moved to
+  `models/demos/deepseek_v41_flash_d_p/tests/test_router_stock_topk.py`.
 
 ## Ops
 
@@ -59,8 +72,6 @@ that use it. Its `CHANGELOG.md` has the source path and SHA and every change.
   Consider instead of: ttnn.generic_op with one descriptor object reused every call. -> prepared_program/README.md
 - `ttnn.bringup.prepare_chunk_recurrence` (prepare_chunk_recurrence): KDA chunk preparation with opt-in precise_gate_factors (exact anchored gate exponents, no TF32 bias near the -5 gate bound; a bias fix, realistic). Source @ 6b80daf43e3: upstream's #63309 rewrite (chunk prep -45 us) not merged yet (CHANGELOG, 107f838f379 sync).
   Consider instead of: ttnn.experimental.kda.prepare_chunk_recurrence. -> prepare_chunk_recurrence/README.md
-- `ttnn.bringup.moe_grouped_topk` (moe_grouped_topk): fused MoE gate after the gate matmul (activation, selection-only bias, grouped / single-group top-k, gather, normalize, route scale) in one program, with the source's fp32_selection; adds opt-in fp32_activation (the fp32 softplus for sqrtsoftplus routers: keys bit-identical to stock ttnn.sqrt(ttnn.softplus) on fp32; a fix, realistic). Upstream's #60550 (always-fp32 keys, its own sqrt_softplus) not merged yet (CHANGELOG, 107f838f379 sync).
-  Consider instead of: ttnn.experimental.deepseek_prefill.moe_grouped_topk; a router chain ttnn.softplus / ttnn.sigmoid + ttnn.sqrt + ttnn.add + ttnn.topk + ttnn.gather + ttnn.sum + ttnn.multiply + ttnn.div. -> moe_grouped_topk/README.md
 - `ttnn.bringup.update_padded_kv_cache` (update_padded_kv_cache): the stock KV cache write; ROW_MAJOR copy calls may write per-chip stripes / cache depths that are whole rows, not 32-row tiles (TP-dedup ratio-2 caches over 4 columns).
   Consider instead of: ttnn.experimental.deepseek_prefill.update_padded_kv_cache (ROW_MAJOR caches with non-tile stripes). -> update_padded_kv_cache/README.md
 - `ttnn.bringup.ckv_bfp4`, `bfp_round` (ckv_bfp4_ttnn): bf16 TILE rows [.., n, 512] -> 320-byte bfloat4_b (or 576-byte bfloat8_b) row records (32 exponents twice + the values, written by the packer) written in place into a uint8 row table at row0 (or, blocks=True, bfloat8_b blocks of 32 rows a page), rounded to nearest even like the host packer (SFPU round before the pack; the packer alone truncates bfp4 in effect); optional bf16 output of the rounded values. bfp_round: bf16 TILE -> bfloat4_b / bfloat8_b TILE by the same rounding, new or in place at a tile row. Opt-in `prepared` (ckv_bfp4 and bfp_round): the program built once per shape, row0 / the first page patched (prepared_program value slot). Opt-in `prefix` (ckv_bfp4: a second input written first, [prefix | ckv] in one call) and `compact` (both: merged core ranges, no per-core runtime args, row0 frozen; ~46-60 us host a call on 32 chips vs ~150).
