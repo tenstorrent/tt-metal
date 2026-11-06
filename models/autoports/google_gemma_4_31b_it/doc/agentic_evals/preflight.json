@@ -54,9 +54,9 @@
     }
   },
   "admission": {
-    "ok": false,
+    "ok": true,
     "local_task_sandboxes_available": 0,
-    "reason": "No usable Docker endpoint and user namespaces denied.",
+    "reason": "Selected C2 observed running concurrently and completed on stock CI; operator network pool approximately31, unchanged task CPU/memory. This validates chosen concurrency, not a host maximum or future disk guarantee.",
     "ci_observation": {
       "run_id": 42190891568,
       "planned_clients": 2,
@@ -64,7 +64,9 @@
       "at": "2026-11-06T10:13:06Z",
       "evidence": "StockHarborprogress0/2done,2running; servingactive_rows2",
       "limit": "ObservedC2 only; hostmaximum and occupiedDockerbridge count unknown; no customadmission checks introduced."
-    }
+    },
+    "selected_route": "qb2-ci",
+    "planned_clients": 2
   },
   "release_route": {
     "ok": false,
@@ -93,11 +95,13 @@
       {
         "eval": "terminal_bench_2_1",
         "run_id": 42190891568,
-        "ok": false,
-        "reason": "Correctautoportlifecycle-repair attemptreached2runningtasksonstockHarbor; trajectoryauditpending"
+        "ok": true,
+        "reason": "Both complete valid trajectories; task quality failures, no limit loss or external retrieval.",
+        "tasks": 2,
+        "trajectory_audit": "runs/smoke2-terminal-lifecycle-repair/audit.json"
       }
     ],
     "trajectory_audit": "runs/smoke2-r1_gpqa_diamond/audit.json",
-    "reason": "GPQA valid; tool-suite smokes pending"
+    "reason": "GPQA and Terminal valid; SWE network-validity retry pending."
   }
 }

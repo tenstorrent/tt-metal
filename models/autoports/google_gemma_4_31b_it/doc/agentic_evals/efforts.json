@@ -1241,8 +1241,8 @@
         "new": 0.75,
         "reason": "Captureonefull-release-capnativechatreplay withrawtokenIDs forcausalonsetcomparison;TTnexttokenlogitsalonecannotdiagnoseobservedloop. Existingdiagnosticcostabout.2h, extraestimated.32h."
       },
-      "device_hours_to_date": 0.3876286155555555,
-      "progress": "Native seed0 exact42823-token replay completed in30.9057s with200 generated tokens and coherent finite tool call, no cap or repetition. Original cause remains open; full-prefix HF reference in progress.",
+      "device_hours_to_date": 0.540240841111111,
+      "progress": "Seed0 and1 natural native tool closures, no loops; stochastic probing stopped. Full-prefix HF still running; no quality exoneration.",
       "re_estimate": {
         "additional_device_hours": 0.48,
         "basis": "390s measured startup plus1281s original capped response; one seed1 only. Current used .387628616h.",
@@ -1314,6 +1314,66 @@
         "change_scope": "Diagnosticclienttimeoutonly; servingunchanged"
       },
       "evidence": "runs/measured-workload-prefill/RESULT.md"
+    },
+    {
+      "problem": "terminal-smoke-runtime-analysis",
+      "owner": "suite_registration",
+      "goal": "Reconcile real Terminal model-call, tool and parser costs and observed workload for release projections, without reconstructing missing native messages.",
+      "plan": "runs/terminal-smoke-runtime-analysis/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated",
+        "reason": "Host-only analysis of existing artifacts; no speedup credited."
+      },
+      "confirm": {
+        "method": "Per-call timings/usage reconcile to2295.204564s suite and observed task durations, with coverage/missing fields explicit.",
+        "success": "Usable bounds for generation/outside-server fractions and real contexts."
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "calls": 47,
+        "call_coverage": 1,
+        "aggregate_api_seconds": 2305.829807281494,
+        "aggregate_non_api_seconds": 313.6840307185059,
+        "parse_error_request_seconds": 403.8074607849121,
+        "limitation": "No separate device generation/prefill/queue or actual tool timestamps; release savings unknown."
+      },
+      "evidence": "runs/terminal-smoke-runtime-analysis/result.json"
+    },
+    {
+      "problem": "next-rung-after-terminal-preparation",
+      "owner": "suite_registration",
+      "goal": "Keep GPQA198 and SWE5 candidates ready on current TTI2f69c37 without delaying eligible rungs.",
+      "plan": "runs/next-rung-after-terminal/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0,
+        "basis": "calculated",
+        "reason": "Host-only rebase of tested model cohorts; no speed credit."
+      },
+      "confirm": {
+        "method": "Resolved configs/tree parity with alreadytested candidates; affected checks if any resulting source differs.",
+        "success": "Only intended cohort selection changes; pins, limits, repairs and autoexport retained."
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "tree_files_compared": 1821,
+        "identical_to_previously_tested_candidates": true,
+        "resolved_configs_equal": true,
+        "previous_validation": "61focused/fullhooks per candidate; unchanged tests not repeated"
+      },
+      "evidence": "runs/next-rung-after-terminal/RESULT.md"
     }
   ],
   "rankings": [
@@ -2829,6 +2889,180 @@
         }
       ],
       "reason": "Validity first: SWE network repair and release route/checker remain open; Django loop cause remains ahead of speed. Terminal lifecycle and Harbor pin confirmed. Existing C2 capacity retained: Terminal artifacts cannot faithfully reconstruct native conversations, so no invented C4 replay."
+    },
+    {
+      "after": "terminal-runtime-analysis-start",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "measured-workload-prefill",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        },
+        {
+          "problem": "terminal-smoke-runtime-analysis",
+          "saving_hours": 0,
+          "device_hours": 0
+        }
+      ],
+      "reason": "Validity first unchanged; host-only runtime analysis runs alongside device work, credits no speed saving and cannot delay rungs."
+    },
+    {
+      "after": "terminal-runtime-analysis-confirmed",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "measured-workload-prefill",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        },
+        {
+          "problem": "terminal-smoke-runtime-analysis",
+          "saving_hours": 0,
+          "device_hours": 0
+        }
+      ],
+      "reason": "Validity stays first. Existing Terminal traffic spends88.0% aggregate agent time in API calls; this is not generation-only fraction. Four recovered parser errors cost403.807 summed request-seconds, but release savings remain unknown. No speculative speed credit."
+    },
+    {
+      "after": "next-rung-candidates-ready",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "measured-workload-prefill",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        },
+        {
+          "problem": "terminal-smoke-runtime-analysis",
+          "saving_hours": 0,
+          "device_hours": 0
+        }
+      ],
+      "reason": "Validity tier unchanged; candidate preparation costs0deviceh and credits no speed benefit. Immediate next rung needs active-run validity and measured projection."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

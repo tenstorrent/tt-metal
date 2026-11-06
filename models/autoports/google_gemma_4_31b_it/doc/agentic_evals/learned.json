@@ -100,6 +100,10 @@
     {
       "fact": "Mini2.2.8 parses nativeactions before saving response; No toolcalls FormatError loses rawusage/finish. Django11missingqueryresponses exactlymatch11FormatErrors; capcountacrossthoseunknown.",
       "evidence": "runs/django-cap-loop-diagnosis/timing-coverage.json"
+    },
+    {
+      "fact": "Terminal ATIF does not retain raw native conversation by default; raw_content mode affects exported assistant representation. Exact C4 replay from2SWE+2Terminal histories is unavailable; do not invent assistant JSON. All47 API durations/usage are available and reconciled.",
+      "evidence": "runs/agent-capacity-and-contention/plan.md; runs/terminal-smoke-runtime-analysis/result.json"
     }
   ],
   "suite_timings": [

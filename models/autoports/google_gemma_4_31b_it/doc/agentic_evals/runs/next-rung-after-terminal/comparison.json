@@ -1,0 +1,22 @@
+{
+  "gpqa198": {
+    "base": "2f69c37e593d7a9b5c91af0f66ebc22e6632c338",
+    "identical_to_tested_worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-observable-gpqa198",
+    "tracked_file_count": 1821,
+    "tracked_file_differences": [],
+    "patch_sha256": "ac4fef20c4ed202fd05b16783162748ff79d20e0ac205285c9a5e26ea32e1284",
+    "targeted_tests_repeated": false,
+    "reason": "Entire tracked source tree byte-identical to61-focused-tests/fullhooks-passing prior candidate; only Git base history differs.",
+    "resolved_configuration_identical_excluding_base": true
+  },
+  "swe5": {
+    "base": "2f69c37e593d7a9b5c91af0f66ebc22e6632c338",
+    "identical_to_tested_worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-observable-swe5",
+    "tracked_file_count": 1821,
+    "tracked_file_differences": [],
+    "patch_sha256": "731bdc579614223ad2fec19c10d26aa3516ff883404abbc8354f2581ebeb1e91",
+    "targeted_tests_repeated": false,
+    "reason": "Entire tracked source tree byte-identical to61-focused-tests/fullhooks-passing prior candidate; only Git base history differs.",
+    "resolved_configuration_identical_excluding_base": true
+  }
+}

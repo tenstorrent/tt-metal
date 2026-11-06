@@ -2,7 +2,7 @@
   "arm": "django-native-seed1",
   "owner": "coordinator",
   "device": "local",
-  "status": "running",
+  "status": "complete",
   "queued_at": "2026-11-06T10:56:20.156922+00:00",
   "start": "2026-11-06T10:56:20.156922+00:00",
   "planned_clients": 1,
@@ -17,5 +17,12 @@
   "regime": "Serial TT mesh1x4; concurrent HF CPU reference",
   "device_hours_before": 0.3876286155555555,
   "effort_box_hours": 1.0,
-  "owner_check": []
+  "owner_check": [],
+  "client_outer_bound_seconds": 1477,
+  "client_started_at": "2026-11-06T11:03:12.468628+00:00",
+  "end": "2026-11-06T11:05:29.560934+00:00",
+  "exit_status": 1,
+  "client_exit_status": 0,
+  "exit_reason": "Idle API gracefully interrupted; wrapper1, empty device owners.",
+  "actual_hours": 0.15261222555555554
 }

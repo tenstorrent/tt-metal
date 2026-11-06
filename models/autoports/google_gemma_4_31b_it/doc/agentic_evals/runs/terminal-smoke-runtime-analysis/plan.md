@@ -1,0 +1,3 @@
+# Terminal runtime attribution
+
+Coordinator goal: price real request/tool/parser runtime and workload from existing smoke42190891568 only. Rank below validity repairs. Device box and predicted device cost0; savings unknown. Reconcile per-call API request times and usage with trial phases and suite2295.204564s, report measured coverage and missing fields, peak prompt/completion usage, and time spent on recovered parser errors. No inference launches, source changes, central docs or score re-audit. Produce compact derived evidence, never raw transcripts. Distinguish end-to-end request timing from model/device generation and residual tool/parser time; do not invent absent event timestamps or finish reasons.

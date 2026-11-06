@@ -1,0 +1,3 @@
+# Next rung after Terminal publication
+
+Prepare independent GPQA198 and SWE5 patches against TTI2f69c37e593d7a9b5c91af0f66ebc22e6632c338, with peers disabled. Preserve already-tested full candidate configurations and all activation/lifecycle/pin/cache/observability repairs. Compare every tracked source file against the prior validated candidate trees and stock resolved config values. Run targeted selection checks only if semantic candidate differences appear beyond cohort/base metadata. Host/device cost0; no publication checkout edits, dispatch or push. Existing tests/evidence are reused rather than rerun unchanged.

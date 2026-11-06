@@ -243,8 +243,8 @@
     {
       "problem": "long-prefill-decode-interference",
       "hours": null,
-      "reason": "Observed synthetic86K prefill35.4s with2.43smax decoder deliverygap; actual task overlap and release counts not yet measured.",
-      "evidence": "runs/prefill-under-load/RESULT.md"
+      "reason": "Measured107585-token cold prefill72.683s and overlap TTFT78.910s under concurrent HF CPU load; anchor delivered28tokens during overlap. Actual release overlap frequency and generation-only share remain unavailable, so no fabricated hours saved.",
+      "evidence": "runs/measured-workload-prefill/RESULT.md; runs/terminal-smoke-runtime-analysis/result.json"
     }
   ],
   "last_updated": "2026-11-06T10:02:30.826022+00:00",

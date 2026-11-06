@@ -25,6 +25,16 @@
         "prompt_p95": 94242,
         "source": "doc/agentic_evals/runs/real-history-capacity/workload-result.json",
         "limits": "No continuous simultaneouspeakoccupancy; quarantinedscore; notrepresentativepopulation; missing11calls."
+      },
+      "terminal_bench_2_1": {
+        "planned_clients": 2,
+        "completed_tasks": 2,
+        "calls": 47,
+        "observed_max_prompt_tokens": 53645,
+        "observed_max_completion_tokens": 4669,
+        "observed_max_prompt_plus_completion_tokens": 54247,
+        "source": "doc/agentic_evals/runs/terminal-smoke-runtime-analysis/result.json",
+        "coverage": "47/47 saved calls; raw native requests not retained, no C4 capacity claim"
       }
     }
   },

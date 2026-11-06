@@ -13,10 +13,11 @@
       ],
       "next_rung": {
         "tasks": 10,
-        "planned_clients": null,
+        "planned_clients": 2,
         "batch": 8,
         "evaluation_hours_at_c2": 0.263041830388053,
-        "projection_basis": "Measured nightly10; C8 candidate awaits actual-state capacity proof."
+        "projection_basis": "C2 selected and active on original nightly10; measured real C2 serving proof, no C8 admission.",
+        "run_id": 42196060694
       }
     },
     "swe_bench_verified": {

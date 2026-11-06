@@ -1,0 +1,117 @@
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index 2d73d5d..1be481a 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -12013,13 +12013,22 @@ _eval_config_list = [
+                         },
+                     },
+                     task_names_map={
+-                        mode: ["pylint-dev__pylint-7080", "django__django-11265"]
+-                        for mode in (EvalLimitMode.SMOKE_TEST, EvalLimitMode.CI_NIGHTLY)
++                        EvalLimitMode.SMOKE_TEST: [
++                            "pylint-dev__pylint-7080",
++                            "django__django-11265",
++                        ],
++                        EvalLimitMode.CI_NIGHTLY: [
++                            "pylint-dev__pylint-7080",
++                            "django__django-11265",
++                            "psf__requests-1766",
++                            "pydata__xarray-4966",
++                            "astropy__astropy-14598",
++                        ],
+                     },
+                 ),
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 0,
++                    EvalLimitMode.CI_NIGHTLY: 5,
+                 },
+             ),
+             EvalTask(
+@@ -12057,27 +12066,16 @@ _eval_config_list = [
+                         },
+                     },
+                     task_names_map={
+-                        EvalLimitMode.SMOKE_TEST: [
+-                            "terminal-bench/llm-inference-batching-scheduler",
+-                            "terminal-bench/mailman",
+-                        ],
+-                        EvalLimitMode.CI_NIGHTLY: [
++                        mode: [
+                             "terminal-bench/llm-inference-batching-scheduler",
+                             "terminal-bench/mailman",
+-                            "terminal-bench/db-wal-recovery",
+-                            "terminal-bench/winning-avg-corewars",
+-                            "terminal-bench/feal-linear-cryptanalysis",
+-                            "terminal-bench/fix-code-vulnerability",
+-                            "terminal-bench/constraints-scheduling",
+-                            "terminal-bench/sparql-university",
+-                            "terminal-bench/dna-insert",
+-                            "terminal-bench/video-processing",
+-                        ],
++                        ]
++                        for mode in (EvalLimitMode.SMOKE_TEST, EvalLimitMode.CI_NIGHTLY)
+                     },
+                 ),
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 10,
++                    EvalLimitMode.CI_NIGHTLY: 0,
+                 },
+             ),
+         ],
+diff --git a/tests/workflows/test_gemma4_autoport_smoke_suites.py b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+index 11609b7..8eaaf9a 100644
+--- a/tests/workflows/test_gemma4_autoport_smoke_suites.py
++++ b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+@@ -95,18 +95,13 @@ def test_stock_harbor_route_preserves_smoke_limits_and_task_resources(
+     tmp_path, mode, index, names
+ ):
+     task = TASKS[index]
+-    if mode == "ci-nightly" and task.task_name == "terminal_bench_2_1":
++    if mode == "ci-nightly" and task.task_name == "swe_bench_verified":
+         names = [
+-            "terminal-bench/llm-inference-batching-scheduler",
+-            "terminal-bench/mailman",
+-            "terminal-bench/db-wal-recovery",
+-            "terminal-bench/winning-avg-corewars",
+-            "terminal-bench/feal-linear-cryptanalysis",
+-            "terminal-bench/fix-code-vulnerability",
+-            "terminal-bench/constraints-scheduling",
+-            "terminal-bench/sparql-university",
+-            "terminal-bench/dna-insert",
+-            "terminal-bench/video-processing",
++            "pylint-dev__pylint-7080",
++            "django__django-11265",
++            "psf__requests-1766",
++            "pydata__xarray-4966",
++            "astropy__astropy-14598",
+         ]
+     if mode == "ci-nightly" and task.task_name == "r1_gpqa_diamond":
+         names = [152, 189, 46, 87, 52, 181, 31, 185, 50, 187]
+@@ -149,18 +144,13 @@ def test_only_prepared_candidate_enabled():
+ 
+     assert [task.limit_samples_map[EvalLimitMode.CI_NIGHTLY] for task in TASKS] == [
+         0,
++        5,
+         0,
+-        10,
+     ]
+-    assert TASKS[2].agentic_eval_config.task_names_map[EvalLimitMode.CI_NIGHTLY] == [
+-        "terminal-bench/llm-inference-batching-scheduler",
+-        "terminal-bench/mailman",
+-        "terminal-bench/db-wal-recovery",
+-        "terminal-bench/winning-avg-corewars",
+-        "terminal-bench/feal-linear-cryptanalysis",
+-        "terminal-bench/fix-code-vulnerability",
+-        "terminal-bench/constraints-scheduling",
+-        "terminal-bench/sparql-university",
+-        "terminal-bench/dna-insert",
+-        "terminal-bench/video-processing",
++    assert TASKS[1].agentic_eval_config.task_names_map[EvalLimitMode.CI_NIGHTLY] == [
++        "pylint-dev__pylint-7080",
++        "django__django-11265",
++        "psf__requests-1766",
++        "pydata__xarray-4966",
++        "astropy__astropy-14598",
+     ]
