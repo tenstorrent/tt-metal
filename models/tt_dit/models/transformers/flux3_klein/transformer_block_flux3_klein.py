@@ -24,8 +24,10 @@ MLP_RATIO = 3
 # length picks badly; other row counts keep the Attention defaults.
 RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     2560: (160, 512),
+    2688: (160, 512),
     2816: (160, 512),
     3072: (192, 512),
+    8320: (128, 640),
     8960: (128, 640),
 }
 
