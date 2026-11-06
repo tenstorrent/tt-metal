@@ -1395,3 +1395,45 @@ def test_model_aux_builder_passes_the_snapshot_through_the_block_state():
         model, list(range(B * T)), [1] * B, rope_delta=0, predict=True, hold=(), gdn_pages=snap
     )
     assert int(out.shape[0]) == 3
+
+
+class _AddrFT(_FT):
+    def __init__(self, label, addr):
+        super().__init__(label)
+        self.addr = addr
+
+    def buffer_address(self):
+        return self.addr
+
+
+def test_write_trace_replays_the_scratch_into_each_target_block(monkeypatch):
+    """QWEN36_MAMBA_WRITE_TRACE: the captured prefill block write restages its page tables for the target blocks and
+    lands the bound scratch's state and conv history there; a moved scratch address makes the caller write eagerly."""
+    import ttnn
+
+    st, rec, conv, _ = _chain_copy_state(monkeypatch)
+    dn = st.layers[0][1]
+    dn.rec_state, dn.conv_carry = _AddrFT("rec:scratch", 100), _AddrFT("conv:scratch", 200)
+    replays = []
+
+    def copy_h2d(host, dev):
+        dev.copy_(host)
+
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", copy_h2d)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: None)
+    monkeypatch.setattr(ttnn, "begin_trace_capture", lambda mesh, cq_id=0: 7)
+    monkeypatch.setattr(ttnn, "end_trace_capture", lambda mesh, tid, cq_id=0: None)
+    wt = sbs._WriteTrace(st)
+    wt.capture()
+    monkeypatch.setattr(
+        ttnn, "execute_trace", lambda mesh, tid, cq_id=0, blocking=False: replays.append(tid) or wt.body()
+    )
+    st._write_trace = wt
+    st.book.set_prefill_blocks([torch.tensor([40])])
+    st.write_prefill(0)
+    assert replays == [7] and rec(40) == {"rec:scratch"} and conv(40) == "conv:scratch"
+    dn.rec_state = _AddrFT("rec:other", 101)  # a different binding: not the captured addresses
+    assert not wt.replay([41])
+    st.book.set_prefill_blocks([torch.tensor([41])])
+    st.write_prefill(0)  # eager
+    assert replays == [7] and rec(41) == {"rec:other"}

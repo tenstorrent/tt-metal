@@ -92,6 +92,13 @@ def mamba_chain_moves_enabled():
     return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_CHAIN_MOVES", "0") == "1"
 
 
+def mamba_write_trace_enabled():
+    """QWEN36_MAMBA_WRITE_TRACE (default "0"; needs QWEN36_MAMBA_SPEC=1): the write of a prefill's GDN state into its
+    vLLM blocks (every GDN layer's recurrent pages and conv history from the bound B=1 scratch) replays one captured
+    trace through per-group page-table buffers instead of about 550 eager ops."""
+    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_WRITE_TRACE", "0") == "1"
+
+
 def verify_device_topk_m():
     """Device-side top-k for the sampled verify (QWEN36_VERIFY_DEVICE_TOPK, default 1 = on; 0 turns it off): 0 when off, else
     M = QWEN36_VERIFY_TOPK_M (default 64) candidates per vocab shard. Read by the model (third verify trace),

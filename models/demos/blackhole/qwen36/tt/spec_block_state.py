@@ -955,14 +955,15 @@ class SpecGdnBlockState:
         fp32, conv_carry [1, K - 1, C] bf16). Same contract as GdnPrefixStateCache.restore."""
         import ttnn
 
-        for _, dn, g in self.layers:
-            b = self.book.prefill_block(g, u)
-            rec = self._read_rec(dn, b)
-            ttnn.copy(rec, dn.rec_state)
-            ttnn.deallocate(rec)
-            carry = self._read_carry(dn, b)
-            ttnn.copy(carry, dn.conv_carry)
-            ttnn.deallocate(carry)
+        with self._timed("prefill block restores", len(self.layers)):
+            for _, dn, g in self.layers:
+                b = self.book.prefill_block(g, u)
+                rec = self._read_rec(dn, b)
+                ttnn.copy(rec, dn.rec_state)
+                ttnn.deallocate(rec)
+                carry = self._read_carry(dn, b)
+                ttnn.copy(carry, dn.conv_carry)
+                ttnn.deallocate(carry)
 
     def write_prefill(self, u):
         """Write the bound B=1 prefill scratch (rec_state, conv_carry) of every GDN layer into request u's state block."""
@@ -976,6 +977,8 @@ class SpecGdnBlockState:
     def _write_scratch(self, blocks, kind):
         import ttnn
 
+        if self._replay_write(blocks, kind):
+            return
         with self._timed(kind, len(self.layers)), _PageTables(self) as pts:
             for _, dn, g in self.layers:
                 b = int(blocks[g])
@@ -984,6 +987,41 @@ class SpecGdnBlockState:
                 rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 self._write_carry(dn, b, rm, pts)
                 ttnn.deallocate(rm)
+
+    def _replay_write(self, blocks, kind):
+        """QWEN36_MAMBA_WRITE_TRACE: write the bound prefill scratch into ``blocks`` ([G] ids) by the captured trace;
+        False when there is none or it does not apply (the caller writes eagerly)."""
+        wt = getattr(self, "_write_trace", None)
+        if wt is None:
+            return False
+        with self._timed(f"{kind} (trace)", len(self.layers)):
+            if not wt.replay(blocks):
+                return False
+        for b in blocks:
+            self.book.forget_block(b)
+        return True
+
+    def capture_write_trace(self):
+        """QWEN36_MAMBA_WRITE_TRACE: capture the prefill block write (_WriteTrace) on the bound scratch. Call after every
+        other trace is captured (MTPSpecEngine.capture_decode), so no buffer allocated later can sit where the replay
+        writes its intermediates. A failed capture leaves the eager write in charge."""
+        from loguru import logger
+
+        from models.demos.blackhole.qwen36.tt.tp_common import mamba_write_trace_enabled
+
+        if getattr(self, "_write_trace", None) is not None or not mamba_write_trace_enabled():
+            return
+        model = self.model
+        prev = model._bind_gdn_prefill_scratch()
+        try:
+            wt = _WriteTrace(self)
+            wt.capture()
+            self._write_trace = wt
+            logger.info(f"[mamba_spec] prefill block write trace captured ({len(self.layers)} GDN layers)")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[mamba_spec] prefill block write trace capture failed ({e!r}): eager writes")
+        finally:
+            model._unbind_gdn_prefill_scratch(prev)
 
     def warmup(self):
         """Run every eager program of the block paths once on vLLM's null block 0 (prefill write and restore on the
@@ -1148,13 +1186,14 @@ class SpecGdnBlockState:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
 
-    def _write_rec(self, dn, b, rec, pts):
+    def _write_rec(self, dn, b, rec, pts, tables=None):
         """rec [1, Nv, Dk, Dv] fp32 TILE -> block b's head pages (paged_fill_cache over [Dk / 2, Dv] view blocks: a
-        head's 16 pages are its two half-head view blocks, in the tile order of [Dk, Dv])."""
+        head's 16 pages are its two half-head view blocks, in the tile order of [Dk, Dv]). ``tables`` (pool -> device
+        page table): write through those instead of block b's pages."""
         import ttnn
 
-        pages = self.layout.head_pages(torch.tensor([b]))[0]
-        for view, h0, h1, off in self._pools(dn):
+        pages = None if tables is not None else self.layout.head_pages(torch.tensor([b]))[0]
+        for k, (view, h0, h1, off) in enumerate(self._pools(dn)):
             if h1 <= h0:
                 continue
             n = h1 - h0
@@ -1166,10 +1205,14 @@ class SpecGdnBlockState:
                 else ttnn.slice(rec, (0, h0, 0, 0), (1, h1, dn.Dk, dn.Dv), memory_config=ttnn.DRAM_MEMORY_CONFIG)
             )
             src = ttnn.reshape(part, (1, 1, n * dn.Dk, dn.Dv))
-            first = int(pages[h0]) - off
-            if first % HALF_PAGES:
-                raise ValueError(f"block {b}: head {h0} starts at page {first}, not a multiple of {HALF_PAGES}")
-            ttnn.experimental.paged_fill_cache(view, src, pts(first // HALF_PAGES, 2 * n), batch_idx=0)
+            if tables is None:
+                first = int(pages[h0]) - off
+                if first % HALF_PAGES:
+                    raise ValueError(f"block {b}: head {h0} starts at page {first}, not a multiple of {HALF_PAGES}")
+                tab = pts(first // HALF_PAGES, 2 * n)
+            else:
+                tab = tables[k]
+            ttnn.experimental.paged_fill_cache(view, src, tab, batch_idx=0)
             if not whole:
                 ttnn.deallocate(part)
 
@@ -1229,6 +1272,95 @@ class SpecGdnBlockState:
         out = ttnn.to_layout(ttnn.reshape(rows, (1, kc - 1, C)), ttnn.TILE_LAYOUT, memory_config=mc)
         ttnn.deallocate(rows)
         return out
+
+
+class _WriteTrace:
+    """QWEN36_MAMBA_WRITE_TRACE: the captured write of the bound prefill scratch into one block per GDN group
+    (SpecGdnBlockState.write_prefill), through persistent page tables: per group one int32 table per recurrent pool
+    and one for the conv history, restaged per write. Valid while the scratch keeps the addresses the capture baked
+    and the target blocks keep their conv history in the captured views."""
+
+    def __init__(self, state):
+        import ttnn
+
+        self.state, self.tid = state, None
+        rep = ttnn.ReplicateTensorToMesh(state.mesh)
+        self.tables = [self._host(g, 0) for g in range(state.G)]
+        self.dev = [
+            {
+                k: ttnn.from_torch(
+                    t, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=state.mesh, mesh_mapper=rep
+                )
+                for k, t in tabs.items()
+            }
+            for tabs in self.tables
+        ]
+        self.views = [self._conv_view(0)] * state.G
+        self.fp = None
+
+    def _host(self, g, b):
+        """{pool index: int32 [1, n] view-block pages, "conv": int32 [1, conv_pages] conv pages} of block b."""
+        st, lay = self.state, self.state.layout
+        dn = next(d for _, d, gg in st.layers if gg == g)
+        pages = lay.head_pages(torch.tensor([b]))[0]
+        out = {}
+        for k, (_, h0, h1, off) in enumerate(st._pools(dn)):
+            if h1 > h0:
+                first = (int(pages[h0]) - off) // HALF_PAGES
+                out[k] = (first + torch.arange(2 * (h1 - h0), dtype=torch.int32)).reshape(1, -1)
+        page = lay.conv_page(b)
+        q0 = page if page < lay.conv_pages_total else page - lay.conv_pages_total
+        out["conv"] = (q0 + torch.arange(lay.conv_pages, dtype=torch.int32)).reshape(1, -1)
+        return out
+
+    def _conv_view(self, b):
+        return self.state.layout.conv_page(b) < self.state.layout.conv_pages_total
+
+    def fingerprint(self):
+        return [(dn.rec_state.buffer_address(), dn.conv_carry.buffer_address()) for _, dn, _ in self.state.layers]
+
+    def body(self):
+        """The write of every GDN layer through the device tables (the capture and the warm run)."""
+        import ttnn
+
+        st, mc = self.state, ttnn.DRAM_MEMORY_CONFIG
+        for _, dn, g in st.layers:
+            st._write_rec(dn, None, dn.rec_state, None, tables=self.dev[g])
+            rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+            st._write_carry(dn, 0, rm, None, self.dev[g]["conv"])
+            ttnn.deallocate(rm)
+
+    def capture(self):
+        import ttnn
+
+        mesh = self.state.mesh
+        self.body()  # compiles every program and allocates its outputs before the capture
+        ttnn.synchronize_device(mesh)
+        self.tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        try:
+            self.body()
+        finally:
+            ttnn.end_trace_capture(mesh, self.tid, cq_id=0)
+        ttnn.synchronize_device(mesh)
+        self.fp = self.fingerprint()
+
+    def replay(self, blocks):
+        """Write the bound scratch into ``blocks`` ([G] block ids); False (nothing done) when the trace does not apply."""
+        import ttnn
+
+        if self.tid is None or any(self._conv_view(b) != v for b, v in zip(blocks, self.views)):
+            return False
+        if self.fingerprint() != self.fp:
+            return False
+        rep = ttnn.ReplicateTensorToMesh(self.state.mesh)
+        for g, b in enumerate(blocks):
+            for k, t in self._host(g, int(b)).items():
+                if not torch.equal(t, self.tables[g][k]):
+                    h = ttnn.from_torch(t, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+                    ttnn.copy_host_to_device_tensor(h, self.dev[g][k])
+                    self.tables[g][k] = t
+        ttnn.execute_trace(self.state.mesh, self.tid, cq_id=0, blocking=False)
+        return True
 
 
 class _PageTables:

@@ -2619,6 +2619,8 @@ class MTPSpecEngine:
                 self._addr_snap = snap
         finally:
             self.mesh.set_program_cache_misses_allowed(True)
+        if self._paged_state() is not None:  # after every other trace, so no later buffer lands on its intermediates
+            self._paged_state().capture_write_trace()
         self.captured = True
 
     def _zero_shared_outputs(self):
