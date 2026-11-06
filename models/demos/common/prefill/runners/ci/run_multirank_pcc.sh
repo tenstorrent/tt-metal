@@ -96,19 +96,21 @@ case "${MODEL}" in
   glm53)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm53.json"
-    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
-    PCC_THRESHOLD=0.83
+    RUNNER_ENV="export LOGURU_LEVEL=ERROR;"
+    # The rank 2 KV cache PCC changes from run to run. On SC4 with the D2D relay (the GLM default) it ranged
+    # 0.8277-0.8337 over 17 runs; without the relay 0.8318-0.8331 over 13 runs. 0.82 keeps CI from failing on that.
+    # Tracked in https://github.com/tenstorrent/tt-metal/issues/62682.
+    PCC_THRESHOLD=0.82
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
-      SC1_MAX_SEQ_LEN=81920
-      SC1_REQUEST_LEN=${GOLDEN_LEN}
-      MTP_PCC_THRESHOLD=0.80
-      MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0}"
-      PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k; \
-          export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
+      # 1M tail on CI SC4: MTP kvpe 0.955, MTP index 0.987 (GPU A-vs-A floor 0.985 / 0.994).
+      MTP_PCC_THRESHOLD=0.93
+      # Same 1M request and tail window as the trunk golden above, so the MTP compare reuses its window.
+      MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
+      PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
       [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
     fi
     ;;
@@ -124,7 +126,8 @@ case "${MODEL}" in
     SC1_NUM_LAYERS=24
     # sc1 is sc4's stage 0, so it opens sc4's slots.
     SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized; \
+      export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
     # run 36524165128), and the two candidates -- the Weka golden copy and the Weka TTNN cache -- give
@@ -171,8 +174,9 @@ if [ -n "${VARIANT}" ]; then
   [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
   [ -f "${MANIFEST}" ] || { echo "no manifest for ${RUN_NAME} at ${MANIFEST}" >&2; exit 2; }
   export PIPELINE_DIR="${PIPELINE_DIR}${VARIANT}"
-  PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
-      export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
+  # A windowed (tail) golden rejects a length cap, so MTP, which compares the 1M tail, takes none.
+  [ "${MTP}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+  PRODUCER_ENV+=" export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
   PERF_BASELINES=""
   REQUIRE_TPS=0
   EXPECTED_TPS=""
@@ -239,17 +243,15 @@ GATE_LOG="${MR_DIR}/gates.log"
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
-TIMING_DIR="${MR_DIR}/timing"
 PRODUCER_LOG="${MR_DIR}/producer.log"
-mkdir -p "${TIMING_DIR}"
 
 SUMMARY_DONE=0
 emit_summary() {
   [ "${SUMMARY_DONE}" = 1 ] && return 0
   SUMMARY_DONE=1
   python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
-    --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-    --chunk-size "${CHUNK_SIZE}" \
+    --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
+    --chunk-size "${CHUNK_SIZE}" --pipeline-ranks "${EXPECTED_RANKS:-1}" \
     --probe-chunks "${PROBE_CHUNKS}" \
     --summary-name "${RUN_NAME}_${CONFIG}" \
     || echo "summary generation failed (non-fatal)"
@@ -286,7 +288,7 @@ cleanup() {
       tail -n 40 "$f" 2>/dev/null || true
     done
     emit_summary
-    if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
+    if [ "${EXPECTED_RANKS:-1}" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
       GANTT_PY=python3
@@ -302,7 +304,7 @@ cleanup() {
         fi
       fi
       "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
-        --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+        --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
         -o "${GANTT_DIR}/${RUN_NAME}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
       if [ -n "${GANTT_TMP}" ]; then
@@ -367,8 +369,6 @@ setsid python3 "${TTRUN_PY}" \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
-    export PREFILL_SYNC_PER_CHUNK=1; \
-    export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     ${RUNNER_OVERRIDES} \

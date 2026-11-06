@@ -89,7 +89,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
     initialize_program(program, cr_set);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
@@ -136,7 +136,7 @@ TEST_F(MeshDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     if (max_dfbs_ < NUM_CIRCULAR_BUFFERS) {
         CircularBufferConfig config(cb_config.page_size, {{max_dfbs_, cb_config.data_format}});
         config.set_page_size(max_dfbs_, cb_config.page_size);
-        Program program;
+        Program program = CreateProgram(*this->devices_[0]);
         EXPECT_THAT(
             [&] { CreateCircularBuffer(program, CoreCoord(0, 0), config); },
             ThrowsMessage<std::runtime_error>(HasSubstr("exceeds max number of circular buffers per core")));
@@ -145,7 +145,7 @@ TEST_F(MeshDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
 }
 
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(
@@ -180,7 +180,7 @@ TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatches
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {1, 1});
@@ -204,7 +204,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {1, 1});
@@ -222,7 +222,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 

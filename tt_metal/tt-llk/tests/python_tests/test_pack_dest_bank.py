@@ -28,7 +28,7 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def get_valid_tilize_datacopy(formats):
@@ -167,9 +167,7 @@ def test_pack_dest_bank(
         TestConfig.TENSIX_LOCATION
     )
 
-    assert len(res_from_L1) == len(golden_tensor)
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
@@ -262,8 +260,6 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
         TestConfig.TENSIX_LOCATION
     )
 
-    assert len(res_from_L1) == len(golden_tensor)
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

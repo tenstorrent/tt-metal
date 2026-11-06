@@ -14,6 +14,7 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BroadcastType,
     DestAccumulation,
     DestSync,
@@ -29,6 +30,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -60,7 +62,7 @@ from helpers.tile_constants import (
     get_tile_params,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +77,7 @@ class CT_DIM(TemplateParameter):
 
 @dataclass
 class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
-    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_tile_init does."""
+    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_init does."""
 
     bcast_preserve: bool = False
 
@@ -86,6 +88,89 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 # Row height of the srcA operand. 32 -> full 32x32 tiles (num_faces=4);
 # 16 -> 16x32 "tiny tiles" (one face-row, num_faces=2).
 _TILE_ROWS = [32, 16]
+# Each column tile is tile_rows x 32; srcA is one row of ct_dim tiles.
+_BCST_COL_RT_DIM = 1
+_CPP_SOURCE = "sources/eltwise_bcast_col_custom_test.cpp"
+
+
+def create_eltwise_bcast_col_custom_config(
+    formats,
+    mathop,
+    dest_acc,
+    math_fidelity,
+    broadcast_type,
+    ct_dim,
+    tile_count,
+    variant_stimuli,
+    *,
+    loop_factor=1,
+    is_perf=False,
+    run_types=None,
+    preserve_src_zero_flag=False,
+    num_faces=None,
+    face_r_dim=None,
+    num_blocks=None,
+    num_tiles_in_block=None,
+):
+    """Build the shared functional/performance bcast-column configuration."""
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+    if not is_perf and run_types != [PerfRunType.L1_TO_L1]:
+        raise ValueError("Functional bcast-column runs only support L1_TO_L1")
+    if not is_perf and loop_factor != 1:
+        raise ValueError("Functional bcast-column runs require loop_factor=1")
+    if is_perf and preserve_src_zero_flag:
+        raise ValueError("preserve_src_zero_flag is functional-only")
+    geometry = (num_faces, face_r_dim, num_blocks, num_tiles_in_block)
+    if is_perf and any(value is not None for value in geometry):
+        raise ValueError("Face and block geometry is functional-only")
+    if not is_perf and None in geometry:
+        raise ValueError("Functional bcast-column geometry is incomplete")
+
+    templates = [
+        MATH_FIDELITY(math_fidelity),
+        MATH_OP(mathop=mathop),
+        BROADCAST_TYPE(broadcast_type),
+        CT_DIM(ct_dim),
+    ]
+    runtimes = [
+        TILE_COUNT(tile_count),
+        LOOP_FACTOR(loop_factor),
+    ]
+
+    if not is_perf:
+        templates.extend(
+            [
+                INPUT_DIMENSIONS(
+                    full_rt_dim=_BCST_COL_RT_DIM,
+                    full_ct_dim=ct_dim,
+                    block_ct_dim=ct_dim,
+                    block_rt_dim=_BCST_COL_RT_DIM,
+                ),
+                PRESERVE_SRC_ZERO_FLAG(preserve_src_zero_flag),
+            ]
+        )
+        runtimes.extend(
+            [
+                NUM_FACES(num_faces, num_faces, num_faces),
+                TEST_FACE_DIMS(face_r_dim),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            ]
+        )
+
+    return create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs={
+            "test_name": _CPP_SOURCE,
+            "formats": formats,
+            "templates": templates,
+            "runtimes": runtimes,
+            "variant_stimuli": variant_stimuli,
+            "dest_acc": dest_acc,
+        },
+    )
 
 
 def _canonical_bcast_col_config(
@@ -158,9 +243,6 @@ def _canonical_bcast_col_config(
 
 
 @parametrize(
-    cpp_source=[
-        "sources/multiple_tiles_eltwise_custom_test.cpp",
-    ],
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -168,12 +250,7 @@ def _canonical_bcast_col_config(
     ),
     mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     broadcast_type=[BroadcastType.Column],
     tile_rows=_TILE_ROWS,
     # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
@@ -181,7 +258,6 @@ def _canonical_bcast_col_config(
     input_width=list(range(32, 257, 32)) + [1024],
 )
 def test_eltwise_bcast_col_custom(
-    cpp_source,
     formats,
     mathop,
     dest_acc,
@@ -209,8 +285,6 @@ def test_eltwise_bcast_col_custom(
     num_faces = num_faces_r_dim * num_faces_c_dim
 
     ct_dim = input_dimensions_A[1] // 32
-    # Each column tile is tile_rows x 32; the operand is a single row of ct_dim tiles.
-    rt_dim = 1
     logger.info(
         "Running ct_dim=%d  srcA=%s  srcB=%s  num_faces=%d  face_r_dim=%d",
         ct_dim,
@@ -277,30 +351,15 @@ def test_eltwise_bcast_col_custom(
         DestSync.Half, dest_acc, formats, input_dimensions_A, tile_dimensions=tile_dims
     )
 
-    configuration = TestConfig(
-        cpp_source,
+    configuration = create_eltwise_bcast_col_custom_config(
         formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            INPUT_DIMENSIONS(
-                full_rt_dim=rt_dim,
-                full_ct_dim=ct_dim,
-                block_ct_dim=ct_dim,
-                block_rt_dim=rt_dim,
-            ),
-            MATH_OP(mathop=mathop),
-            BROADCAST_TYPE(broadcast_type),
-            CT_DIM(ct_dim),
-            PRESERVE_SRC_ZERO_FLAG(False),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces, num_faces, num_faces),
-            TEST_FACE_DIMS(face_r_dim),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
+        mathop,
+        dest_acc,
+        math_fidelity,
+        broadcast_type,
+        ct_dim,
+        tile_cnt_A,
+        StimuliConfig(
             src_A_tilized,
             formats.input_format,
             src_B_tilized,
@@ -314,7 +373,11 @@ def test_eltwise_bcast_col_custom(
             tile_dimensions=tile_dims,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=dest_acc,
+        preserve_src_zero_flag=False,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        num_blocks=num_blocks,
+        num_tiles_in_block=num_tiles_in_block,
     )
     canonical = None
     if mathop == MathOperation.Elwmul:
@@ -334,7 +397,7 @@ def test_eltwise_bcast_col_custom(
         configuration.prepare()
         canonical.prepare()
     res_from_L1 = configuration.run().result
-    res_tilized = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tilized = result_tensor(res_from_L1, formats.output_format)
 
     res_from_L1 = untilize_block(
         res_from_L1,
@@ -345,12 +408,7 @@ def test_eltwise_bcast_col_custom(
         face_r_dim=face_r_dim,
     ).flatten()
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Spot-check: log a few elements per tile to verify srcA <op> bcast(srcB)
     tile_elems = tile_rows * 32
@@ -413,7 +471,6 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
     formats = input_output_formats([DataFormat.Float16_b])[0]
     math_fidelity = MathFidelity.LoFi
     dest_acc = DestAccumulation.No
-    rt_dim = 1
     tile_rows, ct_dim = DEFAULT_TILE_R_DIM, 2
     tile_dims = [tile_rows, DEFAULT_TILE_C_DIM]
     input_dimensions_A = [tile_rows, ct_dim * DEFAULT_TILE_C_DIM]
@@ -472,30 +529,15 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
         input_dimensions_A,
         tile_dimensions=tile_dims,
     )
-    configuration = TestConfig(
-        "sources/multiple_tiles_eltwise_custom_test.cpp",
+    configuration = create_eltwise_bcast_col_custom_config(
         formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            INPUT_DIMENSIONS(
-                full_rt_dim=rt_dim,
-                full_ct_dim=ct_dim,
-                block_ct_dim=ct_dim,
-                block_rt_dim=rt_dim,
-            ),
-            MATH_OP(mathop=mathop),
-            BROADCAST_TYPE(BroadcastType.Column),
-            CT_DIM(ct_dim),
-            PRESERVE_SRC_ZERO_FLAG(True),
-        ],
-        runtimes=[
-            TILE_COUNT(ct_dim),
-            NUM_FACES(num_faces, num_faces, num_faces),
-            TEST_FACE_DIMS(face_r_dim),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
+        mathop,
+        dest_acc,
+        math_fidelity,
+        BroadcastType.Column,
+        ct_dim,
+        ct_dim,
+        StimuliConfig(
             _tilize(src_A, input_dimensions_A),
             formats.input_format,
             _tilize(src_B, input_dimensions_B),
@@ -509,7 +551,11 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
             tile_dimensions=tile_dims,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=dest_acc,
+        preserve_src_zero_flag=True,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        num_blocks=num_blocks,
+        num_tiles_in_block=num_tiles_in_block,
     )
     res = untilize_block(
         configuration.run().result,

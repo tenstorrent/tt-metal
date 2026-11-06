@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
@@ -30,6 +31,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -191,7 +193,7 @@ CmdListCommonRuntimeArgInfo l1_write_value_arg(const Program& program) {
 auto* device(const std::shared_ptr<MeshDevice>& mesh_device) { return mesh_device->impl().get_devices().at(0); }
 
 IDevice* device(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& device_coord) {
-    return mesh_device->get_device(device_coord);
+    return internal::get_device(*mesh_device, device_coord);
 }
 
 void write_l1(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t address, uint32_t value) {
@@ -327,10 +329,10 @@ TEST_F(CommandListTest, BuildsIndependentSnapshotsAndReplaysBlockingAndNonBlocki
 
     CommandListBuilder builder(*mesh_device_);
     EXPECT_EQ(&builder.device(), mesh_device_.get());
-    builder.add(workload_a);
+    builder.add(cq, workload_a);
     auto list_a = builder.build(cq);
 
-    builder.add(workload_b);
+    builder.add(cq, workload_b);
     auto list_ab = builder.build(cq);
     EXPECT_EQ(&list_a.device(), mesh_device_.get());
     EXPECT_EQ(list_a.cq_id(), cq.id());
@@ -444,6 +446,7 @@ TEST_F(CommandListTest, UpdatesRuntimeAndCommonRuntimeArgumentsTransactionally) 
 
     CommandListBuilder builder(*mesh_device_);
     builder.add(
+        cq,
         workload,
         CmdListParameters{
             .runtime_parameters = {{address_param, std::vector<CmdListRuntimeArgInfo>{l1_write_address_arg(program)}}},
@@ -519,9 +522,9 @@ TEST_F(CommandListTest, UpdatesTensorArgumentForSubsequentReplays) {
     // Bind input A when recording and expose only that input as patchable.
     auto workload = make_loopback_workload(*mesh_device_, input_a, output, "tensor_patch");
     const CmdListTensorArgName input_param{"input"};
-    CommandListBuilder builder(*mesh_device_);
-    builder.add(workload, patchable_input(workload.get_programs().begin()->second, input_param));
     auto& cq = mesh_device_->mesh_command_queue(0);
+    CommandListBuilder builder(*mesh_device_);
+    builder.add(cq, workload, patchable_input(workload.get_programs().begin()->second, input_param));
     auto command_list = builder.build(cq);
 
     std::vector<uint32_t> data_a(num_pages * kPageSize / sizeof(uint32_t));
@@ -618,6 +621,7 @@ void kernel_main() {
 
         CommandListBuilder builder(*mesh_device_);
         builder.add(
+            cq,
             workload,
             CmdListParameters{
                 .tensor_parameters =
@@ -677,9 +681,9 @@ void kernel_main() {
         parameters.common_runtime_parameters[CmdListCommonRuntimeArgName{name}] = {
             {.program = std::cref(program), .kernel_name = m2::KernelSpecName{kKernelName}, .arg_name = name}};
     }
-    CommandListBuilder builder(*mesh_device_);
-    builder.add(workload, parameters);
     auto& cq = mesh_device_->mesh_command_queue(0);
+    CommandListBuilder builder(*mesh_device_);
+    builder.add(cq, workload, parameters);
     auto command_list = builder.build(cq);
 
     // Patch one parameter at a time. A patch built from stale window contents would write the recorded 0 back over
@@ -723,8 +727,10 @@ TEST_F(CommandListTest, UpdatesEveryTargetOfAParameter) {
     const CmdListCommonRuntimeArgName value_param{"payload"};
     auto two_node_address = l1_write_address_arg(two_node_program);
     two_node_address.nodes = {kNode, other_node};
+    auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
     builder.add(
+        cq,
         two_nodes,
         CmdListParameters{
             .runtime_parameters = {{address_param, std::vector<CmdListRuntimeArgInfo>{two_node_address}}},
@@ -732,12 +738,12 @@ TEST_F(CommandListTest, UpdatesEveryTargetOfAParameter) {
                 {{value_param, std::vector<CmdListCommonRuntimeArgInfo>{l1_write_value_arg(two_node_program)}}},
         });
     builder.add(
+        cq,
         one_node,
         CmdListParameters{
             .common_runtime_parameters =
                 {{value_param, std::vector<CmdListCommonRuntimeArgInfo>{l1_write_value_arg(one_node_program)}}},
         });
-    auto& cq = mesh_device_->mesh_command_queue(0);
     auto command_list = builder.build(cq);
 
     // One patch moves both nodes' writes to kAddressB and changes the value written by both workloads.
@@ -781,6 +787,7 @@ TEST_F(CommandListTest, OrdersNonBlockingPatchesWithReplays) {
     const CmdListCommonRuntimeArgName value_param{"payload"};
     CommandListBuilder builder(*mesh_device_);
     builder.add(
+        cq,
         workload,
         CmdListParameters{
             .runtime_parameters = {{address_param, std::vector<CmdListRuntimeArgInfo>{l1_write_address_arg(program)}}},
@@ -812,7 +819,7 @@ TEST_F(CommandListMultiDeviceTest, ReplaysMeshWideWorkloadOnEveryDevice) {
     auto& cq = mesh_device_->mesh_command_queue(0);
 
     CommandListBuilder builder(*mesh_device_);
-    builder.add(workload);
+    builder.add(cq, workload);
     auto command_list = builder.build(cq);
 
     const MeshCoordinateRange all_devices(mesh_device_->shape());
@@ -860,9 +867,9 @@ TEST_F(CommandListMultiDeviceTest, ReplaysHeterogeneousAndNonConvexDeviceRanges)
 
     auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
-    builder.add(mesh_wide);
-    builder.add(split_rows);
-    builder.add(non_convex);
+    builder.add(cq, mesh_wide);
+    builder.add(cq, split_rows);
+    builder.add(cq, non_convex);
     auto command_list = builder.build(cq);
 
     for (const auto& coord : all_devices) {
@@ -908,6 +915,7 @@ TEST_F(CommandListMultiDeviceTest, UpdatesParametersAcrossHeterogeneousDeviceRan
     auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
     builder.add(
+        cq,
         split_rows,
         CmdListParameters{
             .runtime_parameters =
@@ -995,7 +1003,7 @@ TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
         Finish(mesh_device_->mesh_command_queue(0));
 
         m2::SetProgramRunArgs(program, loopback_run_args(temporary, output));
-        builder.add(workload);
+        builder.add(write_cq, workload);
     }
 
     // Build and replay after the recorded input tensor has been deallocated.
@@ -1043,7 +1051,7 @@ TEST_F(CommandListTest, CheckedReplayAcceptsOnlyFreeOrExactRanges) {
     auto workload = make_loopback_workload(*mesh_device_, *t, output, "checked_replay");
     const CmdListTensorArgName input_param{"input"};
     CommandListBuilder builder(*mesh_device_);
-    builder.add(workload, patchable_input(workload.get_programs().begin()->second, input_param));
+    builder.add(cq, workload, patchable_input(workload.get_programs().begin()->second, input_param));
     auto command_list = builder.build(cq);
     auto replay = [&](bool check_dram_overlap) {
         EnqueueCommandList(cq, command_list, /*blocking=*/true, check_dram_overlap);
@@ -1212,20 +1220,20 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
         ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder is active")));
 
     // Clearing removes the recording, after which build rejects the empty builder.
-    builder.add(workload);
+    builder.add(cq, workload);
     builder.clear();
     EXPECT_THAT(
         [&] { (void)builder.build(cq); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Cannot build an empty CommandList")));
 
-    builder.add(workload);
+    builder.add(cq, workload);
     auto command_list = builder.build(cq);
 
     // Moving transfers the recording and reservation; explicit deallocation invalidates
     // the destination and releases the reservation for a replacement builder.
     CommandListBuilder moved_builder(std::move(builder));
     EXPECT_THAT(
-        [&] { builder.add(workload); },  // NOLINT(bugprone-use-after-move)
+        [&] { builder.add(cq, workload); },  // NOLINT(bugprone-use-after-move)
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been moved from")));
     EXPECT_EQ(&moved_builder.device(), mesh_device_.get());
     moved_builder.deallocate();
@@ -1236,7 +1244,7 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
         [&] { moved_builder.clear(); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been deallocated")));
     EXPECT_THAT(
-        [&] { moved_builder.add(workload); },
+        [&] { moved_builder.add(cq, workload); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been deallocated")));
     EXPECT_THAT(
         [&] { (void)moved_builder.build(cq); },
@@ -1256,7 +1264,7 @@ TEST_F(CommandListTest, CommandListMoveAndDeallocateInvalidateTheHandle) {
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "list_lifecycle");
     auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
-    builder.add(workload);
+    builder.add(cq, workload);
     auto command_list = builder.build(cq);
 
     CommandList moved_list(std::move(command_list));
@@ -1299,14 +1307,14 @@ TEST_F(CommandListTest, RejectsEmptyAndLegacyWorkloadsWithoutChangingTheRecordin
 
     MeshWorkload empty_workload;
     EXPECT_THAT(
-        [&] { builder.add(empty_workload); },
+        [&] { builder.add(cq, empty_workload); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Cannot prepare an empty MeshWorkload")));
 
     // Command lists accept only ProgramSpec-created Metal 2.0 programs.
     MeshWorkload legacy_workload;
-    legacy_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), CreateProgram());
+    legacy_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), CreateProgram(*this->mesh_device_));
     EXPECT_THAT(
-        [&] { builder.add(legacy_workload); },
+        [&] { builder.add(cq, legacy_workload); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Command lists only support Metal 2.0 programs")));
 
     // Both failed additions are transactional: the builder is still empty.
@@ -1325,7 +1333,8 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
     auto& cq = mesh_device_->mesh_command_queue(0);
     CommandListBuilder builder(*mesh_device_);
     auto expect_add_throws = [&](const CmdListParameters& parameters, const std::string& message) {
-        EXPECT_THAT([&] { builder.add(workload, parameters); }, ThrowsMessage<std::runtime_error>(HasSubstr(message)));
+        EXPECT_THAT(
+            [&] { builder.add(cq, workload, parameters); }, ThrowsMessage<std::runtime_error>(HasSubstr(message)));
     };
 
     // The parameter's program must belong to the workload being added.
@@ -1389,6 +1398,7 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
     EXPECT_THAT(
         [&] {
             builder.add(
+                cq,
                 borrowed_workload,
                 {.tensor_parameters = {
                      {CmdListTensorArgName{"scratch"},
@@ -1421,14 +1431,14 @@ TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {
     mesh_device_->load_sub_device_manager(full_grid_manager);
     auto list_a = [&] {
         CommandListBuilder builder(*mesh_device_);
-        builder.add(workload_a);
+        builder.add(cq, workload_a);
         return builder.build(cq);
     }();
 
     mesh_device_->load_sub_device_manager(single_core_manager);
     auto list_b = [&] {
         CommandListBuilder builder(*mesh_device_);
-        builder.add(workload_b);
+        builder.add(cq, workload_b);
         return builder.build(cq);
     }();
 
@@ -1465,13 +1475,13 @@ TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {
 }
 
 TEST_F(CommandListMultiCQTest, EnforcesTheCommandQueueUsedAtBuildTime) {
-    // Build independent command lists from one recording, one per command queue.
+    // Build independent command lists from one recording, one per command queue. Kernel binaries upload through cq1.
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "cq_binding");
     auto& cq0 = mesh_device_->mesh_command_queue(0);
     auto& cq1 = mesh_device_->mesh_command_queue(1);
 
     CommandListBuilder builder(*mesh_device_);
-    builder.add(workload);
+    builder.add(cq1, workload);
     auto list0 = builder.build(cq0);
     auto list1 = builder.build(cq1);
     EXPECT_EQ(list0.cq_id(), cq0.id());
@@ -1499,7 +1509,7 @@ TEST_F(CommandListTest, TracesAndCommandListsCanRunInSequenceButNotCoexist) {
         EXPECT_THAT(
             [&] { (void)mesh_device_->begin_mesh_trace(cq); },
             ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder or CommandList exists")));
-        builder.add(list_workload);
+        builder.add(cq, list_workload);
         auto first_list = builder.build(cq);
         auto second_list = builder.build(cq);
         builder.deallocate();
@@ -1533,7 +1543,7 @@ TEST_F(CommandListTest, TracesAndCommandListsCanRunInSequenceButNotCoexist) {
 
     // Releasing the trace makes command lists available again.
     CommandListBuilder builder(*mesh_device_);
-    builder.add(list_workload);
+    builder.add(cq, list_workload);
     auto command_list = builder.build(cq);
     write_l1(mesh_device_, kAddressA, 0);
     EnqueueCommandList(cq, command_list, /*blocking=*/true);

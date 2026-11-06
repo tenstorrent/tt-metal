@@ -17,8 +17,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
+#include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 using namespace tt::constants;
@@ -50,7 +50,8 @@ RecvAsyncConnections collect_recv_async_connections(
 
     // TODO #24995: Find appropriate receiver cores and fabric node IDs based on mesh socket configuration
     for (const auto& connection : socket_connection_config) {
-        if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
+        if (tt::tt_metal::internal::get_device(*socket_mesh_device, connection.receiver_core.device_coord)->id() ==
+            target_device->id()) {
             connections.receiver_core_coords.push_back(connection.receiver_core.core_coord);
             connections.receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
@@ -252,6 +253,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
             std::vector<uint32_t> fabric_connection_rt_args;
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                *socket_mesh_device,
                 receiver_fabric_node_id,
                 sender_fabric_node_id,
                 selected_link_index,
@@ -360,6 +362,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
 
             std::vector<uint32_t> fabric_connection_rt_args;
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                *socket_mesh_device,
                 receiver_fabric_node_id,
                 sender_fabric_node_id,
                 selected_link_index,

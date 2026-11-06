@@ -54,6 +54,22 @@
   team: train
   budget_type: unit
 
+- name: tt-train cpp watcher unit tests
+  # Tests of kernels whose bugs only the watcher reports, such as gumbel_sample's NOC write past its staging CB and
+  # its missing atomic barrier (#62090). This job doesn't pass enable-watcher, so the cmd sets the same four
+  # variables enable-watcher would; without them the watcher's device-side checks are compiled out.
+  cmd: |
+    mkdir -p generated/test_reports
+    export TT_METAL_WATCHER=2 TT_METAL_WATCHER_APPEND=1
+    export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="GumbelSample*"
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: unit
+
 - name: tt-train python unit tests
   cmd: |
     python -m pytest tt-train/tests/python

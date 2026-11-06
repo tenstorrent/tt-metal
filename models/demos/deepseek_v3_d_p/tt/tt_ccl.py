@@ -188,6 +188,10 @@ class TT_CCL:
         self.combine_overlap_semaphores = None
         # The same overlap's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
         self.combine_forwarding_buffers = {}
+        # dispatch_fabric2d's forwarding and staging buffers, one pair per shape; see get_dispatch_fabric2d_buffers.
+        self.dispatch_fabric2d_buffers = {}
+        # ready/data_valid pair for MLA's TP high_bw_all_gather calls; see get_mla_high_bw_gather_semaphores.
+        self.mla_high_bw_gather_semaphores = None
 
     def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
         key = (
@@ -262,6 +266,30 @@ class TT_CCL:
             )
             self.combine_forwarding_buffers[key] = buffer
         return buffer
+
+    def get_dispatch_fabric2d_buffers(self, emb_dim, seq_len_per_chip, num_links, cluster_axis=0, fwd_vc_pages=None):
+        """dispatch_fabric2d's DRAM forwarding and staging buffers, as (forwarding, staging).
+
+        One pair per shape, shared by every MoE layer, which run one after another. Get it at model init: left to
+        the op, the pair is allocated at the first dispatch's cache miss in the middle of a forward and every cached
+        program keeps its own copy, which is how a model that fits runs out of DRAM. fwd_vc_pages None takes the
+        op's default, as TtDispatch2dModule does.
+        """
+        key = (emb_dim, seq_len_per_chip, num_links, cluster_axis, fwd_vc_pages)
+        buffers = self.dispatch_fabric2d_buffers.get(key)
+        if buffers is None:
+            buffers = tuple(
+                ttnn.experimental.deepseek_prefill.dispatch_fabric2d_buffers(
+                    self.mesh_device,
+                    emb_dim=emb_dim,
+                    seq_len_per_chip=seq_len_per_chip,
+                    cluster_axis=cluster_axis,
+                    num_links=num_links,
+                    **({} if fwd_vc_pages is None else {"fwd_vc_pages": fwd_vc_pages}),
+                )
+            )
+            self.dispatch_fabric2d_buffers[key] = buffers
+        return buffers
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
         """Create or return the sparse-MLA overlap profile: KV gather on the top worker row, top-k on the rest.
@@ -492,6 +520,23 @@ class TT_CCL:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return self.mla_high_bw_all_gather_buffers[key]
+
+    def get_mla_high_bw_gather_semaphores(self):
+        """ready and data_valid counters shared by MLA's TP high_bw_all_gather calls.
+
+        Without them each gather program allocates its own pair on its first (cache-miss) call, mid-forward, under
+        whatever L1 activation is live at that moment; that pair outlives the activation and can land inside a later
+        op's static CB range. Call this at model construction so the pair sits at the top of an empty L1 heap.
+        """
+        if self.mla_high_bw_gather_semaphores is None:
+            l1_small_view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL)
+            buffer_type = ttnn.BufferType.L1_SMALL if l1_small_view.total_bytes_per_bank > 0 else ttnn.BufferType.L1
+            self.mla_high_bw_gather_semaphores = tuple(
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0, buffer_type) for _ in range(2)
+            )
+            # Every chip must have zeroed its copies before any neighbour bumps them.
+            ttnn.synchronize_device(self.mesh_device)
+        return self.mla_high_bw_gather_semaphores
 
     def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
         """Return the persistent full-K output buffer for the fused ring indexer.

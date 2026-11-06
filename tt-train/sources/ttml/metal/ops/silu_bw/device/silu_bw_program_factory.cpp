@@ -6,9 +6,11 @@
 
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <optional>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "silu_bw_device_operation.hpp"
 
 namespace {
 
@@ -20,12 +22,16 @@ constexpr auto kReaderKernelPath =
 
 constexpr auto kComputeKernelPath = "tt-train/sources/ttml/metal/ops/silu_bw/device/kernels/compute/silu_bw_kernel.cpp";
 
-// Buffer indices
-constexpr uint32_t kInputBufferIdx = 0;
-constexpr uint32_t kDLdoutBufferIdx = 1U;
+// Kernel handles are the push order into ProgramDescriptor::kernels: reader, writer, compute group 1, then compute
+// group 2 when it has cores.
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
 
-// Writer buffer indices
-constexpr uint32_t kDaBufferIdx = 0;
+// reader runtime args
+constexpr uint32_t kInputAddrIdx = 0U;
+constexpr uint32_t kDLdoutAddrIdx = 1U;
+// writer runtime args
+constexpr uint32_t kDLdaAddrIdx = 0U;
 
 // CBs with input data
 constexpr auto kInputCbIndex = tt::CBIndex::c_0;
@@ -42,14 +48,20 @@ constexpr uint32_t kTimesSigmoidCbIndex = tt::CBIndex::c_6;
 
 namespace ttml::metal::ops::silu_bw::device {
 
-struct SiLUBackwardKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
-};
+namespace {
 
-SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
+// The input's tile rows over the device's compute grid. create_descriptor() pins it against split_work_to_cores, and
+// override_runtime_arguments() walks the same cores from it.
+WorkSplit make_work_split(const ttnn::Tensor& input) {
+    const auto& shape = input.padded_shape();
+    return compute_work_split(
+        input.device()->compute_with_storage_grid_size(),
+        shape[0] * shape[1] * (shape[-2] / tt::constants::TILE_HEIGHT));
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor SiLUBackwardProgramFactory::create_descriptor(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
@@ -58,7 +70,7 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
     const auto& dLdout = tensor_args.dL_dout;
 
     auto* device = input.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor program;
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 
@@ -76,7 +88,6 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
 
     // Get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
     uint32_t block_size =
@@ -84,6 +95,9 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+    const WorkSplit split = make_work_split(input);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -92,20 +106,23 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
-    [[maybe_unused]] auto cb_input = create_circular_buffer(
-        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
-        program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
-        program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_sigmoid = create_circular_buffer(
-        program, all_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_one_minus_sigmoid = create_circular_buffer(
-        program, all_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_times_input_plus_one = create_circular_buffer(
-        program, all_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_times_sigmoid = create_circular_buffer(
-        program, all_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    // CreateCircularBuffer merged CB core ranges (kernels keep the unmerged set); merge here to match.
+    const tt::tt_metal::CoreRangeSet cb_cores = all_cores.merge_ranges();
+
+    program.cbs.push_back(
+        make_cb_descriptor(cb_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    program.cbs.push_back(
+        make_cb_descriptor(cb_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    program.cbs.push_back(
+        make_cb_descriptor(cb_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    program.cbs.push_back(
+        make_cb_descriptor(cb_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    program.cbs.push_back(make_cb_descriptor(
+        cb_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    program.cbs.push_back(make_cb_descriptor(
+        cb_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    program.cbs.push_back(make_cb_descriptor(
+        cb_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -128,18 +145,19 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
         "dL_da buffer must be in DRAM. dL_da buffer of type {}",
         enchantum::to_string(dL_da_buffer->buffer_type()));
 
-    SiLUBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
+    program.kernels.push_back(  // kReaderKernelIdx
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, {}, kReaderKernelPath));
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
+    program.kernels.push_back(  // kWriterKernelIdx
+        make_writer_kernel_descriptor(all_cores, writer_compile_time_args, {}, kWriterKernelPath));
 
     // -------------------------------------------------------------------------
-    // 4) Create compute kernels for cross_entropy_bw
+    // 4) Create compute kernels for silu_bw
     // -------------------------------------------------------------------------
 
     // Group 1 compile-time arguments
@@ -149,8 +167,8 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
         Wt                          // num_inner / TILE_W
     };
 
-    kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    program.kernels.push_back(make_compute_kernel_descriptor(
+        core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -160,82 +178,56 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
             Wt                          // num_inner / TILE_W
         };
 
-        kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program.kernels.push_back(make_compute_kernel_descriptor(
+            core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
     }
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_rows_per_core_group_1,
-        num_rows_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-            // Reader kernel: (input_addr, dLdout_addr, num_rows, offset)
-            SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {input_buffer->address(), dLdout_buffer->address(), num_rows, start_row});
-            // Writer kernel: (da_addr, num_rows, offset)
-            SetRuntimeArgs(program, kernels.writer, core, {dL_da_buffer->address(), num_rows, start_row});
-        });
+    // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.
+    // num_rows/start_row follow from the hashed input shape.
+    auto& reader = program.kernels[kReaderKernelIdx];
+    auto& writer = program.kernels[kWriterKernelIdx];
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+        // Reader kernel: (input_addr, dLdout_addr, num_rows, offset)
+        reader.emplace_runtime_args(core, {input_buffer, dLdout_buffer, num_rows, start_row});
+        // Writer kernel: (da_addr, num_rows, offset)
+        writer.emplace_runtime_args(core, {dL_da_buffer, num_rows, start_row});
+    });
 
     // -------------------------------------------------------------------------
-    // 6) Return the fully configured program & relevant shared variables
+    // 6) Return the fully configured program descriptor
     // -------------------------------------------------------------------------
-    return cached_program_t{
-        std::move(program),
-        {/* silu_bw_reader_kernel_id  = */ kernels.reader,
-         /* silu_bw_writer_kernel_id  = */ kernels.writer,
-         /* silu_bw_kernel_group_1_id = */ kernels.compute_group_1,
-         /* silu_bw_kernel_group_2_id = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+    return program;
 }
 
 void SiLUBackwardProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-    auto& silu_bw_reader_kernel_id = shared_variables.silu_bw_reader_kernel_id;
-    auto& silu_bw_writer_kernel_id = shared_variables.silu_bw_writer_kernel_id;
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const WorkSplit split = make_work_split(tensor_args.input);
 
-    uint32_t num_cores = shared_variables.num_cores;
-    uint32_t num_cores_y = shared_variables.num_cores_y;
+    const uint32_t input_addr = tensor_args.input.buffer()->address();
+    const uint32_t dLdout_addr = tensor_args.dL_dout.buffer()->address();
+    const uint32_t dL_da_addr = output.buffer()->address();
 
-    auto* input_buffer = tensor_args.input.buffer();
-    auto* dLdout_buffer = tensor_args.dL_dout.buffer();
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
 
-    auto* da_buffer = output.buffer();
+        auto& reader_args = reader_runtime_args[core.x][core.y];
+        reader_args[kInputAddrIdx] = input_addr;
+        reader_args[kDLdoutAddrIdx] = dLdout_addr;
 
-    // Only address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, silu_bw_reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, silu_bw_writer_kernel_id);
-
-    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        // Update input buffers for the reader kernel
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kInputBufferIdx] = input_buffer->address();
-            runtime_args[kDLdoutBufferIdx] = dLdout_buffer->address();
-        }
-
-        // Update output buffers for the writer kernel
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kDaBufferIdx] = da_buffer->address();
-        }
+        auto& writer_args = writer_runtime_args[core.x][core.y];
+        writer_args[kDLdaAddrIdx] = dL_da_addr;
     });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(SiLUBackwardDeviceOperation, SiLUBackwardProgramFactory);
 
 }  // namespace ttml::metal::ops::silu_bw::device

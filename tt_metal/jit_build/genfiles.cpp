@@ -4,7 +4,6 @@
 
 #include "jit_build/genfiles.hpp"
 
-#include <circular_buffer_constants.h>
 #include "data_format.hpp"
 #include <algorithm>
 #include <cstdint>
@@ -26,7 +25,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -262,17 +260,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     struct TaEntry {
         string name;
         uint32_t cta_offset;
-        uint32_t addr_crta_offset;
+        bool is_per_node;
+        uint32_t addr_offset;
         LLKMetadata metadata;
     };
     vector<TaEntry> ta_entries;
-    settings.process_tensor_binding_handles(
-        [&ta_entries](
-            const string& name,
-            uint32_t cta_offset,
-            uint32_t addr_crta_offset,
-            uint32_t /*num_rt_words*/,
-            const LLKMetadata& metadata) { ta_entries.push_back({name, cta_offset, addr_crta_offset, metadata}); });
+    settings.process_tensor_binding_handles([&ta_entries](
+                                                const string& name,
+                                                uint32_t cta_offset,
+                                                bool is_per_node,
+                                                uint32_t addr_offset,
+                                                uint32_t /*num_rt_words*/,
+                                                const LLKMetadata& metadata) {
+        ta_entries.push_back({name, cta_offset, is_per_node, addr_offset, metadata});
+    });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -431,10 +432,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
     // template with extra metadata in the future without touching kernel source.
     //
+    // Per-node bindings get a PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET> instead.
+    //
     // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
     for (const auto& entry : ta_entries) {
-        content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
-                << entry.addr_crta_offset << "u>;\n";
+        const char* token_type = entry.is_per_node ? "PerNodeTensorBindingToken" : "TensorBindingToken";
+        content << "using " << entry.name << "_t = ::tensor_accessor::" << token_type << "<" << entry.cta_offset
+                << "u, " << entry.addr_offset << "u>;\n";
         content << "constexpr " << entry.name << "_t " << entry.name << "{";
         content << serialize_llk_metadata(entry.metadata);
         content << "};\n";
@@ -481,7 +485,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 }
 
 // METAL 2.0 only:
-// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
+// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs (scalar and array) inside the `args` namespace.
 // Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
 // in, so that vararg indices in kernel code are stable across schema changes.
 //
@@ -500,6 +504,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // so we read them directly here. The vararg helpers below need the vararg-section
     // start offset to skip past sections 1 and 2.
     const KernelCrtaLayout crta_layout = settings.get_crta_layout();
+    const KernelRtaLayout rta_layout = settings.get_rta_layout();
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!
@@ -513,6 +518,9 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             }
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Array args: RTA/CRTA arrays carry their placement; CTA arrays are already in name order.
+    const KernelArrayArgs& array_args = settings.get_array_args();
 
     // Metal 2.0 CTA-vararg prefix length in positional KERNEL_COMPILE_TIME_ARGS.
     // Values live in kernel_compile_time_args[0..N); TensorBinding payloads follow.
@@ -529,7 +537,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
     // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
     // so we keep emitting those unconditionally.
-    const bool has_named_args = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
+    const bool has_named_args =
+        !rta_names.empty() || !crta_names.empty() || !cta_entries.empty() || !array_args.empty();
     if (has_named_args) {
         content << "namespace args {\n";
 
@@ -541,18 +550,37 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
             rta_offset += sizeof(uint32_t);
         }
+        // RTA arrays follow the scalars; lowering placed them (see KernelArrayArgs).
+        TT_ASSERT(
+            array_args.runtime.empty() || array_args.runtime.front().word_offset * sizeof(uint32_t) == rta_offset);
+        for (const auto& array : array_args.runtime) {
+            content << "constexpr experimental::RtaArrayArg<uint32_t, " << array.size << "> " << array.name << "{"
+                    << array.word_offset * sizeof(uint32_t) << "};\n";
+        }
         // Named CRTAs
-        // The TensorBinding address section follows immediately after the named CRTA slots in the CRTA
-        // buffer (see vararg-offset computation below).
+        // The TensorBinding address section follows immediately after the named CRTA slots (the scalars,
+        // then the arrays) in the CRTA buffer (see vararg-offset computation below).
         uint32_t crta_offset = 0;
         for (const auto& name : crta_names) {
             content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
             crta_offset += sizeof(uint32_t);
         }
+        TT_ASSERT(
+            array_args.common_runtime.empty() ||
+            array_args.common_runtime.front().word_offset * sizeof(uint32_t) == crta_offset);
+        for (const auto& array : array_args.common_runtime) {
+            content << "constexpr experimental::CrtaArrayArg<uint32_t, " << array.size << "> " << array.name << "{"
+                    << array.word_offset * sizeof(uint32_t) << "};\n";
+        }
         // Named CTAs
         // No offsets to deal with here; CTA values are emitted directly into the generated header.
         for (const auto& [name, value] : cta_entries) {
             content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
+        }
+        // CTA arrays: CtaVal<std::array<...>> takes three braces (CtaVal, std::array, its C array).
+        for (const auto& [name, values] : array_args.compile_time) {
+            content << "constexpr experimental::CtaVal<std::array<uint32_t, " << values.size() << ">> " << name << "{{{"
+                    << fmt::format("{}u", fmt::join(values, "u, ")) << "}}};\n";
         }
 
         content << "}  // namespace args\n\n";
@@ -565,9 +593,10 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // around get_arg_val / get_common_arg_val.
     // CRTA-side note: the vararg section starts at crta_layout.vararg_section_offset,
     // which already accounts for both the user-named CRTAs and the TensorBinding section.
-    const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
-    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
-            << " + idx); }\n"
+    // RTA-side note: likewise, rta_layout.vararg_section_offset accounts for the user-named RTAs
+    // and the per-node TensorBinding section.
+    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>("
+            << rta_layout.vararg_section_offset << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
 
@@ -635,6 +664,12 @@ std::string generate_tt_kernel_shim_if_present(
             "marker with template/function parameters) require the Metal 2.0 host API.",
             sig->name);
     }
+    TT_FATAL(
+        settings.get_array_args().empty(),
+        "TT_KERNEL entry '{}' (source: {}) belongs to a kernel that declares array arguments, which a TT_KERNEL "
+        "signature cannot take. Read them with get_arg(args::<name>) from a kernel_main() instead.",
+        sig->name,
+        source_desc);
     // Cross-check the kernel's declared parameters against the host-registered schema before
     // generating the shim, so a name typo or schema drift fails here with a clear message rather
     // than as a compile error buried in generated code (kernel param the host never registered) or

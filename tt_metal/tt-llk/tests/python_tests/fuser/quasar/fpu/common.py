@@ -58,7 +58,7 @@ def math_pack_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str
     if config.uses_unpack_to_dest_sync:
         code += (
             "set_up_zero_dest_dvalid_handshake_for_math();\n"
-            "_llk_sync_barrier_pass_(semaphore::UNPACK_INIT);\n"
+            "_llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);\n"
         )
     return code
 

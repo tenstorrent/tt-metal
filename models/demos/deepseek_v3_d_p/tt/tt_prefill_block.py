@@ -18,10 +18,11 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     extract_mesh_config,
+    moe_transport_arg,
     routed_expert_combine_overlap_arg,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
@@ -126,6 +127,7 @@ class TtPrefillBlock(LightweightModule):
                 not in (None, getattr(model_cfg, "EMB_SIZE", None)),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                gate_bias_centered=gate_bias_centered(model_cfg),
             ):
                 return False
 
@@ -238,6 +240,7 @@ class TtPrefillBlock(LightweightModule):
                 routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
                 latent_weights=state_dict.get("latent_weights"),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+                gate_bias_centered=gate_bias_centered(model_cfg),
             )
         else:
             # Use static method (no device copy!)
@@ -517,6 +520,10 @@ class TtPrefillBlock(LightweightModule):
             # Only configs that opt in (Kimi K2.7, GLM 5.3, Mistral Small 4) overlap the routed expert with
             # combine_fabric2d.
             overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
+            # Likewise only configs that opt in (Kimi K2.7, GLM 5.3) run dispatch_fabric2d / combine_fabric2d.
+            moe_transport=moe_transport_arg(model_cfg),
+            combine_fwd_reduction=getattr(model_cfg, "COMBINE_FWD_REDUCTION", None),
+            dispatch_fwd_vc_pages=getattr(model_cfg, "DISPATCH_FWD_VC_PAGES", None),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
@@ -538,6 +545,7 @@ class TtPrefillBlock(LightweightModule):
             # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
+            gate_bias_centered=gate_bias_centered(model_cfg),
             # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
             gate_hash_table=state_dict.get("hash_table"),
             gate_fallback_mode=gate_fallback_mode,
@@ -785,7 +793,7 @@ class TtPrefillBlock(LightweightModule):
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
     ) -> ttnn.Tensor:
-        """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE.
+        """MoE FFN path: 4D TILE → 3D TILE → MoE → 3D TILE → 4D TILE.
 
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""

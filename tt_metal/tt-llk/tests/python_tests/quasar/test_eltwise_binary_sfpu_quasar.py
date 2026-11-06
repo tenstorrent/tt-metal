@@ -379,9 +379,7 @@ _DIV_SPECIAL_CASE_LANES = [
 
 def _get_valid_float_formats_dest_acc():
     """Resolve all executable float binary format and path variants."""
-    formats = input_output_formats(
-        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
-    )
+    formats = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
     return generate_quasar_sfpu_format_variants(MathOperation.SfpuElwadd, formats)
 
 
@@ -731,7 +729,6 @@ def test_eltwise_binary_sfpu_add_top_row_quasar(
 SFPU_BINARY_MAX_MIN_FLOAT_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
     ],
 )

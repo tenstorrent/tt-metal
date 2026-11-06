@@ -45,6 +45,12 @@ class GptOss120BConfig:
     # what it trades. Held at 8: top-4 over a 2880 embedding makes this the shallowest forwarding region
     # of the eight at 10 MB a chip, and halving it again costs 14.8% on hot_expert traffic to save 5 MB.
     COMBINE_FWD_REDUCTION = 8
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at +3.4% balanced and +2.6% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 0
     # GPT-OSS routes with no expert groups; selection is a plain top-k over all experts.
     NUM_EXPERT_GROUPS = 1
