@@ -856,11 +856,9 @@ class TestDeallocateTensorLookup:
         """(name, input tensor) for each operation, in operation order; None for one with no input."""
         conn, cursor = _import_to_db(_make_report(cls._graph(events)), tmp_path)
         try:
-            cursor.execute(
-                """SELECT o.name, it.tensor_id FROM operations o
+            cursor.execute("""SELECT o.name, it.tensor_id FROM operations o
                    LEFT JOIN input_tensors it ON it.operation_id = o.operation_id AND it.rank = o.rank
-                   ORDER BY o.operation_id"""
-            )
+                   ORDER BY o.operation_id""")
             return cursor.fetchall()
         finally:
             conn.close()
@@ -3795,9 +3793,10 @@ class TestGraphCaptureToFile:
             torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
         )
 
+        tt_output = None
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         try:
-            _ = ttnn.relu(tt_input)
+            tt_output = ttnn.relu(tt_input)
             with expect_error(RuntimeError, "cannot create directories"):
                 ttnn.graph.end_graph_capture_to_file(report_path)
             assert not ttnn.graph.is_graph_capture_active()
@@ -3805,6 +3804,11 @@ class TestGraphCaptureToFile:
         finally:
             if ttnn.graph.is_graph_capture_active():
                 ttnn.graph.end_graph_capture()
+            # The caught exception's traceback keeps this frame alive past device close;
+            # free the device buffers now so collecting it later touches no device.
+            ttnn.deallocate(tt_input)
+            if tt_output is not None:
+                ttnn.deallocate(tt_output)
 
     def test_full_graph_capture_failed_write_keeps_outer_capture(self, device, tmp_report_dir, expect_error):
         blocker = tmp_report_dir / "not_a_directory"
@@ -3814,17 +3818,23 @@ class TestGraphCaptureToFile:
             torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
         )
 
+        tt_output = None
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         try:
             with expect_error(RuntimeError, "cannot create directories"):
                 with ttnn.graph.full_graph_capture(blocker / "report.json"):
-                    _ = ttnn.relu(tt_input)
+                    tt_output = ttnn.relu(tt_input)
             assert ttnn.graph.is_graph_capture_active()
             ttnn.graph.end_graph_capture()
             assert not ttnn.graph.is_graph_capture_active()
         finally:
             while ttnn.graph.is_graph_capture_active():
                 ttnn.graph.end_graph_capture()
+            # The caught exception's traceback keeps this frame alive past device close;
+            # free the device buffers now so collecting it later touches no device.
+            ttnn.deallocate(tt_input)
+            if tt_output is not None:
+                ttnn.deallocate(tt_output)
 
     @skip_for_slow_dispatch()
     def test_default_manager_execution_metadata_round_trip(self, device, tmp_report_dir):
@@ -4946,12 +4956,10 @@ class TestResNet50Patterns:
         """
         conn, cursor = self._import_resnet(tmp_path)
 
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT operation_id, COUNT(*) FROM buffers
             GROUP BY operation_id ORDER BY operation_id
-        """
-        )
+        """)
         rows = cursor.fetchall()
         counts_by_op = {r[0]: r[1] for r in rows}
         assert len(counts_by_op) >= 3, f"Should have at least 3 ops with buffers, got {len(counts_by_op)}"
@@ -5017,9 +5025,11 @@ class TestLinearModelE2E:
 
         ttnn.graph.enable_python_stack_traces()
         try:
-            with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
-                "enable_logging", True
-            ), ttnn.manage_config("enable_graph_report", True):
+            with (
+                ttnn.manage_config("enable_fast_runtime_mode", False),
+                ttnn.manage_config("enable_logging", True),
+                ttnn.manage_config("enable_graph_report", True),
+            ):
                 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
                 a = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
                 b = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
@@ -5054,23 +5064,19 @@ class TestLinearModelE2E:
         output_count = c.fetchone()[0]
         assert output_count >= 4, f"Expected at least 4 output_tensor rows, got {output_count}"
 
-        c.execute(
-            """
+        c.execute("""
             SELECT COUNT(*) FROM input_tensors it
             LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
             WHERE t.tensor_id IS NULL
-        """
-        )
+        """)
         dangling = c.fetchone()[0]
         assert dangling == 0, f"{dangling} dangling input_tensors references"
 
-        c.execute(
-            """
+        c.execute("""
             SELECT COUNT(*) FROM output_tensors ot
             LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
             WHERE t.tensor_id IS NULL
-        """
-        )
+        """)
         dangling = c.fetchone()[0]
         assert dangling == 0, f"{dangling} dangling output_tensors references"
 
@@ -5164,34 +5170,28 @@ def test_resnet50_e2e_graph_capture(
     output_count = c.fetchone()[0]
     assert output_count >= 300, f"Expected at least 300 output_tensor rows, got {output_count}"
 
-    c.execute(
-        """
+    c.execute("""
         SELECT COUNT(*) FROM input_tensors it
         LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
         WHERE t.tensor_id IS NULL
-    """
-    )
+    """)
     dangling = c.fetchone()[0]
     assert dangling == 0, f"{dangling} dangling input_tensors references"
 
-    c.execute(
-        """
+    c.execute("""
         SELECT COUNT(*) FROM output_tensors ot
         LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
         WHERE t.tensor_id IS NULL
-    """
-    )
+    """)
     dangling = c.fetchone()[0]
     assert dangling == 0, f"{dangling} dangling output_tensors references"
 
-    c.execute(
-        """
+    c.execute("""
         SELECT COUNT(*) FROM operations o
         WHERE o.name = 'ttnn.deallocate'
         AND EXISTS (SELECT 1 FROM input_tensors it WHERE it.operation_id = o.operation_id)
         AND NOT EXISTS (SELECT 1 FROM output_tensors ot WHERE ot.operation_id = o.operation_id)
-    """
-    )
+    """)
     dealloc_correct = c.fetchone()[0]
     assert dealloc_correct == 51, f"Expected 51 deallocate ops with input+no-output, got {dealloc_correct}"
 
@@ -5615,8 +5615,9 @@ class TestBeginGraphCaptureClearing:
         assert len(python_io[0]["python_stack_trace"]) > 0
 
     def test_begin_graph_capture_default_no_python_stack_traces(self):
-        with ttnn.manage_config("enable_graph_python_stack_traces", False), ttnn.manage_config(
-            "enable_detailed_tensor_report", False
+        with (
+            ttnn.manage_config("enable_graph_python_stack_traces", False),
+            ttnn.manage_config("enable_detailed_tensor_report", False),
         ):
             ttnn.graph.disable_python_stack_traces()
             assert not ttnn.graph.is_python_stack_trace_enabled()
@@ -5633,8 +5634,9 @@ class TestBeginGraphCaptureClearing:
             assert not ttnn.graph.is_python_stack_trace_enabled()
 
     def test_begin_graph_capture_respects_disable_graph_python_stack_traces_config(self):
-        with ttnn.manage_config("enable_graph_python_stack_traces", False), ttnn.manage_config(
-            "enable_detailed_tensor_report", False
+        with (
+            ttnn.manage_config("enable_graph_python_stack_traces", False),
+            ttnn.manage_config("enable_detailed_tensor_report", False),
         ):
             ttnn.graph.disable_python_stack_traces()
             assert not ttnn.graph.is_python_stack_trace_enabled()
@@ -5652,8 +5654,9 @@ class TestBeginGraphCaptureClearing:
 
     def test_begin_graph_capture_auto_enables_python_stack_traces_when_detailed_tensor_report_true(self):
         """enable_detailed_tensor_report also turns on stacks for tensor_lifetime source columns."""
-        with ttnn.manage_config("enable_graph_python_stack_traces", False), ttnn.manage_config(
-            "enable_detailed_tensor_report", True
+        with (
+            ttnn.manage_config("enable_graph_python_stack_traces", False),
+            ttnn.manage_config("enable_detailed_tensor_report", True),
         ):
             ttnn.graph.disable_python_stack_traces()
             assert not ttnn.graph.is_python_stack_trace_enabled()
@@ -5671,8 +5674,9 @@ class TestBeginGraphCaptureClearing:
 
     def test_begin_graph_capture_keeps_pre_enabled_python_stack_traces_when_config_false(self):
         """Stacks enabled before begin are not overridden when config auto-enable is off."""
-        with ttnn.manage_config("enable_graph_python_stack_traces", False), ttnn.manage_config(
-            "enable_detailed_tensor_report", False
+        with (
+            ttnn.manage_config("enable_graph_python_stack_traces", False),
+            ttnn.manage_config("enable_detailed_tensor_report", False),
         ):
             ttnn.graph.disable_python_stack_traces()
             ttnn.graph.enable_python_stack_traces()
@@ -6070,14 +6074,12 @@ class TestPythonIONameMatching:
         report = _make_report(mock_graph, python_io=python_io)
         conn, cursor = _import_to_db(report, tmp_path)
 
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT oa.value FROM operation_arguments oa
             JOIN operations o ON oa.operation_id = o.operation_id
             WHERE oa.name = 'alpha'
             ORDER BY o.operation_id
-        """
-        )
+        """)
         values = [r[0] for r in cursor.fetchall()]
         assert values == ["1.0", "2.0"], f"Expected ordered matching, got {values}"
         conn.close()
@@ -6368,11 +6370,9 @@ class TestFastOperationGraphTracking:
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
 
-        c.execute(
-            """SELECT COUNT(DISTINCT ot.tensor_id)
+        c.execute("""SELECT COUNT(DISTINCT ot.tensor_id)
                FROM output_tensors ot
-               INNER JOIN input_tensors it ON ot.tensor_id = it.tensor_id"""
-        )
+               INNER JOIN input_tensors it ON ot.tensor_id = it.tensor_id""")
         connected = c.fetchone()[0]
         assert connected >= 1, f"Expected at least 1 connected tensor ID, got {connected}"
         conn.close()
@@ -6952,13 +6952,11 @@ class TestPythonStackTraceImport:
         report = _make_report(graph, python_io=python_io)
         conn, c = _import_to_db(report, tmp_path)
 
-        c.execute(
-            """
+        c.execute("""
             SELECT st.operation_id, sf.path
             FROM stack_traces st
             JOIN source_files sf ON st.source_file_id = sf.id
-            """
-        )
+            """)
         assert c.fetchall() == [(1, str(source_file.resolve()))]
 
         c.execute("SELECT path, contents FROM source_files")
@@ -7159,13 +7157,11 @@ class TestPythonStackTraceImport:
         report = _make_report(graph, python_io=python_io)
         conn, c = _import_to_db(report, tmp_path)
 
-        c.execute(
-            """
+        c.execute("""
             SELECT st.operation_id, sf.path
             FROM stack_traces st
             JOIN source_files sf ON st.source_file_id = sf.id
-            """
-        )
+            """)
         assert c.fetchall() == [(1, str(source_file.resolve()))]
         conn.close()
 
@@ -7218,9 +7214,11 @@ class TestReportConfigDoesNotEnableLegacyTracer:
 
     @_FROM_TORCH_CONVERSION_CASES
     def test_from_torch_conversions_under_report_config(self, make_tensor, dtype):
-        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
-            "enable_logging", True
-        ), ttnn.manage_config("enable_graph_report", True):
+        with (
+            ttnn.manage_config("enable_fast_runtime_mode", False),
+            ttnn.manage_config("enable_logging", True),
+            ttnn.manage_config("enable_graph_report", True),
+        ):
             output = ttnn.from_torch(make_tensor(), dtype=dtype)
             assert (
                 output.dtype == dtype
@@ -7327,12 +7325,12 @@ class TestReportNameDerivedFromTestId:
     def test_report_is_written_without_report_name(self, request, device, tmp_path):
         if ttnn.graph.is_graph_capture_active():
             pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
-        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
-            "enable_logging", True
-        ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config(
-            "root_report_path", tmp_path
-        ), ttnn.manage_config(
-            "report_name", None
+        with (
+            ttnn.manage_config("enable_fast_runtime_mode", False),
+            ttnn.manage_config("enable_logging", True),
+            ttnn.manage_config("enable_graph_report", True),
+            ttnn.manage_config("root_report_path", tmp_path),
+            ttnn.manage_config("report_name", None),
         ):
             with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
                 report_name = str(ttnn.CONFIG.report_name)
@@ -7404,9 +7402,11 @@ class TestReportModesDuringTraceCapture:
     def test_op_inside_trace_capture_with_comparison_mode(self, device):
         shape = (1, 1, 32, 32)
         a = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
-            "enable_comparison_mode", True
-        ), ttnn.manage_config("comparison_mode_should_raise_exception", True):
+        with (
+            ttnn.manage_config("enable_fast_runtime_mode", False),
+            ttnn.manage_config("enable_comparison_mode", True),
+            ttnn.manage_config("comparison_mode_should_raise_exception", True),
+        ):
             ttnn.add(a, a)  # compile before capturing; outside a capture the comparison itself must still run
             trace_id = ttnn.begin_trace_capture(device, cq_id=0)
             try:
@@ -7438,9 +7438,12 @@ def test_multihost_graph_report(request):
     rank = int(ttnn.distributed_context_get_rank())
     world_size = int(ttnn.distributed_context_get_size())
 
-    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
-        "enable_logging", True
-    ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config("report_name", None):
+    with (
+        ttnn.manage_config("enable_fast_runtime_mode", False),
+        ttnn.manage_config("enable_logging", True),
+        ttnn.manage_config("enable_graph_report", True),
+        ttnn.manage_config("report_name", None),
+    ):
         # The report directory is stamped with the current minute, so start every rank together.
         ttnn.distributed_context_barrier()
         with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
