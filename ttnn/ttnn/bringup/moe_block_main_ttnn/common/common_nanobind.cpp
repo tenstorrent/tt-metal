@@ -18,6 +18,7 @@
 
 #include "ttnn-nanobind/export_enum.hpp"
 
+#include "core_grid.hpp"
 #include "mesh_routing.hpp"
 #include "moe_block_config.hpp"
 #include "moe_block_resources.hpp"
@@ -211,6 +212,15 @@ void bind_common(nb::module_& mod) {
     nanobind_detail::bind_config(mod);
     nanobind_detail::bind_routing(mod);
     nanobind_detail::bind_resources(mod);
+    // (bring-up, DeepSeek-V4.1 FIX.15: core_grid.hpp)
+    mod.def(
+        "set_max_grid",
+        &set_max_grid,
+        nb::arg("max_x"),
+        nb::arg("max_y"),
+        "Every op of the block inside the first max_x columns and max_y rows of a chip's compute grid (0, 0: the whole "
+        "grid, the default). Set once a process, before the first plan (a different cap after it raises).");
+    mod.def("max_grid", &max_grid, "The core cap (max_x, max_y); (0, 0): none.");
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main

@@ -14,6 +14,7 @@
 
 #include "../../common/moe_block_resources.hpp"
 #include "../../common/port_placement.hpp"
+#include "../../common/core_grid.hpp"
 
 namespace ttnn::operations::bringup::moe_block_main::fused_tail {
 
@@ -284,7 +285,7 @@ std::shared_ptr<const TailA2APlan> make_tail_a2a_plan(MoEBlockResources& resourc
         }
     }
     plan->port_union = CoreRangeSet(ranges);
-    const auto grid = mesh.compute_with_storage_grid_size();
+    const auto grid = block_grid(mesh.compute_with_storage_grid_size());
     for (uint32_t y = 0; y < grid.y && plan->workers.size() < g.NW; ++y) {
         for (uint32_t x = 0; x < grid.x && plan->workers.size() < g.NW; ++x) {
             if (!taken.contains({y, x})) {
@@ -456,7 +457,7 @@ std::shared_ptr<const TailEnginePlan> make_tail_engine_plan(
     MoEBlockResources& resources, uint32_t rows, uint32_t Hr, uint32_t Ho, uint32_t wtb, uint32_t cap_bytes) {
     auto& mesh = resources.mesh_device();
     const auto& topo = resources.topology();
-    const auto grid = mesh.compute_with_storage_grid_size();
+    const auto grid = block_grid(mesh.compute_with_storage_grid_size());
     // (the engine: every row of the grid, an even count of them, and every column but the last)
     const uint32_t GY = grid.y / 2 * 2;
     TT_FATAL(grid.x >= 2 && GY >= 4, "fused_tail (engine): a {}x{} grid (at least 2 columns, 4 rows)", grid.x, grid.y);

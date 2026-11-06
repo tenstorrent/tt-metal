@@ -32,6 +32,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "../../common/combine_plan_words.hpp"
+#include "../../common/core_grid.hpp"
 
 namespace ttnn::operations::bringup::moe_block_main::fused_head {
 
@@ -624,7 +625,7 @@ std::shared_ptr<const HeadModel> make_head_model(
         sh.G,
         h.R,
         h.C);
-    h.grid = mesh.compute_with_storage_grid_size();
+    h.grid = block_grid(mesh.compute_with_storage_grid_size());
     h.MX = std::min<uint32_t>(11, h.grid.x - 1);
     TT_FATAL(h.grid.x - h.MX == 1, "fused_head: the movers are one column (grid {}x{})", h.grid.x, h.grid.y);
     h.ring = sh.ring && sh.G > 2;

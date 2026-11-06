@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flat_routed_expert_plan.hpp"
+#include "../../common/core_grid.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -235,7 +236,7 @@ FlatRoutedExpertPlan make_plan(
     p.banks = device->dram_grid_size().x;
     const auto phys = [device](const Core& c) { return device->worker_core_from_logical_core(c); };
 
-    const auto grid = device->compute_with_storage_grid_size();
+    const auto grid = block_grid(device->compute_with_storage_grid_size());
     TT_FATAL(grid.y >= 10, "flat_routed_expert: laid out for a 10-row Blackhole grid (got {} rows)", grid.y);
     constexpr uint32_t row0 = 0, row1 = 9, nrows = 10;
     // The DRAM-optimal readers (one per bank): columns 0 and E (E = 6 on a p150's 11 x 10, 7 on a Galaxy chip's
@@ -372,7 +373,7 @@ FlatRoutedExpertPlan make_plan(
     const uint32_t east = rcols.size() == 4 ? *std::next(rcols.begin(), 2) : 0;
     TT_FATAL(
         rcols.size() == 4 && *rcols.begin() == 0 && *std::next(rcols.begin()) == 1 && east >= 6 &&
-            *rcols.rbegin() == east + 1 && grid.x >= 11 + (east - 6),
+            *rcols.rbegin() == east + 1 && (auto_shape || grid.x >= 11 + (east - 6)),
         "flat_routed_expert: laid out for Blackhole grids with DRAM readers in columns 0, 1 and E, E + 1 (E >= 6) and "
         "room for the east rectangle; got a {} x {} grid with readers in columns {}",
         grid.x,
@@ -390,6 +391,9 @@ FlatRoutedExpertPlan make_plan(
             x0 += shift;
             x1 += shift;
         }
+        // (bring-up core cap, common/core_grid.hpp: a shaped east rectangle fits the capped grid, a fixed one may not)
+        TT_FATAL(
+            x1 < grid.x, "flat_routed_expert: a gate/up rectangle reaches column {} of a {}-wide grid", x1, grid.x);
     }
     std::vector<Core> gu_all;
     for (const auto& [x0, x1, y0, y1] : p.rects) {
