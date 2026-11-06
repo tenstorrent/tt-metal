@@ -1,0 +1,11 @@
+ccl,cfg,payload,value
+broadcast,"num_links=1, ",2048,6.389
+broadcast,"num_links=1, ",4096,5.181
+broadcast,"num_links=1, ",4352,5.142
+broadcast,"num_links=1, ",8192,4.253
+broadcast,"num_links=1, ",15232,3.909
+broadcast,"num_links=2, ",2048,9.205
+broadcast,"num_links=2, ",4096,7.976
+broadcast,"num_links=2, ",4352,7.99
+broadcast,"num_links=2, ",8192,7.101
+broadcast,"num_links=2, ",15232,4.158

@@ -1,0 +1,45 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "models_unit_tests.yaml",
+  "mirrored": true,
+  "name": "TT-DiT common unit tests, shared amongst all models.",
+  "sku": "bh_quietbox_2"
+ },
+ "ci_timeout_s": 2400,
+ "data_inodes_at_submit": "4985767",
+ "data_inodes_free": 5901385,
+ "deviation": "not in CI as perf: main's test_ring_joint_sdpa_perf_table is skipped (pytest inside pytest); fabric_exp/testplan/dit_ring_joint_perf.py runs test_ring_joint_sdpa (bh_glx, no_trace_no_check, q256 / k512) under the device profiler per model input and reports the slowest chip's RingJointSDPA device kernel ns (median over calls)",
+ "duration_s": 215.3,
+ "end": "2026-11-04T09:17:13+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): python $REGRESS_HARNESS_DIR/dit_ring_joint_perf.py --q q256 --k k512"
+ ],
+ "group": "G-L1P-x",
+ "jit_cache": "/tmp/aagarwal-regress/172928/cache/new_288afd2-new",
+ "label": "ab_288afd2",
+ "metrics": 0,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u08",
+ "note": null,
+ "pass": 2,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172928",
+ "start": "2026-11-04T09:13:38+00:00",
+ "status": "FAIL",
+ "step": "G1x-dit-rj",
+ "step_env": null,
+ "telemetry": "off (prod default)",
+ "timeout_note": null,
+ "timeout_s": 2400,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

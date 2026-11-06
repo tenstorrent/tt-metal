@@ -1,0 +1,3 @@
+export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/Qwen/Qwen3-32B
+export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH); vLLM runs stay on the default no-prefetcher path
+pytest --timeout 900 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "ci-token-matching"

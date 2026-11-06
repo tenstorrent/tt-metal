@@ -1,0 +1,54 @@
+{
+ "benchmark_files": 1,
+ "capped": true,
+ "ci": {
+  "ci_timeout_min": 35,
+  "filtered": true,
+  "list": "blackhole_e2e_tests.yaml",
+  "name": "Disaggregated prefill perf tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 2100,
+ "deviation": null,
+ "duration_s": 105.1,
+ "end": "2026-11-04T05:45:32+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_mistral4_mla_chunked_perf_loudbox -vvv --tb=short"
+ ],
+ "group": "LB-L2",
+ "jit_cache": "/home/aagarwal/.tt-metal-cache-regress/main-main",
+ "junit_files": 4,
+ "label": "main",
+ "metrics": 2,
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-04T05:43:47+00:00",
+ "status": "PERF_WINDOW",
+ "step": "B2-dp-perf-m4",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 3,
+  "PERF_WINDOW": 1,
+  "SKIP": 0
+ },
+ "timeout_note": null,
+ "timeout_s": 1294,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

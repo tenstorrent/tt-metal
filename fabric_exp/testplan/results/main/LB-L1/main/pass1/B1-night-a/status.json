@@ -1,0 +1,51 @@
+{
+ "capped": true,
+ "ci": {
+  "ci_timeout_min": 30,
+  "filtered": true,
+  "list": "fabric_tests.yaml",
+  "name": "BH ccl nightly tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 1800,
+ "deviation": null,
+ "duration_s": 545.5,
+ "end": "2026-11-04T05:02:01+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_minimal_reduce_scatter_async_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_slot_invariance_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_new_all_reduce.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_minimal_direct_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_batch_invariance_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_cache_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_2d_fabric.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_to_root_trace.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_minimal_reduce_scatter_async.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_perf_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_ccl_perf.py"
+ ],
+ "group": "LB-L1",
+ "jit_cache": "/home/aagarwal/.tt-metal-cache-regress/main-main",
+ "junit_files": 1,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-04T04:52:56+00:00",
+ "status": "PASS",
+ "step": "B1-night-a",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 2,
+  "PASS": 134,
+  "PERF_WINDOW": 0,
+  "SKIP": 185
+ },
+ "timeout_note": null,
+ "timeout_s": 1359,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

@@ -1,0 +1,51 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 65,
+  "filtered": true,
+  "list": "demo_sp_release_tests.yaml",
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 3900,
+ "data_inodes_at_submit": "3279117",
+ "data_inodes_free": 6258487,
+ "deviation": "buckets prepare_weights_hybrid_allocator + host_io_risk only (fabric_2d runs in G2-dsb1-f2d/-attn); run_isolated_unit_tests.py --no-reset (deviation for main and new): its reset/validation/smoke preflight validates the single-Galaxy XY-torus cabling and fails on every quad-cabled 110-a node (job 172241, ENV like G0-health-cv); the job still resets at start and after any failing step",
+ "duration_s": 435.7,
+ "end": "2026-11-04T09:29:58+00:00",
+ "failed_lines": [],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172882/cache/new_288afd2-new",
+ "junit_files": 2,
+ "label": "new_288afd2",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a06u20",
+ "note": "the runner sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 for every bucket (as in CI)",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172882",
+ "start": "2026-11-04T09:22:42+00:00",
+ "status": "PASS",
+ "step": "G2-dsb1-hyb",
+ "step_env": null,
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 15,
+  "PERF_WINDOW": 0,
+  "SKIP": 59
+ },
+ "timeout_note": null,
+ "timeout_s": 3900,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

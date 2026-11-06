@@ -1,0 +1,26 @@
+job 180530 on bh-lb-120-a04u32
+command: bash fabric_exp/pr_perf/flushda/flushda_runs.sh
+summary: rc=1 hung=1 node=bh-lb-120-a04u32 job=180530 post=reset+links OK after the hang start=2026-11-05 22:14:32 end=2026-11-05T22:31:13Z
+[lb2 22:12:50 +0s] node=bh-lb-120-a04u32 job=180530 mode=run start=2026-11-05T22:12:50Z timeout=7800s
+[lb2 22:12:50 +0s] command: bash fabric_exp/pr_perf/flushda/flushda_runs.sh
+[lb2 22:12:51 +1s] stage src-20261105-220926 (full full-20261104-221405), staged 2026-11-05T22:09:55Z
+[lb2 22:12:51 +1s] busy check: clear
+[lb2 22:12:51 +1s] space: 876 GB free on /home
+[lb2 22:13:01 +11s] verify: 32764 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T22:09:55Z)
+[lb2 22:13:03 +13s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T22:09:55Z)
+[lb2 22:13:12 +22s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T22:09:55Z)
+[lb2 22:13:14 +24s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T22:09:55Z)
+[lb2 22:13:14 +24s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T22:09:55Z)
+[lb2 22:13:15 +25s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 22:13:15 +25s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 22:13:15 +25s] cpus: nproc 60, Cpus_allowed_list: 0,2-15,17-32,34-47,49-63, memory 638 GB available
+[lb2 22:13:15 +25s] reset (start): tt-smi -r
+[lb2 22:14:31 +101s] link check (start, poll 1, +0 s): every fabric link UP/PASS/400 (link gate PASS)
+[lb2 22:14:33 +103s] run: bash fabric_exp/pr_perf/flushda/flushda_runs.sh
+[lb2 22:29:48 +1018s] command exit 1
+[lb2 22:29:48 +1018s] hang captures written: fabric_exp/results/fdaa_unp_val_ring_hangcap 
+[lb2 22:29:48 +1018s] reset (posthang): tt-smi -r
+[lb2 22:30:48 +1078s] link check (posthang, poll 1, +0 s): every fabric link UP/PASS/400 (link gate PASS)
+[lb2 22:30:48 +1078s] reset+links OK after the hang
+[lb2 22:31:13 +1103s] copied back: 254 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/180530 (MANIFEST.tsv)
+[lb2 22:31:13 +1103s] done: rc 1, hung 1; 875 GB free on /home

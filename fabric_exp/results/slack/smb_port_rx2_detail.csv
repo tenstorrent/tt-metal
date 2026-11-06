@@ -1,0 +1,10 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+Mesh1HopEW_size_2048_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,50000,2048,6201556,22.291180,10884365.150
+Mesh1HopEW_size_4096_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,50000,4096,6433835,42.972815,10491409.867
+Mesh1HopEW_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,50000,4352,6521244,45.046620,10350785.832
+NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,7,1,W,1,100000,4096,12176108,45.413526,11087286.676
+NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,7,1,W,1,100000,4096,12176312,45.412765,11087100.922
+NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,7,1,W,1,100000,4096,12180045,45.398847,11083702.893
+NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,7,2,W,1,100000,4096,12179877,45.399473,11083855.773
+NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,7,2,W,1,100000,4096,12178539,45.404461,11085073.505
+NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,7,2,W,1,100000,4096,12178552,45.404413,11085061.672

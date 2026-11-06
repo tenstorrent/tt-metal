@@ -1,0 +1,233 @@
+bh_1d                    IDENTICAL matched   72, differ   0, unmatched 0/0
+bh_ring                  IDENTICAL matched   72, differ   0, unmatched 0/0
+bh_2d                    IDENTICAL matched   80, differ   0, unmatched 0/0
+bh_torus                 IDENTICAL matched   96, differ   0, unmatched 0/0
+bh_1d_1erisc             IDENTICAL matched   36, differ   0, unmatched 0/0
+bh_ring_1erisc           IDENTICAL matched   36, differ   0, unmatched 0/0
+bh_2d_1erisc             IDENTICAL matched   40, differ   0, unmatched 0/0
+bh_torus_1erisc          IDENTICAL matched   48, differ   0, unmatched 0/0
+bh_neighbor              IDENTICAL matched   72, differ   0, unmatched 0/0
+bh_2d_vc2                IDENTICAL matched   80, differ   0, unmatched 0/0
+bh_torus_vc2             IDENTICAL matched   80, differ   0, unmatched 0/0
+bh_1d_mux                IDENTICAL matched   36, differ   0, unmatched 0/0
+bh_2d_mux                IDENTICAL matched   40, differ   0, unmatched 0/0
+bh_ring_mux              IDENTICAL matched   36, differ   0, unmatched 0/0
+bh_vc1                   IDENTICAL matched   96, differ   0, unmatched 0/0
+glx_1d                   IDENTICAL matched  120, differ   0, unmatched 0/0
+glx_2d                   IDENTICAL matched  168, differ   0, unmatched 0/0
+glx_ring                 IDENTICAL matched  120, differ   0, unmatched 0/0
+glx_torus                IDENTICAL matched  120, differ   0, unmatched 0/0
+TOTAL {'IDENTICAL': 19, 'builds': 1448, 'differ': 0}
+## gate 1b: unset vs i4 (default arm with the define)
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 0, 'router identical': 1442}
+shared 1442  identical 1442  differ 0  only in unset 0  only in i4 0
+## scope: i4 vs i8
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_1d                   router    identical    57  differ   57
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 517, 'router identical': 925}
+shared 1442  identical 925  differ 517  only in i4 0  only in i8 0
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__10206796012768773005__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__11292175955236331814__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1153326711885941584__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1183232962060403140__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__11956485999999321992__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__12920322044797695316__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__13080400782558691954__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1428466494380011422__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__14352405085557053036__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__14923892991075516173__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__15548658725686944017__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__15793228867989318549__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1597170798730186092__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__17093335002257085400__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__17917507063716756787__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__2048942958654553343__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__2728131462251905190__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__3556167160808956811__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__3911376105019820176__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__398355555145217469__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__398527616739608794__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__4314130202983163800__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__461947134189182145__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__4929220600570121840__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__5808453624723692503__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__6183528266438040042__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__6434457033925151524__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7191688452315159791__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7225292333443467092__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7448300592146285746__subordinate_active_erisc
+## scope: i4 vs i16
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_1d                   router    identical    57  differ   57
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 517, 'router identical': 925}
+shared 1442  identical 925  differ 517  only in i4 0  only in i16 0
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__10206796012768773005__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__11292175955236331814__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1153326711885941584__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1183232962060403140__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__11956485999999321992__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__12920322044797695316__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__13080400782558691954__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1428466494380011422__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__14352405085557053036__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__14923892991075516173__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__15548658725686944017__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__15793228867989318549__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1597170798730186092__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__17093335002257085400__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__17917507063716756787__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__2048942958654553343__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__2728131462251905190__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__3556167160808956811__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__3911376105019820176__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__398355555145217469__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__398527616739608794__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__4314130202983163800__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__461947134189182145__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__4929220600570121840__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__5808453624723692503__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__6183528266438040042__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__6434457033925151524__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7191688452315159791__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7225292333443467092__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7448300592146285746__subordinate_active_erisc
+## scope: i4 vs i32
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_1d                   router    identical    57  differ   57
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 517, 'router identical': 925}
+shared 1442  identical 925  differ 517  only in i4 0  only in i32 0
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__10206796012768773005__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__11292175955236331814__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1153326711885941584__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1183232962060403140__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__11956485999999321992__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__12920322044797695316__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__13080400782558691954__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1428466494380011422__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__14352405085557053036__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__14923892991075516173__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__15548658725686944017__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__15793228867989318549__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1597170798730186092__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__17093335002257085400__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__17917507063716756787__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__2048942958654553343__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__2728131462251905190__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__3556167160808956811__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__3911376105019820176__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__398355555145217469__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__398527616739608794__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__4314130202983163800__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__461947134189182145__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__4929220600570121840__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__5808453624723692503__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__6183528266438040042__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__6434457033925151524__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7191688452315159791__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7225292333443467092__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7448300592146285746__subordinate_active_erisc
+## scope: i4 vs i64
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_1d                   router    identical    57  differ   57
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 517, 'router identical': 925}
+shared 1442  identical 925  differ 517  only in i4 0  only in i64 0
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__10206796012768773005__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__11292175955236331814__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1153326711885941584__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1183232962060403140__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__11956485999999321992__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__12920322044797695316__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__13080400782558691954__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1428466494380011422__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__14352405085557053036__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__14923892991075516173__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__15548658725686944017__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__15793228867989318549__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__1597170798730186092__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__17093335002257085400__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__17917507063716756787__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__2048942958654553343__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__2728131462251905190__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__3556167160808956811__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__3911376105019820176__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__398355555145217469__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__398527616739608794__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__4314130202983163800__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__461947134189182145__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__4929220600570121840__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__5808453624723692503__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__6183528266438040042__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__6434457033925151524__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7191688452315159791__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7225292333443467092__subordinate_active_erisc
+  differs: bh_1d_1erisc__kernels__fabric_erisc_router__7448300592146285746__subordinate_active_erisc

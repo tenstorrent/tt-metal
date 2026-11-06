@@ -1,0 +1,22 @@
+job 177108 on bh-lb-120-a07u28
+command: PORT_TREE=/home/aagarwal/tt-metal-port-tune-alloc PORT_TREE_SRC=/data/aagarwal/lb2/trees/port_tune_alloc_9ce0 PT_PREFIX=pta bash fabric_exp/port_tune/tune_runs.sh idlealloc
+summary: rc=0 hung=0 node=bh-lb-120-a07u28 job=177108 post=none start=2026-11-05 06:04:41 end=2026-11-05T06:11:22Z
+[lb2 06:03:09 +0s] node=bh-lb-120-a07u28 job=177108 mode=run start=2026-11-05T06:03:09Z timeout=2400s
+[lb2 06:03:09 +0s] command: PORT_TREE=/home/aagarwal/tt-metal-port-tune-alloc PORT_TREE_SRC=/data/aagarwal/lb2/trees/port_tune_alloc_9ce0 PT_PREFIX=pta bash fabric_exp/port_tune/tune_runs.sh idlealloc
+[lb2 06:03:10 +1s] stage src-20261105-060108 (full full-20261104-221405), staged 2026-11-05T06:01:24Z
+[lb2 06:03:10 +1s] busy check: clear
+[lb2 06:03:10 +1s] space: 728 GB free on /home
+[lb2 06:03:18 +9s] verify: 32544 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T06:01:24Z)
+[lb2 06:03:20 +11s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T06:01:24Z)
+[lb2 06:03:29 +20s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T06:01:24Z)
+[lb2 06:03:31 +22s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T06:01:24Z)
+[lb2 06:03:31 +22s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T06:01:24Z)
+[lb2 06:03:32 +23s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 06:03:32 +23s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 06:03:32 +23s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 581 GB available
+[lb2 06:03:32 +23s] reset (start): tt-smi -r
+[lb2 06:04:41 +92s] link check (start, poll 1, +0 s): every fabric link UP/PASS/400 (link gate PASS)
+[lb2 06:04:42 +93s] run: PORT_TREE=/home/aagarwal/tt-metal-port-tune-alloc PORT_TREE_SRC=/data/aagarwal/lb2/trees/port_tune_alloc_9ce0 PT_PREFIX=pta bash fabric_exp/port_tune/tune_runs.sh idlealloc
+[lb2 06:11:17 +488s] command exit 0
+[lb2 06:11:22 +493s] copied back: 60 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/177108 (MANIFEST.tsv)
+[lb2 06:11:22 +493s] done: rc 0, hung 0; 728 GB free on /home

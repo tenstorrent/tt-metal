@@ -1,0 +1,241 @@
+policy: worker_cap_slots=24
+
+| configuration | payload | slots | main's tier pick | study router today | study best (measured) | dynamic |
+| --- | ---: | ---: | --- | --- | --- | --- |
+| P150 2x4 mesh | 4352 | 81 | 17,16,16 | = main | 17,16,16 (P3; 20,15,16 trades 3-hop +6% for 1 KiB 1-hop -3..-8%) | **17,16,16** |
+| P150 2x4 mesh | 3072 | 115 | 35,16,32 | = main | 20,21,32 (Galaxy 167723) | **24,25,16** |
+| P150 1D line | 4352 | 83 | 16,16,32 | 26,25,32 | 26,25,32 (P3; 23,28,32 and 27,24,32 within 0.7) | **24,27,32** |
+| P150 1D line | 3072 | 117 | 32,32,32 | 43,42,32 | - | **24,61,32** |
+| P150 1D ring | 4352 | 83 | 16,16,32 | 26,25,32 | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **24,27,32** |
+| P150 1D ring | 3072 | 117 | 32,32,32 | 43,42,32 | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **24,61,32** |
+| P150 Y torus (2x4) | 4352 | 81 | 17,16,16 | = main | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **17,16,16** |
+| P150 Y torus (2x4) | 3072 | 115 | 35,16,32 | = main | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **24,25,16** |
+| P150 XY torus (2x4: X ring) | 4352 | 81 | 17,16,16 | = main | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **17,16,16** |
+| P150 XY torus (2x4: X ring) | 3072 | 115 | 35,16,32 | = main | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **24,25,16** |
+| Galaxy 8x4 mesh | 4352 | 81 | 17,16,16 | = main | 17,16,16 (P3; 20,15,16 trades 3-hop +6% for 1 KiB 1-hop -3..-8%) | **17,16,16** |
+| Galaxy 8x4 mesh | 3072 | 115 | 35,16,32 | = main | 20,21,32 (Galaxy 167723) | **24,25,16** |
+| Galaxy 1D ring | 4352 | 83 | 16,16,32 | 26,25,32 | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **24,27,32** |
+| Galaxy 1D ring | 3072 | 117 | 32,32,32 | 43,42,32 | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **24,61,32** |
+| Galaxy 8x4 XY torus | 4352 | 81 | 17,16,16 | = main | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **17,16,16** |
+| Galaxy 8x4 XY torus | 3072 | 115 | 35,16,32 | = main | not window-bound (ALLOCATION_NOTE 4): receiver a power of 2 | **24,25,16** |
+| VC1 split (2x 2x2), VC0 first | 4352 | 81 | 51,4,8,2,4 | 19,9,16,5,4 | 19,9,16,5,4 (VC0 first, P1 jobs 376-388) | **19,9,16,5,4** |
+| VC1 split (2x 2x2), VC0 first | 3072 | 115 | 85,4,8,2,4 | 53,9,16,5,4 | 20,15,16,9,7 (Galaxy 167723; 24,15,16,8,6: VC1 rows +2-5%) | **24,16,16,7,6** |
+| VC1 split (2x 2x2), VC1 first | 4352 | 81 | 51,4,8,2,4 | 19,9,16,5,4 | 18,7,16,7,5 (VC1 to its bound, job 388) | **18,7,16,7,5** |
+| VC1 split (2x 2x2), VC1 first | 3072 | 115 | 85,4,8,2,4 | 53,9,16,5,4 | - | **24,12,16,10,8 (1 unused)** |
+| VC2 on (P150 2x4, Galaxy 8x4) | 4352 | 81 | 43,7,11 + 2,4 | 17,14,16 + 2,4 | 17,14,16 + 2,4 (the study row; VC2 alone 869; 17,10,16 + 8,10: VC2 246) | **17,14,16 + 4,2** |
+| VC2 on (P150 2x4, Galaxy 8x4) | 3072 | 115 | 77,7,11 + 2,4 | 51,14,16 + 2,4 | 20,14,16 + 16,16 (Galaxy 167723: VC2 at the wire) | **24,22,16 + 5,4** |
+| VC1 split + VC2 (three VCs) | 4352 | 81 | 45,4,8,2,4 + 2,4 | 19,8,16,4,4 + 2,4 | 19,8,16,4,4 + 2,4 (the study row, not measured against others) | **17,8,16,5,4 + 3,2** |
+| VC1 split + VC2 (three VCs) | 3072 | 115 | 79,4,8,2,4 + 2,4 | 53,8,16,4,4 + 2,4 | - | **24,14,16,7,5 + 4,3** |
+
+P150 2x4 mesh, 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 81
+    VC0 worker x1: 17 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down); + 1 leftover)
+    VC0 forwarding x3: 16 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 13.5 of VC0's 81 -> nearest power of 2)
+
+P150 2x4 mesh, 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 115
+    VC0 worker x1: 24 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down))
+    VC0 forwarding x3: 25 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down); + 1 leftover past the worker's cap)
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 19.2 of VC0's 115 -> nearest power of 2)
+
+P150 1D line, 4352 B:
+    N = 83 slots of 4400 B (365760 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 83
+    VC0 worker x1: 24 (weight 2.00 of the senders' 4.00: 51 left -> 25 (rounded down), capped at 24 (worker_cap_slots))
+    VC0 forwarding x1: 27 (weight 2.00 of the senders' 4.00: 51 left -> 25 (rounded down); + 2 leftover past the worker's cap)
+    VC0 receiver x1: 32 (weight 1.60 (4/5 of the heaviest sender 2.00) of 5.60: share 23.7 of VC0's 83 -> nearest power of 2)
+
+P150 1D line, 3072 B:
+    N = 117 slots of 3120 B (365760 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 117
+    VC0 worker x1: 24 (weight 2.00 of the senders' 4.00: 85 left -> 42 (rounded down), capped at 24 (worker_cap_slots))
+    VC0 forwarding x1: 61 (weight 2.00 of the senders' 4.00: 85 left -> 42 (rounded down); + 19 leftover past the worker's cap)
+    VC0 receiver x1: 32 (weight 1.60 (4/5 of the heaviest sender 2.00) of 5.60: share 33.4 of VC0's 117 -> nearest power of 2)
+
+P150 1D ring, 4352 B:
+    N = 83 slots of 4400 B (365760 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 83
+    VC0 worker x1: 24 (weight 2.00 of the senders' 4.00: 51 left -> 25 (rounded down), capped at 24 (worker_cap_slots))
+    VC0 forwarding x1: 27 (weight 2.00 of the senders' 4.00: 51 left -> 25 (rounded down); + 2 leftover past the worker's cap)
+    VC0 receiver x1: 32 (weight 1.60 (4/5 of the heaviest sender 2.00) of 5.60: share 23.7 of VC0's 83 -> nearest power of 2)
+
+P150 1D ring, 3072 B:
+    N = 117 slots of 3120 B (365760 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 117
+    VC0 worker x1: 24 (weight 2.00 of the senders' 4.00: 85 left -> 42 (rounded down), capped at 24 (worker_cap_slots))
+    VC0 forwarding x1: 61 (weight 2.00 of the senders' 4.00: 85 left -> 42 (rounded down); + 19 leftover past the worker's cap)
+    VC0 receiver x1: 32 (weight 1.60 (4/5 of the heaviest sender 2.00) of 5.60: share 33.4 of VC0's 117 -> nearest power of 2)
+
+P150 Y torus (2x4), 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 81
+    VC0 worker x1: 17 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down); + 1 leftover)
+    VC0 forwarding x3: 16 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 13.5 of VC0's 81 -> nearest power of 2)
+
+P150 Y torus (2x4), 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 115
+    VC0 worker x1: 24 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down))
+    VC0 forwarding x3: 25 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down); + 1 leftover past the worker's cap)
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 19.2 of VC0's 115 -> nearest power of 2)
+
+P150 XY torus (2x4: X ring), 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 81
+    VC0 worker x1: 17 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down); + 1 leftover)
+    VC0 forwarding x3: 16 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 13.5 of VC0's 81 -> nearest power of 2)
+
+P150 XY torus (2x4: X ring), 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 2x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 115
+    VC0 worker x1: 24 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down))
+    VC0 forwarding x3: 25 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down); + 1 leftover past the worker's cap)
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 19.2 of VC0's 115 -> nearest power of 2)
+
+Galaxy 8x4 mesh, 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 8x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 81
+    VC0 worker x1: 17 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down); + 1 leftover)
+    VC0 forwarding x3: 16 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 13.5 of VC0's 81 -> nearest power of 2)
+
+Galaxy 8x4 mesh, 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 8x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 115
+    VC0 worker x1: 24 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down))
+    VC0 forwarding x3: 25 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down); + 1 leftover past the worker's cap)
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 19.2 of VC0's 115 -> nearest power of 2)
+
+Galaxy 1D ring, 4352 B:
+    N = 83 slots of 4400 B (365760 B of channel buffers)
+    mesh 8x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 83
+    VC0 worker x1: 24 (weight 2.00 of the senders' 4.00: 51 left -> 25 (rounded down), capped at 24 (worker_cap_slots))
+    VC0 forwarding x1: 27 (weight 2.00 of the senders' 4.00: 51 left -> 25 (rounded down); + 2 leftover past the worker's cap)
+    VC0 receiver x1: 32 (weight 1.60 (4/5 of the heaviest sender 2.00) of 5.60: share 23.7 of VC0's 83 -> nearest power of 2)
+
+Galaxy 1D ring, 3072 B:
+    N = 117 slots of 3120 B (365760 B of channel buffers)
+    mesh 8x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 117
+    VC0 worker x1: 24 (weight 2.00 of the senders' 4.00: 85 left -> 42 (rounded down), capped at 24 (worker_cap_slots))
+    VC0 forwarding x1: 61 (weight 2.00 of the senders' 4.00: 85 left -> 42 (rounded down); + 19 leftover past the worker's cap)
+    VC0 receiver x1: 32 (weight 1.60 (4/5 of the heaviest sender 2.00) of 5.60: share 33.4 of VC0's 117 -> nearest power of 2)
+
+Galaxy 8x4 XY torus, 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 8x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 81
+    VC0 worker x1: 17 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down); + 1 leftover)
+    VC0 forwarding x3: 16 (weight 2.00 of the senders' 8.00: 65 left -> 16 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 13.5 of VC0's 81 -> nearest power of 2)
+
+Galaxy 8x4 XY torus, 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 8x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 1, the default, largest remainder): VC0 115
+    VC0 worker x1: 24 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down))
+    VC0 forwarding x3: 25 (weight 2.00 of the senders' 8.00: 99 left -> 24 (rounded down); + 1 leftover past the worker's cap)
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 19.2 of VC0's 115 -> nearest power of 2)
+
+VC1 split (2x 2x2), VC0 first, 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 2x2: no dim longer than 2 chips, forwarding carries only turns
+    VC shares (ratio 3:1, the default, largest remainder): VC0 61 VC1 20
+    VC0 worker x1: 19 (weight 2.00 of the senders' 5.00: 45 left -> 18 (rounded down); + 1 leftover)
+    VC0 forwarding x3: 9 (weight 1.00 of the senders' 5.00: 45 left -> 9 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 6.60: share 14.8 of VC0's 61 -> nearest power of 2)
+    VC1 forwarding x3: 5 (weight 1.00 of the senders' 3.00: 16 left -> 5 (rounded down))
+    VC1 receiver x1: 4 (weight 0.80 (4/5 of the heaviest sender 1.00) of 3.80: share 4.2 of VC1's 20 -> rounded down)
+
+VC1 split (2x 2x2), VC0 first, 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 2x2: no dim longer than 2 chips, forwarding carries only turns
+    VC shares (ratio 3:1, the default, largest remainder): VC0 86 VC1 29
+    VC0 worker x1: 24 (weight 2.00 of the senders' 5.00: 70 left -> 28 (rounded down), capped at 24 (worker_cap_slots))
+    VC0 forwarding x3: 16 (weight 1.00 of the senders' 5.00: 70 left -> 14 (rounded down); + 2 leftover past the worker's cap)
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 6.60: share 20.8 of VC0's 86 -> nearest power of 2)
+    VC1 forwarding x3: 7 (weight 1.00 of the senders' 3.00: 23 left -> 7 (rounded down))
+    VC1 receiver x1: 6 (weight 0.80 (4/5 of the heaviest sender 1.00) of 3.80: share 6.1 of VC1's 29 -> rounded down)
+
+VC1 split (2x 2x2), VC1 first, 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 2x2: no dim longer than 2 chips, forwarding carries only turns
+    VC shares (ratio 2:1, vc_ratio, largest remainder): VC0 54 VC1 27
+    VC0 worker x1: 18 (weight 2.00 of the senders' 5.00: 38 left -> 15 (rounded down); + 3 leftover)
+    VC0 forwarding x3: 7 (weight 1.00 of the senders' 5.00: 38 left -> 7 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 6.60: share 13.1 of VC0's 54 -> nearest power of 2)
+    VC1 forwarding x3: 7 (weight 1.00 of the senders' 3.00: 22 left -> 7 (rounded down))
+    VC1 receiver x1: 5 (weight 0.80 (4/5 of the heaviest sender 1.00) of 3.80: share 5.7 of VC1's 27 -> rounded down)
+
+VC1 split (2x 2x2), VC1 first, 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 2x2: no dim longer than 2 chips, forwarding carries only turns
+    VC shares (ratio 2:1, vc_ratio, largest remainder): VC0 77 VC1 38
+    VC0 worker x1: 24 (weight 2.00 of the senders' 5.00: 61 left -> 24 (rounded down))
+    VC0 forwarding x3: 12 (weight 1.00 of the senders' 5.00: 61 left -> 12 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 6.60: share 18.7 of VC0's 77 -> nearest power of 2)
+    VC1 forwarding x3: 10 (weight 1.00 of the senders' 3.00: 30 left -> 10 (rounded down))
+    VC1 receiver x1: 8 (weight 0.80 (4/5 of the heaviest sender 1.00) of 3.80: share 8.0 of VC1's 38 -> rounded down)
+
+VC2 on (P150 2x4, Galaxy 8x4), 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 8x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 12:1, the default, largest remainder): VC0 75 VC2 6
+    VC0 worker x1: 17 (weight 2.00 of the senders' 8.00: 59 left -> 14 (rounded down); + 3 leftover)
+    VC0 forwarding x3: 14 (weight 2.00 of the senders' 8.00: 59 left -> 14 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 12.5 of VC0's 75 -> nearest power of 2)
+    VC2 worker x1: 4 (weight 2.00 of the senders' 2.00: 4 left -> 4 (rounded down))
+    VC2 receiver x1: 2 (weight 1.60 (4/5 of the heaviest sender 2.00) of 3.60: share 2.7 of VC2's 6 -> rounded down)
+
+VC2 on (P150 2x4, Galaxy 8x4), 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 8x4: a dim longer than 2 chips, forwarding weight x2
+    VC shares (ratio 12:1, the default, largest remainder): VC0 106 VC2 9
+    VC0 worker x1: 24 (weight 2.00 of the senders' 8.00: 90 left -> 22 (rounded down); + 2 leftover)
+    VC0 forwarding x3: 22 (weight 2.00 of the senders' 8.00: 90 left -> 22 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 9.60: share 17.7 of VC0's 106 -> nearest power of 2)
+    VC2 worker x1: 5 (weight 2.00 of the senders' 2.00: 5 left -> 5 (rounded down))
+    VC2 receiver x1: 4 (weight 1.60 (4/5 of the heaviest sender 2.00) of 3.60: share 4.0 of VC2's 9 -> rounded down)
+
+VC1 split + VC2 (three VCs), 4352 B:
+    N = 81 slots of 4448 B (364352 B of channel buffers)
+    mesh 2x2: no dim longer than 2 chips, forwarding carries only turns
+    VC shares (ratio 12:4:1, the default, largest remainder): VC0 57 VC1 19 VC2 5
+    VC0 worker x1: 17 (weight 2.00 of the senders' 5.00: 41 left -> 16 (rounded down); + 1 leftover)
+    VC0 forwarding x3: 8 (weight 1.00 of the senders' 5.00: 41 left -> 8 (rounded down))
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 6.60: share 13.8 of VC0's 57 -> nearest power of 2)
+    VC1 forwarding x3: 5 (weight 1.00 of the senders' 3.00: 15 left -> 5 (rounded down))
+    VC1 receiver x1: 4 (weight 0.80 (4/5 of the heaviest sender 1.00) of 3.80: share 4.0 of VC1's 19 -> rounded down)
+    VC2 worker x1: 3 (weight 2.00 of the senders' 2.00: 3 left -> 3 (rounded down))
+    VC2 receiver x1: 2 (weight 1.60 (4/5 of the heaviest sender 2.00) of 3.60: share 2.2 of VC2's 5 -> rounded down)
+
+VC1 split + VC2 (three VCs), 3072 B:
+    N = 115 slots of 3168 B (364352 B of channel buffers)
+    mesh 2x2: no dim longer than 2 chips, forwarding carries only turns
+    VC shares (ratio 12:4:1, the default, largest remainder): VC0 81 VC1 27 VC2 7
+    VC0 worker x1: 24 (weight 2.00 of the senders' 5.00: 65 left -> 26 (rounded down), capped at 24 (worker_cap_slots))
+    VC0 forwarding x3: 14 (weight 1.00 of the senders' 5.00: 65 left -> 13 (rounded down); + 1 leftover past the worker's cap)
+    VC0 receiver x1: 16 (weight 1.60 (4/5 of the heaviest sender 2.00) of 6.60: share 19.6 of VC0's 81 -> nearest power of 2)
+    VC1 forwarding x3: 7 (weight 1.00 of the senders' 3.00: 22 left -> 7 (rounded down))
+    VC1 receiver x1: 5 (weight 0.80 (4/5 of the heaviest sender 1.00) of 3.80: share 5.7 of VC1's 27 -> rounded down)
+    VC2 worker x1: 4 (weight 2.00 of the senders' 2.00: 4 left -> 4 (rounded down))
+    VC2 receiver x1: 3 (weight 1.60 (4/5 of the heaviest sender 2.00) of 3.60: share 3.1 of VC2's 7 -> rounded down)
+

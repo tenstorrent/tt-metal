@@ -1,0 +1,67 @@
+{
+ "group": "G-L2-a",
+ "label": "main",
+ "updated": "2026-11-04T06:01:48+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G2-mm3",
+   "status": "KNOWN_FAIL",
+   "duration_s": 185.2,
+   "node": "bh-glx-110-a08u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 65,
+    "KNOWN_FAIL": 0,
+    "PASS": 0,
+    "PERF_WINDOW": 0,
+    "SKIP": 3
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T05:00:40+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G2-oss",
+   "status": "PASS",
+   "duration_s": 1001.2,
+   "node": "bh-glx-110-a08u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 1,
+    "PERF_WINDOW": 0,
+    "SKIP": 12
+   },
+   "tt_fabric": null,
+   "metrics": 3,
+   "reason": null,
+   "start": "2026-11-04T04:43:59+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G2-qwen",
+   "status": "PASS",
+   "duration_s": 1668.5,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 1,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": 3,
+   "reason": null,
+   "start": "2026-11-04T05:33:59+00:00"
+  }
+ ]
+}

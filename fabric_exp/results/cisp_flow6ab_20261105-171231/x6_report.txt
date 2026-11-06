@@ -1,0 +1,18 @@
+== A on: 38/96 iterations with a low router
+   low router-iterations by plane: P0 150/1920, P1 126/960
+   by direction: N 63/576, E 82/864, S 51/576, W 80/864
+   by source chip: c0 30, c1 25, c2 45, c3 29, c4 50, c5 33, c6 41, c7 23
+   positions in each test's 12 iterations: 0:0 1:2 2:5 3:5 4:4 5:1 6:0 7:3 8:6 9:6 10:5 11:1
+   ............
+   ........SSS.
+   ..SSSS.SSSS.
+   .SSS........
+   ..SSS..SSSSS
+   ..SSS...SS..
+   ........SSS.
+   .SSSS..SSSS.
+== A off: 0/96 iterations with a low router
+== L1 on: 0/48 iterations with a low router
+== L1 off: 0/48 iterations with a low router
+== L2 on: 0/48 iterations with a low router
+== L2 off: 0/48 iterations with a low router

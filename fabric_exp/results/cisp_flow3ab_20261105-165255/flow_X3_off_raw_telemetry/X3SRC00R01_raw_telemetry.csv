@@ -1,0 +1,13 @@
+coord,eth_channel,bw_gbps,pps,connected_coord,connected_eth_channel
+"0,1",6,24.4968,1.16887e+07,MeshCoordinate([0, 0]),5
+"0,0",8,24.4937,1.16872e+07,MeshCoordinate([1, 0]),11
+"0,1",6,48.4536,1.16937e+07,MeshCoordinate([0, 0]),5
+"0,0",8,48.4266,1.16872e+07,MeshCoordinate([1, 0]),11
+"0,1",6,24.4957,1.16881e+07,MeshCoordinate([0, 0]),5
+"0,0",8,24.4949,1.16877e+07,MeshCoordinate([1, 0]),11
+"0,1",6,48.4586,1.16949e+07,MeshCoordinate([0, 0]),5
+"0,0",8,48.4551,1.16941e+07,MeshCoordinate([1, 0]),11
+"0,0",8,24.4983,1.16894e+07,MeshCoordinate([1, 0]),11
+"0,1",6,24.4963,1.16884e+07,MeshCoordinate([0, 0]),5
+"0,1",6,48.4484,1.16925e+07,MeshCoordinate([0, 0]),5
+"0,0",8,48.4401,1.16905e+07,MeshCoordinate([1, 0]),11

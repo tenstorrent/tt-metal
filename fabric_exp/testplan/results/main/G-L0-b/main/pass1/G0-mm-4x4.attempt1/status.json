@@ -1,0 +1,46 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 10,
+  "filtered": false,
+  "list": "galaxy_e2e_tests.yaml",
+  "name": "Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 600,
+ "duration_s": 602.3,
+ "end": "2026-11-03T23:30:49+00:00",
+ "failed_lines": [],
+ "group": "G-L0-b",
+ "label": "main",
+ "marker_found": 0,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u14",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": -15,
+ "reason": "stall after device start on bh-glx-110-a03u14 (job 171352, old runner: TMPDIR unset, farm/JIT on node /tmp); the same CI step passes on bh-glx-110-a10u08 (job 171909). Cause unknown; MPI-transport hypothesis WRONG (171869).",
+ "rescored": [
+  {
+   "at": "2026-11-04T01:20:47+00:00",
+   "from": "HANG",
+   "to": "ENV"
+  }
+ ],
+ "router": "main",
+ "slurm_job": "171352",
+ "start": "2026-11-03T23:20:47+00:00",
+ "status": "ENV",
+ "step": "G0-mm-4x4",
+ "telemetry": "CI default",
+ "timeout_s": 600,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

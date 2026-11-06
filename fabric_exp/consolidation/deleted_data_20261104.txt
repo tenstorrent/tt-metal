@@ -1,0 +1,82 @@
+# /data/aagarwal deletions 2026-11-04 (user-approved: A1 job tree copies, A2 mainline_58a9a1e, A3 pre-Nov-2 staged trees, B October job caches; results and mockroot kept)
+# kind path names
+A1 frs-glx/jobs/155913/v4l 26605 FAILED
+A1 frs-glx/jobs/156067/base 26602 FAILED
+A1 frs-glx/jobs/155963/base 26581 FAILED
+A1 frs-glx/jobs/155913/base 26581 FAILED
+A1 frs-glx/jobs/156067/v4l 26612 FAILED
+A1 frs-glx/jobs/155971/base 26581 FAILED
+A1 frs-glx/jobs/155963/v4u 26610 FAILED
+A1 frs-glx/jobs/155971/v4l 26591 FAILED
+A1 frs-glx/jobs/155833/v4l 26610 FAILED
+A1 frs-glx/jobs/155240/base 26599 FAILED
+A1 frs-glx/jobs/155833/base 26602 FAILED
+A1 frs-glx/jobs/155971/v4u 26591 FAILED
+A1 frs-glx/jobs/156067/v4u 26612 FAILED
+A1 frs-glx/jobs/155281/base 26602 FAILED
+A1 frs-glx/jobs/155240/v3q 26602 FAILED
+A1 frs-glx/jobs/155281/v3q 26605 FAILED
+A1 frs-glx/jobs/157726/v4p 26591
+A1 frs-glx/jobs/157929/base 26602
+A1 frs-glx/jobs/157804/v4p2 26591
+A1 frs-glx/jobs/157929/v4p2 26612
+A1 frs-glx/jobs/157804/base 26581
+A1 frs-glx/jobs/157804/v4u 26591
+A1 frs-glx/jobs/158562/base 26602
+A1 frs-glx/jobs/157929/v4u 26612
+A1 frs-glx/jobs/158562/v4eg 26612
+A1 frs-glx/jobs/157726/base 26581
+A1 frs-glx/jobs/157929/v4p 26612
+A1 frs-glx/jobs/158477/v4uf 26610
+A1 frs-glx/jobs/157804/v4p 26591
+A1 frs-glx/jobs/157726/v4u 26591
+A1 frs-glx/jobs/158477/base 26602
+A1 frs-glx/jobs/158477/v4u 26612
+A1 frs-glx/jobs/158562/v4wt 26612
+A3 frs-glx/trees/v4p2 26591
+A3 frs-glx/trees/v4uf 26591
+A3 frs-glx/trees/v4eg 26591
+A1 frs-glx/jobs/158562/v4uf 26612
+A3 frs-glx/trees/base_pre 26581
+A3 frs-glx/trees/v4u 26591
+A3 frs-glx/trees/v4l 26591
+A3 frs-glx/trees/v4r 26591
+A3 frs-glx/trees/v4p 26591
+A1 frs-glx/jobs/163369/base 27617
+A1 frs-glx/jobs/162896/base 27610
+A1 frs-glx/jobs/162896/v4tel 27626
+A1 frs-glx/jobs/163369/v4trm 27628
+A3 frs-glx/trees/v3q 26584
+B frs-glx/jobs/155281/cache_main 4187
+B frs-glx/jobs/155281/cache_v3qfw 4187
+B frs-glx/jobs/155281/cache_v3q 4187
+B frs-glx/jobs/156067/cache_main 1835
+B frs-glx/jobs/155913/cache_v4l 4263
+B frs-glx/jobs/156067/cache_v4l 1835
+B frs-glx/jobs/156067/cache_v4u 1835
+B frs-glx/jobs/155240/cache_mainka 6095
+B frs-glx/jobs/157929/cache_main 1835
+B frs-glx/jobs/155240/cache_main 6888
+B frs-glx/jobs/155240/cache_v3q 6888
+B frs-glx/jobs/157929/cache_v4p 1919
+B frs-glx/jobs/157929/cache_v4p2 1919
+B frs-glx/jobs/158477/cache_main 1835
+B frs-glx/jobs/157929/cache_v4u 1883
+B frs-glx/jobs/158477/cache_v4u 1883
+B frs-glx/jobs/158562/cache_main 1835
+B frs-glx/jobs/158562/cache_v4uf 1883
+B frs-glx/jobs/158562/cache_v4wt 1919
+B frs-glx/jobs/155833/cache_main 10732
+B frs-glx/jobs/155833/cache_v4l 10804
+B frs-glx/jobs/155963/cache_v4u 10804
+B frs-glx/jobs/163369/cache_main 6095
+B frs-glx/jobs/163369/cache_v4trm 6095
+B frs-glx/jobs/158477/cache_v4uf 10804
+B frs-glx/jobs/158562/cache_v4eg 10732
+B frs-glx/jobs/162896/cache_main 11325
+B frs-glx/jobs/162896/cache_v4tel 17209
+A3 frs-glx/trees/base 27596
+A3 frs-glx/trees/v4wt 26591
+A3 frs-glx/trees/v4tel 27607
+A3 frs-glx/trees/v4trm 27607
+A2 regress/trees/mainline_58a9a1e 175762

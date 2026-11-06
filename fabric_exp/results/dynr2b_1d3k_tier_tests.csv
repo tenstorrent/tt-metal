@@ -1,0 +1,7 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+SlsLin1HopEW_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,1024,4714632,14.660741,14317130.160
+SlsLin1HopEW_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,3072,4720314,43.929281,14299896.151
+SlsLin3HopEW_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,1024,5793248,11.931131,11651494.982
+SlsLin3HopEW_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,3072,5794554,35.785325,11648868.921
+SlsLinRowMerge_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,2,1,E,3,50000,1024,16087524,12.889491,12587393.809
+SlsLinRowMerge_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,2,1,E,3,50000,3072,16174845,38.459719,12519439.908

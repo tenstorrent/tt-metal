@@ -1,0 +1,62 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "demo_sp_release_tests.yaml",
+  "mirrored": true,
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 1200,
+ "deviation": "fabric_2d bucket split per test file (approved 2026-11-04), for main and new alike: one pytest process per file in the bucket's order with the runner's env (TT_METAL_SLOW_DISPATCH_MODE=1, TT_METAL_ALLOCATOR_MODE_HYBRID=1, PYTHONPATH + ttnn + tools) and --timeout=480; the job resets after any failing step; no runner reset/validation/smoke (as --no-reset in the other dsb1 steps); test_attention_block runs in G2-dsb1-attn",
+ "duration_s": 55.1,
+ "end": "2026-11-04T06:21:56+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): python -m pytest --timeout=480 models/demos/deepseek_v3_b1/tests/unit_tests/test_sdpa_reduce_to_all.py"
+ ],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172554/cache/main-main",
+ "junit_files": 1,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a10u08",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "rescored": [
+  {
+   "at": "2026-11-04T07:09:28+00:00",
+   "from": "FAIL",
+   "to": "KNOWN_FAIL"
+  }
+ ],
+ "router": "main",
+ "slurm_job": "172554",
+ "start": "2026-11-04T06:21:01+00:00",
+ "status": "KNOWN_FAIL",
+ "step": "G2-dsb1-f2d-sdpa",
+ "step_env": {
+  "TT_METAL_ALLOCATOR_MODE_HYBRID": "1",
+  "TT_METAL_SLOW_DISPATCH_MODE": "1"
+ },
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 8,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 1
+ },
+ "timeout_note": null,
+ "timeout_s": 1200,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

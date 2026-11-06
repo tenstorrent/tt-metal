@@ -1,0 +1,471 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 76,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "fabric_unit_tests.xml",
+  "fabric_unit_tests_1.xml"
+ ],
+ "tests": {
+  "Fabric2DUDMModeFixture::TestUDMFabricReadEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.228
+  },
+  "Fabric2DUDMModeFixture::TestUDMFabricReadWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.207
+  },
+  "Fabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.966
+  },
+  "Fabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.957
+  },
+  "Fabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.038
+  },
+  "Fabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.993
+  },
+  "Fabric2DUDMModeFixture::TestUDMFabricUnicastWriteEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.163
+  },
+  "Fabric2DUDMModeFixture::TestUDMFabricUnicastWriteWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.565
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode0ForwardEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.796
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode0ForwardSouth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.364
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.674
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardSouth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 19.327
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.045
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.276
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardSouth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.289
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.566
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode3ForwardSouth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.597
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode3ForwardWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.455
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode4ForwardEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.341
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode4ForwardNorth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.753
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.576
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardNorth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.112
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.208
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.231
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardNorth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 18.031
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.463
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode7ForwardNorth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.555
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode7ForwardWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.405
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.238
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.37
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadNorth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.207
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadSouth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.51
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.49
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncAllToAll": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.926
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncAllToAllDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.915
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.943
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.345
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncNorth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.035
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncSouth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.982
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.056
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteAllToAll": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.257
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteAllToAllDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.692
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.96
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.084
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteNorth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.957
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteSouth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.985
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.045
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllToAll": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.583
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllToAllDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.301
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllWorkerCoords": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.653
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllWorkerCoordsDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.646
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode0": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.637
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode1": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.204
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.277
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode3": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.112
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode4": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.188
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode5": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.085
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode6": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.09
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode7": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.137
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllToAll": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.226
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllToAllDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.753
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllWorkerCoords": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.568
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllWorkerCoordsDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.536
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteDualRisc": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.023
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteEast": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.977
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode0": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.006
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode1": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 13.83
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.612
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode3": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.848
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode4": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 15.062
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode5": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.559
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode6": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.755
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode7": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 13.919
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteNorth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.969
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteSouth": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.969
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteWest": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.959
+  }
+ }
+}

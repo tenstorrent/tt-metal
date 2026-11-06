@@ -1,0 +1,158 @@
+diff --git a/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp b/home/aagarwal/tt-metal-port-gap-roots/cisp_recdbg/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
+index a8f91b3bfe4..8392b0bc632 100644
+--- a/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
++++ b/home/aagarwal/tt-metal-port-gap-roots/cisp_recdbg/tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp
+@@ -111,6 +111,10 @@ struct RoundCounters {
+ // The heartbeat, the streaming profiler's clock sync, then the context switch: the master hands the core to the base
+ // firmware every SWITCH_INTERVAL rounds, or under IDLE_CONTEXT_SWITCHING after that many without a send attempt; the
+ // other ERISC follows. Returns whether the base firmware ran here (it may have used the command buffers).
++// LOCAL (fabric_exp/port_tune/cisp/recdbg, the profiler stall study; never committed): set where the base firmware's
++// link check runs, read and cleared by telemetry's round_end (recorder instrumentation).
++inline bool recdbg_fw_ran = false;
++
+ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_attempted) {
+     if ((++counters.heartbeat & (HEARTBEAT_INTERVAL - 1)) == 0) {
+         *reinterpret_cast<volatile uint32_t*>(heartbeat_addr) = HEARTBEAT_SIGNATURE | counters.heartbeat;
+@@ -127,6 +131,7 @@ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_atte
+         } else if (counters.idle_rounds++ > SWITCH_INTERVAL) {
+             counters.idle_rounds = 0;
+             with_other_erisc_parked([] { run_routing_without_noc_sync(); });
++            recdbg_fw_ran = true;  // LOCAL (recdbg)
+             return true;
+         }
+     } else {
+diff --git a/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp b/home/aagarwal/tt-metal-port-gap-roots/cisp_recdbg/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp
+index 1cf3c562e43..23220ae3c70 100644
+--- a/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp
++++ b/home/aagarwal/tt-metal-port-gap-roots/cisp_recdbg/tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp
+@@ -100,10 +100,62 @@ FORCE_INLINE void note_received(uint32_t bytes) {
+     }
+ }
+ 
++// LOCAL (fabric_exp/port_tune/cisp/recdbg, the profiler stall study; never committed): per iteration, the perf
++// recorder's counted rounds as the sender ERISC saw them, into a ring in L1 the routers of the NX rows leave unused
++// (their channel buffers end at 371104; the link-sync block starts at 454880). An iteration starts at the first counted
++// round after the host cleared the perf buffer. The host never reads it: hang_capture.py dumps L1 after the run.
++constexpr uint32_t recdbg_ring_addr = 0x60000;  // header (128 B: [0] iterations, [1] magic), then 128 B entries
++constexpr uint32_t recdbg_entries = 320;
++struct RecDbgEntry {
++    uint64_t busy;            // counted rounds' wall-clock sum (the perf buffer's cycles)
++    uint64_t max_wall;        // the longest counted round: wall-clock delta
++    uint64_t max_ts;          //   get_timestamp() delta over the same round (read right after each wall-clock read)
++    uint64_t max_start;       //   its start (wall clock)
++    uint64_t max_end;         //   its end (wall clock)
++    uint64_t first_send;      // the start of the first counted round with tx_packets > 0
++    uint64_t zero_tx_sum;     // counted rounds with tx_packets == 0: summed wall-clock duration
++    uint64_t max_gap;         // the largest step between consecutive wall-clock reads (round start / end), any round
++    uint32_t max_tx;          //   the longest round's tx_packets
++    uint32_t max_held;        //   its any_held()
++    uint32_t max_fw;          //   whether end_round ran the base firmware's link check in it
++    uint32_t zero_tx_rounds;  // counted rounds with tx_packets == 0
++    uint32_t counted;         // counted rounds
++    uint32_t backwards;       // wall-clock reads below the previous one
++    uint32_t max_free[7];     //   the longest round's sender channels' free-slots registers (raw)
++    uint32_t huge_steps;      // steps between consecutive reads above 2^31 cycles
++    uint32_t seq;             // this entry's iteration number (1-based)
++    uint32_t magic;           // 0x5EC0DB61
++};
++static_assert(sizeof(RecDbgEntry) == 128);
++struct RecDbgState {
++    uint64_t last_wall;
++    uint32_t iteration;
++    RecDbgEntry e;
++};
++inline RecDbgState recdbg;
++
++FORCE_INLINE void recdbg_step(uint64_t now) {
++    if (now < recdbg.last_wall) {
++        recdbg.e.backwards++;
++    } else {
++        const uint64_t d = now - recdbg.last_wall;
++        if (recdbg.last_wall != 0 && d > recdbg.e.max_gap) {
++            recdbg.e.max_gap = d;
++        }
++        if (recdbg.last_wall != 0 && d > (1ull << 31)) {
++            recdbg.e.huge_steps++;
++        }
++    }
++    recdbg.last_wall = now;
++}
++
+ template <int = 0>
+ __attribute__((noinline)) void round_start_impl() {
+     counters.round_wall_clock = eth_read_wall_clock();
+     counters.round_timestamp = get_timestamp();
++    if constexpr (perf_recorder && any_sender_channel_serviced) {
++        recdbg_step(counters.round_wall_clock);
++    }
+     counters.round_tx_words = 0;
+     counters.round_tx_eth_words = 0;
+     counters.round_rx_packets = counters.rx_packets;
+@@ -140,12 +192,67 @@ __attribute__((noinline)) void round_end_impl(
+     const bool rx_progress = c.rx_packets != c.round_rx_packets;
+     if constexpr (SENDER && perf_recorder) {
+         const uint64_t now = eth_read_wall_clock();
++        const uint64_t ts_now = get_timestamp();  // LOCAL (recdbg)
++        recdbg_step(now);                          // LOCAL (recdbg)
++        const bool fw_ran = recdbg_fw_ran;         // LOCAL (recdbg)
++        recdbg_fw_ran = false;                     // LOCAL (recdbg)
+         if (tx_progress || any_held()) {
+             // The busy cycles accumulate in timestamp_start (idle rounds left out); timestamp_end is unused.
+             auto* buffer = perf_buffer();
++            // LOCAL (recdbg): a cleared perf buffer starts the next iteration's entry
++            if (buffer->timestamp_start.full == 0 && recdbg.iteration < recdbg_entries) {
++                recdbg.iteration++;
++                const uint64_t keep_last = recdbg.last_wall;
++                recdbg.e = {};
++                recdbg.e.seq = recdbg.iteration;
++                recdbg.e.magic = 0x5EC0DB61;
++                recdbg.last_wall = keep_last;
++                auto* hdr = reinterpret_cast<volatile uint32_t*>(recdbg_ring_addr);
++                hdr[0] = recdbg.iteration;
++                hdr[1] = 0x5EC0DB61;
++            }
+             buffer->timestamp_start.full = buffer->timestamp_start.full + (now - c.round_wall_clock);
+             buffer->num_words_sent = buffer->num_words_sent + c.round_tx_eth_words;
+             buffer->num_packets_sent = buffer->num_packets_sent + tx_packets;
++            // LOCAL (recdbg): this round into the iteration's entry
++            if (recdbg.iteration != 0) {
++                RecDbgEntry& e = recdbg.e;
++                const uint64_t dur = now - c.round_wall_clock;
++                e.busy += dur;
++                e.counted++;
++                if (tx_packets == 0) {
++                    e.zero_tx_rounds++;
++                    e.zero_tx_sum += dur;
++                } else if (e.first_send == 0) {
++                    e.first_send = c.round_wall_clock;
++                }
++                if (dur > e.max_wall) {
++                    e.max_wall = dur;
++                    e.max_ts = ts_now - c.round_timestamp;
++                    e.max_start = c.round_wall_clock;
++                    e.max_end = now;
++                    e.max_tx = tx_packets;
++                    e.max_held = any_held() ? 1 : 0;
++                    e.max_fw = fw_ran ? 1 : 0;
++                    constexpr uint32_t ids[7] = {sender_channel_0_free_slots_stream_id,
++                                                 sender_channel_1_free_slots_stream_id,
++                                                 sender_channel_2_free_slots_stream_id,
++                                                 sender_channel_3_free_slots_stream_id,
++                                                 sender_channel_4_free_slots_stream_id,
++                                                 sender_channel_5_free_slots_stream_id,
++                                                 sender_channel_6_free_slots_stream_id};
++                    for (uint32_t i = 0; i < 7; i++) {
++                        e.max_free[i] = i < NUM_SENDER_CHANNELS
++                                            ? NOC_STREAM_READ_REG(ids[i], STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)
++                                            : 0xFFFFFFFF;
++                    }
++                }
++                auto* dst = reinterpret_cast<volatile uint32_t*>(recdbg_ring_addr + 128 * recdbg.iteration);
++                const uint32_t* srcw = reinterpret_cast<const uint32_t*>(&e);
++                for (uint32_t i = 0; i < sizeof(RecDbgEntry) / 4; i++) {
++                    dst[i] = srcw[i];
++                }
++            }
+         }
+     }
+     if constexpr (dynamic_stats) {

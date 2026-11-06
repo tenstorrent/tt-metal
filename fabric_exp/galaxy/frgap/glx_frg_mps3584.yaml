@@ -1,0 +1,43 @@
+# RING_JAM_FIX.md §9.5 (fraction vs cap sweep): a 3584 B router max packet (fabric_setup max_packet_size), so a
+# 64-slot ring receiver fits the router's L1 budget; every arm runs these rows.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: GlxRingMcastNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring, max_packet_size: 3584}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072, 3584]
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+    destination:
+      hops: {N: max, S: max}
+  patterns:
+  - {type: all_devices_uniform_pattern, iterations: 1}
+- name: GlxRingMcastEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring, max_packet_size: 3584}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3584]
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+    destination:
+      hops: {E: max, W: max}
+  patterns:
+  - {type: all_devices_uniform_pattern, iterations: 1}
+- name: GlxHalfRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Ring, max_packet_size: 3584}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3584]
+  defaults: {ftype: mcast, num_packets: 20000}
+  patterns:
+  - {type: half_ring, iterations: 1}

@@ -1,0 +1,3 @@
+python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --no-reset \
+  --bucket prepare_weights_hybrid_allocator \
+  --bucket host_io_risk

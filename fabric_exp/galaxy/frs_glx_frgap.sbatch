@@ -32,7 +32,8 @@
 # Each config has its own kernel cache $J/cache_CONFIG, kept (the PC mapping reads its ELFs). Source snapshots of each
 # tree: results/src_{main,v4rxg3}.tgz. A run past its timeout is a hang: this job's processes are killed, the routers
 # captured read-only (hang_capture.py, CAPTURE=0 skips), the Galaxy reset, and the job stops. A failed run stops it too.
-# Rules: only bh-glx-110-a* nodes (partition bh_sc36_6; the job stops at once anywhere else); other users' device work
+# VAL_STOPS_ARM=1: a failed frg_val step stops only its config's later steps (the job resets and goes on); a timeout
+# still stops the job. Rules: only bh-glx-110-a* nodes (partition bh_sc36_6; the job stops at once anywhere else); other users' device work
 # on the node stops the job before anything (IGNORE_BUSY=1 skips); tt-smi -glx_reset before the steps.
 #SBATCH --partition=bh_sc36_6
 #SBATCH --nodes=1
@@ -86,12 +87,13 @@ suite_yaml() {  # suite tree-dir
         [su]_ew1024) echo $Y/pcs/glx_ew1024.yaml ;;
         [su]_ns7) echo $Y/pcs/glx_ns7_1024.yaml ;;
         [su]_fullring) echo $Y/pcs/glx_fullring4352.yaml ;;
-        frg_axis | frg_sizes | frg_fr | frg_torus | frg_line | frg_ns | frg_nsrx | frg_ew | frg_short | frg_val) echo $Y/frgap/glx_$1.yaml ;;
+        frg_axis | frg_sizes | frg_fr | frg_torus | frg_line | frg_ns | frg_nsrx | frg_ew | frg_short | frg_short4k | frg_val | \
+            frg_mps3584 | frg_val_mps3584 | frg_val_ring | frg_val_ring_mps3584) echo $Y/frgap/glx_$1.yaml ;;
         s_fr3072) echo $Y/frgap/glx_frg_fullring3072_s.yaml ;;
         *) echo "" ;;
     esac
 }
-tree_of() { case $1 in main | mainka) echo $G/trees/$BASE ;; v4rxg3 | v4tier | v4r32 | v4r48 | v4ka0 | v4ka250 | v4tx32 | v4rx16 | v4rx32 | v4rx48 | v4rx64 | v4rx96 | v4sl | v4itA | v4itB | v4itC | a11j | a11jam) echo $G/trees/$NEW ;; esac; }
+tree_of() { case $1 in main | mainka) echo $G/trees/$BASE ;; v4rxg3 | v4tier | v4r32 | v4r48 | v4ka0 | v4ka250 | v4tx32 | v4rx16 | v4rx32 | v4rx48 | v4rx64 | v4rx96 | v4sl | v4itA | v4itB | v4itC | a11j | a11jam | a11k | a11kam | a11t[2-6] | bs[A-GN]*) echo $G/trees/$NEW ;; esac; }
 # Preflight on the source trees (before the copies and the reset): every step's yaml and the tools it needs.
 # PREFLIGHT_ONLY=1 stops here (a dry run against the real /data trees: no copy, no device, nothing written).
 miss=0
@@ -117,7 +119,7 @@ unset PYTHONPATH VIRTUAL_ENV
 # Trees: copied (hard links) so generated/ is this job's; only the trees the steps use.
 need_main=0; need_new=0; sampled=0
 for st in $STEPS; do
-    case $st in *:main:* | *:mainka:*) need_main=1 ;; *:v4*:* | *:a11j*:*) need_new=1 ;; esac
+    case $st in *:main:* | *:mainka:*) need_main=1 ;; *:v4*:* | *:a11*:* | *:bs*:*) need_new=1 ;; esac
     case $st in *:s_*) sampled=1 ;; esac
 done
 copy_tree() {  # tree-name dir router-name
@@ -191,11 +193,29 @@ run() {  # label config suite
         a11j) tree=$J/new; kv=2; flags=13129088; ka=(TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000) ;;
         a11jam) tree=$J/new; kv=2; flags=13129088
                 ka=(TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000 TT_FABRIC_PHASE_PROFILE=1 TT_FABRIC_PHASE_PROFILE_CSV=$J/results/${label}_jam.csv) ;;
+        # Bubble-threshold sweep (NEW=v4txa11t_1103, variants/v4txa11t/README.md): an injection channel on a
+        # deadlock-avoiding VC sends with T free far slots; a11t2 = the switch off (T 2, v4txa11's images), a11t3..6 = T.
+        a11t2) tree=$J/new; kv=2; flags=13129088; ka=(TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000) ;;
+        a11t[3-6]) tree=$J/new; kv=2; flags=13129088; ka=(TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000 TT_FABRIC_EXP_DRISC_DELAY=${c#a11t}) ;;
+        # Slot depth x injection threshold (RING_JAM_FIX.md §9.3 / §9.5, NEW=v4txa11t_1103): bs<ARM><T>. ARM = the 1D ring's
+        # worker / forwarding / receiver slots (TT_FABRIC_EXP_SLOTS_1D; N = no slot switch, the defaults); T = the
+        # injection threshold (2 = the switch off).
+        bs[A-GN][0-9]*)
+            local arm=${c:2:1} t=${c:3} sl
+            case $arm in A) sl=26,25,32 ;; B) sl=42,25,16 ;; C) sl=16,51,16 ;; D) sl=8,59,16 ;; E) sl=4,63,16 ;;
+                F) sl=8,43,32 ;; G) sl=18,17,64 ;; N) sl="" ;; esac
+            tree=$J/new; kv=2; flags=13129088; ka=(TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000)
+            [ -n "$sl" ] && ka+=(TT_FABRIC_EXP_SLOTS_1D=$sl)
+            [ "$t" != 2 ] && ka+=(TT_FABRIC_EXP_DRISC_DELAY=$t) ;;
+        # The same, round-sampled (RING_JAM_FIX.md §8.2, NEW=v4txa11k_1103): a11k = off, a11kam = on.
+        a11k) tree=$J/new; kv=2; flags=13129088; ka=(TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000) ;;
+        a11kam) tree=$J/new; kv=2; flags=13129088
+                ka=(TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000 TT_FABRIC_PHASE_PROFILE=1 TT_FABRIC_PHASE_PROFILE_CSV=$J/results/${label}_jam.csv) ;;
         *) echo "!!! unknown config $c: stopping"; exit 1 ;;
     esac
     local yaml; yaml=$(suite_yaml $s $tree)
     [ -n "$yaml" ] && [ -f "$yaml" ] || { echo "!!! no yaml for suite $s: stopping"; exit 1; }
-    case $s in s_*) smp=1; to=${ROW_TIMEOUT:-900} ;; c_* | u_* | check | frg_val) to=${ROW_TIMEOUT:-900} ;; esac
+    case $s in s_*) smp=1; to=${ROW_TIMEOUT:-900} ;; c_* | u_* | check | frg_val*) to=${ROW_TIMEOUT:-900} ;; esac
     local lib=$tree/build_Release log=$J/results/$label.log cache=$J/cache_$c
     [ -e $log ] && { echo "!!! $label ran already: stopping"; exit 1; }
     rm -f $tree/generated/fabric/bandwidth_summary_results_blackhole.csv $tree/generated/fabric/bandwidth_results_blackhole.csv
@@ -259,6 +279,11 @@ run() {  # label config suite
         kill_mine; capture $label $cache; glx_reset "after a timeout in $label"; exit 1
     fi
     if [ $rc != 0 ] || ! echo "$res" | grep -q ", 0 failed"; then
+        if [[ $s == frg_val* ]] && [ -n "${VAL_STOPS_ARM:-}" ]; then  # a failed validation stops its arm only
+            echo "!!! $label: validation failed: arm $c stopped (its later steps are skipped)"
+            DEAD_ARMS="$DEAD_ARMS $c"; glx_reset "after a failed validation in $label" || { echo "!!! reset failed: stopping"; exit 1; }
+            return 0
+        fi
         echo "!!! $label failed: stopping"; glx_reset "after a failure in $label"; exit 1
     fi
     if [ $smp = 1 ] && ! grep -qE '^sampler: [1-9][0-9]* samples in .* 0 read errors' $J/results/${label}_sampler.log; then
@@ -268,13 +293,15 @@ run() {  # label config suite
     fi
 }
 
-NO_RING=0; SKIPPED=""
+NO_RING=0; SKIPPED=""; DEAD_ARMS=""
 needs_ring() { case $1 in ring | torus | c_ring | [su]_fullring | frg_* | s_fr3072) return 0 ;; esac; return 1; }
 for st in $STEPS; do
     IFS=: read -r p c s <<< "$st"
     [ -n "$p" ] && [ -n "$c" ] && [ -n "$s" ] || { echo "!!! bad step $st: stopping"; exit 1; }
     if [ $NO_RING = 1 ] && needs_ring $s; then echo "skipped ${p}_${c}_$s (no ring/torus mapping on $NODE)"; SKIPPED="$SKIPPED ${p}_${c}_$s"; continue; fi
+    case " $DEAD_ARMS " in *" $c "*) echo "skipped ${p}_${c}_$s (arm $c stopped by its failed validation)"; continue ;; esac
     run ${p}_${c}_$s $c $s
 done
+[ -z "$DEAD_ARMS" ] || echo "arms stopped by a failed validation:$DEAD_ARMS"
 echo "done $(date -u +%T)"
 [ -z "$SKIPPED" ] || { echo "SKIPPED on $NODE (no ring/torus mapping):$SKIPPED"; exit 3; }

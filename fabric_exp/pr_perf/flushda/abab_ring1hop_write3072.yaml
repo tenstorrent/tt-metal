@@ -1,0 +1,18 @@
+# A/B (coordinator 2026-11-06): the tip's first failing ring row (a09u32 broker 861, flushval_ring_rows.yaml):
+# Ring1HopEW_size_3072_ntype_unicast_write, data-checked (benchmark off), 5000 packets, RoundRobin receivers; on main.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: Ring1HopEW
+  benchmark_mode: false
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype: [unicast_write]
+    size: [3072]
+  defaults: {ftype: unicast, num_packets: 5000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]

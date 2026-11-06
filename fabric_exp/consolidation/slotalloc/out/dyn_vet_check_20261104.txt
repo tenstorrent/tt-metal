@@ -1,0 +1,33 @@
+glx2d3k      tier    35,16,32               ok
+glx2d3k      dyn     27,24,16               ok
+glx2d3k      dynw24  24,25,16               ok
+glx1d        tier    16,16,32               ok
+glx1d        dyn     26,25,32               ok
+glx1d        dynw24  24,27,32               ok
+glxvc1       tier    51,4,8,2,4             ok
+glxvc1       dyn     19,9,16,5,4            ok
+glxvc13k     tier    85,4,8,2,4             ok
+glxvc13k     dyn     30,14,16,7,6           ok
+glxvc13k     dynw24  24,16,16,7,6           ok
+glxvc2       tier    43,7,11+2,4            ok
+glxvc2       dyn     17,14,16+4,2           ok
+glxvc23k     tier    77,7,11+2,4            ok
+glxvc23k     dyn     24,22,16+5,4           ok
+glxvc12      tier    45,4,8,2,4+2,4         ok
+glxvc12      dyn     17,8,16,5,4+3,2        ok
+p150_2d      tier    17,16,16               ok
+p150_2d      dyn     17,16,16               ok
+p150_2d3k    tier    35,16,32               ok
+p150_2d3k    dyn     27,24,16               ok
+p150_2d3k    dynw24  24,25,16               ok
+p150_ring3k  tier    32,32,32               ok
+p150_ring3k  dyn     43,42,32               ok
+p150_txy3k   tier    35,16,32               ok
+p150_txy3k   dyn     27,24,16               ok
+
+| arm | ELFs | E0 code | E1 code | E0+E1 (vs 26624) | least free stack E0 | E1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| tier | 1112 | 12100 | 9956 | 22056 | 1684 | 4252 |
+| dyn | 1112 | 12108 | 10116 | 22224 | 1684 | 4252 |
+| dynw24 | 448 | 12056 | 10068 | 22124 | 1684 | 4252 |
+DYN_VET_OK

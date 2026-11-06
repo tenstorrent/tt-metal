@@ -1,0 +1,25 @@
+# RING_JAM_FIX.md §9.5: the Ring rows of glx_frg_val_mps3584.yaml only (3584 B, 3584 B router max packet). The sweep's thresholds apply to every router,
+# and T must stay below the far receiver's slots: the torus receivers (16 or 32) are smaller than T 16-48.
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: FrgValFullRingMcast
+  enable_flow_control: true
+  fabric_setup: {topology: Ring, num_links: 1, max_packet_size: 3584}
+  parametrization_params:
+    ftype: [mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [3584]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: full_ring}
+- name: FrgValRingAllToAll
+  enable_flow_control: true
+  fabric_setup: {topology: Ring, num_links: 1, max_packet_size: 3584}
+  parametrization_params:
+    ftype: [mcast]
+    ntype: [unicast_write, fused_atomic_inc]
+    size: [3584]
+  defaults: {num_packets: 2000}
+  patterns:
+  - {type: all_to_all}

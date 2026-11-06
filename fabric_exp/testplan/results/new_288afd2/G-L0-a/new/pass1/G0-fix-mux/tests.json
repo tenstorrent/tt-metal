@@ -1,0 +1,422 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 68,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "fabric_unit_tests.xml"
+ ],
+ "tests": {
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/MultiSender_4Senders": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.663
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/NonPow2Buffers_3Bufs_StageRingFull": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.51
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/OddChannels_3Senders": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.652
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/SmallPayload_SteadyState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.53
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_OppFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.348
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_StageAndClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.583
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_StageIdle": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.806
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_StageThenFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.331
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_TridOppFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.798
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_TridStageAndClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.136
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_ZeroPacket": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.667
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_StageAndClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.358
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_StageIdle": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.18
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_StageRingFull": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.272
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_StageThenFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.885
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_TridStageAndClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.247
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_ZeroPacket": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.396
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stress_16Senders_1Buf_RingFullOnFirst": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.597
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stress_8Senders_16Bufs_DeepStage": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.704
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Staging_Stress_8Senders_4Bufs_StageThenFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.134
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Stress_48Senders_DefaultPayload": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.622
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Stress_48Senders_RandomSizeDelay": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.785
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Stress_64Senders_DefaultPayload": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.017
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Stress_64Senders_RandomSizeDelay": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.82
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Stress_MultiSender_DefaultPayload_Riscv0": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.441
+  },
+  "Functional1D/FabricMuxV2Functional1DFixture::SharedMuxFunctionalCoverage/Stress_MultiSender_DefaultPayload_Riscv1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.479
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/MultiSender_4Senders": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.583
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/NonPow2Buffers_3Bufs_StageRingFull": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.109
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/OddChannels_3Senders": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.557
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/SmallPayload_SteadyState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.872
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_OppFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.365
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_StageAndClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.445
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_StageIdle": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.507
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_StageThenFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.325
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_TridOppFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.38
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_TridStageAndClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.369
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_ZeroPacket": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.522
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_StageAndClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.387
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_StageIdle": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.36
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_StageRingFull": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.322
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_StageThenFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.361
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_TridStageAndClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.342
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_ZeroPacket": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.35
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stress_16Senders_1Buf_RingFullOnFirst": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.652
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stress_8Senders_16Bufs_DeepStage": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.123
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Staging_Stress_8Senders_4Bufs_StageThenFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.961
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Stress_48Senders_DefaultPayload": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.2
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Stress_48Senders_RandomSizeDelay": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.009
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Stress_64Senders_DefaultPayload": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.469
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Stress_64Senders_RandomSizeDelay": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.878
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Stress_MultiSender_DefaultPayload_Riscv0": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.38
+  },
+  "Functional2D/FabricMuxV2Functional2DFixture::SharedMuxFunctionalCoverage/Stress_MultiSender_DefaultPayload_Riscv1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.408
+  },
+  "Smoke1D/FabricMuxV2Smoke1DFixture::SharedMuxFunctionalCoverage/MultiSender_16Senders": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.855
+  },
+  "Smoke1D/FabricMuxV2Smoke1DFixture::SharedMuxFunctionalCoverage/NonPow2Buffers_5Bufs_MultiSender": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.027
+  },
+  "Smoke1D/FabricMuxV2Smoke1DFixture::SharedMuxFunctionalCoverage/SingleSender_DefaultPayload_Riscv0": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.589
+  },
+  "Smoke1D/FabricMuxV2Smoke1DFixture::SharedMuxFunctionalCoverage/SingleSender_DefaultPayload_Riscv0_FromDescriptor": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.968
+  },
+  "Smoke1D/FabricMuxV2Smoke1DFixture::SharedMuxFunctionalCoverage/SingleSender_DefaultPayload_Riscv1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.457
+  },
+  "Smoke1D/FabricMuxV2Smoke1DFixture::SharedMuxFunctionalCoverage/SingleSender_DefaultPayload_Riscv1_FromDescriptor": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.353
+  },
+  "Smoke1D/FabricMuxV2Smoke1DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_StageRingFull": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.021
+  },
+  "Smoke1D/FabricMuxV2Smoke1DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_TridOppFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.678
+  },
+  "Smoke2D/FabricMuxV2Smoke2DFixture::SharedMuxFunctionalCoverage/MultiSender_16Senders": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.214
+  },
+  "Smoke2D/FabricMuxV2Smoke2DFixture::SharedMuxFunctionalCoverage/NonPow2Buffers_5Bufs_MultiSender": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.137
+  },
+  "Smoke2D/FabricMuxV2Smoke2DFixture::SharedMuxFunctionalCoverage/SingleSender_DefaultPayload_Riscv0": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.253
+  },
+  "Smoke2D/FabricMuxV2Smoke2DFixture::SharedMuxFunctionalCoverage/SingleSender_DefaultPayload_Riscv0_FromDescriptor": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.658
+  },
+  "Smoke2D/FabricMuxV2Smoke2DFixture::SharedMuxFunctionalCoverage/SingleSender_DefaultPayload_Riscv1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.088
+  },
+  "Smoke2D/FabricMuxV2Smoke2DFixture::SharedMuxFunctionalCoverage/SingleSender_DefaultPayload_Riscv1_FromDescriptor": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.076
+  },
+  "Smoke2D/FabricMuxV2Smoke2DFixture::SharedMuxFunctionalCoverage/Staging_NonStateful_StageRingFull": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.348
+  },
+  "Smoke2D/FabricMuxV2Smoke2DFixture::SharedMuxFunctionalCoverage/Staging_Stateful_TridOppFlush": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.394
+  }
+ }
+}

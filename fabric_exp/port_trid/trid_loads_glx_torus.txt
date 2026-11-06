@@ -1,0 +1,281 @@
+glx_torus_4352: 20 paired E1 builds facing NS
+
+## N receiver, MY_ETH_CHANNEL 2, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 4, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 4, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 2, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 3, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 5, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 5, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 3, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 2, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 4, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 2, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 2, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 4, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 2, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 3, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 5, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 3, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## N receiver, MY_ETH_CHANNEL 3, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 5, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+
+## S receiver, MY_ETH_CHANNEL 3, deadlock avoidance 1: stack loads in receiver::run rule 19, uniform 21
+   rule only: lw	R,12(sp)              fabric_common.h:360                      tt::tt_fabric::Routing2DCodec::decode_action_y_first (x1)
+   rule only: lw	R,16(sp)              noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x2)
+   rule only: lw	R,24(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,12(sp)              noc_nonblocking_api.h:174                NOC_CMD_BUF_WRITE_REG (x2)
+   uniform only: lw	R,8(sp)               noc_nonblocking_api.h:184                NOC_STATUS_READ_REG (x1)
+   uniform only: lw	R,12(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,16(sp)              router_local_delivery.hpp:187            void fabric_router::deliver<0u> (x1)
+   uniform only: lw	R,24(sp)              router_receiver.hpp:213                  fabric_router::receiver::run (x1)
+   decode site, rule: lw	R,12(sp)              c::Routing2DCodec::decode_action_y_first@fabric_common.h:360 < t_fabric::Routing2DCodec::decode_action<@fabric_common.h:378 < c::Fabric2DRoutingConfig::decode_action<@fabric_common.h:485 < ric_router::Routing2D<0u, false>::action@router_routing.hpp:86
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, rule: lw	R,16(sp)              NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514
+   proof site, uniform: lw	R,8(sp)               NOC_STATUS_READ_REG@noc_nonblocking_api.h:184 < nonposted_write_with_transaction_id_sent@noc_nonblocking_api.h:756 < abric_router::receiver::trid_writes_sent@router_receiver.hpp:503 < ::receiver::trid_writes_sent_within<1ul>@router_receiver.hpp:514

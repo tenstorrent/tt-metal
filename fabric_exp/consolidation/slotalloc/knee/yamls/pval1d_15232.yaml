@@ -1,0 +1,28 @@
+# Data-checked SlsLin1HopEW at 15232 B packets and slots, 17 packets (= the receiver ring's slots).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: ValSlsLin1HopEW
+  sync: true
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 15232
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 15232
+  defaults:
+    ftype: unicast
+    num_packets: 17
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

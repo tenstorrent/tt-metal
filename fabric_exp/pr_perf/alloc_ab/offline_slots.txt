@@ -1,0 +1,22 @@
+== qb_torus_14400 arm a (tt-metal-alloc-57c5): 32 router builds
+   erisc                     dir   n slot B DA bubble tx ch  TX slots / RX slots
+   active_erisc              E     4  14496  1      2     4  TX 5, 4, 4, 4             RX 8
+   active_erisc              N     4  14496  1      2     4  TX 5, 4, 4, 4             RX 8
+   active_erisc              S     4  14496  1      2     4  TX 5, 4, 4, 4             RX 8
+   active_erisc              W     4  14496  1      2     4  TX 5, 4, 4, 4             RX 8
+   subordinate_active_erisc  E     4  14496  1      2     4  TX 5, 4, 4, 4             RX 8
+   subordinate_active_erisc  N     4  14496  1      2     4  TX 5, 4, 4, 4             RX 8
+   subordinate_active_erisc  S     4  14496  1      2     4  TX 5, 4, 4, 4             RX 8
+   subordinate_active_erisc  W     4  14496  1      2     4  TX 5, 4, 4, 4             RX 8
+== qb_torus_14400 arm b (tt-metal-alloc-0732): 32 router builds
+   erisc                     dir   n slot B DA bubble tx ch  TX slots / RX slots
+   active_erisc              E     4  14496  1      2     4  TX 6, 5, 5, 5             RX 4
+   active_erisc              N     4  14496  1      2     4  TX 6, 5, 5, 5             RX 4
+   active_erisc              S     4  14496  1      2     4  TX 6, 5, 5, 5             RX 4
+   active_erisc              W     4  14496  1      2     4  TX 6, 5, 5, 5             RX 4
+   subordinate_active_erisc  E     4  14496  1      2     4  TX 6, 5, 5, 5             RX 4
+   subordinate_active_erisc  N     4  14496  1      2     4  TX 6, 5, 5, 5             RX 4
+   subordinate_active_erisc  S     4  14496  1      2     4  TX 6, 5, 5, 5             RX 4
+   subordinate_active_erisc  W     4  14496  1      2     4  TX 6, 5, 5, 5             RX 4
+
+# yaml vetting (each test alone, benchmark off, 10 packets): all three tests reached 'Launching programs' on both arms

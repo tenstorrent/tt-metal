@@ -1,0 +1,1 @@
+superseded 2026-11-04: CI-shape fabric_2d run with test_attention_block deselected (job 172490, a07u08, --no-reset); exit -11 after test_lm_head_sampling 4x2 sub-mesh router-sync timeouts and test_moe_mlp PCC fails; replaced by per-file steps G2-dsb1-f2d-<file> (jobs 172553/172554).

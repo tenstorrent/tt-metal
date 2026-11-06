@@ -1,0 +1,6 @@
+alt root /home/aagarwal/.tt-metal-mainline-cov-bfc-rjcred/rtx2: tt_metal -> /home/aagarwal/tt-metal-mainline-cleanup/tt_metal
+alt root /home/aagarwal/.tt-metal-mainline-cov-bfc-rjcred/rtx2 -> /home/aagarwal/tt-metal-mainline-cleanup
+compiled /home/aagarwal/tt-metal-mainline-cleanup at 3cbc209a497 (uncommitted diff md5 d41d8cd9)
+built 5010/5010 into /home/aagarwal/.tt-metal-mainline-cov-bfc-rjcred/builds/a_opdrop
+== opdrop vs base: shared 5010, identical 5010, differ 0, only base 0, only arm 0
+OPDROP_GATE_DONE

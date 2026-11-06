@@ -1,0 +1,118 @@
+# XY torus on the P150x8 as 2x4 (auto-discovered shape; the 4-long axis is X): report/sweep/torusy_sizes.yaml's rows
+# with torus_config XY (same rows, sizes and packet counts), plus two rows on the X ring: TorusXYWrap1HopEW, column 3 to
+# column 0 across the wrap; TorusXYRowMcast, chip [0,1] multicasting E 3 hops around its row (cols 2, 3 and, across the
+# wrap, 0). With X a ring, TorusXY3HopEW ([0,0] -> [0,3]) has a 1-hop route over the wrap. (2026-11-03, second-LB
+# harness; mock-vetted with consolidation/torus_xy_mock.sh before any device run.)
+allocation_policies:
+  receiver: {policy: RoundRobin, max_configs_per_core: 4}
+Tests:
+- name: TorusXY1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]
+- name: TorusXY1HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 4]
+- name: TorusXY1HopNSBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 4]
+  - device: [0, 4]
+    patterns:
+    - destination:
+        device: [0, 0]
+- name: TorusXY1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]
+  - device: [0, 1]
+    patterns:
+    - destination:
+        device: [0, 0]
+- name: TorusXY3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 3]
+- name: TorusXYMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    num_links: [1]
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: mcast, num_packets: 20000}
+  patterns:
+  - {type: all_to_all, iterations: 1}
+- name: TorusXYWrap1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: unicast, num_packets: 50000}
+  senders:
+  - device: [0, 3]
+    patterns:
+    - destination:
+        device: [0, 0]
+- name: TorusXYRowMcast
+  benchmark_mode: true
+  sync: true
+  fabric_setup: {topology: Torus, torus_config: XY}
+  parametrization_params:
+    ntype: [unicast_write, unicast_scatter_write]
+    size: [256, 1024, 2048, 3072, 4352]
+  defaults: {ftype: mcast, num_packets: 20000}
+  senders:
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops: {E: 3}

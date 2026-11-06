@@ -1,0 +1,37 @@
+# Data-checked multi-mesh sanity of the 4x4 split (sls_glx_vc1_4x4.yaml's first two tests, packets capped).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: MultiMeshAllToAll
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+    size:
+    - 1024
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 64
+  patterns:
+  - type: all_to_all
+- name: MultiMeshNeighborExchangeInter
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+  defaults:
+    ftype: unicast
+    size: 32
+    num_packets: 3000
+  patterns:
+  - type: neighbor_exchange
+    mesh_scope: inter_mesh

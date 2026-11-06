@@ -1,0 +1,32 @@
+== job F: drop5 vs base (cycles/packet; d < 0: drop5 faster); predicted = sum of the single arms' d
+   row                    B                 base x3         drop5 x2      d noise   pred  verdict; sources
+   Au1e2D1Hop           256   199.6   199.5   199.5    195.6   195.6   -3.9   0.0   -4.0  faster; rg_s537 -1.0(C); rg_s583 +0.0(C); rg_r755 -3.0(C)
+   Au1e2D1Hop          4352   199.9   199.9   200.0    196.0   196.0   -3.9   0.1   -3.9  faster; rg_s537 -0.9(C); rg_s583 -0.0(C); rg_r755 -2.9(C)
+   Au1e2D3Hop           256   255.3   255.3   255.3    251.3   251.3   -4.0   0.0   -4.0  faster; rg_s537 -1.0(C); rg_s583 -0.0(C); rg_r755 -3.0(C)
+   Au1e2D3Hop          4352   255.7   255.7   255.7    251.8   251.8   -4.0   0.0   -3.9  faster; rg_s537 -1.0(C); rg_s583 -0.0(C); rg_r755 -2.9(C)
+   Au1e2DMcast          256   327.4   327.4   327.4    322.4   322.4   -5.0   0.0   -2.6  faster; rg_r755 -2.6(C); unmeasured with image changes: rg_s537, rg_s583
+   Au1e2DMcast         4352   327.7   327.7   327.7    322.7   322.8   -5.0   0.1   -2.6  faster; rg_r755 -2.6(C); unmeasured with image changes: rg_s537, rg_s583
+   Au1eVC1fab1Hop       256   296.3   296.6   296.6    286.5   286.5  -10.0   0.4   +0.0  faster; ; unmeasured with image changes: rg_s537, rg_s583, rg_r755, kim_r713
+   Au1eVC1fab1Hop      4352   296.5   296.8   296.4    286.5   286.5  -10.0   0.3   +0.0  faster; ; unmeasured with image changes: rg_s537, rg_s583, rg_r755, kim_r713
+   Au1eVC1fab2Hop       256   581.7   581.6   581.8    570.7   570.7  -11.0   0.1   +0.0  faster; ; unmeasured with image changes: rg_s537, rg_s583, rg_r755, kim_r713
+   Au1eVC1fab2Hop      4352   621.2   621.2   621.0    613.4   613.5   -7.7   0.2   +0.0  faster; ; unmeasured with image changes: rg_s537, rg_s583, rg_r755, kim_r713
+   Au1eVC2fab2D1Hop     256   268.0   268.0   268.0    262.9   262.9   -5.1   0.0   -5.0  faster; rg_r755 -3.0(C); kim_s816 -0.0(C); kim_r713 -2.0(E); unmeasured with image changes: rg_s537, rg_s583
+   Au1eVC2fab2D1Hop    4352   268.5   268.5   268.5    263.4   263.4   -5.1   0.0   -5.0  faster; rg_r755 -3.0(C); kim_s816 +0.0(C); kim_r713 -2.0(E); unmeasured with image changes: rg_s537, rg_s583
+   Au1eVC2fab2D3Hop     256   359.1   359.2   359.1    355.4   355.4   -3.7   0.1   -1.4  faster; kim_s816 +0.0(C); kim_r713 -1.4(E); unmeasured with image changes: rg_s537, rg_s583, rg_r755
+   Au1eVC2fab2D3Hop    4352   380.8   380.8   380.8    377.8   377.7   -3.1   0.1   -1.7  faster; kim_s816 +0.0(C); kim_r713 -1.7(E); unmeasured with image changes: rg_s537, rg_s583, rg_r755
+   Au2D1Hop             256   120.3   120.3   120.3    120.0   120.0   -0.3   0.0   -0.3  flat; rg_s537 -0.0(C); rg_s583 -0.3(C)
+   Au2D1Hop            4352   128.0   128.0   128.0    128.1   128.1   +0.1   0.0   +0.2  flat; rg_s537 +0.0(C); rg_s583 +0.2(C)
+   Au2D3Hop             256   144.6   144.6   144.6    138.8   138.8   -5.8   0.0   -5.9  faster; rg_s537 -0.1(C); rg_s583 -5.8(C)
+   Au2D3Hop            4352   145.6   145.6   145.6    142.6   142.5   -3.0   0.0   -3.0  faster; rg_s537 +0.0(C); rg_s583 -3.0(C)
+   Au2DBidir            256   120.1   120.1   120.1    119.8   119.8   -0.3   0.0   -0.3  flat; rg_s537 -0.0(C); rg_s583 -0.3(C)
+   Au2DBidir           4352   135.7   135.7   135.7    135.8   135.8   +0.1   0.0   +0.2  flat; rg_s537 -0.0(C); rg_s583 +0.2(C)
+   AuTorusY3HopEW       256   144.6   144.6   144.6    138.8   138.8   -5.8   0.0   +0.0  faster; ; unmeasured with image changes: rg_s537, rg_s583, rg_r755
+   AuTorusY3HopEW      4352   145.5   145.5   145.5    142.6   142.5   -3.0   0.1   +0.0  faster; ; unmeasured with image changes: rg_s537, rg_s583, rg_r755
+   AuVC1fab1Hop         256   175.2   175.2   175.2    174.3   174.3   -0.9   0.0   -1.0  faster; rg_s583 -0.9(E); kim_r713 -0.0(E); unmeasured with image changes: rg_s537
+   AuVC1fab1Hop        4352   193.2   193.2   193.2    193.5   193.5   +0.2   0.0   +0.2  flat; rg_s583 +0.2(E); kim_r713 -0.0(E); unmeasured with image changes: rg_s537
+   AuVC1fab2Hop         256   425.7   425.8   425.7    424.5   424.6   -1.1   0.2   -1.2  faster; rg_s583 -1.2(E); kim_r713 +0.0(E); unmeasured with image changes: rg_s537
+   AuVC1fab2Hop        4352   478.7   478.7   478.6    477.6   477.4   -1.1   0.2   -1.0  faster; rg_s583 -1.0(E); kim_r713 -0.0(E); unmeasured with image changes: rg_s537
+   AuVC2fab2D1Hop       256   147.9   147.9   147.9    147.4   147.4   -0.5   0.0   -0.5  faster; kim_r713 -0.5(E); unmeasured with image changes: rg_s537, rg_s583
+   AuVC2fab2D1Hop      4352   149.9   149.9   149.9    149.4   149.4   -0.5   0.0   -0.7  flat; kim_r713 -0.7(E); unmeasured with image changes: rg_s537, rg_s583
+   AuVC2fab2D3Hop       256   265.0   264.9   264.9    263.5   263.5   -1.4   0.0   -0.2  faster; kim_r713 -0.2(E); unmeasured with image changes: rg_s537, rg_s583
+   AuVC2fab2D3Hop      4352   293.9   293.9   293.9    292.9   292.8   -1.0   0.1   -0.2  faster; kim_r713 -0.2(E); unmeasured with image changes: rg_s537, rg_s583

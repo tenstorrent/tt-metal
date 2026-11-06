@@ -1,0 +1,2695 @@
+# cisp row-order C (mk_order_yamls.py): one unicast_write iteration per row, each followed by a
+# tiny fused_atomic_inc row (1000 packets), 8 repeats.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: WgapR01_w00_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g00_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w01_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g01_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w02_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g02_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w03_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g03_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w04_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g04_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w05_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g05_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w06_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g06_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w07_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g07_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w08_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g08_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w09_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g09_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w10_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g10_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_w11_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR01_g11_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w00_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g00_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w01_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g01_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w02_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g02_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w03_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g03_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w04_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g04_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w05_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g05_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w06_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g06_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w07_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g07_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w08_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g08_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w09_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g09_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w10_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g10_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_w11_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR02_g11_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w00_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g00_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w01_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g01_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w02_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g02_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w03_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g03_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w04_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g04_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w05_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g05_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w06_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g06_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w07_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g07_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w08_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g08_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w09_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g09_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w10_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g10_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_w11_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR03_g11_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w00_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g00_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w01_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g01_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w02_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g02_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w03_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g03_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w04_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g04_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w05_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g05_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w06_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g06_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w07_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g07_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w08_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g08_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w09_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g09_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w10_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g10_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_w11_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR04_g11_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w00_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g00_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w01_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g01_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w02_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g02_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w03_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g03_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w04_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g04_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w05_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g05_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w06_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g06_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w07_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g07_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w08_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g08_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w09_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g09_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w10_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g10_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_w11_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR05_g11_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w00_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g00_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w01_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g01_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w02_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g02_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w03_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g03_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w04_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g04_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w05_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g05_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w06_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g06_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w07_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g07_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w08_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g08_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w09_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g09_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w10_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g10_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_w11_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR06_g11_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w00_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g00_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w01_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g01_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w02_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g02_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w03_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g03_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w04_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g04_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w05_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g05_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w06_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g06_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w07_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g07_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w08_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g08_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w09_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g09_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w10_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g10_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_w11_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR07_g11_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w00_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g00_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w01_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g01_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w02_size_2048_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g02_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w03_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g03_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w04_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g04_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w05_size_2048_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 2048
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g05_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w06_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g06_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w07_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g07_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w08_size_4096_ntype_unicast_write_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g08_size_2048_ntype_fused_atomic_inc_num_links_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 1
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w09_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g09_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w10_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g10_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_w11_size_4096_ntype_unicast_write_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: unicast_write
+    size: 4096
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1
+- name: WgapR08_g11_size_2048_ntype_fused_atomic_inc_num_links_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+    num_links: 2
+  defaults:
+    ftype: unicast
+    ntype: fused_atomic_inc
+    size: 2048
+    num_packets: 1000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1

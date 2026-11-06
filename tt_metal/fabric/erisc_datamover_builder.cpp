@@ -33,6 +33,7 @@
 #include <fmt/format.h>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_trid_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
@@ -1552,6 +1553,80 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
         named_args[fmt::format("RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_local_write_cmd_buf_ids[i]) : 0;
+    }
+    // Receiver transaction IDs, per receiver channel: its completion group size, its number of IDs and its first ID,
+    // for routers that take them from the host instead of their own uniform rule. All of a router's receiver channels
+    // run on one ERISC and share that NoC's IDs. Study switch (fabric_exp, TRID_ALLOCATION.md):
+    // TT_FABRIC_EXP_TRID_ALLOC=1 sizes each range from the channel's final slot count (assign_transaction_ids); without
+    // it the ranges follow today's uniform rule, so every router keeps today's behaviour. Main's router does not read
+    // these.
+    {
+        namespace ta = tt::tt_fabric::trid_allocator;
+        // Study switch (fabric_exp, SLOT_ALLOCATOR.md section 12.10): TT_FABRIC_EXP_COMPLETION_GROUP=G sets the
+        // completion group size (1, 2 or 4) of every receiver channel without first-level acks, or G0,G1,G2 per VC
+        // (0: the size from the slot count). Unset: the size from the slot count, as today.
+        std::array<size_t, builder_config::MAX_NUM_VCS> group_override{};
+        if (const char* text = std::getenv("TT_FABRIC_EXP_COMPLETION_GROUP")) {
+            std::vector<size_t> values;
+            const std::string list(text);
+            for (size_t start = 0; start <= list.size();) {
+                const size_t end = std::min(list.find(',', start), list.size());
+                values.push_back(std::stoul(list.substr(start, end - start)));
+                start = end + 1;
+            }
+            TT_FATAL(
+                values.size() == 1 || values.size() == builder_config::MAX_NUM_VCS,
+                "TT_FABRIC_EXP_COMPLETION_GROUP={}: one size, or one per VC ({})",
+                text,
+                builder_config::MAX_NUM_VCS);
+            for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+                group_override[vc] = values.size() == 1 ? values[0] : values[vc];
+                TT_FATAL(
+                    group_override[vc] == 0 || group_override[vc] == 1 || group_override[vc] == 2 ||
+                        group_override[vc] == 4,
+                    "TT_FABRIC_EXP_COMPLETION_GROUP={}: sizes are 1, 2 or 4 (0: from the slot count)",
+                    text);
+            }
+        }
+        std::vector<ta::ReceiverChannel> receivers;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            const bool first_level_ack = named_args.at(fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)) != 0;
+            for (size_t i = 0; i < config.num_used_receiver_channels_per_vc[vc]; ++i) {
+                const size_t slots = static_channel_allocator->get_receiver_channel_number_of_slots(vc, i);
+                TT_FATAL(
+                    group_override[vc] <= slots,
+                    "TT_FABRIC_EXP_COMPLETION_GROUP: groups of {} on a VC{} receiver of {} slots",
+                    group_override[vc],
+                    vc,
+                    slots);
+                receivers.push_back({slots, first_level_ack, first_level_ack ? 0 : group_override[vc]});
+            }
+        }
+        const bool trid_alloc = std::getenv("TT_FABRIC_EXP_TRID_ALLOC") != nullptr;
+        const ta::Assignment ids = trid_alloc ? ta::assign_transaction_ids(receivers)
+                                              : ta::uniform_transaction_ids(receivers, final_enable_deadlock_avoidance);
+        TT_FATAL(!ids.error.has_value(), "receiver transaction IDs: {}", ids.error.value_or(""));
+        for (size_t c = 0; c < builder_config::num_max_receiver_channels; ++c) {
+            const bool used = c < ids.channels.size();
+            named_args[fmt::format("RX_CH_{}_COMPLETION_GROUP_SIZE", c)] =
+                used ? static_cast<uint32_t>(ids.channels[c].group_size) : 1;
+            named_args[fmt::format("RX_CH_{}_NUM_TRIDS", c)] =
+                used ? static_cast<uint32_t>(ids.channels[c].num_ids) : 0;
+            named_args[fmt::format("RX_CH_{}_TRID_START", c)] = used ? static_cast<uint32_t>(ids.channels[c].start) : 0;
+        }
+        if (std::getenv("TT_FABRIC_EXP_LOG_SLOTS") != nullptr && risc_id == 1) {
+            for (size_t c = 0; c < ids.channels.size(); ++c) {
+                log_info(
+                    tt::LogFabric,
+                    "receiver transaction IDs ({}): RX_CH_{} G {} ids {} start {}: {}",
+                    trid_alloc ? "TT_FABRIC_EXP_TRID_ALLOC" : "uniform rule",
+                    c,
+                    ids.channels[c].group_size,
+                    ids.channels[c].num_ids,
+                    ids.channels[c].start,
+                    ids.channels[c].reason);
+            }
+        }
     }
     named_args["EDM_NOC_VC"] = config.edm_noc_vc;
 

@@ -1,0 +1,10 @@
+13:for s in check nx mesh linear ring; do
+check test 0: ok (GlxCheck2D_size_4096_num_links_1_ntype_unicast_write_ftype_unicast)
+nx test 0: ok (GlxNeighborExchange_size_4352_ntype_unicast_write_num_links_1)
+mesh test 0: ok (GlxMesh1HopEW_size_4096_ntype_unicast_write)
+mesh test 1: ok (GlxMesh3HopNS_size_4096_ntype_unicast_write)
+linear test 0: ok (GlxLinear3HopEW_size_4096_ntype_unicast_write)
+ring test 0: ok (GlxRing1HopEW_size_4096_ntype_unicast_write)
+ring test 1: ok (GlxFullRingMulticast_size_4352_ntype_unicast_write)
+
+[exited with code 0]

@@ -1,0 +1,49 @@
+
+== on: 825984 samples, 29 slow of 288 iterations; in NX write-row windows: {('brisc', 'normal'): 31225, ('ncrisc', 'normal'): 31225, ('brisc', 'slow'): 16408, ('ncrisc', 'slow'): 16412}; unmatched (no snapshot yet) 0
+   brisc normal: 31225 samples: firmware / outside the kernel image 52.2%, fabric send path 19.8%, fabric connection credits 9.0%, noc command (buffer wait / issue) 8.3%, sync kernel: fabric send path 3.7%, sync kernel: fabric connection credits 3.7%, sync kernel: noc command (buffer wait / issue) 3.3%, noc write ack / flush wait 0.2%, sync kernel: noc write ack / flush wait 0.0%, other kernel code 0.0%, profiler 0.0%
+   brisc slow: 16408 samples: firmware / outside the kernel image 46.9%, fabric send path 21.5%, noc command (buffer wait / issue) 13.0%, fabric connection credits 7.0%, sync kernel: fabric send path 5.6%, sync kernel: noc command (buffer wait / issue) 3.8%, noc write ack / flush wait 1.3%, sync kernel: fabric connection credits 0.8%, other kernel code 0.0%
+   ncrisc normal: 31225 samples: (NCRISC baseline) 100.0%
+   ncrisc slow: 16412 samples: (NCRISC baseline) 100.0%
+   brisc slow: top lines
+       11.73%  fabric send path                   tt::tt_fabric::wrap_increment edm_fabric/edm_fabric_flow_control_helpers.hpp:46
+       10.58%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::advance_buffer_slot_write_index edm_fabric/edm_fabric_worker_adapters.hpp:725
+        8.46%  sync kernel: fabric send path      tt::tt_fabric::fabric_tests::LocalSyncConfig::local_sync kernels/tt_fabric_test_kernels_utils.hpp:829
+        7.73%  noc command (buffer wait / issue)  NOC_CMD_BUF_READ_REG blackhole/noc_nonblocking_api.h:178
+        6.69%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::close_finish edm_fabric/edm_fabric_worker_adapters.hpp:628
+        6.60%  fabric connection credits          tt::tt_fabric::WorkerToFabricEdmSenderBase::get_num_free_write_slots edm_fabric/edm_fabric_worker_adapters.hpp:309
+        6.36%  noc command (buffer wait / issue)  NOC_CMD_BUF_WRITE_REG blackhole/noc_nonblocking_api.h:174
+        5.79%  sync kernel: noc command (buffer wait / issue) noc_fast_atomic_increment blackhole/noc_nonblocking_api.h:1304
+        4.69%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::advance_buffer_slot_write_index edm_fabric/edm_fabric_worker_adapters.hpp:721
+        4.51%  noc command (buffer wait / issue)  NOC_CMD_BUF_READ_REG blackhole/noc_nonblocking_api.h:180
+        3.12%  fabric connection credits          tt::tt_fabric::WorkerToFabricEdmSenderBase::get_num_free_write_slots edm_fabric/edm_fabric_worker_adapters.hpp:310
+        2.96%  noc command (buffer wait / issue)  noc_fast_write_dw_inline_set_state blackhole/noc_nonblocking_api.h:1801
+   brisc normal: top lines
+       12.56%  fabric connection credits          tt::tt_fabric::WorkerToFabricEdmSenderBase::get_num_free_write_slots edm_fabric/edm_fabric_worker_adapters.hpp:309
+        9.94%  fabric send path                   tt::tt_fabric::wrap_increment edm_fabric/edm_fabric_flow_control_helpers.hpp:46
+        9.91%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::advance_buffer_slot_write_index edm_fabric/edm_fabric_worker_adapters.hpp:725
+        7.06%  sync kernel: fabric connection credits noc_semaphore_wait dataflow/dataflow_api.h:2120
+        4.33%  noc command (buffer wait / issue)  NOC_CMD_BUF_READ_REG blackhole/noc_nonblocking_api.h:180
+        4.13%  noc command (buffer wait / issue)  NOC_CMD_BUF_READ_REG blackhole/noc_nonblocking_api.h:178
+        3.83%  sync kernel: fabric send path      kernel_main kernels/tt_fabric_test_sync.cpp:69
+        3.51%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::advance_buffer_slot_write_index edm_fabric/edm_fabric_worker_adapters.hpp:721
+        3.35%  fabric send path                   tt::tt_fabric::fabric_tests::SenderKernelTrafficConfig::send_one_packet kernels/tt_fabric_test_kernels_utils.hpp:1136
+        3.18%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::close_finish edm_fabric/edm_fabric_worker_adapters.hpp:628
+        3.01%  sync kernel: noc command (buffer wait / issue) noc_fast_atomic_increment blackhole/noc_nonblocking_api.h:1304
+        3.00%  fabric connection credits          tt::tt_fabric::WorkerToFabricEdmSenderBase::get_num_free_write_slots edm_fabric/edm_fabric_worker_adapters.hpp:310
+
+== off: 807264 samples, 0 slow of 288 iterations; in NX write-row windows: {('ncrisc', 'normal'): 47311, ('brisc', 'normal'): 47303}; unmatched (no snapshot yet) 0
+   brisc normal: 47303 samples: firmware / outside the kernel image 51.3%, fabric send path 22.3%, fabric connection credits 9.1%, noc command (buffer wait / issue) 6.9%, sync kernel: fabric connection credits 5.1%, sync kernel: fabric send path 2.6%, sync kernel: noc command (buffer wait / issue) 2.6%, noc write ack / flush wait 0.1%, other kernel code 0.0%, sync kernel: other kernel code 0.0%, sync kernel: noc write ack / flush wait 0.0%
+   ncrisc normal: 47311 samples: (NCRISC baseline) 100.0%
+   brisc normal: top lines
+       11.88%  fabric connection credits          tt::tt_fabric::WorkerToFabricEdmSenderBase::get_num_free_write_slots edm_fabric/edm_fabric_worker_adapters.hpp:309
+       11.50%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::advance_buffer_slot_write_index edm_fabric/edm_fabric_worker_adapters.hpp:725
+        9.63%  sync kernel: fabric connection credits noc_semaphore_wait dataflow/dataflow_api.h:2120
+        8.82%  fabric send path                   tt::tt_fabric::wrap_increment edm_fabric/edm_fabric_flow_control_helpers.hpp:46
+        5.23%  sync kernel: noc command (buffer wait / issue) noc_fast_atomic_increment blackhole/noc_nonblocking_api.h:1304
+        5.18%  fabric send path                   tt::tt_fabric::fabric_tests::SenderKernelTrafficConfig::send_packets_stateful kernels/tt_fabric_test_kernels_utils.hpp:1115
+        4.47%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::close_finish edm_fabric/edm_fabric_worker_adapters.hpp:628
+        4.26%  noc command (buffer wait / issue)  NOC_CMD_BUF_READ_REG blackhole/noc_nonblocking_api.h:178
+        3.76%  noc command (buffer wait / issue)  NOC_CMD_BUF_WRITE_REG blackhole/noc_nonblocking_api.h:174
+        3.50%  fabric send path                   tt::tt_fabric::WorkerToFabricEdmSenderBase::advance_buffer_slot_write_index edm_fabric/edm_fabric_worker_adapters.hpp:721
+        3.25%  sync kernel: fabric send path      tt::tt_fabric::fabric_tests::LocalSyncConfig::local_sync kernels/tt_fabric_test_kernels_utils.hpp:835
+        3.25%  fabric connection credits          tt::tt_fabric::WorkerToFabricEdmSenderBase::wait_for_empty_write_slot edm_fabric/edm_fabric_worker_adapters.hpp:324

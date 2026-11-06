@@ -1,0 +1,43 @@
+{
+ "group": "G-P",
+ "label": "main",
+ "updated": "2026-11-04T00:48:51+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-bench",
+   "status": "PASS",
+   "duration_s": 80.1,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 36,
+    "failed": 0,
+    "runs": 1
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T00:46:31+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 2,
+   "step": "G0-bench",
+   "status": "PASS",
+   "duration_s": 60.1,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 36,
+    "failed": 0,
+    "runs": 1
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T00:47:51+00:00"
+  }
+ ]
+}

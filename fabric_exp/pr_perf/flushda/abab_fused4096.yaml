@@ -1,0 +1,17 @@
+# Isolating A/B (coordinator 2026-11-05): the one test that failed DATA_MISMATCH on the tip de8a2ac17a8 in a09u32
+# broker job 844 (flushval_ring_atomics.yaml): FlushRing1HopEW_size_4096_ntype_fused_atomic_inc, no flush, ring 1-hop
+# unicast, 2000 packets, data-checked, no flow control. Arms: the PR base (de8a2ac17a8 with 7326d59a864 undone), main.
+Tests:
+- name: FlushRing1HopEW
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype:
+    - {type: fused_atomic_inc, flush: [false]}
+    size: [4096]
+  defaults: {ftype: unicast, num_packets: 2000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]

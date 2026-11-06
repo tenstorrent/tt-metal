@@ -1,0 +1,9 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+Merge_p4x2_k1_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,2,1,E,1,50000,256,7739320,2.232754,8721696.480
+Merge_p4x2_k1_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,2,1,E,1,50000,3072,8186651,25.329039,8245129.785
+Merge_p4x2_k1f_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,S,1,50000,256,8536708,2.024199,7907029.267
+Merge_p4x2_k1f_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,S,1,50000,3072,8915067,23.259500,7571451.791
+Merge_p4x2_k2_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,2,1,E,2,50000,256,11196151,3.086775,12057715.192
+Merge_p4x2_k2_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,2,1,E,2,50000,3072,11217034,36.972340,12035267.077
+Merge_p4x2_k3_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,4,1,N,1,50000,256,16336077,1.057781,4131958.976
+Merge_p4x2_k3_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,4,1,N,1,50000,3072,16351909,12.681088,4127958.393

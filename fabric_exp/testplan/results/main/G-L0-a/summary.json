@@ -1,0 +1,150 @@
+{
+ "group": "G-L0-a",
+ "label": "main",
+ "updated": "2026-11-04T00:31:13+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-fix-1d",
+   "status": "PASS",
+   "duration_s": 70.1,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 24,
+    "SKIP": 7
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T23:42:57+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-fix-2d",
+   "status": "PASS",
+   "duration_s": 165.2,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 45,
+    "SKIP": 6
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T23:44:07+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-fix-mux",
+   "status": "PASS",
+   "duration_s": 235.3,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 68,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T22:27:05+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-health-cv",
+   "status": "ENV",
+   "duration_s": 295.4,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": "run_cluster_validation: 'Connection mismatch detected' (4 missing QSFP_DD ports, 20 extra channels vs bh_galaxy_xy_torus.textproto); quad-cabled 110-a node, not the single-Galaxy XY-torus wiring",
+   "start": "2026-11-03T22:40:55+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-health-stab",
+   "status": "PASS",
+   "duration_s": 295.4,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 56,
+    "failed": 0,
+    "runs": 1
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T22:40:55+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-night",
+   "status": "TIMEOUT",
+   "duration_s": 1806.2,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T22:47:04+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-torus-n",
+   "status": "PASS",
+   "duration_s": 1473.8,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 2604,
+    "failed": 0,
+    "runs": 1
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T23:18:23+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 2,
+   "step": "G0-night",
+   "status": "PASS",
+   "duration_s": 1343.1,
+   "node": "bh-glx-110-a08u02",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 165,
+    "PERF_WINDOW": 0,
+    "SKIP": 21
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T00:08:50+00:00"
+  }
+ ]
+}

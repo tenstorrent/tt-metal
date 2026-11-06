@@ -1,0 +1,50 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 38,
+  "filtered": false,
+  "list": "models_unit_tests.yaml",
+  "name": "MiniMax-M3 unit tests (BH Galaxy 8x4)",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 2280,
+ "duration_s": 190.3,
+ "end": "2026-11-04T03:53:17+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): pytest --timeout 900 models/demos/minimax_m3/tests/unit/ -k \"8x4\""
+ ],
+ "group": "G-L2-a",
+ "jit_cache": "/tmp/aagarwal-regress/172124/cache/main-main",
+ "junit_files": 1,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u08",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "172124",
+ "start": "2026-11-04T03:50:07+00:00",
+ "status": "FAIL",
+ "step": "G2-mm3",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 65,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 3
+ },
+ "timeout_note": null,
+ "timeout_s": 2280,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

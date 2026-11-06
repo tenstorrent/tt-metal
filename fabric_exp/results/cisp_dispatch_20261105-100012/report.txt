@@ -1,0 +1,183 @@
+
+== on
+   chip 0 f16-2 brisc normal: 678 samples
+       38.35%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       28.91%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       20.06%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        8.41%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        4.28%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+   chip 0 f16-2 brisc slow: 543 samples
+       41.07%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       30.57%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       16.94%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        6.63%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        4.42%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+        0.18%  cq_prefetch: noc_address_backend_xy::packed_worker_address dataflow/noc_address_backend_xy.h:32
+   chip 0 f16-3 brisc normal: 675 samples
+       42.67%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       32.74%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+       22.37%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        2.07%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+        0.15%  cq_dispatch: process_write_packed_large kernels/cq_dispatch.cpp:912
+   chip 0 f16-3 brisc slow: 541 samples
+       41.22%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       35.67%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+       21.07%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        1.85%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+        0.18%  cq_dispatch: noc_address_backend_xy::packed_worker_address dataflow/noc_address_backend_xy.h:32
+   chip 0 f16-3 ncrisc normal: 676 samples
+       42.46%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       27.07%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:16
+       25.15%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532
+        5.33%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:14
+   chip 0 f16-3 ncrisc slow: 542 samples
+       41.88%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       27.49%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:16
+       23.99%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532
+        6.64%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:14
+   chip 3 f16-2 brisc normal: 669 samples
+       38.71%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       27.65%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       19.88%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        8.97%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        4.63%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+        0.15%  cq_prefetch: noc_async_read_barrier_with_trid dataflow/dataflow_api.h:2573
+   chip 3 f16-2 brisc slow: 540 samples
+       39.44%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       30.00%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       21.30%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        5.00%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        4.07%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+        0.19%  cq_prefetch: wrap_gt kernels/cq_common.hpp:62
+   chip 3 f16-3 brisc normal: 668 samples
+       45.81%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       31.89%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+       20.06%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        2.10%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+        0.15%  cq_dispatch: noc_async_write_barrier dataflow/dataflow_api.h:1958
+   chip 3 f16-3 brisc slow: 541 samples
+       43.81%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       33.46%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+       20.15%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        2.40%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+        0.18%  cq_dispatch: noc_increment_nonposted_writes_acked blackhole/noc_nonblocking_api.h:359
+   chip 3 f16-3 ncrisc normal: 668 samples
+       42.51%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       26.80%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:16
+       25.90%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532
+        4.79%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:14
+   chip 3 f16-3 ncrisc slow: 541 samples
+       42.14%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       26.62%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:16
+       25.51%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532
+        5.73%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:14
+   chip 7 f16-2 brisc normal: 671 samples
+       41.43%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       28.17%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       18.93%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        7.00%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        4.32%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+        0.15%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:869
+   chip 7 f16-2 brisc slow: 545 samples
+       41.65%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       31.19%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       16.70%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        6.24%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        4.22%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+   chip 7 f16-3 brisc normal: 672 samples
+       47.17%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       31.99%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+       18.30%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        2.53%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+   chip 7 f16-3 brisc slow: 545 samples
+       41.10%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       35.78%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+       21.10%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        1.83%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+        0.18%  cq_dispatch: noc_async_write_barrier dataflow/dataflow_api.h:1958
+   chip 7 f16-3 ncrisc normal: 671 samples
+       42.47%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       26.38%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532
+       23.99%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:16
+        7.15%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:14
+   chip 7 f16-3 ncrisc slow: 547 samples
+       47.90%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       23.03%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:16
+       22.67%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532
+        6.40%  cq_dispatch_subordinate: invalidate_l1_cache tt-1xx/cache.h:14
+
+== off
+   chip 0 f16-11 brisc normal: 1251 samples
+       99.76%  kernel image (1516 B)
+        0.24%  firmware/other pc 0xac00
+   chip 0 f16-11 ncrisc normal: 1254 samples
+      100.00%  kernel image (1652 B)
+   chip 0 f16-2 brisc normal: 1247 samples
+       37.21%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       28.63%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       20.13%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        8.42%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        5.53%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+        0.08%  cq_prefetch: noc_async_read_barrier_with_trid dataflow/dataflow_api.h:2573
+   chip 0 f16-3 brisc normal: 1248 samples
+       54.57%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       34.70%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+        7.85%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        2.88%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+   chip 0 f16-3 ncrisc normal: 1249 samples
+       17.53%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       15.85%  cq_dispatch_subordinate: record_realtime_timestamp kernels/realtime_profiler.hpp:86
+       13.29%  cq_dispatch_subordinate: stream_wrap_gt kernels/cq_dispatch_subordinate.cpp:464
+       12.65%  cq_dispatch_subordinate: open_record kernels/realtime_profiler.hpp:71
+       11.45%  cq_dispatch_subordinate: record_realtime_timestamp kernels/realtime_profiler.hpp:87
+       10.65%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532
+   chip 3 f16-11 brisc normal: 1248 samples
+       99.44%  kernel image (1516 B)
+        0.32%  firmware/other pc 0xac00
+        0.24%  firmware/other pc 0xa000
+   chip 3 f16-11 ncrisc normal: 1248 samples
+      100.00%  kernel image (1652 B)
+   chip 3 f16-2 brisc normal: 1259 samples
+       36.85%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       30.10%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       19.70%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        7.94%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        5.08%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+        0.16%  cq_prefetch: noc_async_read_barrier_with_trid dataflow/dataflow_api.h:2573
+   chip 3 f16-3 brisc normal: 1259 samples
+       52.34%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       36.14%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+        9.77%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        1.75%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+   chip 3 f16-3 ncrisc normal: 1258 samples
+       16.53%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       14.94%  cq_dispatch_subordinate: record_realtime_timestamp kernels/realtime_profiler.hpp:86
+       14.15%  cq_dispatch_subordinate: stream_wrap_gt kernels/cq_dispatch_subordinate.cpp:464
+       12.56%  cq_dispatch_subordinate: record_realtime_timestamp kernels/realtime_profiler.hpp:87
+       11.92%  cq_dispatch_subordinate: open_record kernels/realtime_profiler.hpp:71
+       11.05%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532
+   chip 7 f16-11 brisc normal: 1241 samples
+       98.71%  kernel image (1516 B)
+        1.29%  firmware/other pc 0xac00
+   chip 7 f16-11 ncrisc normal: 1244 samples
+      100.00%  kernel image (1652 B)
+   chip 7 f16-2 brisc normal: 1247 samples
+       36.49%  cq_prefetch: process_stall kernels/cq_prefetch.cpp:1909
+       30.55%  cq_prefetch: void fetch_q_get_cmds<0ul> kernels/cq_prefetch.cpp:943
+       21.57%  cq_prefetch: semaphore_detail::load dataflow/semaphore_dm_impl.h:48
+        6.98%  cq_prefetch: invalidate_l1_cache tt-1xx/cache.h:14
+        4.25%  cq_prefetch: prefetch_q_read_slot kernels/cq_prefetch.cpp:162
+        0.08%  cq_prefetch: NOC_STATUS_READ_REG blackhole/noc_nonblocking_api.h:186
+   chip 7 f16-3 brisc normal: 1246 samples
+       52.33%  cq_dispatch: stream_wrap_ge kernels/cq_dispatch.cpp:1076
+       34.91%  cq_dispatch: kernel_main kernels/cq_common.hpp:664
+       10.51%  cq_dispatch: kernel_main kernels/cq_dispatch.cpp:1135
+        2.17%  cq_dispatch: invalidate_l1_cache tt-1xx/cache.h:14
+        0.08%  cq_dispatch: noc_async_write_barrier dataflow/dataflow_api.h:1958
+   chip 7 f16-3 ncrisc normal: 1248 samples
+       16.67%  cq_dispatch_subordinate: wrap_gt kernels/cq_common.hpp:62
+       14.74%  cq_dispatch_subordinate: record_realtime_timestamp kernels/realtime_profiler.hpp:86
+       13.78%  cq_dispatch_subordinate: open_record kernels/realtime_profiler.hpp:71
+       13.06%  cq_dispatch_subordinate: stream_wrap_gt kernels/cq_dispatch_subordinate.cpp:464
+       12.02%  cq_dispatch_subordinate: record_realtime_timestamp kernels/realtime_profiler.hpp:87
+        8.97%  cq_dispatch_subordinate: void cb_acquire_pages_dispatch_s<207ul, 1ul> kernels/cq_dispatch_subordinate.cpp:532

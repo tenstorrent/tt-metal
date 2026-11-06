@@ -1,0 +1,7 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+NS_Write_size_16_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,S,1,50000,16,5754240,0.187688,11730480.480
+NS_Write_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,S,1,50000,4352,6353627,46.235009,10623853.116
+NS_Atomic_size_4352_ntype_atomic_inc,CHIP_UNICAST,NOC_UNICAST_ATOMIC_INC,Mesh,8,0,1,S,1,50000,4352,6613393,44.418954,10206561.140
+EW_Write_size_16_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,50000,16,5734490,0.188334,11770881.107
+EW_Write_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,50000,4352,6345871,46.291518,10636837.717
+EW_Atomic_size_4352_ntype_atomic_inc,CHIP_UNICAST,NOC_UNICAST_ATOMIC_INC,Mesh,8,0,1,E,1,50000,4352,6496425,45.218716,10390330.066

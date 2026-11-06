@@ -1,0 +1,68 @@
+{
+ "counts": {
+  "FAIL": 8,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 1
+ },
+ "files": [
+  "pytest_110771_1793773287862602954_20261104_062127.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all[blackhole-True-pos1500-reduce_and_scatter-device_params0]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/tensor/spec/layout/page_config.cpp:179: !tile.has_value() || *tile == Tile{}\ninfo:\nConfiguring a ROW MAJOR page config with a custom tile configuration is not supported.\nbacktrace:\n --- /data/aagarwal/regress/results/_scratch/172554",
+   "status": "FAIL",
+   "time": 1.601
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all[blackhole-True-pos1500-reduce_only-device_params0]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/tensor/spec/layout/page_config.cpp:179: !tile.has_value() || *tile == Tile{}\ninfo:\nConfiguring a ROW MAJOR page config with a custom tile configuration is not supported.\nbacktrace:\n --- /data/aagarwal/regress/results/_scratch/172554",
+   "status": "FAIL",
+   "time": 1.707
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all[blackhole-True-pos2500-reduce_and_scatter-device_params0]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/tensor/spec/layout/page_config.cpp:179: !tile.has_value() || *tile == Tile{}\ninfo:\nConfiguring a ROW MAJOR page config with a custom tile configuration is not supported.\nbacktrace:\n --- /data/aagarwal/regress/results/_scratch/172554",
+   "status": "FAIL",
+   "time": 1.629
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all[blackhole-True-pos2500-reduce_only-device_params0]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/tensor/spec/layout/page_config.cpp:179: !tile.has_value() || *tile == Tile{}\ninfo:\nConfiguring a ROW MAJOR page config with a custom tile configuration is not supported.\nbacktrace:\n --- /data/aagarwal/regress/results/_scratch/172554",
+   "status": "FAIL",
+   "time": 1.611
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all[blackhole-True-pos3500-reduce_and_scatter-device_params0]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/tensor/spec/layout/page_config.cpp:179: !tile.has_value() || *tile == Tile{}\ninfo:\nConfiguring a ROW MAJOR page config with a custom tile configuration is not supported.\nbacktrace:\n --- /data/aagarwal/regress/results/_scratch/172554",
+   "status": "FAIL",
+   "time": 1.618
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all[blackhole-True-pos3500-reduce_only-device_params0]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/tensor/spec/layout/page_config.cpp:179: !tile.has_value() || *tile == Tile{}\ninfo:\nConfiguring a ROW MAJOR page config with a custom tile configuration is not supported.\nbacktrace:\n --- /data/aagarwal/regress/results/_scratch/172554",
+   "status": "FAIL",
+   "time": 1.758
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all[blackhole-True-pos500-reduce_and_scatter-device_params0]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/tensor/spec/layout/page_config.cpp:179: !tile.has_value() || *tile == Tile{}\ninfo:\nConfiguring a ROW MAJOR page config with a custom tile configuration is not supported.\nbacktrace:\n --- /data/aagarwal/regress/results/_scratch/172554",
+   "status": "FAIL",
+   "time": 1.641
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all[blackhole-True-pos500-reduce_only-device_params0]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/tensor/spec/layout/page_config.cpp:179: !tile.has_value() || *tile == Tile{}\ninfo:\nConfiguring a ROW MAJOR page config with a custom tile configuration is not supported.\nbacktrace:\n --- /data/aagarwal/regress/results/_scratch/172554",
+   "status": "FAIL",
+   "time": 4.684
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sdpa_reduce_to_all::test_sdpa_reduce_to_all_trace[blackhole-True-device_params0-100-25]": {
+   "file": "pytest_110771_1793773287862602954_20261104_062127.xml",
+   "message": "SDPA reduce-to-all trace test needs fast dispatch",
+   "status": "SKIP",
+   "time": 1.685
+  }
+ }
+}

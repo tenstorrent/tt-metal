@@ -190,18 +190,23 @@ _vc1cap_capture() {
     # every run of this job, and per router config its named args and stripped ELF (load image only).
     cp "$runlog" "$cap/run.log" 2>/dev/null
     grep -ah 'g++ compile cmd' $out/${VC1CAP_LABEL}_r*_13129088_vc1.log "$runlog" 2>/dev/null \
-        | grep -a 'fabric_erisc_router_v2/' > "$cap/compile_cmds.txt"
-    for d in "$c"/*/kernels/fabric_erisc_router_v2/*/; do
-        [ -f "$d/named_ct_arg_map_generated.h" ] || continue
-        h=$(basename "$d"); mkdir -p "$cap/cache/kernels/fabric_erisc_router_v2/$h"
-        cp "$d/named_ct_arg_map_generated.h" "$cap/cache/kernels/fabric_erisc_router_v2/$h/"
-        for k in active_erisc subordinate_active_erisc; do
-            [ -f "$d/$k/$k.elf.xip.elf" ] || continue
-            mkdir -p "$cap/cache/kernels/fabric_erisc_router_v2/$h/$k"
-            $VC1CAP_OBJCOPY --strip-all "$d/$k/$k.elf.xip.elf" "$cap/cache/kernels/fabric_erisc_router_v2/$h/$k/$k.elf.xip.elf"
+        | grep -aE 'fabric_erisc_router(_v2)?/' > "$cap/compile_cmds.txt"
+    # The router's kernel directory: the study's v2 slot, or the port's (and main's) fabric_erisc_router.
+    local kd n=0
+    for kd in fabric_erisc_router_v2 fabric_erisc_router; do
+        for d in "$c"/*/kernels/$kd/*/; do
+            [ -f "$d/named_ct_arg_map_generated.h" ] || continue
+            h=$(basename "$d"); mkdir -p "$cap/cache/kernels/$kd/$h"
+            cp "$d/named_ct_arg_map_generated.h" "$cap/cache/kernels/$kd/$h/"
+            n=$((n + 1))
+            for k in active_erisc subordinate_active_erisc; do
+                [ -f "$d/$k/$k.elf.xip.elf" ] || continue
+                mkdir -p "$cap/cache/kernels/$kd/$h/$k"
+                $VC1CAP_OBJCOPY --strip-all "$d/$k/$k.elf.xip.elf" "$cap/cache/kernels/$kd/$h/$k/$k.elf.xip.elf"
+            done
         done
     done
-    echo "   kept $(grep -c . "$cap/compile_cmds.txt") compile commands, $(ls "$cap/cache/kernels/fabric_erisc_router_v2" 2>/dev/null | wc -l) router configs"
+    echo "   kept $(grep -c . "$cap/compile_cmds.txt") compile commands, $n router configs"
     timeout 120 python_env/bin/python $CON/hang_decode.py "$cap" "$c" > "$cap/decode.txt" 2>&1
     echo "   decode exit $? -> $cap/decode.txt; summary:"
     sed -n '/^== Traffic waiting/,$p' "$cap/decode.txt" | head -60 | sed 's/^/   | /'

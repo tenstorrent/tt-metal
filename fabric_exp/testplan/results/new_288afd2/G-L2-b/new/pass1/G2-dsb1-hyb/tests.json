@@ -1,0 +1,459 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 15,
+  "PERF_WINDOW": 0,
+  "SKIP": 59
+ },
+ "files": [
+  "pytest_2442981_1793784178282365696_20261104_092258.xml",
+  "pytest_2462590_1793784381087718334_20261104_092621.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_broadcast_rms_single_device::test_broadcast_rms_single_device[blackhole-False-mesh_device0-False-1e-06-DataType.BFLOAT16-Layout.TILE-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.235
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_broadcast_rms_single_device::test_broadcast_rms_single_device[blackhole-True-mesh_device0-False-1e-06-DataType.BFLOAT16-Layout.TILE-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_broadcast_rms_single_device[blackhole-True-mesh_device0-False-1e-06-DataType.BFLOAT16-Layout.TILE-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED] appears to hang",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-1024-2048-128]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: Blackhole HostIO DEVICE_PULL loopback hangs in the data-transfer loop (device PCIe pull from host-pinned memory) under viommu. Issue: #43079",
+   "status": "SKIP",
+   "time": 1.293
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-32768-65536-128]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: Blackhole HostIO large loopback fails DMA page pinning for both H2D modes. Issue: #43079",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-512-1024-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: Blackhole HostIO DEVICE_PULL loopback hangs in the data-transfer loop (device PCIe pull from host-pinned memory) under viommu. Issue: #43079",
+   "status": "SKIP",
+   "time": 1.3
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-64-1024-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: Blackhole HostIO DEVICE_PULL loopback hangs in the data-transfer loop (device PCIe pull from host-pinned memory) under viommu. Issue: #43079",
+   "status": "SKIP",
+   "time": 1.276
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-64-128-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: Blackhole HostIO DEVICE_PULL loopback hangs in the data-transfer loop (device PCIe pull from host-pinned memory) under viommu. Issue: #43079",
+   "status": "SKIP",
+   "time": 1.436
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-64-256-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: Blackhole HostIO DEVICE_PULL loopback hangs in the data-transfer loop (device PCIe pull from host-pinned memory) under viommu. Issue: #43079",
+   "status": "SKIP",
+   "time": 1.251
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-64-512-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: Blackhole HostIO DEVICE_PULL loopback hangs in the data-transfer loop (device PCIe pull from host-pinned memory) under viommu. Issue: #43079",
+   "status": "SKIP",
+   "time": 1.273
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.HOST_PUSH-1024-2048-128]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.253
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.HOST_PUSH-32768-65536-128]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: Blackhole HostIO large loopback fails DMA page pinning for both H2D modes. Issue: #43079",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.HOST_PUSH-512-1024-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.86
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.HOST_PUSH-64-1024-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.23
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.HOST_PUSH-64-128-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.466
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.HOST_PUSH-64-256-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.47
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback[blackhole-H2DMode.HOST_PUSH-64-512-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.699
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-128-2-128-7168-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-128-2-128-7168-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-128-2-256-3584-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-128-2-256-3584-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-128-2-512-1792-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-128-2-512-1792-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-128-2-64-14336-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-128-2-64-14336-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-256-4-128-7168-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-256-4-128-7168-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-256-4-256-3584-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-256-4-256-3584-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-256-4-512-1792-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-256-4-512-1792-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-256-4-64-14336-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-256-4-64-14336-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-512-8-128-7168-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-512-8-128-7168-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-512-8-256-3584-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-512-8-256-3584-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-512-8-512-1792-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-512-8-512-1792-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-512-8-64-14336-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_host_io_loopback_with_embedding[blackhole-512-8-64-14336-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-1024-2048-128]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.791
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-32768-65536-128]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 5.059
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-512-1024-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.721
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-64-1024-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.702
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-64-128-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.938
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-64-256-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.712
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-64-512-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.748
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-1024-2048-128]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.97
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-32768-65536-128]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.753
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-512-1024-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.768
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-64-1024-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.78
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-64-128-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 18.95
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-64-256-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.79
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-64-512-512]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.787
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-128-2-128-7168-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.999
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-128-2-128-7168-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.79
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-128-2-256-3584-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.783
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-128-2-256-3584-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.795
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-128-2-512-1792-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.781
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-128-2-512-1792-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.857
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-256-4-128-7168-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.788
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-256-4-128-7168-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.747
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-256-4-256-3584-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.765
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-256-4-256-3584-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.711
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-256-4-512-1792-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.724
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_host_io::test_multi_stage_pipeline_loopback_with_embedding[blackhole-device_params0-mesh_device0-256-4-512-1792-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2462590_1793784381087718334_20261104_092621.xml",
+   "message": "[SKIP REASON]: test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past --timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079",
+   "status": "SKIP",
+   "time": 4.73
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_attention_weights_dense_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2442981_1793784178282365696_20261104_092258.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 33.295
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_attention_weights_moe_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2442981_1793784178282365696_20261104_092258.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.344
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_attention_weights_with_cache_dense_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2442981_1793784178282365696_20261104_092258.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.549
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_attention_weights_with_cache_moe_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2442981_1793784178282365696_20261104_092258.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.336
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_dense_layer_single_layer_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2442981_1793784178282365696_20261104_092258.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.717
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_dense_layer_weights_with_cache_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2442981_1793784178282365696_20261104_092258.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 27.452
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_layer_single_layer_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2442981_1793784178282365696_20261104_092258.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.288
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_layer_weights_with_cache_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2442981_1793784178282365696_20261104_092258.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.825
+  }
+ }
+}

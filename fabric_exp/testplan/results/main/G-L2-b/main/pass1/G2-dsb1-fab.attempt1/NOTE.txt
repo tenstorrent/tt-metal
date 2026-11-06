@@ -1,0 +1,1 @@
+superseded 2026-11-04: CI-shaped Fabric2DHostIO run (job 172397, a08u02, --no-reset). fabric_2d aborted (exit -6) after test_attention_block pos 127/511 TT_FATAL 'Per-core-allocated buffer has no shard on core 9-8'; split into G2-dsb1-f2d/-attn/-hyb (job 172490).

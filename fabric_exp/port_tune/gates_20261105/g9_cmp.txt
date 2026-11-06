@@ -1,0 +1,53 @@
+bh_1d                    IDENTICAL images 74/74
+bh_1d_1erisc             IDENTICAL images 38/38
+bh_1d_mux                IDENTICAL images 44/44
+bh_1d_telemetry          IDENTICAL images 72/72
+bh_1d_trim               IDENTICAL images 72/72
+bh_2d                    IDENTICAL images 82/82
+bh_2d_1erisc             IDENTICAL images 42/42
+bh_2d_1erisc_streaming   IDENTICAL images 42/42
+bh_2d_bwtelemetry        IDENTICAL images 80/80
+bh_2d_codeprof           IDENTICAL images 80/80
+bh_2d_mux                IDENTICAL images 56/56
+bh_2d_streaming          DIFFER    images 82/82  only in A 80, only in B 80
+bh_2d_telemetry          IDENTICAL images 80/80
+bh_2d_trim               IDENTICAL images 80/80
+bh_2d_udm_gtest          DIFFER    images 146/146  only in A 2, only in B 2
+bh_2d_vc2                IDENTICAL images 80/80
+bh_2d_vc2_1erisc         IDENTICAL images 40/40
+bh_neighbor              IDENTICAL images 75/75
+bh_neighbor_1erisc       IDENTICAL images 39/39
+bh_ring                  IDENTICAL images 74/74
+bh_ring_1erisc           IDENTICAL images 38/38
+bh_ring_mux              IDENTICAL images 44/44
+bh_torus                 IDENTICAL images 98/98
+bh_torus_1erisc          IDENTICAL images 50/50
+bh_torus_vc2             IDENTICAL images 80/80
+bh_trim_gtest            IDENTICAL images 186/186
+bh_vc1                   IDENTICAL images 98/98
+bh_vc1_1erisc            IDENTICAL images 50/50
+bh_vc1_vc2               IDENTICAL images 96/96
+glx2_mesh                IDENTICAL images 232/232
+glx2_mesh_novc           IDENTICAL images 232/232
+glx2_mesh_novc_1erisc    IDENTICAL images 116/116
+glx3_mesh                DIFFER    images 424/244  only in A 182, only in B 2
+glx3_passthrough         DIFFER    images 201/292  only in A 4, only in B 95
+glx3_torus_yx            DIFFER    images 208/192  only in A 17, only in B 1
+glx_1d                   IDENTICAL images 114/114
+glx_1x32_line            IDENTICAL images 74/74
+glx_1x32_ring            IDENTICAL images 78/78
+glx_2d                   IDENTICAL images 168/168
+glx_express              IDENTICAL images 218/218
+glx_express_1erisc       IDENTICAL images 110/110
+glx_express_ew           IDENTICAL images 262/262
+glx_ring                 IDENTICAL images 120/120
+glx_torus                IDENTICAL images 120/120
+glxz_mesh                DIFFER    images 109/110  only in A 0, only in B 1
+glxz_mesh_novc           DIFFER    images 108/106  only in A 2, only in B 0
+wh_t3k_line              IDENTICAL images 30/30
+wh_t3k_mesh              IDENTICAL images 38/38
+wh_t3k_ring              IDENTICAL images 30/30
+wh_t3k_sanity_2x2        IDENTICAL images 2/2
+wh_t3k_sanity_common     IDENTICAL images 4/4
+wh_t3k_ubench_2x2        IDENTICAL images 28/28
+TOTAL {'same': 45, 'images': 5144, 'differ': 7}

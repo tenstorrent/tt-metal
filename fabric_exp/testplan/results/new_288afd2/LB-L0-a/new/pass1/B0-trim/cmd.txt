@@ -1,0 +1,2 @@
+./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"
+TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"

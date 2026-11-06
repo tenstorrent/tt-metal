@@ -1,0 +1,39 @@
+{
+ "group": "G-L0-mpiab",
+ "label": "main",
+ "updated": "2026-11-04T00:45:05+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-mm-4x4-ci",
+   "status": "PASS",
+   "duration_s": 290.6,
+   "node": "bh-glx-110-a09u14",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 456,
+    "failed": 0,
+    "runs": 6
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T00:36:47+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G0-mm-4x4-lo",
+   "status": "FAIL",
+   "duration_s": 155.5,
+   "node": "bh-glx-110-a09u14",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T00:41:37+00:00"
+  }
+ ]
+}

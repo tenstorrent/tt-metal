@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1" failures="0" disabled="0" errors="0" time="20.266" timestamp="2026-11-03T22:25:17.635" name="AllTests">
+  <testsuite name="FabricTrafficGeneratorKernelIntegrationTest" tests="1" failures="0" disabled="0" skipped="1" errors="0" time="0" timestamp="2026-11-03T22:25:37.902">
+    <testcase name="KernelGeneratesTraffic" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_fabric_traffic_generator_kernel.cpp" line="155" status="run" result="skipped" time="0" timestamp="1970-01-01T00:00:00.000" classname="FabricTrafficGeneratorKernelIntegrationTest">
+      <skipped message="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_fabric_traffic_generator_kernel.cpp:155&#x0A;"><![CDATA[/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_fabric_traffic_generator_kernel.cpp:155
+]]></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -1,0 +1,27 @@
+# v4/val_torus_y_p150.yaml's UnicastAlltoAll with torus_config XY (data-checked; shape-agnostic: the 2x4 runs use the
+# auto-discovered descriptor, the 4x2 runs pass fabric_exp/torus/p150_x8_4x2_torus_xy_mgd.textproto). 2026-11-03.
+allocation_policies:
+  receiver:
+    max_configs_per_core: 2
+Tests:
+- name: UnicastAlltoAll
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+    num_links: max
+  parametrization_params:
+    size:
+    - 256
+    - 512
+    - 1024
+    num_packets:
+    - 2000
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+  defaults:
+    ftype: unicast
+  patterns:
+  - type: all_to_all

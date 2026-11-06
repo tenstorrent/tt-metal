@@ -1,0 +1,82 @@
+# test_bh_glx_2d_torus_multi_mesh.yaml (tests/tt_metal/tt_fabric/test_infra/test_yamls) with num_packets 40000 -> 4000,
+# for wall time only on a Galaxy pair (64 chips; every row has flow control on, so this is not an overrun cap).
+# torus_config XY -> X: the pair descriptors (torusx16) are TORUS_X; XY threw at RandomPairing2DTorus (job 177393).
+Tests:
+
+# ================================================
+# Fabric 2D Tests (Mesh and Torus)
+# ================================================
+
+  - name: "RandomPairingMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      num_links: 2
+
+    parametrization_params:
+      ftype: [unicast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [512, 1024, 2048, 4096]
+
+    defaults:
+      num_packets: 4000
+
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 10
+
+  - name: "RandomPairing2DTorus"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: X
+      num_links: 2
+
+    parametrization_params:
+      ftype: [unicast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [512, 1024, 2048, 4096]
+
+    defaults:
+      num_packets: 4000
+
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 10
+
+  - name: "AllToAllMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      num_links: 2
+
+    parametrization_params:
+      ftype: [unicast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [512, 1024, 2048, 4096]
+
+    defaults:
+      num_packets: 4000
+
+    patterns:
+      - type: all_to_all
+        iterations: 10
+
+  - name: "AllToAll2DTorus"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: X
+      num_links: 2
+
+    parametrization_params:
+      ftype: [unicast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [512, 1024, 2048, 4096]
+
+    defaults:
+      num_packets: 4000
+
+    patterns:
+      - type: all_to_all
+        iterations: 10

@@ -1,4 +1,8 @@
 #!/bin/bash
+# DEPRECATED (2026-11-04): superseded by frs_glx_frgap.sbatch (and frs_glx_rsz.sbatch), which reset the Galaxy
+# (tt-smi -glx_reset) before their steps, skip ring/torus steps a node cannot map, and stop an arm on a failed
+# validation. This script does not reset at start and nothing submits it any more; it refuses to run unless
+# FRS_OLD_OK=1 (to rerun an old job exactly as it was).
 # v4 rings and tori on one Blackhole Galaxy node (RESULTS §98, family 2): data-checked validation of main's router and
 # v4 on the Galaxy's 2D torus and rings (the yamls vetted on the mock Galaxy, fabric_exp/v4/glxprobe), then ring rows.
 #
@@ -25,6 +29,7 @@
 #SBATCH --job-name=frs-glx-torus
 #SBATCH --output=/data/aagarwal/frs-glx/logs/%x-%j.log
 #SBATCH --chdir=/data/aagarwal/frs-glx
+[ "${FRS_OLD_OK:-}" = 1 ] || { echo "!!! deprecated: use fabric_exp/galaxy/frs_glx_frgap.sbatch (FRS_OLD_OK=1 overrides)"; exit 1; }
 
 set -uo pipefail
 G=${G:-/data/aagarwal/frs-glx}

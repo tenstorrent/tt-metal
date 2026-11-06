@@ -1,0 +1,2566 @@
+# cisp slow-state check X5 (mk_flow_yamls.py): one sender core against one per flow, 8 repeats.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: X5SO1C00R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C00R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5SO1C02R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C02R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5NX1R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+- name: X5NXsR01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+- name: X5SO1C00R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C00R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5SO1C02R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C02R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5NX1R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+- name: X5NXsR02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+- name: X5SO1C00R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C00R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5SO1C02R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C02R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5NX1R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+- name: X5NXsR03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+- name: X5SO1C00R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C00R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5SO1C02R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C02R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5NX1R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+- name: X5NXsR04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+- name: X5SO1C00R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C00R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5SO1C02R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C02R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5NX1R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+- name: X5NXsR05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+- name: X5SO1C00R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C00R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5SO1C02R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C02R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5NX1R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+- name: X5NXsR06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+- name: X5SO1C00R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C00R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5SO1C02R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C02R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5NX1R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+- name: X5NXsR07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+- name: X5SO1C00R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C00R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5SO1C02R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+- name: X5SO2C02R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X5NX1R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+    - destination:
+        hops:
+          N: 1
+- name: X5NXsR08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 1]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 4]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 5]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 6]
+    patterns:
+    - destination:
+        hops:
+          N: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 7]
+    patterns:
+    - destination:
+        hops:
+          N: 1

@@ -1,0 +1,30 @@
+# Report refresh 2 (2026-11-06, fabric_exp/report/refresh/mk_rf2_yamls.py): fused write + atomic (fused_atomic_inc, the stock test infra's default flush), benchmark mode only, at 1,024 / 4,096 / 4,352 B; 200G row as the matrix's 1-hop write cell: GlxLinear1HopEW (glx_sizes_linear.yaml).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxLinear1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - fused_atomic_inc
+    size:
+    - 1024
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

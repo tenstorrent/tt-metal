@@ -1,0 +1,2 @@
+main pass 1 (job 172928, 09:01-09:05): FAIL from the harness, not the router: tracy capture did not finish within 120 s after the test (device data push to Tracy, 32 chips); dit_ring_joint_perf.py now sets TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1 (patched in the job's stage copy before arm 2); the job's last arm reruns main pass 1
+UPDATE: the TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY fix was WRONG: new pass 1 (09:08-09:12) failed the same way

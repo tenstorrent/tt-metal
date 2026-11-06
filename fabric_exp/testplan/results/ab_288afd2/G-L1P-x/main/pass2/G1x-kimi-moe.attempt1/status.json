@@ -1,0 +1,53 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "blaze_models_prefill_tests.yaml",
+  "mirrored": true,
+  "name": "(Kimi-K2.7-1T, Kimi-K3-2.8T) MoE perf 5k",
+  "sku": "bh_sc1_high_power"
+ },
+ "ci_timeout_s": 1920,
+ "data_inodes_at_submit": "5721433",
+ "data_inodes_free": 5965103,
+ "deviation": "no mpirun wrapper (one host); KIMI_MOE_PERF_IGNORE_POWER=1 (the 110-a hosts' TDP class is unknown; both arms run on one node), KIMI_MOE_PERF_REPLAYS=5 (metric stays the first replay)",
+ "duration_s": 45.0,
+ "end": "2026-11-04T09:17:17+00:00",
+ "failed_lines": [],
+ "group": "G-L1P-x",
+ "jit_cache": "/tmp/aagarwal-regress/172972/cache/main-main",
+ "junit_files": 1,
+ "label": "ab_288afd2",
+ "metrics": 0,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-120-c08u14",
+ "note": null,
+ "pass": 2,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "172972",
+ "start": "2026-11-04T09:16:32+00:00",
+ "status": "PASS",
+ "step": "G1x-kimi-moe",
+ "step_env": null,
+ "telemetry": "off (prod default)",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 2
+ },
+ "timeout_note": null,
+ "timeout_s": 1920,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

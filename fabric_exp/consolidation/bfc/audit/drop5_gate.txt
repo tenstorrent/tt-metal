@@ -1,0 +1,101 @@
+images 5010; differing from base in drop5 or a single: 4071
+
+== functions changed in drop5 but in no single arm (config ERISC, function: images)
+   (none)
+== functions changed by a single arm but not in drop5
+   (none)
+== function presence (inlining) in drop5 not predicted by the singles
+   (none)
+== pass loops: drop5's (instructions, stack loads, stack stores) vs base + the singles' summed deltas
+   bh_1d E0                     sender::run            as predicted   36, differs    0
+   bh_1d_1erisc E1              single::receiver_pass  as predicted   36, differs    0
+   bh_1d_1erisc E1              single::sender_pass    as predicted   36, differs    0
+   bh_1d_mux E1                 single::receiver_pass  as predicted   36, differs    0
+   bh_1d_mux E1                 single::sender_pass    as predicted   36, differs    0
+   bh_1d_telemetry E0           sender::run            as predicted   36, differs    0
+   bh_1d_trim E0                sender::run            as predicted   36, differs    0
+   bh_2d E0                     sender::run            as predicted   40, differs    0
+   bh_2d_1erisc E1              single::receiver_pass  as predicted   40, differs    0
+   bh_2d_1erisc E1              single::run            as predicted   40, differs    0
+   bh_2d_1erisc E1              single::sender_pass    as predicted   40, differs    0
+   bh_2d_1erisc_streaming E1    single::receiver_pass  as predicted   40, differs    0
+   bh_2d_1erisc_streaming E1    single::run            as predicted   40, differs    0
+   bh_2d_1erisc_streaming E1    single::sender_pass    as predicted   40, differs    0
+   bh_2d_bwtelemetry E0         sender::run            as predicted   40, differs    0
+   bh_2d_codeprof E0            sender::run            as predicted   40, differs    0
+   bh_2d_mux E1                 single::receiver_pass  as predicted   40, differs    0
+   bh_2d_mux E1                 single::run            as predicted   40, differs    0
+   bh_2d_mux E1                 single::sender_pass    as predicted   40, differs    0
+   bh_2d_streaming E0           sender::run            as predicted   40, differs    0
+   bh_2d_telemetry E0           sender::run            as predicted   40, differs    0
+   bh_2d_trim E0                sender::run            as predicted   40, differs    0
+   bh_2d_udm_gtest E1           single::receiver_pass  as predicted   40, differs    0
+   bh_2d_udm_gtest E1           single::run            as predicted   40, differs    0
+   bh_2d_udm_gtest E1           single::sender_pass    as predicted   40, differs    0
+   bh_2d_vc2 E0                 sender::run            as predicted   40, differs    0
+   bh_2d_vc2 E1                 receiver::run          as predicted   40, differs    0
+   bh_2d_vc2_1erisc E1          single::receiver_pass  as predicted   40, differs    0
+   bh_2d_vc2_1erisc E1          single::run            as predicted   40, differs    0
+   bh_2d_vc2_1erisc E1          single::sender_pass    as predicted   40, differs    0
+   bh_neighbor E0               sender::run            as predicted   36, differs    0
+   bh_neighbor E1               receiver::run          as predicted   36, differs    0
+   bh_neighbor_1erisc E1        single::receiver_pass  as predicted   36, differs    0
+   bh_neighbor_1erisc E1        single::sender_pass    as predicted   36, differs    0
+   bh_ring E0                   sender::run            as predicted   36, differs    0
+   bh_ring E1                   receiver::run          as predicted   36, differs    0
+   bh_ring_1erisc E1            single::receiver_pass  as predicted   36, differs    0
+   bh_ring_1erisc E1            single::sender_pass    as predicted   36, differs    0
+   bh_ring_mux E1               single::receiver_pass  as predicted   36, differs    0
+   bh_ring_mux E1               single::sender_pass    as predicted   36, differs    0
+   bh_torus E0                  sender::run            as predicted   48, differs    0
+   bh_torus E1                  receiver::run          as predicted   48, differs    0
+   bh_torus_1erisc E1           single::receiver_pass  as predicted   48, differs    0
+   bh_torus_1erisc E1           single::run            as predicted   48, differs    0
+   bh_torus_1erisc E1           single::sender_pass    as predicted   48, differs    0
+   bh_torus_vc2 E0              sender::run            as predicted   40, differs    0
+   bh_torus_vc2 E1              receiver::run          as predicted   40, differs    0
+   bh_torus_x E0                sender::run            as predicted   16, differs    0
+   bh_torus_y E0                sender::run            as predicted   32, differs    0
+   bh_torus_y E1                receiver::run          as predicted    8, differs    0
+   bh_trim_gtest E0             sender::run            as predicted  132, differs    0
+   bh_trim_gtest E1             receiver::run          as predicted   32, differs    0
+   bh_vc1 E0                    sender::run            as predicted   47, differs    0
+   bh_vc1 E1                    receiver::run          as predicted   31, differs    0
+   bh_vc1_1erisc E1             single::receiver_pass  as predicted   48, differs    0
+   bh_vc1_1erisc E1             single::sender_pass    as predicted    0, differs   48
+      x48: base (930, 6, 6) singles [rg_s537+1/+0/+0 rg_s583-11/+0/+0] predicted (920, 6, 6) drop5 (918, 6, 6)
+   bh_vc1_vc2 E0                sender::run            as predicted   47, differs    0
+   bh_vc1_vc2 E1                receiver::run          as predicted   47, differs    0
+   glx2_mesh E0                 sender::run            as predicted  116, differs    0
+   glx2_mesh E1                 receiver::run          as predicted   80, differs    0
+   glx2_mesh_novc E0            sender::run            as predicted  114, differs    0
+   glx2_mesh_novc_1erisc E1     single::receiver_pass  as predicted  116, differs    0
+   glx2_mesh_novc_1erisc E1     single::run            as predicted  108, differs    0
+   glx2_mesh_novc_1erisc E1     single::sender_pass    as predicted  116, differs    0
+   glx3_mesh E0                 sender::run            as predicted  213, differs    0
+   glx3_mesh E1                 receiver::run          as predicted  149, differs    0
+   glx3_passthrough E0          sender::run            as predicted   98, differs    0
+   glx3_passthrough E1          receiver::run          as predicted   98, differs    0
+   glx3_torus_yx E0             sender::run            as predicted  104, differs    0
+   glx3_torus_yx E1             receiver::run          as predicted   80, differs    0
+   glx_1d E0                    sender::run            as predicted   57, differs    0
+   glx_1x32_line E0             sender::run            as predicted   36, differs    0
+   glx_1x32_ring E0             sender::run            as predicted   38, differs    0
+   glx_1x32_ring E1             receiver::run          as predicted   38, differs    0
+   glx_2d E0                    sender::run            as predicted   84, differs    0
+   glx_express E0               sender::run            as predicted  108, differs    0
+   glx_express E1               receiver::run          as predicted  108, differs    0
+   glx_express_1erisc E1        single::receiver_pass  as predicted  108, differs    0
+   glx_express_1erisc E1        single::run            as predicted  108, differs    0
+   glx_express_1erisc E1        single::sender_pass    as predicted  108, differs    0
+   glx_express_ew E0            sender::run            as predicted  130, differs    0
+   glx_express_ew E1            receiver::run          as predicted  130, differs    0
+   glx_ring E0                  sender::run            as predicted   60, differs    0
+   glx_ring E1                  receiver::run          as predicted   60, differs    0
+   glx_torus E0                 sender::run            as predicted   60, differs    0
+   glx_torus E1                 receiver::run          as predicted   60, differs    0
+   glx_torus_y E0               sender::run            as predicted   48, differs    0
+   glx_torus_y E1               receiver::run          as predicted   24, differs    0
+   glxz_mesh E0                 sender::run            as predicted   54, differs    0
+   glxz_mesh E1                 receiver::run          as predicted   30, differs    0
+   glxz_mesh_novc E0            sender::run            as predicted   54, differs    0

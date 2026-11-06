@@ -1,0 +1,4 @@
+export TT_METAL_SHM_TRACKING_DISABLED=1
+export LOGURU_LEVEL=ERROR
+pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit $?
+ATTN_RES_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP2xTP4" -vvv --tb=short || exit $?

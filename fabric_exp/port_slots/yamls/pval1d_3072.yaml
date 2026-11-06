@@ -1,0 +1,29 @@
+# Port slot measurements (SLOT_ALLOCATOR.md section 12.12; fabric_exp/port_slots/mk_port_yamls.py)
+# Data-checked SlsLin1HopEW at 3072 B, 85 packets.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: ValSlsLin1HopEW
+  sync: true
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 85
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

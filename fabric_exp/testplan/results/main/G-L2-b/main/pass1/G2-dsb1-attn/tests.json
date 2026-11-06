@@ -1,0 +1,24 @@
+{
+ "counts": {
+  "FAIL": 2,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_attention_block::test_attention_block[blackhole-True-1-NOC_MODE.DM_DYNAMIC_NOC-device_params0-0-2-127-32768-1-4-2-1-False-1e-06-1-0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_attention_block::test_attention_block[blackhole-True-1-NOC_MODE.DM_DYNAMIC_NOC-device_params0-0-2-511-32768-1-4-2-1-False-1e-06-1-0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  }
+ }
+}

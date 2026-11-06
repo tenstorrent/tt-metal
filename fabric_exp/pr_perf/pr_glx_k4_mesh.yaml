@@ -1,0 +1,139 @@
+# PR perf gap runs, Galaxy 200G (mk_pr_gap_yamls.py): galaxy/glx_sizes_mesh.yaml's GlxMesh1HopNS, GlxMesh1HopEWScatter, GlxMesh1HopEWFused, GlxMesh1HopEWAtomic, GlxMesh3HopEW, GlxMeshMulticast
+# at 512 and 4096 B only (the sizes the 200G size suites did not run).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxMesh1HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 512
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4
+- name: GlxMesh1HopEWScatter
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_scatter_write
+    size:
+    - 512
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxMesh1HopEWFused
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - fused_atomic_inc
+    size:
+    - 512
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxMesh1HopEWAtomic
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - atomic_inc
+    size:
+    - 512
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxMesh3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 512
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: GlxMeshMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 512
+    - 4096
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1

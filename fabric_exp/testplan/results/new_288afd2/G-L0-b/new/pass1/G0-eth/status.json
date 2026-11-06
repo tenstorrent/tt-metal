@@ -1,0 +1,53 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": false,
+  "list": "runtime_integration_tests.yaml",
+  "name": "galaxy_eth",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 900,
+ "data_inodes_at_submit": "3073699",
+ "data_inodes_free": 7562733,
+ "deviation": null,
+ "duration_s": 90.1,
+ "end": "2026-11-04T10:10:08+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=134): TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth"
+ ],
+ "group": "G-L0-b",
+ "jit_cache": "/tmp/aagarwal-regress/172874/cache/new_288afd2-new",
+ "junit_files": 1,
+ "label": "new_288afd2",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a07u02",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172874",
+ "start": "2026-11-04T10:08:38+00:00",
+ "status": "FAIL",
+ "step": "G0-eth",
+ "step_env": null,
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 34
+ },
+ "timeout_note": null,
+ "timeout_s": 900,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

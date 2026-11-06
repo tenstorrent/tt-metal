@@ -1,0 +1,43 @@
+# VC0 + VC2 with matched counts (porth, 256 B; fabric_exp/report/refresh/rf_matched.py, from this job's pass a):
+# VC0 4000000 packets, VC2 1040000: VC0 / VC2 cycles per packet under contention 170.7 / 656.3, so both senders finish
+# together and the summary CSV is the link's combined rate.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsVC02M256
+  benchmark_mode: true
+  sync: false  # each sender times its own run
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+  defaults:
+    ftype: unicast
+    num_packets: 4000000
+  senders:
+  - device:
+    - 0
+    - 0
+    vc_id: 0
+    patterns:
+    - num_packets: 4000000
+      destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 0
+    vc_id: 2
+    patterns:
+    - num_packets: 1040000
+      destination:
+        device:
+        - 0
+        - 1

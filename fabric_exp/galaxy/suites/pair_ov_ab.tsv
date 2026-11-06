@@ -1,0 +1,5 @@
+# config	label	form	timeout_s	env	yaml
+# Override (inter-mesh traffic on VC0) A/B on one pair: the job tree (BASE) then GLXQ_TREE (BATCH); 2026-11-05.
+config	label	form	timeout_s	env	yaml
+ov_base	ov_base_mm_exp	mm_exp	900	TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml
+ov_batch	ov_batch_mm_exp	mm_exp	900	TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1,GLXQ_TREE=port_c3c1813	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml

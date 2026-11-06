@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="31" failures="0" disabled="0" errors="0" time="40.331" timestamp="2026-11-03T21:03:56.461" name="AllTests">
+  <testsuite name="Fabric1DFixture" tests="13" failures="0" disabled="0" skipped="3" errors="0" time="6.719" timestamp="2026-11-03T21:04:09.244">
+    <testcase name="TestGetNextHopRouterDirection1D" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="1759" status="run" result="completed" time="0.339" timestamp="2026-11-03T21:04:09.244" classname="Fabric1DFixture" />
+    <testcase name="TestSetUnicastRoute" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="1994" status="run" result="skipped" time="0" timestamp="2026-11-03T21:04:09.584" classname="Fabric1DFixture">
+      <skipped message="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1996&#x0A;Test applicable only on T3K"><![CDATA[/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1996
+Test applicable only on T3K]]></skipped>
+    </testcase>
+    <testcase name="TestSetUnicastRouteIdleEth" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="2001" status="run" result="skipped" time="0" timestamp="2026-11-03T21:04:09.584" classname="Fabric1DFixture">
+      <skipped message="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:2003&#x0A;Test applicable only on T3K"><![CDATA[/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:2003
+Test applicable only on T3K]]></skipped>
+    </testcase>
+    <testcase name="TestUnicastRaw" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="1861" status="run" result="completed" time="0.906" timestamp="2026-11-03T21:04:09.584" classname="Fabric1DFixture" />
+    <testcase name="TestUnicastConnAPI" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="1875" status="run" result="completed" time="0.002" timestamp="2026-11-03T21:04:10.491" classname="Fabric1DFixture" />
+    <testcase name="TestUnicastConnAPIDRAM" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="1876" status="run" result="completed" time="1.048" timestamp="2026-11-03T21:04:10.493" classname="Fabric1DFixture" />
+    <testcase name="TestUnicastTGGateways" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="1877" status="run" result="skipped" time="0" timestamp="2026-11-03T21:04:11.541" classname="Fabric1DFixture">
+      <skipped message="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:832&#x0A;"><![CDATA[/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:832
+]]></skipped>
+    </testcase>
+    <testcase name="TestMCastConnAPI" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="1878" status="run" result="completed" time="1.047" timestamp="2026-11-03T21:04:11.541" classname="Fabric1DFixture" />
+    <testcase name="TestChipMCast1DWithTracing" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="1881" status="run" result="completed" time="1.157" timestamp="2026-11-03T21:04:12.589" classname="Fabric1DFixture" />
+    <testcase name="TestChipMCast1DWithTracing2" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="1882" status="run" result="completed" time="0.003" timestamp="2026-11-03T21:04:13.747" classname="Fabric1DFixture" />
+    <testcase name="TestSparseMcastPerPageSingleDest" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_sparse_mcast_perpage.cpp" line="173" status="run" result="completed" time="1.211" timestamp="2026-11-03T21:04:13.751" classname="Fabric1DFixture" />
+    <testcase name="TestSparseMcastPerPageTwoContiguous" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_sparse_mcast_perpage.cpp" line="174" status="run" result="completed" time="0.998" timestamp="2026-11-03T21:04:14.962" classname="Fabric1DFixture" />
+    <testcase name="TestSparseMcastPerPageNonContiguous" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_sparse_mcast_perpage.cpp" line="175" status="run" result="completed" time="0.003" timestamp="2026-11-03T21:04:15.961" classname="Fabric1DFixture" />
+  </testsuite>
+  <testsuite name="Fabric1DTensixFixture" tests="4" failures="0" disabled="0" skipped="0" errors="0" time="3.898" timestamp="2026-11-03T21:04:23.174">
+    <testcase name="TestLinearFabricUnicastNocUnicastWriteMux" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="3925" status="run" result="completed" time="0.997" timestamp="2026-11-03T21:04:23.174" classname="Fabric1DTensixFixture" />
+    <testcase name="TestLinearFabricUnicastNocAtomicIncMux" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="3929" status="run" result="completed" time="0.912" timestamp="2026-11-03T21:04:24.172" classname="Fabric1DTensixFixture" />
+    <testcase name="TestLinearFabricMulticastNocUnicastWriteMux" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="3933" status="run" result="completed" time="1.041" timestamp="2026-11-03T21:04:25.084" classname="Fabric1DTensixFixture" />
+    <testcase name="TestLinearFabricMulticastNocAtomicIncMux" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp" line="3937" status="run" result="completed" time="0.947" timestamp="2026-11-03T21:04:26.126" classname="Fabric1DTensixFixture" />
+  </testsuite>
+  <testsuite name="Fabric1DMuxFixture" tests="14" failures="0" disabled="0" skipped="4" errors="0" time="8.98" timestamp="2026-11-03T21:04:27.464">
+    <testcase name="TestFabricMuxTwoChipVariant1" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="656" status="run" result="completed" time="0.63" timestamp="2026-11-03T21:04:27.464" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxTwoChipVariant2" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="674" status="run" result="completed" time="0.874" timestamp="2026-11-03T21:04:28.095" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxTwoChipVariant3" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="692" status="run" result="completed" time="0.17" timestamp="2026-11-03T21:04:28.970" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxTwoChipVariantWithNocTracing" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="711" status="run" result="completed" time="0.008" timestamp="2026-11-03T21:04:29.140" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxTerminateFromKernel" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="729" status="run" result="completed" time="0.631" timestamp="2026-11-03T21:04:29.149" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxThreeChipVariant" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="748" status="run" result="completed" time="0.817" timestamp="2026-11-03T21:04:29.781" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxFourChipVariant1" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="766" status="run" result="completed" time="0.693" timestamp="2026-11-03T21:04:30.598" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxFourChipVariant2" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="784" status="run" result="completed" time="1.407" timestamp="2026-11-03T21:04:31.292" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxFiveChipVariant" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="802" status="run" result="skipped" time="0" timestamp="2026-11-03T21:04:32.699" classname="Fabric1DMuxFixture">
+      <skipped message="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp:408&#x0A;Not enough devices available"><![CDATA[/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp:408
+Not enough devices available]]></skipped>
+    </testcase>
+    <testcase name="TestFabricMuxSixChipVariant" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="820" status="run" result="skipped" time="0" timestamp="2026-11-03T21:04:32.699" classname="Fabric1DMuxFixture">
+      <skipped message="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp:408&#x0A;Not enough devices available"><![CDATA[/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp:408
+Not enough devices available]]></skipped>
+    </testcase>
+    <testcase name="TestFabricMuxSevenChipVariant" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="838" status="run" result="skipped" time="0" timestamp="2026-11-03T21:04:32.699" classname="Fabric1DMuxFixture">
+      <skipped message="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp:408&#x0A;Not enough devices available"><![CDATA[/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp:408
+Not enough devices available]]></skipped>
+    </testcase>
+    <testcase name="TestFabricMuxEightChipVariant" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="856" status="run" result="skipped" time="0" timestamp="2026-11-03T21:04:32.699" classname="Fabric1DMuxFixture">
+      <skipped message="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp:408&#x0A;Not enough devices available"><![CDATA[/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp:408
+Not enough devices available]]></skipped>
+    </testcase>
+    <testcase name="TestFabricMuxStressOpenClose" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="874" status="run" result="completed" time="2.45" timestamp="2026-11-03T21:04:32.699" classname="Fabric1DMuxFixture" />
+    <testcase name="TestFabricMuxNumFullSizeChannelIters" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_mux.cpp" line="892" status="run" result="completed" time="1.295" timestamp="2026-11-03T21:04:35.150" classname="Fabric1DMuxFixture" />
+  </testsuite>
+</testsuites>

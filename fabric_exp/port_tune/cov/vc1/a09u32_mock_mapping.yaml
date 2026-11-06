@@ -1,0 +1,6 @@
+# Mock cluster for the VC1 split on bh-lb-120-a09u32 (CPU only, no device): both ranks read this host's cluster
+# descriptor; TT_VISIBLE_DEVICES in the rank bindings picks each rank's four chips. Copy of the study's
+# fabric_exp/vc1/a09u32_mock_mapping.yaml with an absolute descriptor path.
+rank_to_cluster_mock_cluster_desc:
+  0: "/home/aagarwal/tt-metal/fabric_exp/a09u32_cluster_desc.yaml"
+  1: "/home/aagarwal/tt-metal/fabric_exp/a09u32_cluster_desc.yaml"

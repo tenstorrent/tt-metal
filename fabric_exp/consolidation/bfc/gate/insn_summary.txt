@@ -1,0 +1,13 @@
+Every differing router image (bfc_gate.py, 49 configs), bfc_insn_diff.py base -> branch:
+  36 x bh_ring        E0 (active_erisc)             T16  code bytes +0  1 instruction
+  36 x bh_ring_1erisc E1 (subordinate_active_erisc) T16  code bytes +0  1 instruction
+  60 x glx_ring       E0                            T16  code bytes +0  1 instruction
+  38 x glx_1x32_ring  E0                            T16  code bytes +0  1 instruction
+  the instruction: srli a5,a5,0x11 -> srli a5,a5,0x14 (134x), srli a2,a2,0x11 -> srli a2,a2,0x14 (36x),
+  all at router_sender.hpp:643 (visit_worker: remote.has_room(remote_free_slots_to_send)); the compiler tests
+  "free slots >= 2" as "(word << 16) >> 17 != 0" and ">= 16" as "(word << 16) >> 20 != 0".
+Streaming-profiler builds (bh_2d_streaming, 160 builds, 2D mesh, no new arg): differ in 3 lui immediates each, all at
+  kernel_profiler_streaming.hpp:202 (the per-run TT_PROFILER_TU_ID numbering, 10/11 swapped between the two runs).
+Multi-rank captures (glx2_mesh, glx3_mesh, glxz_mesh): 23 router builds logged on one side only, paired through the
+  JIT cache: identical. Unpaired non-router test kernels differ in run-dependent compile args (random values, garbled
+  MPI log lines).

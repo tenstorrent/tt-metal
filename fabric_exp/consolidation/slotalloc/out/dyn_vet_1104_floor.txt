@@ -1,0 +1,17 @@
+glxvc13k     tier    85,4,8,2,4             ok
+glxvc13k     dyn     30,14,16,7,6           ok
+glxvc13k     dynw24  24,16,16,7,6           ok
+glxvc13k     dynfloor 26,10,32,7,6           ok
+p150_2d3k    tier    35,16,32               ok
+p150_2d3k    dyn     27,24,16               ok
+p150_2d3k    dynw24  24,25,16               ok
+p150_2d3k    dynfloor 23,20,32               ok
+
+| arm | ELFs | E0 code | E1 code | E0+E1 (vs 26624) | least free stack E0 | E1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| tier | 160 | 12068 | 9940 | 22008 | 1684 | 4252 |
+| dyn | 160 | 12072 | 10072 | 22144 | 1684 | 4252 |
+| dynw24 | 160 | 12056 | 10068 | 22124 | 1684 | 4252 |
+| dynfloor | 160 | 12068 | 10076 | 22144 | 1684 | 4236 |
+DYN_VET_OK
+exit 0

@@ -1,0 +1,210 @@
+== rg_s537
+   bh_1d_1erisc E1              code  36 sched   0 none   0 same   0  [single::sender_pass +2 st 6/6->6/6] x36
+   bh_1d_mux E1                 code  36 sched   0 none   0 same   0  [single::sender_pass +2 st 6/4->6/4] x36
+   bh_1d_telemetry E0           code  36 sched   0 none   0 same   0  [sender::run -1 st 29/39->29/39] x36
+   bh_2d E0                     code   0 sched  40 none   0 same   0  [sender::run +0 st 47/45->47/45] x40
+   bh_2d_1erisc E1              code  40 sched   0 none   0 same   0  [single::sender_pass +2 st 6/6->6/6] x40
+   bh_2d_1erisc_streaming E1    code  40 sched   0 none   0 same   0  [single::sender_pass +2 st 6/6->6/6] x40
+   bh_2d_bwtelemetry E0         code   0 sched  40 none   0 same   0  [sender::run +0 st 54/46->54/46] x40
+   bh_2d_codeprof E0            code   0 sched  40 none   0 same   0  [sender::run +0 st 47/45->47/45] x40
+   bh_2d_mux E1                 code  40 sched   0 none   0 same   0  [single::sender_pass +2 st 6/4->6/4] x40
+   bh_2d_streaming E0           code   0 sched  40 none   0 same   0  [sender::run +0 st 47/45->47/45] x40
+   bh_2d_telemetry E0           code   0 sched  40 none   0 same   0  [sender::run +0 st 54/46->54/46] x40
+   bh_2d_trim E0                code   0 sched  40 none   0 same   0  [sender::run +0 st 46/45->46/45] x40
+   bh_2d_udm_gtest E1           code  40 sched   0 none   0 same   0  [single::sender_pass +2 st 6/6->6/6] x40
+   bh_2d_vc2 E0                 code   0 sched  40 none   0 same   0  [sender::run +0 st 60/56->60/56] x40
+   bh_2d_vc2_1erisc E1          code  40 sched   0 none   0 same   0  [single::sender_pass +2 st 9/9->9/9] x40
+   bh_neighbor_1erisc E1        code  36 sched   0 none   0 same   0  [single::sender_pass +2 st 6/4->6/4] x36
+   bh_ring_1erisc E1            code  36 sched   0 none   0 same   0  [single::sender_pass +2 st 8/7->8/7] x36
+   bh_ring_mux E1               code  36 sched   0 none   0 same   0  [single::sender_pass +2 st 8/4->8/4] x36
+   bh_torus E0                  code   0 sched  48 none   0 same   0  [sender::run +0 st 64/54->64/54] x48
+   bh_torus_1erisc E1           code  48 sched   0 none   0 same   0  [single::sender_pass +2 st 12/9->12/9] x48
+   bh_torus_vc2 E0              code   0 sched  40 none   0 same   0  [sender::run +0 st 60/56->60/56] x24; [sender::run +0 st 78/65->78/65] x16
+   bh_torus_x E0                code   0 sched  16 none   0 same   0  [sender::run +0 st 47/45->47/45] x16
+   bh_torus_y E0                code   0 sched  32 none   0 same   0  [sender::run +0 st 47/45->47/45] x24; [sender::run +0 st 64/54->64/54] x8
+   bh_trim_gtest E0             code   0 sched  48 none   0 same  84  [sender::run +0 st 66/54->66/54] x32; [sender::run +0 st 46/45->46/45] x16
+   bh_vc1 E0                    code   0 sched  47 none   0 same   0  [sender::run +0 st 75/68->75/68] x47
+   bh_vc1_1erisc E1             code  48 sched   0 none   0 same   0  [single::sender_pass +1 st 6/6->6/6] x48
+   bh_vc1_vc2 E0                code   0 sched  47 none   0 same   0  [sender::run +0 st 101/106->101/106] x47
+== rg_s605
+   bh_1d E0                     code   0 sched  36 none   0 same   0  [sender::run +0 st 27/39->27/39] x36
+   bh_1d_1erisc E1              code   0 sched  36 none   0 same   0  [single::sender_pass +0 st 6/6->6/6] x36
+   bh_1d_mux E1                 code   0 sched  36 none   0 same   0  [single::sender_pass +0 st 6/4->6/4] x36
+   bh_1d_telemetry E0           code   0 sched  36 none   0 same   0  [sender::run +0 st 29/39->29/39] x36
+   bh_1d_trim E0                code   0 sched  36 none   0 same   0  [sender::run +0 st 27/39->27/39] x36
+   bh_2d E0                     code   0 sched  40 none   0 same   0  [sender::run +0 st 47/45->47/45] x40
+   bh_2d_1erisc E1              code   0 sched  40 none   0 same   0  [single::sender_pass +0 st 6/6->6/6] x40
+   bh_2d_1erisc_streaming E1    code   0 sched  40 none   0 same   0  [single::sender_pass +0 st 6/6->6/6] x40
+   bh_2d_bwtelemetry E0         code   0 sched  40 none   0 same   0  [sender::run +0 st 54/46->54/46] x40
+   bh_2d_codeprof E0            code   0 sched  40 none   0 same   0  [sender::run +0 st 47/45->47/45] x40
+   bh_2d_mux E1                 code   0 sched  40 none   0 same   0  [single::sender_pass +0 st 6/4->6/4] x40
+   bh_2d_streaming E0           code   0 sched  40 none   0 same   0  [sender::run +0 st 47/45->47/45] x40
+   bh_2d_telemetry E0           code   0 sched  40 none   0 same   0  [sender::run +0 st 54/46->54/46] x40
+   bh_2d_trim E0                code   0 sched  40 none   0 same   0  [sender::run +0 st 46/45->46/45] x40
+   bh_2d_udm_gtest E1           code   0 sched  40 none   0 same   0  [single::sender_pass +0 st 6/6->6/6] x40
+   bh_2d_vc2 E0                 code   0 sched  40 none   0 same   0  [sender::run +0 st 60/56->60/56] x40
+   bh_2d_vc2_1erisc E1          code   0 sched  40 none   0 same   0  [single::sender_pass +0 st 9/9->9/9] x40
+   bh_neighbor E0               code   0 sched  36 none   0 same   0  [sender::run +0 st 15/20->15/20] x36
+   bh_neighbor_1erisc E1        code   0 sched  36 none   0 same   0  [single::sender_pass +0 st 6/4->6/4] x36
+   bh_ring E0                   code   0 sched  36 none   0 same   0  [sender::run +0 st 33/42->33/42] x36
+   bh_ring_1erisc E1            code   0 sched  36 none   0 same   0  [single::sender_pass +0 st 8/7->8/7] x36
+   bh_ring_mux E1               code   0 sched  36 none   0 same   0  [single::sender_pass +0 st 8/4->8/4] x36
+   bh_torus E0                  code   0 sched  48 none   0 same   0  [sender::run +0 st 64/54->64/54] x48
+   bh_torus_1erisc E1           code   0 sched  48 none   0 same   0  [single::sender_pass +0 st 12/9->12/9] x48
+   bh_torus_vc2 E0              code   0 sched  40 none   0 same   0  [sender::run +0 st 60/56->60/56] x24; [sender::run +0 st 78/65->78/65] x16
+   bh_torus_x E0                code   0 sched  16 none   0 same   0  [sender::run +0 st 47/45->47/45] x16
+   bh_torus_y E0                code   0 sched  32 none   0 same   0  [sender::run +0 st 47/45->47/45] x24; [sender::run +0 st 64/54->64/54] x8
+   bh_trim_gtest E0             code   0 sched 132 none   0 same   0  [sender::run +0 st 27/39->27/39] x48; [sender::run +0 st 15/20->15/20] x36
+   bh_vc1 E0                    code   0 sched  47 none   0 same   0  [sender::run +0 st 75/68->75/68] x47
+   bh_vc1_1erisc E1             code   0 sched  48 none   0 same   0  [single::sender_pass +0 st 6/6->6/6] x48
+   bh_vc1_vc2 E0                code   0 sched  47 none   0 same   0  [sender::run +0 st 101/106->101/106] x47
+== rg_s583
+   bh_1d E0                     code  36 sched   0 none   0 same   0  [sender::run -1 st 27/39->27/39] x36
+   bh_1d_1erisc E1              code  36 sched   0 none   0 same   0  [single::sender_pass -4 st 6/6->6/6] x36
+   bh_1d_mux E1                 code  36 sched   0 none   0 same   0  [single::sender_pass +1 st 6/4->6/4] x36
+   bh_1d_telemetry E0           code  36 sched   0 none   0 same   0  [sender::run -2 st 29/39->29/39] x36
+   bh_1d_trim E0                code  36 sched   0 none   0 same   0  [sender::run -1 st 27/39->27/39] x36
+   bh_2d E0                     code  40 sched   0 none   0 same   0  [sender::run -1 st 47/45->47/45] x40
+   bh_2d_1erisc E1              code  40 sched   0 none   0 same   0  [single::sender_pass -14 st 6/6->6/6] x40
+   bh_2d_1erisc_streaming E1    code  40 sched   0 none   0 same   0  [single::sender_pass -14 st 6/6->6/6] x40
+   bh_2d_bwtelemetry E0         code  40 sched   0 none   0 same   0  [sender::run -1 st 54/46->54/46] x40
+   bh_2d_codeprof E0            code  40 sched   0 none   0 same   0  [sender::run -1 st 47/45->47/45] x40
+   bh_2d_mux E1                 code  40 sched   0 none   0 same   0  [single::sender_pass +1 st 6/4->6/4] x40
+   bh_2d_streaming E0           code  40 sched   0 none   0 same   0  [sender::run -1 st 47/45->47/45] x40
+   bh_2d_telemetry E0           code  40 sched   0 none   0 same   0  [sender::run -1 st 54/46->54/46] x40
+   bh_2d_trim E0                code  40 sched   0 none   0 same   0  [sender::run -1 st 46/45->46/45] x40
+   bh_2d_udm_gtest E1           code  40 sched   0 none   0 same   0  [single::sender_pass -14 st 6/6->6/6] x40
+   bh_2d_vc2 E0                 code  40 sched   0 none   0 same   0  [sender::run -3 st 60/56->60/56] x40
+   bh_2d_vc2_1erisc E1          code  40 sched   0 none   0 same   0  [single::sender_pass -10 st 9/9->9/9] x40
+   bh_neighbor E0               code  36 sched   0 none   0 same   0  [sender::run -1 st 15/20->15/20] x36
+   bh_neighbor_1erisc E1        code  36 sched   0 none   0 same   0  [single::sender_pass +2 st 6/4->6/4] x36
+   bh_ring E0                   code  36 sched   0 none   0 same   0  [sender::run -3 st 33/42->33/42] x36
+   bh_ring_1erisc E1            code  36 sched   0 none   0 same   0  [single::sender_pass -7 st 8/7->8/7] x36
+   bh_ring_mux E1               code  36 sched   0 none   0 same   0  [single::sender_pass +1 st 8/4->7/4] x36
+   bh_torus E0                  code  48 sched   0 none   0 same   0  [sender::run -7 st 64/54->64/54] x48
+   bh_torus_1erisc E1           code  48 sched   0 none   0 same   0  [single::sender_pass -21 st 12/9->12/9] x48
+   bh_torus_vc2 E0              code  40 sched   0 none   0 same   0  [sender::run -3 st 60/56->60/56] x24; [sender::run -8 st 78/65->79/65] x16
+   bh_torus_x E0                code  16 sched   0 none   0 same   0  [sender::run -1 st 47/45->47/45] x16
+   bh_torus_y E0                code  32 sched   0 none   0 same   0  [sender::run -1 st 47/45->47/45] x24; [sender::run -7 st 64/54->64/54] x8
+   bh_trim_gtest E0             code 132 sched   0 none   0 same   0  [sender::run -1 st 27/39->27/39] x48; [sender::run -1 st 15/20->15/20] x36
+   bh_vc1 E0                    code  47 sched   0 none   0 same   0  [sender::run -7 st 75/68->76/69] x47
+   bh_vc1_1erisc E1             code  48 sched   0 none   0 same   0  [single::sender_pass -11 st 6/6->6/6] x48
+   bh_vc1_vc2 E0                code   0 sched  47 none   0 same   0  [sender::run +0 st 101/106->101/106] x47
+== rg_s673
+   bh_1d E0                     code  36 sched   0 none   0 same   0  [sender::run +1 st 27/39->27/39] x36
+   bh_1d_1erisc E1              code  36 sched   0 none   0 same   0  [single::sender_pass -1 st 6/6->6/6] x36
+   bh_1d_mux E1                 code  36 sched   0 none   0 same   0  [single::sender_pass -1 st 6/4->6/4] x36
+   bh_1d_telemetry E0           code  36 sched   0 none   0 same   0  [sender::run +1 st 29/39->29/39] x36
+   bh_1d_trim E0                code  36 sched   0 none   0 same   0  [sender::run +1 st 27/39->27/39] x36
+   bh_2d E0                     code  40 sched   0 none   0 same   0  [sender::run +1 st 47/45->47/45] x40
+   bh_2d_1erisc E1              code  40 sched   0 none   0 same   0  [single::sender_pass -1 st 6/6->6/6] x40
+   bh_2d_1erisc_streaming E1    code  40 sched   0 none   0 same   0  [single::sender_pass -1 st 6/6->6/6] x40
+   bh_2d_bwtelemetry E0         code  40 sched   0 none   0 same   0  [sender::run -3 st 54/46->52/46] x40
+   bh_2d_codeprof E0            code  40 sched   0 none   0 same   0  [sender::run +1 st 47/45->47/45] x40
+   bh_2d_mux E1                 code  40 sched   0 none   0 same   0  [single::sender_pass -1 st 6/4->6/4] x40
+   bh_2d_streaming E0           code  40 sched   0 none   0 same   0  [sender::run +1 st 47/45->47/45] x40
+   bh_2d_telemetry E0           code  40 sched   0 none   0 same   0  [sender::run -3 st 54/46->52/46] x40
+   bh_2d_trim E0                code  40 sched   0 none   0 same   0  [sender::run -3 st 46/45->44/45] x40
+   bh_2d_udm_gtest E1           code  40 sched   0 none   0 same   0  [single::sender_pass -1 st 6/6->6/6] x40
+   bh_2d_vc2 E0                 code  40 sched   0 none   0 same   0  [sender::run +1 st 60/56->60/56] x40
+   bh_2d_vc2_1erisc E1          code  40 sched   0 none   0 same   0  [single::sender_pass +4 st 9/9->12/12] x40
+   bh_neighbor E0               code   0 sched  36 none   0 same   0  [sender::run +0 st 15/20->15/20] x36
+   bh_neighbor_1erisc E1        code  36 sched   0 none   0 same   0  [single::sender_pass -1 st 6/4->6/4] x36
+   bh_ring E0                   code  36 sched   0 none   0 same   0  [sender::run -1 st 33/42->33/42] x36
+   bh_ring_1erisc E1            code  36 sched   0 none   0 same   0  [single::sender_pass +2 st 8/7->8/7] x36
+   bh_ring_mux E1               code  36 sched   0 none   0 same   0  [single::sender_pass -1 st 8/4->6/4] x36
+   bh_torus E0                  code  48 sched   0 none   0 same   0  [sender::run -1 st 64/54->64/54] x48
+   bh_torus_1erisc E1           code  48 sched   0 none   0 same   0  [single::sender_pass +4 st 12/9->12/9] x48
+   bh_torus_vc2 E0              code  40 sched   0 none   0 same   0  [sender::run +1 st 60/56->60/56] x24; [sender::run -1 st 78/65->78/65] x16
+   bh_torus_x E0                code  16 sched   0 none   0 same   0  [sender::run +1 st 47/45->47/45] x16
+   bh_torus_y E0                code  32 sched   0 none   0 same   0  [sender::run +1 st 47/45->47/45] x24; [sender::run -1 st 64/54->64/54] x8
+   bh_trim_gtest E0             code  96 sched  36 none   0 same   0  [sender::run +1 st 27/39->27/39] x48; [sender::run +0 st 15/20->15/20] x36
+   bh_vc1 E0                    code  47 sched   0 none   0 same   0  [sender::run -5 st 75/68->76/69] x47
+   bh_vc1_1erisc E1             code   0 sched  48 none   0 same   0  [single::sender_pass +0 st 6/6->6/6] x48
+   bh_vc1_vc2 E0                code  47 sched   0 none   0 same   0  [sender::run -7 st 101/106->101/106] x47
+== rg_d414
+   bh_1d E1                     code  36 sched   0 none   0 same   0  [receiver::run +1 st 16/35->16/35] x36
+   bh_1d_1erisc E1              code  36 sched   0 none   0 same   0  [single::receiver_pass -11 st 6/5->6/5] x36
+   bh_1d_mux E1                 code  36 sched   0 none   0 same   0  [single::receiver_pass -11 st 4/3->4/3] x36
+   bh_1d_telemetry E1           code  36 sched   0 none   0 same   0  [receiver::run +5 st 15/35->15/35] x36
+   bh_1d_trim E1                code  36 sched   0 none   0 same   0  [receiver::run +20 st 22/38->22/38] x36
+   bh_2d E1                     code  24 sched  12 none   0 same   4  [receiver::run -14 st 17/36->17/36] x12; [receiver::run +0 st 17/36->17/36] x12
+   bh_2d_1erisc E1              code  40 sched   0 none   0 same   0  [single::receiver_pass -12 st 4/3->4/3] x28; [single::receiver_pass -15 st 5/4->5/4] x12
+   bh_2d_1erisc_streaming E1    code  40 sched   0 none   0 same   0  [single::receiver_pass -12 st 4/3->4/3] x28; [single::receiver_pass -15 st 5/4->5/4] x12
+   bh_2d_bwtelemetry E1         code  24 sched  12 none   0 same   4  [receiver::run -14 st 21/41->21/41] x12; [receiver::run -14 st 16/36->16/36] x12
+   bh_2d_codeprof E1            code  28 sched  12 none   0 same   0  [receiver::run +1 st 27/43->27/43] x24; [receiver::run +0 st 30/46->30/46] x12
+   bh_2d_mux E1                 code  40 sched   0 none   0 same   0  [single::receiver_pass -12 st 3/2->3/2] x28; [single::receiver_pass -15 st 4/3->4/3] x12
+   bh_2d_streaming E1           code  24 sched  12 none   0 same   4  [receiver::run +0 st 17/36->17/36] x12; [receiver::run -14 st 21/40->21/40] x12
+   bh_2d_telemetry E1           code  24 sched  16 none   0 same   0  [receiver::run -14 st 21/41->21/41] x24; [receiver::run +0 st 17/36->17/36] x16
+   bh_2d_trim E1                code  28 sched  12 none   0 same   0  [receiver::run -1 st 22/41->22/41] x12; [receiver::run +0 st 20/39->20/39] x12
+   bh_2d_udm_gtest E1           code  40 sched   0 none   0 same   0  [single::receiver_pass +11 st 0/0->0/0] x16; [single::receiver_pass +9 st 0/0->0/0] x12
+   bh_2d_vc2 E1                 code  16 sched  24 none   0 same   0  [receiver::run +0 st 29/52->29/52] x24; [receiver::run -1 st 30/53->30/53] x12
+   bh_2d_vc2_1erisc E1          code  40 sched   0 none   0 same   0  [single::receiver_pass -2 st 8/7->8/7] x16; [single::receiver_pass -16 st 8/7->8/7] x12
+   bh_ring E1                   code  36 sched   0 none   0 same   0  [receiver::run +19 st 18/37->18/37] x36
+   bh_ring_1erisc E1            code  36 sched   0 none   0 same   0  [single::receiver_pass -9 st 11/9->10/8] x36
+   bh_ring_mux E1               code  36 sched   0 none   0 same   0  [single::receiver_pass -5 st 6/5->6/5] x36
+   bh_torus E1                  code  16 sched  16 none   0 same  16  [receiver::run -3 st 26/43->26/43] x16; [receiver::run +0 st 19/38->19/38] x16
+   bh_torus_1erisc E1           code  48 sched   0 none   0 same   0  [single::receiver_pass -11 st 7/5->7/5] x16; [single::receiver_pass -8 st 7/5->7/5] x16
+   bh_torus_vc2 E1              code  16 sched  24 none   0 same   0  [receiver::run +0 st 29/52->29/52] x24; [receiver::run -1 st 34/54->34/54] x12
+   bh_torus_x E1                code   0 sched  16 none   0 same   0  [receiver::run +0 st 17/36->17/36] x16
+   bh_torus_y E1                code  28 sched   0 none   0 same   4  [receiver::run -14 st 17/36->17/36] x12; [receiver::run -14 st 21/40->21/40] x12
+   bh_trim_gtest E1             code  32 sched  16 none   0 same   0  [receiver::run -1 st 19/38->19/38] x16; [receiver::run -2 st 20/39->19/38] x16
+   bh_vc1 E1                    code  31 sched  16 none   0 same   0  [receiver::run +0 st 17/40->17/40] x16; [receiver::run -18 st 36/57->32/57] x11
+   bh_vc1_1erisc E1             code  48 sched   0 none   0 same   0  [single::receiver_pass -24 st 12/11->10/9] x12; [single::receiver_pass -13 st 12/12->15/15] x8
+   bh_vc1_vc2 E1                code  31 sched   0 none   0 same  16  [receiver::run -1 st 44/41->43/41] x16; [receiver::run -1 st 46/42->45/42] x15
+== rg_r755
+   bh_1d_1erisc E1              code   0 sched  36 none   0 same   0  [single::receiver_pass +0 st 6/5->6/5] x36
+   bh_1d_mux E1                 code   0 sched  36 none   0 same   0  [single::receiver_pass +0 st 4/3->4/3] x36
+   bh_2d_1erisc E1              code  40 sched   0 none   0 same   0  [single::receiver_pass +563 st 0/0->4/3; single::receiver_pass -564 st 4/3->0/0; single::run -3 st 15/43->16/42] x12; [single::receiver_pass +560 st 0/0->4/3; single::receiver_pass -561 st 4/3->0/0; single::run -3 st 15/43->16/42]
+   bh_2d_1erisc_streaming E1    code  40 sched   0 none   0 same   0  [single::receiver_pass +661 st 0/0->5/4; single::receiver_pass -663 st 5/4->0/0; single::run +1 st 15/43->17/43] x12; [single::receiver_pass +563 st 0/0->4/3; single::receiver_pass -564 st 4/3->0/0; single::run -3 st 15/43->16/42]
+   bh_2d_mux E1                 code  40 sched   0 none   0 same   0  [single::receiver_pass +658 st 0/0->4/3; single::receiver_pass -660 st 4/3->0/0; single::run +1 st 9/42->11/42] x12; [single::receiver_pass +557 st 0/0->3/2; single::receiver_pass -558 st 3/2->0/0; single::run -3 st 9/42->10/41] x
+   bh_2d_udm_gtest E1           code  40 sched   0 none   0 same   0  [single::receiver_pass +446 st 0/0->0/0; single::receiver_pass -448 st 0/0->0/0; single::run +1 st 15/43->17/43] x12; [single::receiver_pass +355 st 0/0->0/0; single::receiver_pass -356 st 0/0->0/0; single::run -3 st 15/43->16/42]
+   bh_2d_vc2_1erisc E1          code  40 sched   0 none   0 same   0  [single::receiver_pass +904 st 0/0->8/7; single::receiver_pass -905 st 8/7->0/0; single::run -3 st 17/52->18/51] x24; [single::receiver_pass +1008 st 0/0->10/9; single::receiver_pass -1010 st 10/9->0/0; single::run +1 st 17/52->19
+   bh_neighbor E1               code  36 sched   0 none   0 same   0  [receiver::run +17 st 18/34->19/35] x36
+   bh_neighbor_1erisc E1        code   0 sched  36 none   0 same   0  [single::receiver_pass +0 st 4/3->4/3] x36
+   bh_ring E1                   code   0 sched  36 none   0 same   0  [receiver::run +0 st 18/37->18/37] x36
+   bh_ring_1erisc E1            code   0 sched  36 none   0 same   0  [single::receiver_pass +0 st 11/9->11/9] x36
+   bh_ring_mux E1               code   0 sched  36 none   0 same   0  [single::receiver_pass +0 st 6/5->6/5] x36
+   bh_torus E1                  code   0 sched  48 none   0 same   0  [receiver::run +0 st 19/38->19/38] x32; [receiver::run +0 st 26/43->26/43] x16
+   bh_torus_1erisc E1           code  48 sched   0 none   0 same   0  [single::receiver_pass +518 st 0/0->7/5; single::receiver_pass -519 st 7/5->0/0; single::run -3 st 15/43->16/42] x16; [single::receiver_pass +520 st 0/0->7/5; single::receiver_pass -521 st 7/5->0/0; single::run -3 st 15/43->16/42]
+   bh_torus_vc2 E1              code   0 sched  16 none   0 same  24  [receiver::run +0 st 34/54->34/54] x12; [receiver::run +0 st 30/54->30/54] x4
+   bh_torus_y E1                code   0 sched   8 none   0 same  24  [receiver::run +0 st 26/43->26/43] x8
+   bh_trim_gtest E1             code   0 sched  32 none   0 same  16  [receiver::run +0 st 19/38->19/38] x16; [receiver::run +0 st 20/39->20/39] x16
+   bh_vc1_1erisc E1             code   0 sched  48 none   0 same   0  [single::receiver_pass +0 st 12/12->12/12] x24; [single::receiver_pass +0 st 12/11->12/11] x12
+== kim_s755
+   bh_1d E0                     code  36 sched   0 none   0 same   0  [sender::run -10 st 27/39->20/26] x36
+   bh_1d_1erisc E1              code  36 sched   0 none   0 same   0  [single::run +6 st 11/44->11/48; single::sender_pass -2 st 6/6->6/6] x36
+   bh_1d_telemetry E0           code  36 sched   0 none   0 same   0  [sender::run -8 st 29/39->24/29] x36
+   bh_1d_trim E0                code  36 sched   0 none   0 same   0  [sender::run -6 st 27/39->23/29] x36
+   bh_2d E0                     code  40 sched   0 none   0 same   0  [sender::run +65 st 47/45->54/48] x40
+   bh_2d_1erisc E1              code  40 sched   0 none   0 same   0  [single::run +12 st 15/43->15/51; single::sender_pass -8 st 6/6->6/6] x40
+   bh_2d_1erisc_streaming E1    code  40 sched   0 none   0 same   0  [single::run +12 st 15/43->15/51; single::sender_pass -8 st 6/6->6/6] x40
+   bh_2d_bwtelemetry E0         code  40 sched   0 none   0 same   0  [sender::run +66 st 54/46->59/51] x40
+   bh_2d_codeprof E0            code  40 sched   0 none   0 same   0  [sender::run +65 st 47/45->54/48] x40
+   bh_2d_streaming E0           code  40 sched   0 none   0 same   0  [sender::run +65 st 47/45->54/48] x40
+   bh_2d_telemetry E0           code  40 sched   0 none   0 same   0  [sender::run +66 st 54/46->59/51] x40
+   bh_2d_trim E0                code  40 sched   0 none   0 same   0  [sender::run +59 st 46/45->56/51] x40
+   bh_2d_udm_gtest E1           code  40 sched   0 none   0 same   0  [single::run +12 st 15/43->15/51; single::sender_pass -8 st 6/6->6/6] x40
+   bh_2d_vc2 E0                 code  40 sched   0 none   0 same   0  [sender::run +2 st 60/56->60/56] x40
+   bh_2d_vc2_1erisc E1          code  40 sched   0 none   0 same   0  [single::sender_pass -13 st 9/9->8/8] x40
+   bh_ring E0                   code  36 sched   0 none   0 same   0  [sender::run -20 st 33/42->25/31] x36
+   bh_ring_1erisc E1            code  36 sched   0 none   0 same   0  [single::run +6 st 11/44->11/48; single::sender_pass -2 st 8/7->8/7] x36
+   bh_torus E0                  code  48 sched   0 none   0 same   0  [sender::run +84 st 64/54->71/67] x48
+   bh_torus_1erisc E1           code  48 sched   0 none   0 same   0  [single::run +12 st 15/43->15/51; single::sender_pass -10 st 12/9->12/9] x48
+   bh_torus_vc2 E0              code  40 sched   0 none   0 same   0  [sender::run +2 st 60/56->60/56] x24; [sender::run +2 st 78/65->78/65] x16
+   bh_torus_x E0                code  16 sched   0 none   0 same   0  [sender::run +65 st 47/45->54/48] x16
+   bh_torus_y E0                code  32 sched   0 none   0 same   0  [sender::run +65 st 47/45->54/48] x24; [sender::run +84 st 64/54->71/67] x8
+   bh_trim_gtest E0             code  96 sched   0 none   0 same  36  [sender::run -10 st 27/39->20/26] x48; [sender::run +107 st 66/54->71/67] x32
+   bh_vc1 E0                    code  47 sched   0 none   0 same   0  [sender::run +3 st 75/68->75/68] x47
+   bh_vc1_1erisc E1             code  48 sched   0 none   0 same   0  [single::sender_pass -16 st 6/6->6/6] x48
+   bh_vc1_vc2 E0                code  47 sched   0 none   0 same   0  [sender::run +3 st 101/106->101/106] x47
+== kim_s816
+   bh_2d_vc2_1erisc E1          code  40 sched   0 none   0 same   0  [single::sender_pass +10 st 9/9->17/9] x40
+   bh_torus_vc2 E0              code   0 sched  16 none   0 same  24  [sender::run +0 st 78/65->78/65] x16
+== kim_r713
+   bh_2d_vc2 E1                 code  40 sched   0 none   0 same   0  [receiver::run +4 st 29/52->31/54] x12; [receiver::run +3 st 29/52->31/54] x12
+   bh_2d_vc2_1erisc E1          code  40 sched   0 none   0 same   0  [single::receiver_pass +1 st 8/7->9/7] x28; [single::receiver_pass +1 st 10/9->11/9] x12
+   bh_torus_vc2 E1              code  28 sched  12 none   0 same   0  [receiver::run +0 st 34/54->34/54] x12; [receiver::run +4 st 29/52->31/54] x12
+   bh_vc1 E1                    code  31 sched   0 none   0 same  16  [receiver::run +4 st 36/57->36/58] x15; [receiver::run +5 st 36/55->36/55] x8
+   bh_vc1_1erisc E1             code  32 sched   0 none   0 same  16  [single::receiver_pass +2 st 12/12->16/12] x16; [single::receiver_pass +1 st 12/12->16/12] x8
+   bh_vc1_vc2 E1                code   0 sched  47 none   0 same   0  [receiver::run +0 st 30/29->30/29] x16; [receiver::run +0 st 44/41->44/41] x16

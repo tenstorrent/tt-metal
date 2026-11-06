@@ -1,0 +1,15 @@
+distinct images: de8a/80118 2467  6a4a 2454
+only in de8a/80118 captures: 67 distinct images
+   bh_2d_streaming          fabric_erisc_router          80
+   bh_2d_udm_gtest          test_udm_receiver            1
+   bh_2d_udm_gtest          test_udm_sender              1
+   glx3_mesh                fabric_erisc_router          19
+   glx3_passthrough         tt_fabric_test_sender        1
+   glx3_torus_yx            fabric_erisc_router          1
+   glx3_torus_yx            tt_fabric_test_sender        2
+only in 6a4a captures: 54 distinct images
+   bh_2d_streaming          fabric_erisc_router          80
+   bh_2d_udm_gtest          test_udm_receiver            1
+   bh_2d_udm_gtest          test_udm_sender              1
+   glx3_mesh                fabric_erisc_router          1
+   glxz_mesh                tt_fabric_test_sender        1

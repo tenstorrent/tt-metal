@@ -1,0 +1,1208 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 83,
+  "PERF_WINDOW": 0,
+  "SKIP": 116
+ },
+ "files": [
+  "pytest_1727059_1793748646095192310.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_externally_owned_cases[blackhole-GptOss120B-4x1-fabric_1d-128-2link-rand-pcc-tile-bf16]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_externally_owned_cases[blackhole-GptOss120B-4x1-fabric_1d-1280-2link-rand-pcc-tile-bf16]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_externally_owned_cases[blackhole-GptOss120B-4x8-fabric_1d-128-2link-rand-pcc-tile-bf16]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Requires 32 devices, only 8 available",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_externally_owned_cases[blackhole-GptOss120B-4x8-fabric_1d-1280-2link-rand-pcc-tile-bf16]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Requires 32 devices, only 8 available",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_externally_owned_cases[blackhole-MiniMaxM3-8x1-fabric_1d-128-2link-rand-pcc-tile-bf16]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.471
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_externally_owned_cases[blackhole-MiniMaxM3-8x1-fabric_1d-640-2link-rand-pcc-tile-bf16]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.253
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_externally_owned_cases[blackhole-MiniMaxM3-8x4-fabric_1d-128-2link-rand-pcc-tile-bf16]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Requires 32 devices, only 8 available",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_externally_owned_cases[blackhole-MiniMaxM3-8x4-fabric_1d-640-2link-rand-pcc-tile-bf16]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Requires 32 devices, only 8 available",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv3-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv3-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv3-fabric2d-4x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.135
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv3-torus-xy-8x4-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv3-torus-y-4x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv3-torus-y-4x1-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv3-torus-y-8x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.427
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv4_flash-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv4_flash-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv4_pro-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-dsv4_pro-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-glm_53-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-glm_53-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-gptoss_120b-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-gptoss_120b-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-kimi_k2_7-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-kimi_k2_7-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-minimax_m27-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-minimax_m27-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-mistral4-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-mistral4-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-fabric2d-4x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.281
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-fabric2d-4x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.56
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-torus-xy-8x4-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-torus-xy-8x4-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-torus-y-4x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-torus-y-4x1-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-torus-y-8x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.129
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv3-torus-y-8x1-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.827
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv4_flash-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv4_flash-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv4_pro-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-dsv4_pro-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-glm_53-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-glm_53-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-gptoss_120b-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-gptoss_120b-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-kimi_k2_7-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-kimi_k2_7-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-minimax_m27-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-minimax_m27-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-mistral4-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-row_major-random-mistral4-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv3-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv3-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv3-fabric2d-4x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.406
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv3-torus-xy-8x4-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv3-torus-y-4x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv3-torus-y-4x1-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv3-torus-y-8x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.004
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv4_flash-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv4_flash-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv4_pro-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-dsv4_pro-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-glm_53-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-glm_53-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-gptoss_120b-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-gptoss_120b-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-kimi_k2_7-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-kimi_k2_7-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-minimax_m27-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-minimax_m27-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-mistral4-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-predictable-mistral4-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-fabric2d-4x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.527
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-fabric2d-4x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.512
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-torus-xy-8x4-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-torus-xy-8x4-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-torus-y-4x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-torus-y-4x1-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-torus-y-8x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.161
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv3-torus-y-8x1-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 13.158
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv4_flash-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv4_flash-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv4_pro-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-dsv4_pro-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-glm_53-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-glm_53-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-gptoss_120b-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-gptoss_120b-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-kimi_k2_7-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-kimi_k2_7-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-minimax_m27-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-minimax_m27-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-mistral4-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-bf16_out-tile-random-mistral4-fabric2d-2x2-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-dsv3-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-dsv3-fabric2d-4x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.201
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-dsv3-torus-xy-8x4-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-dsv3-torus-y-4x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-dsv3-torus-y-8x1-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.216
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-dsv4_flash-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-dsv4_pro-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-glm_53-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-gptoss_120b-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-kimi_k2_7-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-minimax_m27-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine::test_ttnn_combine[blackhole-fp8_out-tile-random-mistral4-fabric2d-2x2-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Blackhole only supports 8-device mesh configs (requested 4)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-xy-8x4-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-dsv3-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-8x1-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.106
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-xy-8x4-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-xy-8x4-2link-dsv3-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-dsv3-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-8x1-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.747
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-8x1-2link-dsv3-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.357
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-xy-8x4-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-xy-8x4-2link-dsv3-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-dsv3-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-8x1-2link-dsv3-pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.327
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-8x1-2link-dsv3-perf_no_pcc]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.918
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_ttnn_reduce[blackhole-fabric2d-mesh-4x2-generic]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.497
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_ttnn_reduce[blackhole-fabric2d-mesh-8x4-generic]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Requires 32 devices, only 8 available",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_ttnn_reduce_models[blackhole-fabric2d-mesh-4x2-dsv3]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.31
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_ttnn_reduce_models[blackhole-fabric2d-mesh-8x4-dsv3]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "Requires 32 devices, only 8 available",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_ttnn_reduce_single_expert[blackhole-torus-y-4x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_weights_output_channel_shape_detection[weights_shape0-combine_output_shape0-False]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.387
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_weights_output_channel_shape_detection[weights_shape1-combine_output_shape1-True]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.364
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_weights_output_channel_shape_detection[weights_shape2-combine_output_shape2-True]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.366
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_reduce::test_weights_output_channel_shape_detection[weights_shape3-combine_output_shape3-False]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.374
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ring_joint_mla::test_mla_sdpa[blackhole-balanced-rpxup-4x2-fabric2d-1link-pcc_check-no_trace-determinism_check-1-128-1-576-128-seq100k-q_bf16_kv_bf8]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 28.539
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ring_joint_mla::test_mla_sdpa[blackhole-balanced-rpxup-4x2-fabric2d-1link-pcc_check-no_trace-determinism_check-1-128-1-576-128-seq128k-q_bf16_kv_bf8]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 32.693
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ring_joint_mla::test_mla_sdpa[blackhole-balanced-rpxup-4x2-fabric2d-1link-pcc_check-no_trace-single_run-1-128-1-576-128-seq100k-q_bf16_kv_bf8]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 49.002
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ring_joint_mla::test_mla_sdpa[blackhole-balanced-rpxup-4x2-fabric2d-1link-pcc_check-no_trace-single_run-1-128-1-576-128-seq128k-q_bf16_kv_bf8]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 60.726
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ring_joint_mla::test_mla_sdpa[blackhole-no_balancing-rpxup-4x2-fabric2d-1link-pcc_check-no_trace-determinism_check-1-128-1-576-128-seq100k-q_bf16_kv_bf8]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 21.748
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ring_joint_mla::test_mla_sdpa[blackhole-no_balancing-rpxup-4x2-fabric2d-1link-pcc_check-no_trace-determinism_check-1-128-1-576-128-seq128k-q_bf16_kv_bf8]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 28.608
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ring_joint_mla::test_mla_sdpa[blackhole-no_balancing-rpxup-4x2-fabric2d-1link-pcc_check-no_trace-single_run-1-128-1-576-128-seq100k-q_bf16_kv_bf8]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 54.913
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ring_joint_mla::test_mla_sdpa[blackhole-no_balancing-rpxup-4x2-fabric2d-1link-pcc_check-no_trace-single_run-1-128-1-576-128-seq128k-q_bf16_kv_bf8]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 61.371
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_rope_prefill::test_rope_prefill[blackhole-balanced-seq128k-device_params0-4x2]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.251
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_rope_prefill::test_rope_prefill[blackhole-unbalanced-seq128k-device_params0-4x2]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.047
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_sub_device_load_clear_timing::test_sub_device_load_clear_tracy[blackhole-iters_10-no_sd-2-fabric2d-mesh-4x2]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.757
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_sub_device_load_clear_timing::test_sub_device_load_clear_tracy[blackhole-iters_10-with_sd-2-fabric2d-mesh-4x2]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.684
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-mesh-4x2-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.375
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-xy-8x4-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-8x1-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.172
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-mesh-4x2-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.808
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-xy-8x4-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-8x1-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.856
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-mesh-4x2-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.938
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-xy-8x4-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-8x1-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.004
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-mesh-4x2-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.942
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-xy-8x4-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "requested combination of fabric config and mesh, unfeasible on the given hardware",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-8x1-2link-dsv3-640-avg]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.944
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine_overflow[blackhole-cut_short_last-fabric2d-torus-y-8x1-1link]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.775
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine_overflow[blackhole-omit_last-fabric2d-torus-y-8x1-1link]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.663
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine_top4[blackhole-dispatched_buffer_row_major-fabric2d-torus-y-8x1-1link]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.492
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine_top4[blackhole-dispatched_buffer_tile-fabric2d-torus-y-8x1-1link]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.308
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v20_chip0-bf16_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.732
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v20_chip0-bfp8_tile-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.732
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v20_chip0-fp8_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.724
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v2600_chip4-bf16_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.654
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v2600_chip4-bfp8_tile-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.63
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v2600_chip4-fp8_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.249
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v4480_aligned-bf16_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.728
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v4480_aligned-bfp8_tile-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.736
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v4480_aligned-fp8_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.804
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v4512_chip7-bf16_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.532
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v4512_chip7-bfp8_tile-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.291
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v4512_chip7-fp8_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.76
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v6668_chip2-bf16_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.784
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v6668_chip2-bfp8_tile-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.088
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v6668_chip2-fp8_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.76
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v740_chip1-bf16_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.663
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v740_chip1-bfp8_tile-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.649
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache[blackhole-v740_chip1-fp8_rm-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.656
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_layers_users[blackhole-L61_U1_slot0_layer0_v2600-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.776
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_layers_users[blackhole-L61_U1_slot0_layer60_v2600-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.757
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_layers_users[blackhole-L61_U2_slot1_layer60_v2600-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.852
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_layers_users[blackhole-L8_U2_slot1_layer5_v4512-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.678
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_program_cache_cross_chip[blackhole-bf16_rm-fabric2d-2x4]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.638
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_program_cache_cross_chip[blackhole-bfp8_tile-fabric2d-2x4]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.708
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_program_cache_cross_chip[blackhole-fp8_rm-fabric2d-2x4]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.763
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_tensor_matches_scalar[blackhole-slot0_v2600-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.639
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_tensor_matches_scalar[blackhole-slot0_v4512-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.627
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_tensor_matches_scalar[blackhole-slot0_v740-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.661
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_tensor_matches_scalar[blackhole-slot1_v2600-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.634
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_tensor_program_reuse[blackhole-torus-y-8x1]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.729
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_tp_deduped[blackhole-scalar-fabric2d-2x4]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.666
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_zero_padded_kv_cache::test_zero_padded_kv_cache_tp_deduped[blackhole-tensor-fabric2d-2x4]": {
+   "file": "pytest_1727059_1793748646095192310.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.647
+  }
+ }
+}

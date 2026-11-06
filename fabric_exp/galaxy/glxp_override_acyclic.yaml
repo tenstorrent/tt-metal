@@ -1,0 +1,41 @@
+# Galaxy pair, TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 (inter-mesh traffic on VC0), on the two-MESH pair forms.
+# The override is for one careful use: traffic is routed to the inter-mesh chips inside mesh 0, crosses in a one-hop
+# exchange over the inter-mesh link, and is routed on VC0 inside mesh 1 from there. The test infra's end-to-end
+# inter-mesh patterns (any mesh 0 chip to any mesh 1 chip in one route) are not that use, so they are left out: the
+# first version of this file had OverrideOneWayInter and OverrideOneToAllInter, which hung (177271 ov_mm_exp, nothing
+# reached mesh 1). What stays:
+#   OverrideNeighborExchangeInter  each boundary chip with its peer across the link, both ways: one hop, delivered on
+#                                  arrival, no forward.
+#   OverrideAllToAllIntra          all-to-all inside each mesh (intra_mesh): no inter-mesh traffic.
+# Data-checked, no flow control: num_packets stays within each receiver's ring (one or two receiver configs per core
+# here, so the dynamic ring is 1 MiB: 256 slots at 4096 B, 32768 at 32 B).
+Tests:
+  - name: "OverrideNeighborExchangeInter"
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "OverrideAllToAllIntra"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+      size: [1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 100
+    patterns:
+      - type: all_to_all
+        mesh_scope: intra_mesh
+

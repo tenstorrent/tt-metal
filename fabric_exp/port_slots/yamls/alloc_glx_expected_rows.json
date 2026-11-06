@@ -1,0 +1,112 @@
+{
+ "vc1": {
+  "staged": [
+   "VC0 sender slots {15, 11, 11, 11} receiver slots {8} (channel buffer 4448 B)",
+   "VC0 sender slots {4, 0, 0, 0} receiver slots {8} (channel buffer 4448 B)",
+   "VC1 sender slots {0, 0, 0} receiver slots {4} (channel buffer 4448 B)",
+   "VC1 sender slots {7, 7, 7} receiver slots {4} (channel buffer 4448 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {4, 0, 0, 0} receiver slots {8} (channel buffer 4448 B)",
+   "VC0 sender slots {51, 4, 4, 4} receiver slots {8} (channel buffer 4448 B)",
+   "VC1 sender slots {0, 0, 0} receiver slots {4} (channel buffer 4448 B)",
+   "VC1 sender slots {2, 2, 2} receiver slots {4} (channel buffer 4448 B)"
+  ]
+ },
+ "vc13k": {
+  "staged": [
+   "VC0 sender slots {19, 15, 15, 15} receiver slots {16} (channel buffer 3168 B)",
+   "VC0 sender slots {4, 0, 0, 0} receiver slots {8} (channel buffer 3168 B)",
+   "VC1 sender slots {0, 0, 0} receiver slots {4} (channel buffer 3168 B)",
+   "VC1 sender slots {9, 9, 9} receiver slots {8} (channel buffer 3168 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {4, 0, 0, 0} receiver slots {8} (channel buffer 3168 B)",
+   "VC0 sender slots {85, 4, 4, 4} receiver slots {8} (channel buffer 3168 B)",
+   "VC1 sender slots {0, 0, 0} receiver slots {4} (channel buffer 3168 B)",
+   "VC1 sender slots {2, 2, 2} receiver slots {4} (channel buffer 3168 B)"
+  ]
+ },
+ "vc1x44": {
+  "staged": [
+   "VC0 sender slots {15, 11, 11, 11} receiver slots {8} (channel buffer 4448 B)",
+   "VC0 sender slots {4, 0, 0, 0} receiver slots {8} (channel buffer 4448 B)",
+   "VC1 sender slots {0, 0, 0} receiver slots {4} (channel buffer 4448 B)",
+   "VC1 sender slots {7, 7, 7} receiver slots {4} (channel buffer 4448 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {4, 0, 0, 0} receiver slots {8} (channel buffer 4448 B)",
+   "VC0 sender slots {51, 4, 4, 4} receiver slots {8} (channel buffer 4448 B)",
+   "VC1 sender slots {0, 0, 0} receiver slots {4} (channel buffer 4448 B)",
+   "VC1 sender slots {2, 2, 2} receiver slots {4} (channel buffer 4448 B)"
+  ]
+ },
+ "vc2k": {
+  "staged": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {18, 13, 13, 13} receiver slots {16} (channel buffer 4448 B)",
+   "VC2 sender slots {4} receiver slots {4} (channel buffer 4448 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {43, 7, 7, 7} receiver slots {11} (channel buffer 4448 B)",
+   "VC2 sender slots {2} receiver slots {4} (channel buffer 4448 B)"
+  ]
+ },
+ "vc23k": {
+  "staged": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {32} (channel buffer 3168 B)",
+   "VC0 sender slots {22, 23, 23, 23} receiver slots {16} (channel buffer 3168 B)",
+   "VC2 sender slots {4} receiver slots {4} (channel buffer 3168 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {32} (channel buffer 3168 B)",
+   "VC0 sender slots {77, 7, 7, 7} receiver slots {11} (channel buffer 3168 B)",
+   "VC2 sender slots {2} receiver slots {4} (channel buffer 3168 B)"
+  ]
+ },
+ "frgew": {
+  "staged": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {26, 25} receiver slots {32} (channel buffer 4400 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {16, 16} receiver slots {32} (channel buffer 4400 B)"
+  ]
+ },
+ "frgnsrx": {
+  "staged": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {26, 25} receiver slots {32} (channel buffer 4400 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {16, 16} receiver slots {32} (channel buffer 4400 B)"
+  ]
+ },
+ "frgshort4k": {
+  "staged": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {26, 25} receiver slots {32} (channel buffer 4400 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {16, 16} receiver slots {32} (channel buffer 4400 B)"
+  ]
+ },
+ "frgval": {
+  "staged": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {17, 16, 16, 16} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {26, 25} receiver slots {32} (channel buffer 4400 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {16, 16} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {17, 16, 16, 16} receiver slots {16} (channel buffer 4448 B)"
+  ]
+ }
+}

@@ -1,0 +1,28 @@
+# Report data refresh 2026-11-05 (fabric_exp/report/refresh/mk_rf_yamls.py): breakdown point, 2D 1-hop E/W write at 1024 B: pcs3/ew4352.yaml's row with 100M packets (~10 s on the port, ~15 s on main), long enough for the PC sampler.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsEW1024
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+  defaults:
+    ftype: unicast
+    num_packets: 100000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

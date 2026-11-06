@@ -1,0 +1,92 @@
+# Flush validation of 7326d59a864 on the tip de8a2ac17a8 (coordinator 2026-11-05): p150_it_ring.yaml's proven ring rows
+# (ring 1-hop, unidirectional / half / all-to-all multicast, write and scatter, 3072 / 4352 B; no flow control), data-checked:
+# benchmark_mode off, 5000 packets.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Ring1HopEW
+  benchmark_mode: false
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 3072
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 5000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: UnidirRingMulticast
+  benchmark_mode: false
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 3072
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 5000
+  patterns:
+  - type: unidirectional_linear
+    iterations: 1
+- name: HalfRingMulticast
+  benchmark_mode: false
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 3072
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 5000
+  patterns:
+  - type: half_ring
+    iterations: 1
+- name: RingMulticast
+  benchmark_mode: false
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 3072
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 5000
+  patterns:
+  - type: all_to_all
+    iterations: 1

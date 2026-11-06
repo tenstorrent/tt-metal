@@ -1,0 +1,26 @@
+{
+ "counts": {
+  "FAIL": 2,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "unit_tests_eth.xml"
+ ],
+ "tests": {
+  "MeshDeviceFixture::ActiveEthKernelsDirectSendAllConnectedChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "unknown file\nC++ exception with description \"TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/llrt/tt_cluster.cpp:1569: ethernet_connections_within_cluster.contains(std::get<0>(eth_core)) and ethernet_connections_within_cluster.at(std::get<0>(eth_core)).contains(eth_chan)\ninfo:\nChip 0 logical eth co",
+   "status": "FAIL",
+   "time": 0.473
+  },
+  "MeshDeviceFixture::ActiveEthKernelsSendInterleavedBufferAllConnectedChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "unknown file\nC++ exception with description \"TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/llrt/tt_cluster.cpp:1569: ethernet_connections_within_cluster.contains(std::get<0>(eth_core)) and ethernet_connections_within_cluster.at(std::get<0>(eth_core)).contains(eth_chan)\ninfo:\nChip 0 logical eth co",
+   "status": "FAIL",
+   "time": 1.704
+  }
+ }
+}

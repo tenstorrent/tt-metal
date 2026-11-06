@@ -1,0 +1,137 @@
+{
+ "group": "G-L0-a",
+ "label": "new_288afd2",
+ "updated": "2026-11-04T09:30:27+00:00",
+ "steps": [
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "G0-fix-1d",
+   "status": "PASS",
+   "duration_s": 65.1,
+   "node": "bh-glx-110-a07u02",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 24,
+    "PERF_WINDOW": 0,
+    "SKIP": 7
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T09:23:26+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "G0-fix-2d",
+   "status": "PASS",
+   "duration_s": 130.1,
+   "node": "bh-glx-110-a07u02",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 45,
+    "PERF_WINDOW": 0,
+    "SKIP": 6
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T09:24:32+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "G0-fix-mux",
+   "status": "PASS",
+   "duration_s": 225.3,
+   "node": "bh-glx-110-a07u02",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 68,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T09:26:42+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "G0-health-cv",
+   "status": "ENV",
+   "duration_s": 5.0,
+   "node": "bh-glx-110-a07u02",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:34:45+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "G0-health-stab",
+   "status": "PASS",
+   "duration_s": 145.2,
+   "node": "bh-glx-110-a07u02",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 56,
+    "failed": 0,
+    "runs": 1
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:34:50+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "G0-night",
+   "status": "PASS",
+   "duration_s": 1312.8,
+   "node": "bh-glx-110-a07u02",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 165,
+    "PERF_WINDOW": 0,
+    "SKIP": 21
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:37:15+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "G0-torus-n",
+   "status": "PASS",
+   "duration_s": 1458.2,
+   "node": "bh-glx-110-a07u02",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 2604,
+    "failed": 0,
+    "runs": 1
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:59:08+00:00"
+  }
+ ]
+}

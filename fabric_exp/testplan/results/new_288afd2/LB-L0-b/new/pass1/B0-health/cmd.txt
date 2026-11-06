@@ -1,0 +1,1 @@
+./build/test/tt_metal/tt_fabric/test_system_health

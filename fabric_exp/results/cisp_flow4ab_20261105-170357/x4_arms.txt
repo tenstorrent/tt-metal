@@ -1,0 +1,22 @@
+== X4 on
+   SOdef  C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SOdef  C01:   0/ 48 iterations with a low router; c0/e7->E c2/e4 0/48; c0/e8->S c4/e11 0/48
+   SOdef  C02:   0/ 48 iterations with a low router; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+   SOdef  C03:   0/ 48 iterations with a low router; c3/e6->W c2/e5 0/48; c3/e8->S c7/e11 0/48
+   SOfar  C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SOfar  C02:   0/ 48 iterations with a low router; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+   SOswap C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SOswap C02:   0/ 48 iterations with a low router; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+== X4 off
+   SOdef  C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SOdef  C01:   0/ 48 iterations with a low router; c0/e7->E c2/e4 0/48; c0/e8->S c4/e11 0/48
+   SOdef  C02:   0/ 48 iterations with a low router; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+   SOdef  C03:   0/ 48 iterations with a low router; c3/e6->W c2/e5 0/48; c3/e8->S c7/e11 0/48
+   SOfar  C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SOfar  C02:   0/ 48 iterations with a low router; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+   SOswap C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SOswap C02:   0/ 48 iterations with a low router; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+== A on
+   NX        :  39/ 96 iterations with a low router; 
+== A off
+   NX        :   0/ 96 iterations with a low router; 

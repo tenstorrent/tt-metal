@@ -1,0 +1,38 @@
+# DeepSeek CCL trace perf matrix
+
+Timestamp: 2026_11_04_09_32_56
+CCLs: all_gather
+Details file: /data/aagarwal/regress/results-lb2/ab_288afd2_lb2/LB-L1P/new/pass3/B1-ccl-ag/ccl/ccl_trace_perf_details_2026_11_04_09_32_56.md
+
+## all_gather
+
+Test target: models/demos/deepseek_v3_b1/tests/unit_tests/test_ccl_all_gather.py::test_ccl_all_gather
+Configured benchmark shape: [1, 7168]
+Configured transport mode: single-link only
+Configured num_links: 1
+Trace id: 1
+Source: profile_log_device.csv only (top-level zones only; no micro-profiling).
+Conversion: us = cycles / CHIP_FREQ[MHz], ns = cycles * 1000 / CHIP_FREQ[MHz].
+Op time = max(avg per top-level (RISC processor type, zone) bucket across devices).
+Top-level zones: ALLGATHER_GATHER, ALLGATHER_TRANSPORT
+
+Observed CHIP_FREQ[MHz]: 1350.000
+
+### Per-run overview
+
+| num_links | max_payload_size_bytes | op_time_us | op_cycles | op_bucket     |
+| --------- | ---------------------- | ---------- | --------- | ------------- |
+| 1         | 15232                  | 2.522      | 3404.1    | NCRISC gather |
+
+### Perf matrix (op time, us)
+
+| num_links \ max_payload | 15232 |
+| ----------------------- | ----- |
+| 1                       | 2.522 |
+
+### Perf matrix (op time, cycles)
+
+| num_links \ max_payload | 15232  |
+| ----------------------- | ------ |
+| 1                       | 3404.1 |
+

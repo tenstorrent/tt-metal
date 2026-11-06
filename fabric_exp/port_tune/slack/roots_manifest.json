@@ -1,0 +1,324 @@
+{
+ "main_mrx1": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "3d15ef55df3d205d659ef6b5f4948bbd",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mrx128": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "2303cc3f989a58e454a62b5992cb898a",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mrx16": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "b88e0146cbf2a9fe0de6853e664623c9",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mrx2": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "39b1b6ea0bae96470a788a1ae9028d0e",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mrx32": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "1909559a7c928411028e5ec1b452a805",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mrx4": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "78c5292f3c0e145c971ec631f1e3be11",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mrx64": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "be13c1af5a8e3f2f6d714e8c198261a1",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mrx8": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "5659fea48e0268314fa221b6c90f15ac",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mtx1": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "fc590f5d60ae11c27c2acedd3e68315a",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mtx16": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "e3fbf7fb41022608f9724e25296634cc",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mtx2": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "16c23918aac1dd0a1c994554bf9179db",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mtx32": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "da12ca26d53193f007dd82f5f92c7b4a",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mtx4": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "32f5fb7e6298d105d375f12b5c8921a2",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mtx8": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "eed08ea437632438fb1759e10d39081d",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_mz": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "7a500563f4e9d6e27ab4ee7ebd4e1d5a",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_plain": {},
+ "main_rx1": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "556ebe54bedcc9461b9e63b2f93771f3",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_rx128": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "d64351ef22bdf9aa57b96c21cf5644a4",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_rx16": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "9789d335084f81554aa84171927aa059",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_rx2": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "fd94049fdeef746f7ff60d74c864a389",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_rx32": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "6943b01c972677b43b2639440178b535",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_rx4": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "04624cb32d08a131e47ea798b4006cba",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_rx64": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "7162b8aaada81211084d050ab0b36b32",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_rx8": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "1a47bb86897534335e667452a94947c8",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_tx1": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "6fdfbda84bd27a63e88b03429aeb0d57",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_tx128": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "aef057b9efd4e5c48de062585766faf5",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_tx16": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "278bd4dda506cd8b35d29a280a4048ce",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_tx2": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "ce01b5fdb0ea45f4eae2817e508ea4d5",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_tx32": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "947e7e96974bb7d58f4436eba5a03e15",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_tx4": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "43b23e9887e63f2a9cd8c3ea9b5ba1b8",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_tx64": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "34f0c607960a08ad8eec06d2629905c3",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_tx8": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "0397cfa46355053c47d56e793f362a69",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "main_z": {
+  "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp": "2bac3ad01f96e0d9686daf29199ce1e8",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "2224025ecc9aa0b6a1c01e075f7dcab0",
+  "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp": "b71776743aec5f5d216c8255e9aaabfa"
+ },
+ "port_mrx1": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "3d15ef55df3d205d659ef6b5f4948bbd"
+ },
+ "port_mrx128": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "2303cc3f989a58e454a62b5992cb898a"
+ },
+ "port_mrx16": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "b88e0146cbf2a9fe0de6853e664623c9"
+ },
+ "port_mrx2": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "39b1b6ea0bae96470a788a1ae9028d0e"
+ },
+ "port_mrx32": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "1909559a7c928411028e5ec1b452a805"
+ },
+ "port_mrx4": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "78c5292f3c0e145c971ec631f1e3be11"
+ },
+ "port_mrx64": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "be13c1af5a8e3f2f6d714e8c198261a1"
+ },
+ "port_mrx8": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "5659fea48e0268314fa221b6c90f15ac"
+ },
+ "port_mtx1": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "fc590f5d60ae11c27c2acedd3e68315a"
+ },
+ "port_mtx16": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "e3fbf7fb41022608f9724e25296634cc"
+ },
+ "port_mtx2": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "16c23918aac1dd0a1c994554bf9179db"
+ },
+ "port_mtx32": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "da12ca26d53193f007dd82f5f92c7b4a"
+ },
+ "port_mtx4": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "32f5fb7e6298d105d375f12b5c8921a2"
+ },
+ "port_mtx8": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "eed08ea437632438fb1759e10d39081d"
+ },
+ "port_mz": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "7a500563f4e9d6e27ab4ee7ebd4e1d5a"
+ },
+ "port_plain": {},
+ "port_rx1": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "556ebe54bedcc9461b9e63b2f93771f3"
+ },
+ "port_rx128": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "d64351ef22bdf9aa57b96c21cf5644a4"
+ },
+ "port_rx16": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "9789d335084f81554aa84171927aa059"
+ },
+ "port_rx2": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "fd94049fdeef746f7ff60d74c864a389"
+ },
+ "port_rx32": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "6943b01c972677b43b2639440178b535"
+ },
+ "port_rx4": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "04624cb32d08a131e47ea798b4006cba"
+ },
+ "port_rx64": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "7162b8aaada81211084d050ab0b36b32"
+ },
+ "port_rx8": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "1a47bb86897534335e667452a94947c8"
+ },
+ "port_tx1": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "6fdfbda84bd27a63e88b03429aeb0d57"
+ },
+ "port_tx128": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "aef057b9efd4e5c48de062585766faf5"
+ },
+ "port_tx16": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "278bd4dda506cd8b35d29a280a4048ce"
+ },
+ "port_tx2": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "ce01b5fdb0ea45f4eae2817e508ea4d5"
+ },
+ "port_tx32": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "947e7e96974bb7d58f4436eba5a03e15"
+ },
+ "port_tx4": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "43b23e9887e63f2a9cd8c3ea9b5ba1b8"
+ },
+ "port_tx64": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "34f0c607960a08ad8eec06d2629905c3"
+ },
+ "port_tx8": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "0397cfa46355053c47d56e793f362a69"
+ },
+ "port_z": {
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp": "e4d4352352bafb28e0d7c67227fa3d80",
+  "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp": "9dc6b6a8b55e948259b14dbe7d5c437a",
+  "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp": "2224025ecc9aa0b6a1c01e075f7dcab0"
+ }
+}

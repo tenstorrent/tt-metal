@@ -1,0 +1,2 @@
+VC0 sender slots {32, 0} receiver slots {32} (channel buffer 3120 B)
+VC0 sender slots {32, 32} receiver slots {32} (channel buffer 3120 B)

@@ -1,0 +1,73 @@
+=== on p150_2d (rule new): launch yes
+    rx 16 da 0 -> 4/4@0: ok [80 configs: 10308704424626601465(subordinate_active_erisc), 10462850907127175910(active_erisc), 10508786290835460623(active_erisc), ...]
+    80 configs, 0 not as the new rule
+    TRID_VET_OK
+=== on p150_1d (rule new): launch yes
+    rx 32 da 0 -> 4/8@0: ok [72 configs: 10105259991831194466(active_erisc), 1023446911965796354(active_erisc), 10402786135070323961(subordinate_active_erisc), ...]
+    72 configs, 0 not as the new rule
+    TRID_VET_OK
+=== on p150_ring (rule new): launch yes
+    rx 32a da 1 -> 1/16@0: ok [72 configs: 10040260651932708743(active_erisc), 10950385961259475551(active_erisc), 11492860197297307053(active_erisc), ...]
+    72 configs, 0 not as the new rule
+    TRID_VET_OK
+=== on p150_torusy (rule new): launch yes
+    rx 16 da 0 -> 4/4@0: ok [48 configs: 10533383676524540166(active_erisc), 10909071287307098040(active_erisc), 10951154443906758454(subordinate_active_erisc), ...]
+    rx 16a da 1 -> 1/16@0: ok [32 configs: 10226794456301570715(active_erisc), 10664117400061123493(subordinate_active_erisc), 10685019020102571914(active_erisc), ...]
+    80 configs, 0 not as the new rule
+    TRID_VET_OK
+=== on p150_txy (rule new): launch yes
+    rx 16a da 1 -> 1/16@0: ok [96 configs: 10006496368398822729(subordinate_active_erisc), 10185394889925646960(active_erisc), 10315554520815311882(active_erisc), ...]
+    96 configs, 0 not as the new rule
+    TRID_VET_OK
+=== on glx_vc1 (rule new): launch yes
+    rx 16 | 4 da 0 -> 4/4@0 | 1/4@4: ok [80 configs: 1019479694663758671(active_erisc), 10331357557397169396(subordinate_active_erisc), 10503053873576223934(subordinate_active_erisc), ...]
+    80 configs, 0 not as the new rule
+    TRID_VET_OK
+=== on glx_vc2 (rule new): launch yes
+    rx 16 | 4 da 0 -> 4/4@0 | 1/4@4: ok [168 configs: 10184866189417896477(active_erisc), 10365026751535434910(active_erisc), 10414598637330601790(active_erisc), ...]
+    168 configs, 0 not as the new rule
+    TRID_VET_OK
+=== on glx_vc13k_floor (rule new): launch yes
+    rx 32 | 6 da 0 -> 4/8@0 | 1/6@8: ok [80 configs: 10246970827214067404(subordinate_active_erisc), 10586529963164821626(active_erisc), 10588183585239048444(active_erisc), ...]
+    80 configs, 0 not as the new rule
+    TRID_VET_OK
+=== off p150_2d (rule uniform): launch yes
+    rx 16 da 0 -> 4/16@0: ok [80 configs: 10296194031151432173(subordinate_active_erisc), 10319964133540133892(subordinate_active_erisc), 10620266423988938041(active_erisc), ...]
+    80 configs, 0 not as the uniform rule
+    TRID_VET_OK
+=== off p150_1d (rule uniform): launch yes
+    rx 32 da 0 -> 4/16@0: ok [72 configs: 10143843627685743174(subordinate_active_erisc), 10423327291123429550(active_erisc), 10797028739036958191(active_erisc), ...]
+    72 configs, 0 not as the uniform rule
+    TRID_VET_OK
+=== off p150_ring (rule uniform): launch yes
+    rx 32a da 1 -> 1/8@0: ok [72 configs: 10489749524925520327(subordinate_active_erisc), 10859823390058548624(active_erisc), 11472775298045121578(subordinate_active_erisc), ...]
+    72 configs, 0 not as the uniform rule
+    TRID_VET_OK
+=== off p150_torusy (rule uniform): launch yes
+    rx 16 da 0 -> 4/16@0: ok [48 configs: 10008837382667538585(active_erisc), 10583218303849884778(active_erisc), 11122506920962438126(active_erisc), ...]
+    rx 16a da 1 -> 1/8@0: ok [32 configs: 10271047559669445313(active_erisc), 10394371208307974357(subordinate_active_erisc), 10858234842023867822(active_erisc), ...]
+    80 configs, 0 not as the uniform rule
+    TRID_VET_OK
+=== off p150_txy (rule uniform): launch yes
+    rx 16a da 1 -> 1/8@0: ok [96 configs: 10485978369437992637(subordinate_active_erisc), 10513064847869582224(active_erisc), 10767570344613781559(active_erisc), ...]
+    96 configs, 0 not as the uniform rule
+    TRID_VET_OK
+=== off glx_vc1 (rule uniform): launch yes
+    rx 16 | 4 da 0 -> 4/4@0 | 1/4@4: ok [80 configs: 1019479694663758671(active_erisc), 10331357557397169396(subordinate_active_erisc), 10503053873576223934(subordinate_active_erisc), ...]
+    80 configs, 0 not as the uniform rule
+    TRID_VET_OK
+=== off glx_vc2 (rule uniform): launch yes
+    rx 16 | 4 da 0 -> 4/4@0 | 1/4@4: ok [168 configs: 10184866189417896477(active_erisc), 10365026751535434910(active_erisc), 10414598637330601790(active_erisc), ...]
+    168 configs, 0 not as the uniform rule
+    TRID_VET_OK
+=== off glx_vc13k_floor (rule uniform): launch yes
+    rx 32 | 6 da 0 -> 4/4@0 | 1/4@4: ok [80 configs: 10165571707048150274(subordinate_active_erisc), 10289513140547990967(active_erisc), 10443458068957231244(active_erisc), ...]
+    80 configs, 0 not as the uniform rule
+    TRID_VET_OK
+
+| arm | ELFs | E0 code | E1 code | E0+E1 (vs 26624) | least free stack E0 | E1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| on | 728 | 12108 | 10160 | 22268 | 1684 | 4236 |
+| off | 728 | 12108 | 10160 | 22268 | 1684 | 4236 |
+TRID_VET_OK
+final exit 0

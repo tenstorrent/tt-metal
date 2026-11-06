@@ -1,0 +1,2 @@
+export OMP_NUM_THREADS=$(nproc) TT_METAL_SHM_TRACKING_DISABLED=1 KIMI_MOE_PERF_REPLAYS=5 KIMI_MOE_PERF_IGNORE_POWER=1
+python -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k galaxy -vvv --tb=short

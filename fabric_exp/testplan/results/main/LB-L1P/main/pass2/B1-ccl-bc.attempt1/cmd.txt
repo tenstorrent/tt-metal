@@ -1,0 +1,1 @@
+for l in 1 2; do for s in 2048 4096 4352 8192 15232; do python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl broadcast --max-payload-sizes $s --num-links $l --output-dir $REGRESS_STEP_DIR/ccl; done; done

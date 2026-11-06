@@ -1,0 +1,163 @@
+# Offline gate, 2026-11-04T22:37:23Z (gate.sh; cov/cov.py; captures: 18 mocked cases from the patched host, env unset)
+
+== cmp base none
+totals: {'router differ': 0, 'router identical': 1328}
+shared 1328  identical 1328  differ 0  only in base 0  only in none 0
+
+== cmp base d4_32
+totals: {'router differ': 0, 'router identical': 1328}
+shared 1328  identical 1328  differ 0  only in base 0  only in d4_32 0
+
+== cmp d4_32 i1
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 460, 'router identical': 868}
+shared 1328  identical 868  differ 460  only in d4_32 0  only in i1 0
+
+== cmp d4_32 i2
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 460, 'router identical': 868}
+shared 1328  identical 868  differ 460  only in d4_32 0  only in i2 0
+
+== cmp d4_32 i8
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 460, 'router identical': 868}
+shared 1328  identical 868  differ 460  only in d4_32 0  only in i8 0
+
+== cmp d4_32 c8
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 460, 'router identical': 868}
+shared 1328  identical 868  differ 460  only in d4_32 0  only in c8 0
+
+== cmp d4_32 c128
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    72  differ    0
+bh_ring_1erisc           router    identical    36  differ    0
+bh_ring_mux              router    identical    36  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_torus_1erisc          router    identical    48  differ    0
+bh_torus_vc2             router    identical    56  differ   24
+bh_vc1                   router    identical    48  differ   48
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+totals: {'router differ': 460, 'router identical': 868}
+shared 1328  identical 868  differ 460  only in d4_32 0  only in c128 0
+
+== cmp d4_32 tx16
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    36  differ   36
+bh_ring_1erisc           router    identical     0  differ   36
+bh_ring_mux              router    identical     0  differ   36
+bh_torus                 router    identical    48  differ   48
+bh_torus_1erisc          router    identical     0  differ   48
+bh_torus_vc2             router    identical    40  differ   40
+bh_vc1                   router    identical    48  differ   48
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical    60  differ   60
+glx_torus                router    identical    60  differ   60
+totals: {'router differ': 800, 'router identical': 528}
+shared 1328  identical 528  differ 800  only in d4_32 0  only in tx16 0
+
+== cmp d4_32 rp16
+bh_1d                    router    identical    36  differ   36
+bh_1d_1erisc             router    identical     0  differ   36
+bh_1d_mux                router    identical     0  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_2d_1erisc             router    identical     0  differ   40
+bh_2d_mux                router    identical     0  differ   40
+bh_2d_vc2                router    identical    40  differ   40
+bh_neighbor              router    identical    36  differ   36
+bh_ring                  router    identical    36  differ   36
+bh_ring_1erisc           router    identical     0  differ   36
+bh_ring_mux              router    identical     0  differ   36
+bh_torus                 router    identical    48  differ   48
+bh_torus_1erisc          router    identical     0  differ   48
+bh_torus_vc2             router    identical    40  differ   40
+bh_vc1                   router    identical    48  differ   48
+glx_2d                   router    identical    84  differ   84
+glx_ring                 router    identical    60  differ   60
+glx_torus                router    identical    60  differ   60
+totals: {'router differ': 800, 'router identical': 528}
+shared 1328  identical 528  differ 800  only in d4_32 0  only in rp16 0

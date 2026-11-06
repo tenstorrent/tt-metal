@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+GlxNeighborExchange,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,"[0]",1,3072,1,35490674.000000,7607632.359983,23.370647,23.370647,23.370647,0.000000,1.000000
+GlxNeighborExchange,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,"[0]",1,4096,1,47149385.000000,5726479.783352,23.455661,23.455661,23.455661,0.000000,1.000000
+GlxNeighborExchange,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,"[0]",1,4352,1,50022218.000000,5397601.521788,23.490362,23.490362,23.490362,0.000000,1.000000

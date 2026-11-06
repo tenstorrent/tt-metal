@@ -1,0 +1,62 @@
+bh_1d                    IDENTICAL elfs 74/74 distinct 30/30
+bh_1d_1erisc             IDENTICAL elfs 38/38 distinct 28/28
+bh_1d_mux                IDENTICAL elfs 44/44 distinct 30/30
+bh_1d_telemetry          IDENTICAL elfs 74/74 distinct 30/30
+bh_1d_trim               IDENTICAL elfs 74/74 distinct 30/30
+bh_2d                    IDENTICAL elfs 82/82 distinct 52/52
+bh_2d_1erisc             IDENTICAL elfs 42/42 distinct 32/32
+bh_2d_1erisc_streaming   DIFFER    elfs 42/42 distinct 32/32 only in A 2, only in B 2
+     tt_fabric_test_receiver: only in A 1, only in B 1
+     tt_fabric_test_sender: only in A 1, only in B 1
+bh_2d_bwtelemetry        IDENTICAL elfs 82/82 distinct 52/52
+bh_2d_codeprof           IDENTICAL elfs 80/80 distinct 50/50
+bh_2d_mux                IDENTICAL elfs 56/56 distinct 37/37
+bh_2d_streaming          DIFFER    elfs 82/82 distinct 52/52 only in A 82, only in B 82
+     fabric_erisc_router: only in A 80, only in B 80
+     tt_fabric_test_receiver: only in A 1, only in B 1
+     tt_fabric_test_sender: only in A 1, only in B 1
+bh_2d_telemetry          IDENTICAL elfs 82/82 distinct 52/52
+bh_2d_trim               IDENTICAL elfs 82/82 distinct 52/52
+bh_2d_udm_gtest          DIFFER    elfs 146/146 distinct 128/128 only in A 2, only in B 2
+     test_udm_receiver: only in A 1, only in B 1
+     test_udm_sender: only in A 1, only in B 1
+bh_2d_vc2                IDENTICAL elfs 82/82 distinct 52/52
+bh_2d_vc2_1erisc         IDENTICAL elfs 42/42 distinct 32/32
+bh_neighbor              IDENTICAL elfs 75/75 distinct 25/25
+bh_neighbor_1erisc       IDENTICAL elfs 39/39 distinct 21/21
+bh_ring                  IDENTICAL elfs 74/74 distinct 30/30
+bh_ring_1erisc           IDENTICAL elfs 38/38 distinct 28/28
+bh_ring_mux              IDENTICAL elfs 44/44 distinct 30/30
+bh_torus                 IDENTICAL elfs 98/98 distinct 38/38
+bh_torus_1erisc          IDENTICAL elfs 50/50 distinct 38/38
+bh_torus_vc2             IDENTICAL elfs 82/82 distinct 52/52
+bh_trim_gtest            IDENTICAL elfs 442/442 distinct 203/203
+bh_vc1                   IDENTICAL elfs 99/99 distinct 49/49
+bh_vc1_1erisc            IDENTICAL elfs 51/51 distinct 45/45
+bh_vc1_vc2               IDENTICAL elfs 99/99 distinct 49/49
+glx2_mesh                IDENTICAL elfs 234/234 distinct 140/140
+glx2_mesh_novc           IDENTICAL elfs 234/234 distinct 134/134
+glx2_mesh_novc_1erisc    IDENTICAL elfs 118/118 distinct 102/102
+glx3_mesh                IDENTICAL elfs 430/430 distinct 198/198
+glx3_passthrough         DIFFER    elfs 431/430 distinct 195/194 only in A 1, only in B 0
+     tt_fabric_test_sender: only in A 1, only in B 0
+glx3_torus_yx            DIFFER    elfs 211/210 distinct 129/128 only in A 1, only in B 0
+     tt_fabric_test_sender: only in A 1, only in B 0
+glx_1d                   IDENTICAL elfs 122/122 distinct 46/46
+glx_1x32_line            IDENTICAL elfs 74/74 distinct 28/28
+glx_1x32_ring            IDENTICAL elfs 78/78 distinct 26/26
+glx_2d                   IDENTICAL elfs 170/170 distinct 88/88
+glx_express              IDENTICAL elfs 218/218 distinct 57/57
+glx_express_1erisc       IDENTICAL elfs 110/110 distinct 68/68
+glx_express_ew           IDENTICAL elfs 262/262 distinct 75/75
+glx_ring                 IDENTICAL elfs 122/122 distinct 29/29
+glx_torus                IDENTICAL elfs 122/122 distinct 29/29
+glxz_mesh                DIFFER    elfs 112/111 distinct 58/57 only in A 1, only in B 0
+     tt_fabric_test_sender: only in A 1, only in B 0
+glxz_mesh_novc           IDENTICAL elfs 112/112 distinct 50/50
+wh_t3k_line              IDENTICAL elfs 30/30 distinct 22/22
+wh_t3k_mesh              IDENTICAL elfs 38/38 distinct 30/30
+wh_t3k_ring              IDENTICAL elfs 30/30 distinct 22/22
+wh_t3k_sanity_2x2        IDENTICAL elfs 31/31 distinct 23/23
+wh_t3k_sanity_common     IDENTICAL elfs 33/33 distinct 25/25
+wh_t3k_ubench_2x2        IDENTICAL elfs 28/28 distinct 20/20

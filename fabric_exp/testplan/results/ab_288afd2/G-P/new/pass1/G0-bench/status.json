@@ -1,0 +1,46 @@
+{
+ "capped": false,
+ "ci": null,
+ "ci_timeout_s": 1800,
+ "data_inodes_at_submit": "3059768",
+ "data_inodes_free": 3775914,
+ "deviation": null,
+ "duration_s": 80.2,
+ "end": "2026-11-04T08:38:20+00:00",
+ "fabric_csv": 3,
+ "failed_lines": [],
+ "group": "G-P",
+ "jit_cache": "/tmp/aagarwal-regress/172872/cache/new_288afd2-new",
+ "label": "ab_288afd2",
+ "marker_found": 1,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a01u08",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172872",
+ "start": "2026-11-04T08:37:00+00:00",
+ "status": "PASS",
+ "step": "G0-bench",
+ "step_env": {
+  "TT_FABRIC_NO_BW_TELEMETRY": "1"
+ },
+ "telemetry": "off (prod default)",
+ "timeout_note": null,
+ "timeout_s": 1800,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+ "tt_fabric": {
+  "executed": 36,
+  "failed": 0,
+  "runs": 1
+ }
+}

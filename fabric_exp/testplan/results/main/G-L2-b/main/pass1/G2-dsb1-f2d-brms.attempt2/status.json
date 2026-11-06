@@ -1,0 +1,21 @@
+{
+ "ci": {
+  "list": "demo_sp_release_tests.yaml",
+  "mirrored": true,
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "data_inodes_free": 8020,
+ "duration_s": 0,
+ "end": "2026-11-04T07:10:19+00:00",
+ "group": "G-L2-b",
+ "label": "main",
+ "node": "-",
+ "pass": 1,
+ "rc": null,
+ "reason": "NOT RUN: job 172554 died at 06:22 when /data ran out of inodes (brms could not create its junit dir, ENOSPC); rerun only with >= 2M free inodes on /data at submit (coordinator 2026-11-04); at 07:09 /data had 8,020 free; not retried",
+ "router": "main",
+ "start": "2026-11-04T07:10:19+00:00",
+ "status": "NOT_RUN",
+ "step": "G2-dsb1-f2d-brms"
+}

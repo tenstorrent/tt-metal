@@ -1,0 +1,34 @@
+# proof-count diagnostic row (port_tune/proof/proof_runs.sh): FWD_PureFused4352
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: FWD_PureFused4352
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  defaults:
+    ftype: unicast
+    repeat: 48000
+    stream:
+    - ntype: fused_atomic_inc
+      size: 4352
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2

@@ -1,0 +1,1 @@
+./build/test/ttnn/unit_tests_ttnn_udm

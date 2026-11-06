@@ -1,0 +1,116 @@
+# PR perf gap runs (mk_pr_gap_yamls.py): 2D 1-hop E/W by packet type (scatter_write, fused_atomic_inc) at 256-4352 B,
+# atomic_inc (no payload, one nominal size) on 1-hop E/W and N/S, and 2 hops merging with a 1-hop flow (MeshFwd).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Mesh1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_scatter_write
+    - fused_atomic_inc
+    size:
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: Mesh1HopEWAtomic
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - atomic_inc
+    size:
+    - 256
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: Mesh1HopNSAtomic
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - atomic_inc
+    size:
+    - 256
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4
+- name: MeshFwd
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2

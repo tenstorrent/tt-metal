@@ -1,0 +1,243 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 1,
+  "PASS": 31,
+  "PERF_WINDOW": 0,
+  "SKIP": 6
+ },
+ "files": [
+  "pytest_2104886_1793782947597793152_20261104_090227.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_compressed_tensor_target_assignment_hash_invalidates_cache": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.125
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_compressed_tensor_target_transform_version_invalidates_cache": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.137
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_create_gate_indices_tensor_sram_encoding_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.262
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_create_gate_indices_tensor_sram_validation_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.941
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_attention_weights_dense_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 23.124
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_attention_weights_moe_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.632
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_attention_weights_with_cache_dense_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.427
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_attention_weights_with_cache_moe_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.224
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_dense_layer_single_layer_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.74
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_dense_layer_weights_with_cache_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 27.012
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_dense_layer_weights_with_sram_expert_ids_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 25.909
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_embedding_weights_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 39.767
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_embedding_weights_with_cache_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 47.284
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_lm_head_weights_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "[SKIP REASON]: LM-head 4x2 prepare currently returns folded lm_head without standalone final_norm. Issue: #43025",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_lm_head_weights_with_cache_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "[SKIP REASON]: LM-head 4x2 TensorCache prepare currently returns folded lm_head without standalone final_norm. Issue: #43025",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_layer_bspm_cache_roundtrip_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.237
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_layer_single_layer_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.29
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_layer_weights_compressed_tp8_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 15.022
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_layer_weights_empty_sram_expert_ids_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.762
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_layer_weights_with_cache_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.736
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_layer_weights_with_sram_expert_ids_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "known_fail": "main d2bd12f (job 172554): TT_THROW: Fast dispatch would claim dispatch cores that hold resident L1 (tt-blaze #2019)",
+   "message": "RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/distributed/dispatch_context.cpp:355: tt::exception\ninfo:\nFast dispatch would claim dispatch cores that hold resident L1 (tt-blaze #2019):\n  chip 0 dispatch core (12,0): chip ledger: per-core allocation at 0x110000, 458752 B/core, spans 8",
+   "status": "KNOWN_FAIL",
+   "time": 14.356
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_routed_experts_bspm_footprint_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.925
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_routed_experts_bspm_output_types_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.882
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_moe_routed_experts_bspm_tile_assignment_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.013
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_mtp_weights_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "[SKIP REASON]: MTP 4x2 prepare produced eh_projection shape (1792, 7168) instead of expected (14336, 7168). Issue: #43025",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_mtp_weights_with_cache_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "[SKIP REASON]: MTP 4x2 TensorCache prepare produced eh_projection shape (1792, 7168) instead of expected (14336, 7168). Issue: #43025",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_routed_expert_weights_bspm_missing_raises_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.137
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_routed_expert_weights_dense_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 22.163
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_routed_expert_weights_moe_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 13.255
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_routed_expert_weights_via_bspm_dir_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.893
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_routed_expert_weights_with_cache_dense_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 23.88
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_routed_expert_weights_with_cache_moe_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.67
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_shared_expert_weights_dense_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 16.482
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_shared_expert_weights_moe_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.748
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_shared_expert_weights_with_cache_dense_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 16.031
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_shared_expert_weights_with_cache_moe_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.345
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_spec_weights_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "[SKIP REASON]: Spec 4x2 prepare currently returns folded lm_head without standalone shared_head_norm. Issue: #43025",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights::test_prepare_spec_weights_with_cache_4x2[blackhole-True-device_params0]": {
+   "file": "pytest_2104886_1793782947597793152_20261104_090227.xml",
+   "message": "[SKIP REASON]: Spec 4x2 TensorCache prepare currently returns folded lm_head without standalone shared_head_norm. Issue: #43025",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

@@ -1,0 +1,24 @@
+== bh_ring active_erisc T16 function default (router loop)
+base fabric_router::sender::run(): 381 instructions; new fabric_router::sender::run(): 381 (+0)
+loads/stores: base {'load': 39, 'sp store': 42, 'sp load': 33, 'store': 26}  new {'load': 39, 'sp store': 42, 'sp load': 33, 'store': 26}
+changed lines after the line map: 0
+== bh_ring_1erisc subordinate_active_erisc T16 function single::sender_pass
+base fabric_router::single::sender_pass(fabric_router::single::SenderState&, bool&): 322 instructions; new fabric_router::single::sender_pass(fabric_router::single::SenderState&, bool&): 322 (+0)
+loads/stores: base {'sp store': 7, 'load': 70, 'store': 47, 'sp load': 8}  new {'sp store': 7, 'load': 70, 'store': 47, 'sp load': 8}
+changed lines after the line map: 0
+== bh_ring_1erisc subordinate_active_erisc T16 function single::receiver_pass
+base fabric_router::single::receiver_pass(fabric_router::single::ReceiverState&, fabric_router::DownstreamConnections&, fabric_router::ChipCoordinates const&) [clone .isra.0]: 532 instructions; new fabric_router::single::receiver_pass(fabric_router::single::ReceiverState&, fabric_router::DownstreamConnections&, fabric_router::ChipCoordinates const&) [clone .isra.0]: 532 (+0)
+loads/stores: base {'sp store': 9, 'load': 95, 'store': 108, 'sp load': 11}  new {'sp store': 9, 'load': 95, 'store': 108, 'sp load': 11}
+changed lines after the line map: 0
+== bh_ring_1erisc subordinate_active_erisc T16 function default (router loop)
+base fabric_router::single::sender_pass(fabric_router::single::SenderState&, bool&): 322 instructions; new fabric_router::single::sender_pass(fabric_router::single::SenderState&, bool&): 322 (+0)
+loads/stores: base {'sp store': 7, 'load': 70, 'store': 47, 'sp load': 8}  new {'sp store': 7, 'load': 70, 'store': 47, 'sp load': 8}
+changed lines after the line map: 0
+== glx_ring active_erisc T16 function default (router loop)
+base fabric_router::sender::run(): 381 instructions; new fabric_router::sender::run(): 381 (+0)
+loads/stores: base {'load': 39, 'sp store': 42, 'sp load': 33, 'store': 26}  new {'load': 39, 'sp store': 42, 'sp load': 33, 'store': 26}
+changed lines after the line map: 0
+== glx_1x32_ring active_erisc T16 function default (router loop)
+base fabric_router::sender::run(): 381 instructions; new fabric_router::sender::run(): 381 (+0)
+loads/stores: base {'load': 39, 'sp store': 42, 'sp load': 33, 'store': 26}  new {'load': 39, 'sp store': 42, 'sp load': 33, 'store': 26}
+changed lines after the line map: 0

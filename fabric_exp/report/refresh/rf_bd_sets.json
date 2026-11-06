@@ -1,0 +1,602 @@
+[
+ {
+  "id": "rf1a_main_bd_ew4352",
+  "prefix": "rf1a_main_bd_ew4352_samples",
+  "rate_csv": "rf1a_main_bd_ew4352.csv",
+  "test": "PcsEW4352",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_a_main",
+  "logs": [
+   "rf1a_main_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_main_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "rf1a_main_bd_mcast",
+  "prefix": "rf1a_main_bd_mcast_samples",
+  "rate_csv": "rf1a_main_bd_mcast.csv",
+  "test": "BdMcast",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_a_main",
+  "logs": [
+   "rf1a_main_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_main_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "rf1a_main_bd_ew1024",
+  "prefix": "rf1a_main_bd_ew1024_samples",
+  "rate_csv": "rf1a_main_bd_ew1024.csv",
+  "test": "PcsEW1024",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_a_main",
+  "logs": [
+   "rf1a_main_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_main_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "glxrf180536_a_main_s_ew1024",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ew1024_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ew1024.csv",
+  "test": "BdGlxEW1024",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_a_main",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_main.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "glxrf180536_a_main_s_ns7",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ns7_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ns7.csv",
+  "test": "BdGlxNS7",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_a_main",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_main.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "glxrf180536_a_main_s_fullring",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_fullring_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_fullring.csv",
+  "test": "BdGlxFullRing4352",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_a_main",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_main_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_main.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "rf1b_main_bd_ew4352",
+  "prefix": "rf1b_main_bd_ew4352_samples",
+  "rate_csv": "rf1b_main_bd_ew4352.csv",
+  "test": "PcsEW4352",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_b_main",
+  "logs": [
+   "rf1b_main_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_main_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "rf1b_main_bd_mcast",
+  "prefix": "rf1b_main_bd_mcast_samples",
+  "rate_csv": "rf1b_main_bd_mcast.csv",
+  "test": "BdMcast",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_b_main",
+  "logs": [
+   "rf1b_main_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_main_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "rf1b_main_bd_ew1024",
+  "prefix": "rf1b_main_bd_ew1024_samples",
+  "rate_csv": "rf1b_main_bd_ew1024.csv",
+  "test": "PcsEW1024",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_b_main",
+  "logs": [
+   "rf1b_main_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_main_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "glxrf180536_b_main_s_ew1024",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ew1024_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ew1024.csv",
+  "test": "BdGlxEW1024",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_b_main",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_main.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "glxrf180536_b_main_s_ns7",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ns7_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ns7.csv",
+  "test": "BdGlxNS7",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_b_main",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_main.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "glxrf180536_b_main_s_fullring",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_fullring_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_fullring.csv",
+  "test": "BdGlxFullRing4352",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_b_main",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_main_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_main.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_main_d2bd.json",
+  "router": "main",
+  "build": "main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "rf1a_port_bd_ew4352",
+  "prefix": "rf1a_port_bd_ew4352_samples",
+  "rate_csv": "rf1a_port_bd_ew4352.csv",
+  "test": "PcsEW4352",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_a_port",
+  "logs": [
+   "rf1a_port_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_port_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "rf1a_port_bd_mcast",
+  "prefix": "rf1a_port_bd_mcast_samples",
+  "rate_csv": "rf1a_port_bd_mcast.csv",
+  "test": "BdMcast",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_a_port",
+  "logs": [
+   "rf1a_port_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_port_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "rf1a_port_bd_ew1024",
+  "prefix": "rf1a_port_bd_ew1024_samples",
+  "rate_csv": "rf1a_port_bd_ew1024.csv",
+  "test": "PcsEW1024",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_a_port",
+  "logs": [
+   "rf1a_port_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_port_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "glxrf180536_a_port_s_ew1024",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ew1024_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ew1024.csv",
+  "test": "BdGlxEW1024",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_a_port",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_port.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "glxrf180536_a_port_s_ns7",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ns7_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ns7.csv",
+  "test": "BdGlxNS7",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_a_port",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_port.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "glxrf180536_a_port_s_fullring",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_fullring_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_fullring.csv",
+  "test": "BdGlxFullRing4352",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_a_port",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/a_port_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_port.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "rf1b_port_bd_ew4352",
+  "prefix": "rf1b_port_bd_ew4352_samples",
+  "rate_csv": "rf1b_port_bd_ew4352.csv",
+  "test": "PcsEW4352",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_b_port",
+  "logs": [
+   "rf1b_port_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_port_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "rf1b_port_bd_mcast",
+  "prefix": "rf1b_port_bd_mcast_samples",
+  "rate_csv": "rf1b_port_bd_mcast.csv",
+  "test": "BdMcast",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_b_port",
+  "logs": [
+   "rf1b_port_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_port_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "rf1b_port_bd_ew1024",
+  "prefix": "rf1b_port_bd_ew1024_samples",
+  "rate_csv": "rf1b_port_bd_ew1024.csv",
+  "test": "PcsEW1024",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/lb180535_b_port",
+  "logs": [
+   "rf1b_port_bd_*.log"
+  ],
+  "sources": [
+   "tgz:fabric_exp/results/rf1_port_bd_src.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "lb2 180535 (bh-lb-120-a04u32)",
+  "date": "2026-11-05",
+  "system": "P150x8",
+  "runner": "refresh/rf_lb_stock.sh"
+ },
+ {
+  "id": "glxrf180536_b_port_s_ew1024",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ew1024_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ew1024.csv",
+  "test": "BdGlxEW1024",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_b_port",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_port.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "glxrf180536_b_port_s_ns7",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ns7_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ns7.csv",
+  "test": "BdGlxNS7",
+  "packet_size_B": 1024,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_b_port",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_port.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ },
+ {
+  "id": "glxrf180536_b_port_s_fullring",
+  "prefix": "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_fullring_samples",
+  "rate_csv": "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_fullring.csv",
+  "test": "BdGlxFullRing4352",
+  "packet_size_B": 4352,
+  "cache": "/home/aagarwal/.tt-metal-rf-bdcache/glx180536_b_port",
+  "logs_unused": [
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_c_mesh.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_c_ring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ew1024.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ew1024_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_fullring.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_fullring_sampler.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ns7.log",
+   "/data/aagarwal/frs-glx/jobs/180536/results/b_port_s_ns7_sampler.log"
+  ],
+  "sources": [
+   "tgz:/data/aagarwal/frs-glx/jobs/180536/results/src_port.tgz"
+  ],
+  "map": "/home/aagarwal/tt-metal/fabric_exp/report/refresh/map_port.json",
+  "router": "new",
+  "build": "port d51e42cd78a (PR tip)",
+  "job": "Slurm 180536 (bh-glx-110-a10u02)",
+  "date": "2026-11-05",
+  "system": "BH Galaxy",
+  "runner": "refresh/rf_glx.sbatch",
+  "notes": "Builds matched by the launch layout's text head (as the earlier Galaxy sets)."
+ }
+]

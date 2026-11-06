@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+Torus1HopEWBidir,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,"[4]",1,14400,1,12392832.000000,2178678.771729,31.372974,31.372974,31.372974,0.000000,1.000000
+TorusRingNeighbors,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,"[4]",1,14400,1,12385162.000000,2180028.004478,31.392403,31.392403,31.392403,0.000000,1.000000
+Mesh1HopEWBidir,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[4]",1,14400,1,9399162.000000,2872596.514455,41.365390,41.365390,41.365390,0.000000,1.000000

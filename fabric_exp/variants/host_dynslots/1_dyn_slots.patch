@@ -1,0 +1,149 @@
+--- a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
++++ b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+@@ -4,7 +4,11 @@
+ 
+ #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+ #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
++#include "tt_metal/fabric/builder/fabric_slot_allocator.hpp"
+ #include "tt_metal/fabric/fabric_context.hpp"
++#include "tt_metal/impl/context/metal_context.hpp"
++#include <tt-metalium/experimental/fabric/control_plane.hpp>
++#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+ #include <tt-metalium/hal.hpp>
+ #include <tt-logger/tt-logger.hpp>
+ #include <enchantum/enchantum.hpp>
+@@ -84,6 +88,24 @@
+ }
+ }  // namespace
+ 
++// Study switch (fabric_exp, SLOT_ALLOCATOR.md): the dynamic slot allocator's mesh facts, step 1 (one set for the
++// fabric): the largest dims of its meshes. Read from the control plane here so no builder struct changes layout; step
++// 2 brings per-router facts through the builder instead. Named, not anonymous: this file is built in a unity batch.
++namespace dyn_slots_detail {
++void read_mesh_dims(slot_allocator::RouterShape& shape) {
++    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
++    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
++        const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
++        if (mesh_shape.dims() != 2) {
++            continue;
++        }
++        for (size_t axis = 0; axis < 2; ++axis) {
++            shape.mesh_dims[axis] = std::max<size_t>(shape.mesh_dims[axis], mesh_shape[axis]);
++        }
++    }
++}
++}  // namespace dyn_slots_detail
++
+ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
+     tt::tt_fabric::Topology topology,
+     const FabricEriscDatamoverOptions& options,
+@@ -987,6 +1009,99 @@
+             num_remote_receiver_buffer_slots_per_vc[2].fill(receiver2);
+         }
+     }
++
++    // Study switch (fabric_exp, SLOT_ALLOCATOR.md): TT_FABRIC_EXP_DYN_SLOTS=1 replaces every depth above with the
++    // dynamic allocator's (fabric_slot_allocator.hpp: the slots split between VCs by an integer ratio, then by channel
++    // kind and mesh dims), on any router and arch, for fabrics without the tensix extension.
++    // TT_FABRIC_EXP_DYN_SLOTS_POLICY=k=v,... overrides its ratios and options; an explicit slot switch above still
++    // wins. Channel kinds (step 1): VC0's worker-connected sender is its worker and its other senders forward; VC1's
++    // senders all forward; VC2's sender is its worker. Every router gets the same depths, so a receiver's depth matches
++    // at both ends of a link.
++    if (std::getenv("TT_FABRIC_EXP_DYN_SLOTS") != nullptr &&
++        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
++        const char* explicit_switch = nullptr;
++        if ((vc1_present || vc2_present) && row_text != nullptr) {
++            explicit_switch = row_switch;
++        } else if (!vc1_present && !vc2_present && exp_slots != nullptr) {
++            explicit_switch = "TT_FABRIC_EXP_SLOTS (or its _1D / _2D form)";
++        }
++        for (const char* name :
++             {"TT_FABRIC_EXP_TIER_SLOTS",
++              "TT_FABRIC_EXP_WORKER_SLOTS",
++              "TT_FABRIC_EXP_MAX_SENDER_SLOTS",
++              "TT_FABRIC_EXP_MAX_RECEIVER_SLOTS",
++              "TT_FABRIC_EXP_LINEAR_SPARE_SLOTS"}) {
++            if (std::getenv(name) != nullptr) {
++                explicit_switch = name;
++            }
++        }
++        if (explicit_switch != nullptr) {
++            log_info(tt::LogFabric, "dynamic slots: {} is set and wins over TT_FABRIC_EXP_DYN_SLOTS", explicit_switch);
++        } else {
++            namespace sa = slot_allocator;
++            const size_t vc0_senders = num_used_sender_channels_per_vc[0];
++            sa::RouterShape shape;
++            shape.budget_bytes = available_channel_buffering_space;
++            shape.slot_bytes = channel_buffer_size_bytes;
++            shape.vcs[0] = {
++                vc0_senders > 0 ? size_t{1} : size_t{0},
++                vc0_senders > 0 ? vc0_senders - 1 : size_t{0},
++                num_used_receiver_channels_per_vc[0]};
++            shape.vcs[1] = {0, num_used_sender_channels_per_vc[1], num_used_receiver_channels_per_vc[1]};
++            shape.vcs[2] = {num_used_sender_channels_per_vc[2], 0, num_used_receiver_channels_per_vc[2]};
++            dyn_slots_detail::read_mesh_dims(shape);
++            shape.two_d = topology == Topology::Mesh || topology == Topology::Torus;
++            sa::Policy policy;
++            policy.max_slots = MAX_CHANNEL_BUFFER_SLOTS;
++            const char* const policy_text = std::getenv("TT_FABRIC_EXP_DYN_SLOTS_POLICY");
++            if (policy_text != nullptr) {
++                const auto error = sa::parse_policy(policy_text, policy);
++                TT_FATAL(!error.has_value(), "TT_FABRIC_EXP_DYN_SLOTS_POLICY={}: {}", policy_text, error.value_or(""));
++            }
++            const sa::Allocation allocation = sa::allocate_slots(shape, policy);
++            TT_FATAL(!allocation.error.has_value(), "dynamic slots: {}", allocation.error.value_or(""));
++            std::string notes;
++            for (const std::string& note : allocation.notes) {
++                notes += (notes.empty() ? "" : "; ") + note;
++            }
++            log_info(
++                tt::LogFabric,
++                "dynamic slots (TT_FABRIC_EXP_DYN_SLOTS, policy {}): {}",
++                policy_text != nullptr ? policy_text : "defaults",
++                notes);
++            for (size_t vc = 0; vc < sa::NUM_VCS; ++vc) {
++                for (size_t kind = 0; kind < sa::NUM_CHANNEL_KINDS; ++kind) {
++                    const sa::Count& count = allocation.counts[vc][kind];
++                    if (count.channels > 0) {
++                        log_info(
++                            tt::LogFabric,
++                            "dynamic slots: VC{} {} x{}: {} slots: {}",
++                            vc,
++                            sa::to_string(static_cast<sa::ChannelKind>(kind)),
++                            count.channels,
++                            count.slots,
++                            count.reason);
++                    }
++                }
++            }
++            if (allocation.unused_slots > 0) {
++                log_info(tt::LogFabric, "dynamic slots: {} slots unused", allocation.unused_slots);
++            }
++            const auto slots = [&](size_t vc, sa::ChannelKind kind) { return allocation.at(vc, kind).slots; };
++            const uint32_t worker_channel = get_worker_connected_sender_channel();
++            for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
++                const size_t sender_slots = vc == 0   ? slots(0, sa::ChannelKind::Forwarding)
++                                            : vc == 1 ? slots(1, sa::ChannelKind::Forwarding)
++                                                      : slots(2, sa::ChannelKind::Worker);
++                num_sender_buffer_slots_per_vc[vc].fill(sender_slots);
++                num_remote_sender_buffer_slots_per_vc[vc].fill(sender_slots);
++                num_receiver_buffer_slots_per_vc[vc].fill(slots(vc, sa::ChannelKind::Receiver));
++                num_remote_receiver_buffer_slots_per_vc[vc].fill(slots(vc, sa::ChannelKind::Receiver));
++            }
++            num_sender_buffer_slots_per_vc[0][worker_channel] = slots(0, sa::ChannelKind::Worker);
++            num_remote_sender_buffer_slots_per_vc[0][worker_channel] = slots(0, sa::ChannelKind::Worker);
++        }
++    }
+ }
+ 
+ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {
+--- a/tt_metal/fabric/sources.cmake
++++ b/tt_metal/fabric/sources.cmake
+@@ -35,6 +35,7 @@
+     builder/fabric_stream_assignment.cpp
+     builder/fabric_core_placement.cpp
+     builder/fabric_channel_allocator.cpp
++    builder/fabric_slot_allocator.cpp
+     builder/fabric_static_sized_channels_allocator.cpp
+     builder/fabric_remote_channels_allocator.cpp
+     builder/static_sized_channel_connection_writer_adapter.cpp

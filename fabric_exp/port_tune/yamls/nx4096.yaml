@@ -1,0 +1,24 @@
+# NeighborExchange write, 1 link, 4096 B (mk_tune_yamls.py; RECEIVER_TUNING.md section 8).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: NeighborExchange
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1

@@ -1,0 +1,626 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 100,
+  "PERF_WINDOW": 0,
+  "SKIP": 2
+ },
+ "files": [
+  "pytest_2712235_1793766263756344327_20261104_042423.xml"
+ ],
+ "tests": {
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.625
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.622
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.245
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.281
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.657
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.792
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.168
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 32.065
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.694
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.229
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.939
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.083
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_4D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fabric_1d_linear-non-trace-l1_only-float_16-num_devices=4-ag_output_shape=[1, 1, 128, 2048]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 15.416
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_everything_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-non-trace-l1_only-float_16-num_devices=4-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE-cluster_axis=0]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.6
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_everything_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-non-trace-l1_only-float_16-num_devices=8-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE-cluster_axis=1]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.437
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_everything_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-trace-l1_only-float_16-num_devices=4-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE-cluster_axis=0]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.133
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_apc::test_all_gather_everything_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-trace-l1_only-float_16-num_devices=8-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE-cluster_axis=1]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 32.619
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_minimal_matmul_variable_chunks_bh::test_all_gather_minimal_matmul_variable_chunks[silicon_arch_name=blackhole-fabric_ring-asymmetric-4x8]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.98
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_minimal_matmul_variable_chunks_bh::test_all_gather_minimal_matmul_variable_chunks[silicon_arch_name=blackhole-fabric_ring-lopsided_2chunk-4x8]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.085
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_minimal_matmul_variable_chunks_bh::test_all_gather_minimal_matmul_variable_chunks[silicon_arch_name=blackhole-fabric_ring-qkv_plus_gate-4x8]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.967
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_gather_minimal_matmul_variable_chunks_bh::test_all_gather_minimal_matmul_variable_chunks[silicon_arch_name=blackhole-fabric_ring-uniform_3x1024-4x8]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 30.397
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input[silicon_arch_name=blackhole-large-axis0_8chip-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.929
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input[silicon_arch_name=blackhole-large-axis1_4chip-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 28.826
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input[silicon_arch_name=blackhole-odd_tile_rows-axis0_8chip-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.155
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input[silicon_arch_name=blackhole-odd_tile_rows-axis1_4chip-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.834
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input[silicon_arch_name=blackhole-small-axis0_8chip-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.244
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input[silicon_arch_name=blackhole-small-axis1_4chip-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.792
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input[silicon_arch_name=blackhole-wide_rows-axis0_8chip-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.702
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input[silicon_arch_name=blackhole-wide_rows-axis1_4chip-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.724
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_async_generic_row_major_bh::test_all_to_all_async_generic_row_major_input_rejects_float32[silicon_arch_name=blackhole-mesh_device=(8, 4)-device_params={'fabric_config': FabricConfig.FABRIC_2D_TORUS_XY}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.565
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_combine_bh::test_all_to_all_combine_no_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-dtype=DataType.BFLOAT16-l1-l1-num_iters=2-scheme=random-local_reduce=False-seq=2-hidden_size=7000-select_experts_k=8-experts_per_device=8-batches_per_device=8-num_devices=8-mesh_shape=(1, 8)-axis=1-fabric_1d_line_axis_0]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.437
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_combine_bh::test_all_to_all_combine_no_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-dtype=DataType.BFLOAT16-l1-l1-num_iters=2-scheme=random-local_reduce=True-seq=2-hidden_size=7000-select_experts_k=8-experts_per_device=8-batches_per_device=8-num_devices=8-mesh_shape=(1, 8)-axis=1-fabric_1d_line_axis_0]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 39.924
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_combine_bh::test_all_to_all_combine_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-dtype=DataType.BFLOAT16-topology=Topology.Linear-num_links=1-dram-dram-local_reduce=True-seq_len=1-num_iters=40-warmup_iters=10-hidden_size=7168-select_experts_k=8-experts_per_device=8-batches_per_device=8-num_devices=8-cluster_axis=1-mesh_shape=(1, 8)-device_params={'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 500000}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 20.875
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_dispatch_bh::test_all_to_all_dispatch_no_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-l1-l1-dtype=DataType.BFLOAT16-num_links=MAX_LINKS-b16s2-hidden_size=7168-select_experts_k=4-experts_per_device=8-num_devices=4-mesh_shape=(4, 1)-cluster_axis=0-trace_mode=False-device_params={'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.854
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_dispatch_bh::test_all_to_all_dispatch_no_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-l1-l1-dtype=DataType.BFLOAT16-num_links=MAX_LINKS-b16s2-hidden_size=7168-select_experts_k=4-experts_per_device=8-num_devices=8-mesh_shape=(1, 8)-cluster_axis=1-trace_mode=False-device_params={'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.69
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_dispatch_bh::test_all_to_all_dispatch_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-dtype=DataType.BFLOAT16-num_links=MAX_LINKS-dram-dram-s128-hidden_size=7168-select_experts_k=4-experts_per_device=8-batches_per_device=8-num_devices=8-mesh_shape=(1, 8)-cluster_axis=1-trace_mode=False-device_params={'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 500000}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.766
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_all_to_all_dispatch_bh::test_all_to_all_dispatch_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-dtype=DataType.BFLOAT16-num_links=MAX_LINKS-dram-dram-s128-hidden_size=7168-select_experts_k=4-experts_per_device=8-batches_per_device=8-num_devices=8-mesh_shape=(1, 8)-cluster_axis=1-trace_mode=True-device_params={'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 500000}]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.883
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_new_all_broadcast::test_all_broadcast[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D}-num_iters=3-mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-num_devices=4-num_links=1-output_shape=[1, 1, 1, 32, 1024]-layout=Layout.TILE-input_dtype=DataType.BFLOAT16-cluster_axis=1]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.673
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-l1_only-float_16-num_devices=8-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.225
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-l1_only-float_16-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.204
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-cluster_axis=0-num_devices=4-non-trace-dram_only-float_16-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "Skipping due to hang",
+   "status": "SKIP",
+   "time": 1.522
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-cluster_axis=1-num_devices=8-non-trace-dram_only-float_16-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "Skipping due to hang",
+   "status": "SKIP",
+   "time": 2.352
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_async_bh::test_strided_all_gather_async[silicon_arch_name=blackhole-fabric_ring-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.351
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_async_bh::test_strided_all_gather_async[silicon_arch_name=blackhole-fabric_ring-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 33.526
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-bias-addcmul-fused-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.058
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-bias-addcmul-fused-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 18.394
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-bias-chunks2-fused-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.399
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-bias-chunks2-fused-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 23.682
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-bias-gelu_tanh-fused-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.973
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-bias-gelu_tanh-fused-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 18.461
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-bias-plain-fused-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.008
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-bias-plain-fused-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 16.562
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-no_bias-addcmul-fused-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.031
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-no_bias-addcmul-fused-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.592
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-no_bias-chunks2-fused-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.056
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-no_bias-chunks2-fused-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.001
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-no_bias-gelu_tanh-fused-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.455
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-no_bias-gelu_tanh-fused-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 22.244
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-no_bias-plain-fused-check-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.056
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_async[silicon_arch_name=blackhole-fabric_ring-read_local-no_bias-plain-fused-perf-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_mm=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-wan1-2link-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 58.423
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-a2v_attn_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.998
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-a2v_attn_s2-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.888
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-a_gate-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.892
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-a_gate_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.42
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-a_kv-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.56
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-a_kv_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.369
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-v_gate-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.833
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-v_gate_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.085
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-v_q_out-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.859
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-v_q_out_addcmul-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.111
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-v_q_out_addcmul_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.168
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check-v_q_out_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.276
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-a2v_attn_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.11
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-a2v_attn_s2-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 25.513
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-a_gate-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.893
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-a_gate_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.354
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-a_kv-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 36.721
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-a_kv_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.659
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-v_gate-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 20.414
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-v_gate_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.744
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-v_q_out-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 41.578
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-v_q_out_addcmul-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 44.68
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-v_q_out_addcmul_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.117
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-check_multi-v_q_out_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.834
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-a2v_attn_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.217
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-a2v_attn_s2-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.104
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-a_gate-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.995
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-a_gate_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.749
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-a_kv-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 53.862
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-a_kv_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 22.034
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-v_gate-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 28.299
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-v_gate_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.508
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-v_q_out-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 43.771
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-v_q_out_addcmul-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.694
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-v_q_out_addcmul_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.347
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_ltx_configs[silicon_arch_name=blackhole-fabric_ring-perf-v_q_out_s1-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.778
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_swiglu[silicon_arch_name=blackhole-fabric_ring-check-bias-aligned-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.443
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_swiglu[silicon_arch_name=blackhole-fabric_ring-check-bias-full_block-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.635
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_swiglu[silicon_arch_name=blackhole-fabric_ring-check-bias-ragged-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.166
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_swiglu[silicon_arch_name=blackhole-fabric_ring-check-no_bias-aligned-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 37.289
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_swiglu[silicon_arch_name=blackhole-fabric_ring-check-no_bias-full_block-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.308
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.galaxy.galaxy_nightly.test_strided_all_gather_minimal_matmul_async_bh::test_strided_all_gather_minimal_matmul_swiglu[silicon_arch_name=blackhole-fabric_ring-check-no_bias-ragged-mesh_device=(8, 4)]": {
+   "file": "pytest_2712235_1793766263756344327_20261104_042423.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.936
+  }
+ }
+}

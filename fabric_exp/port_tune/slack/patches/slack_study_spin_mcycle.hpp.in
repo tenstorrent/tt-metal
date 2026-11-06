@@ -1,0 +1,33 @@
+// LOCAL slack study (fabric_exp/port_tune/slack/NOTES.md); never committed. A fixed busy-wait per packet on one side,
+// to measure each ERISC's headroom at saturation: tx after each packet sent over Ethernet (E0), rx after each packet
+// received and handled (E1). Each arm's runtime root holds its own copy with its values; 0 compiles the spin out.
+// This copy spins on the core cycle counter (mcycle), the study's fabric_experiment_spin (V4_PROFILE.md, V4_BOUNDS.md).
+#pragma once
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+
+namespace slack_study {
+
+constexpr uint32_t tx_spin_cycles = @TX@;
+constexpr uint32_t rx_spin_cycles = @RX@;
+
+// The core cycle counter: one CSR read (the study's fabric_core_cycles).
+FORCE_INLINE uint32_t core_cycles() {
+    uint32_t cycles;
+    asm volatile("csrr %0, mcycle" : "=r"(cycles));
+    return cycles;
+}
+
+// Busy-waits until mcycle has advanced by `cycles` (the study's fabric_experiment_spin).
+template <uint32_t cycles>
+FORCE_INLINE void spin() {
+    if constexpr (cycles > 0) {
+        const uint32_t start = core_cycles();
+        while (core_cycles() - start < cycles) {
+        }
+    }
+}
+
+}  // namespace slack_study

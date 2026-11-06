@@ -1,0 +1,25 @@
+# cisp PC sampling (fabric_exp/port_tune/cisp/cisp_pcs.sh): ubench.yaml's NeighborExchangeUnicast at size 4096,
+# unicast_write, num_links 2 only, one iteration of 80M packets (several seconds of steady traffic to sample).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: NeighborExchangeUnicastPcs
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 80000000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1

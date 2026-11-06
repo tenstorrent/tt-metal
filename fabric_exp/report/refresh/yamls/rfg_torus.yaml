@@ -1,0 +1,92 @@
+# Report data refresh 2026-11-05 (fabric_exp/report/refresh/mk_rf_yamls.py): 200G missing cells, XY torus (8x4, both axes rings): GlxTorus3HopNS ([0,0] -> [0,12]: 3 hops down column 0's 8-chip ring; on the 4-chip row ring [0,0] -> [0,3] is the 1-hop wrap), glx_sizes_torus.yaml's GlxTorusWrapEW as scatter_write, GlxTorusRowMcast ([0,1] multicasting E 3 hops around its row: cols 2, 3 and, across the wrap, 0; as the P150's TorusXYRowMcast; 20,000 packets as the multicast rows).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxTorus3HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 12
+- name: GlxTorusWrapEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_scatter_write
+    size:
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: GlxTorusRowMcast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  senders:
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        hops:
+          E: 3

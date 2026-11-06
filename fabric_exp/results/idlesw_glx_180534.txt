@@ -1,0 +1,28 @@
+# Galaxy 200G, Slurm 180534
+
+## nx (3 rows, cycles/packet; per arm: mean [spread] change vs i4)
+row                                                                             i4                      i8                     i16                     i32                     i64
+GlxNeighborExchange write 3072                                178.54 [0.08]           177.45 [0.01]  -1.09    177.42 [0.10]  -1.13    177.45 [0.00]  -1.09    177.47 [0.03]  -1.08
+GlxNeighborExchange write 4096                                239.28 [0.00]           236.68 [0.00]  -2.60    235.75 [0.00]  -3.53    235.75 [0.00]  -3.53    235.74 [0.02]  -3.55
+GlxNeighborExchange write 4352                                253.12 [0.00]           250.73 [0.00]  -2.39    250.10 [0.02]  -3.02    250.10 [0.02]  -3.02    250.11 [0.00]  -3.01
+
+## mesh (3 rows, cycles/packet; per arm: mean [spread] change vs i4)
+row                                                                             i4                      i8                     i16                     i32                     i64
+GlxMesh1HopEW write 4096                                      238.22 [0.00]           238.22 [0.01]  +0.00    238.23 [0.00]  +0.01    238.23 [0.00]  +0.01    238.23 [0.00]  +0.01
+GlxMesh3HopNS write 1024                                      153.41 [0.13]           153.22 [0.07]  -0.20    153.14 [0.01]  -0.27    153.17 [0.15]  -0.25    153.13 [0.02]  -0.28
+GlxMesh3HopNS write 4096                                      238.22 [0.01]           238.22 [0.00]  +0.00    238.22 [0.00]  +0.00    238.22 [0.00]  +0.00    238.22 [0.00]  +0.00
+
+## linear (1 rows, cycles/packet; per arm: mean [spread] change vs i4)
+row                                                                             i4                      i8                     i16                     i32                     i64
+GlxLinear3HopEW write 4096                                    235.58 [0.00]           235.57 [0.00]  -0.00    235.58 [0.00]  -0.00    235.58 [0.00]  -0.00    235.58 [0.00]  -0.00
+
+## ring (2 rows, cycles/packet; per arm: mean [spread] change vs i4)
+row                                                                             i4                      i8                     i16                     i32                     i64
+GlxFullRingMulticast write 4352                               254.14 [0.00]           254.14 [0.01]  +0.00    254.14 [0.00]  +0.00    254.14 [0.00]  -0.00    254.14 [0.00]  -0.00
+GlxRing1HopEW write 4096                                      235.62 [0.00]           235.62 [0.00]  -0.00    235.62 [0.00]  -0.00    235.62 [0.00]  -0.00    235.62 [0.00]  -0.00
+
+## regressions against i4 (more than 1 cycle or 0.5%, both passes beyond i4's spread)
+   i8: 0 rows
+   i16: 0 rows
+   i32: 0 rows
+   i64: 0 rows

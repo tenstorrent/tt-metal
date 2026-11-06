@@ -1,0 +1,141 @@
+== job C (cycles/packet; flag *: |d| > max(spread, 0.5))
+-- kim_r713 two: router images 48 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC2fab2D1Hop               256    147.9    147.9    147.4   -0.5    0.0 *
+   AuVC2fab2D1Hop              4352    149.9    149.9    149.2   -0.6    0.0 *
+   AuVC2fab2D3Hop               256    265.0    264.9    264.7   -0.2    0.1
+   AuVC2fab2D3Hop              4352    293.9    293.9    293.7   -0.2    0.0
+-- kim_r713 one: router images 28 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1eVC2fab2D1Hop             256    268.0    268.0    266.0   -2.0    0.0 *
+   Au1eVC2fab2D1Hop            4352    268.5    268.5    266.5   -2.0    0.0 *
+   Au1eVC2fab2D3Hop             256    359.1    359.1    357.7   -1.4    0.0 *
+   Au1eVC2fab2D3Hop            4352    380.8    380.9    379.2   -1.7    0.1 *
+-- kim_s816 one: router images 28 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1eVC2fab2D1Hop             256    268.0    268.0    268.0   -0.0    0.0
+   Au1eVC2fab2D1Hop            4352    268.5    268.5    268.5   +0.0    0.0
+   Au1eVC2fab2D3Hop             256    359.1    359.1    359.1   +0.0    0.0
+   Au1eVC2fab2D3Hop            4352    380.8    380.9    380.8   +0.0    0.1
+-- rg_r755 one: router images 56 distinct, 56 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1e2D1Hop                   256    199.6    199.6    196.6   -3.0    0.0 *
+   Au1e2D1Hop                  4352    199.9    199.9    197.0   -2.9    0.0 *
+   Au1e2D3Hop                   256    255.3    255.2    252.3   -3.0    0.0 *
+   Au1e2D3Hop                  4352    255.7    255.7    252.8   -2.9    0.0 *
+   Au1e2DMcast                  256    327.3    327.4    324.8   -2.6    0.1 *
+   Au1e2DMcast                 4352    327.7    327.7    325.1   -2.6    0.0 *
+   Au1eVC2fab2D1Hop             256    268.0    268.0    265.0   -3.0    0.0 *
+   Au1eVC2fab2D1Hop            4352    268.5    268.5    265.5   -3.0    0.0 *
+-- rg_s673 two: router images 76 distinct, 38 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1D1Hop                     256    123.1    123.1    123.1   -0.0    0.0
+   Au1D1Hop                    4352    130.9    130.9    130.7   -0.2    0.0
+   Au1DBidir                    256    122.8    122.8    122.8   -0.0    0.0
+   Au1DBidir                   4352    138.8    138.8    138.7   -0.1    0.0
+   Au2D1Hop                     256    120.3    120.3    120.1   -0.2    0.0
+   Au2D1Hop                    4352    128.0    128.0    128.1   +0.2    0.0
+   Au2D3Hop                     256    144.6    144.6    143.5   -1.1    0.0 *
+   Au2D3Hop                    4352    145.6    145.6    144.8   -0.8    0.0 *
+   Au2DBidir                    256    120.1    120.1    119.8   -0.3    0.0
+   Au2DBidir                   4352    135.7    135.7    135.7   +0.1    0.0
+-- rg_s673 one: router images 56 distinct, 56 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1e2D1Hop                   256    199.6    199.6    198.5   -1.0    0.0 *
+   Au1e2D1Hop                  4352    199.9    199.9    198.9   -1.0    0.0 *
+   Au1e2D3Hop                   256    255.3    255.2    254.2   -1.0    0.0 *
+   Au1e2D3Hop                  4352    255.7    255.7    254.7   -1.0    0.0 *
+   Au1eVC2fab2D1Hop             256    268.0    268.0    265.0   -3.0    0.0 *
+   Au1eVC2fab2D1Hop            4352    268.5    268.5    265.5   -3.0    0.0 *
+-- rg_s605 two: router images 48 distinct, 20 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au2D1Hop                     256    120.3    120.3    120.4   +0.1    0.0
+   Au2D1Hop                    4352    128.0    128.0    128.2   +0.3    0.0
+   Au2D3Hop                     256    144.6    144.6    146.8   +2.2    0.0 *
+   Au2D3Hop                    4352    145.6    145.6    145.7   +0.2    0.0
+   Au2DBidir                    256    120.1    120.1    120.2   +0.1    0.0
+   Au2DBidir                   4352    135.7    135.7    135.5   -0.2    0.0
+-- rg_s605 one: router images 28 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1e2D1Hop                   256    199.6    199.6    199.6   +0.0    0.0
+   Au1e2D1Hop                  4352    199.9    199.9    199.9   +0.0    0.0
+   Au1e2D3Hop                   256    255.3    255.2    255.2   -0.0    0.0
+   Au1e2D3Hop                  4352    255.7    255.7    255.7   +0.0    0.0
+-- rg_s537 two: router images 48 distinct, 20 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au2D1Hop                     256    120.3    120.3    120.3   -0.0    0.0
+   Au2D1Hop                    4352    128.0    128.0    128.0   +0.0    0.0
+   Au2D3Hop                     256    144.6    144.6    144.6   -0.1    0.0
+   Au2D3Hop                    4352    145.6    145.6    145.6   +0.0    0.0
+   Au2DBidir                    256    120.1    120.1    120.1   -0.0    0.0
+   Au2DBidir                   4352    135.7    135.7    135.7   -0.0    0.0
+-- rg_s537 one: router images 28 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1e2D1Hop                   256    199.6    199.6    198.5   -1.0    0.0 *
+   Au1e2D1Hop                  4352    199.9    199.9    199.0   -0.9    0.0 *
+   Au1e2D3Hop                   256    255.3    255.2    254.3   -1.0    0.0 *
+   Au1e2D3Hop                  4352    255.7    255.7    254.8   -1.0    0.0 *
+-- rg_d414 two: router images 100 distinct, 42 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au2D3Hop                     256    144.6    144.6    144.6   -0.0    0.0
+   Au2D3Hop                    4352    145.6    145.6    145.5   -0.0    0.0
+   Au2DMcast                    256    139.3    139.2    139.2   +0.0    0.0
+   Au2DMcast                   4352    142.3    142.3    142.3   +0.0    0.0
+   Au2DTurn                     256    143.5    143.6    143.5   -0.1    0.1
+   Au2DTurn                    4352    144.9    144.9    144.9   +0.0    0.0
+   AuRingMcast                  256    140.7    140.7    140.7   +0.0    0.0
+   AuRingMcast                 4352    148.6    148.6    148.7   +0.1    0.0
+   AuTorusY3HopEW               256    144.6    144.7    144.6   +0.0    0.1
+   AuTorusY3HopEW              4352    145.6    145.5    145.5   -0.0    0.1
+-- rg_d414 one: router images 28 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1e2D3Hop                   256    255.3    255.2    252.7   -2.6    0.0 *
+   Au1e2D3Hop                  4352    255.7    255.7    253.5   -2.2    0.0 *
+   Au1e2DMcast                  256    327.3    327.4    326.7   -0.6    0.1 *
+   Au1e2DMcast                 4352    327.7    327.7    327.0   -0.7    0.0 *
+-- kim_s755 two: router images 128 distinct, 68 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1D1Hop                     256    123.1    123.1    123.3   +0.2    0.0
+   Au1D1Hop                    4352    130.9    130.9    131.5   +0.6    0.0 *
+   Au1DBidir                    256    122.8    122.8    123.0   +0.2    0.0
+   Au1DBidir                   4352    138.8    138.8    139.1   +0.3    0.0
+   Au2D1Hop                     256    120.3    120.3    120.4   +0.1    0.0
+   Au2D1Hop                    4352    128.0    128.0    128.2   +0.2    0.0
+   Au2D3Hop                     256    144.6    144.6    153.1   +8.4    0.0 *
+   Au2D3Hop                    4352    145.6    145.6    151.7   +6.2    0.0 *
+   Au2DBidir                    256    120.1    120.1    120.2   +0.1    0.0
+   Au2DBidir                   4352    135.7    135.7    135.7   -0.0    0.0
+   AuRing1Hop                   256    140.6    140.6    140.6   +0.0    0.0
+   AuRing1Hop                  4352    140.9    140.9    140.9   +0.0    0.0
+   AuTorusY3HopEW               256    144.6    144.7    152.9   +8.3    0.1 *
+   AuTorusY3HopEW              4352    145.6    145.5    151.7   +6.2    0.1 *
+   AuTorusYNS1Hop               256    158.3    158.3    158.1   -0.2    0.0
+   AuTorusYNS1Hop              4352    158.0    158.0    158.0   +0.0    0.0
+-- kim_s755 one: router images 28 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1e2D1Hop                   256    199.6    199.6    207.3   +7.7    0.0 *
+   Au1e2D1Hop                  4352    199.9    199.9    207.6   +7.7    0.0 *
+   Au1e2D3Hop                   256    255.3    255.2    262.9   +7.6    0.0 *
+   Au1e2D3Hop                  4352    255.7    255.7    263.4   +7.7    0.0 *
+-- rg_s583 two: router images 128 distinct, 68 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1D1Hop                     256    123.1    123.1    123.1   +0.0    0.0
+   Au1D1Hop                    4352    130.9    130.9    130.9   -0.0    0.0
+   Au1DBidir                    256    122.8    122.8    122.8   +0.0    0.0
+   Au1DBidir                   4352    138.8    138.8    138.6   -0.2    0.0
+   Au2D1Hop                     256    120.3    120.3    120.0   -0.3    0.0
+   Au2D1Hop                    4352    128.0    128.0    128.1   +0.2    0.0
+   Au2D3Hop                     256    144.6    144.6    138.8   -5.8    0.0 *
+   Au2D3Hop                    4352    145.6    145.6    142.6   -3.0    0.0 *
+   Au2DBidir                    256    120.1    120.1    119.8   -0.3    0.0
+   Au2DBidir                   4352    135.7    135.7    135.9   +0.2    0.0
+   AuRing1Hop                   256    140.6    140.6    140.6   +0.0    0.0
+   AuRing1Hop                  4352    140.9    140.9    141.0   +0.0    0.0
+   AuTorusYNS1Hop               256    158.3    158.3    158.3   +0.0    0.0
+   AuTorusYNS1Hop              4352    158.0    158.0    158.0   +0.0    0.0
+-- rg_s583 one: router images 28 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1e2D1Hop                   256    199.6    199.6    199.6   +0.0    0.0
+   Au1e2D1Hop                  4352    199.9    199.9    199.9   -0.0    0.0
+   Au1e2D3Hop                   256    255.3    255.2    255.2   -0.0    0.0
+   Au1e2D3Hop                  4352    255.7    255.7    255.7   -0.0    0.0

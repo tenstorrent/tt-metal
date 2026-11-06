@@ -1,0 +1,108 @@
+--- a/tt_metal/fabric/erisc_datamover_builder.cpp	2026-11-04 17:28:25.996708986 +0000
++++ b/tt_metal/fabric/erisc_datamover_builder.cpp	2026-11-04 17:28:54.410096675 +0000
+@@ -1562,12 +1562,44 @@
+     // these.
+     {
+         namespace ta = tt::tt_fabric::trid_allocator;
++        // Study switch (fabric_exp, SLOT_ALLOCATOR.md section 12.10): TT_FABRIC_EXP_COMPLETION_GROUP=G sets the
++        // completion group size (1, 2 or 4) of every receiver channel without first-level acks, or G0,G1,G2 per VC
++        // (0: the size from the slot count). Unset: the size from the slot count, as today.
++        std::array<size_t, builder_config::MAX_NUM_VCS> group_override{};
++        if (const char* text = std::getenv("TT_FABRIC_EXP_COMPLETION_GROUP")) {
++            std::vector<size_t> values;
++            const std::string list(text);
++            for (size_t start = 0; start <= list.size();) {
++                const size_t end = std::min(list.find(',', start), list.size());
++                values.push_back(std::stoul(list.substr(start, end - start)));
++                start = end + 1;
++            }
++            TT_FATAL(
++                values.size() == 1 || values.size() == builder_config::MAX_NUM_VCS,
++                "TT_FABRIC_EXP_COMPLETION_GROUP={}: one size, or one per VC ({})",
++                text,
++                builder_config::MAX_NUM_VCS);
++            for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
++                group_override[vc] = values.size() == 1 ? values[0] : values[vc];
++                TT_FATAL(
++                    group_override[vc] == 0 || group_override[vc] == 1 || group_override[vc] == 2 ||
++                        group_override[vc] == 4,
++                    "TT_FABRIC_EXP_COMPLETION_GROUP={}: sizes are 1, 2 or 4 (0: from the slot count)",
++                    text);
++            }
++        }
+         std::vector<ta::ReceiverChannel> receivers;
+         for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+             const bool first_level_ack = named_args.at(fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)) != 0;
+             for (size_t i = 0; i < config.num_used_receiver_channels_per_vc[vc]; ++i) {
+-                receivers.push_back(
+-                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i), first_level_ack});
++                const size_t slots = static_channel_allocator->get_receiver_channel_number_of_slots(vc, i);
++                TT_FATAL(
++                    group_override[vc] <= slots,
++                    "TT_FABRIC_EXP_COMPLETION_GROUP: groups of {} on a VC{} receiver of {} slots",
++                    group_override[vc],
++                    vc,
++                    slots);
++                receivers.push_back({slots, first_level_ack, first_level_ack ? 0 : group_override[vc]});
+             }
+         }
+         const bool trid_alloc = std::getenv("TT_FABRIC_EXP_TRID_ALLOC") != nullptr;
+--- a/tt_metal/fabric/builder/fabric_trid_allocator.hpp	2026-11-04 17:28:25.997708999 +0000
++++ b/tt_metal/fabric/builder/fabric_trid_allocator.hpp	2026-11-04 17:28:54.463097399 +0000
+@@ -23,7 +23,8 @@
+ 
+ struct ReceiverChannel {
+     std::size_t slots = 0;
+-    bool first_level_ack = false;  // the channel credits every slot on its own (bubble flow control)
++    bool first_level_ack = false;    // the channel credits every slot on its own (bubble flow control)
++    std::size_t group_override = 0;  // study switch: 1, 2 or 4 slots per completion group (0: from the slot count)
+ };
+ 
+ struct ChannelIds {
+@@ -40,8 +41,9 @@
+     std::optional<std::string> error;
+ };
+ 
+-// Slots per completion group: 1 under first-level acks, else 1 / 2 / 4 for fewer than 8 / 8-15 / 16 or more slots.
+-std::size_t completion_group_size(std::size_t slots, bool first_level_ack);
++// Slots per completion group: 1 under first-level acks, else the override when set, else 1 / 2 / 4 for fewer than 8 /
++// 8-15 / 16 or more slots.
++std::size_t completion_group_size(std::size_t slots, bool first_level_ack, std::size_t group_override = 0);
+ 
+ // The rule. One ID per completion group when the groups of every channel fit the NoC's IDs; otherwise, until they
+ // fit, the largest count shrinks: rounded down to a power of 2 if it is not one (20 -> 16), else halved. A channel with
+--- a/tt_metal/fabric/builder/fabric_trid_allocator.cpp	2026-11-04 17:28:25.997708999 +0000
++++ b/tt_metal/fabric/builder/fabric_trid_allocator.cpp	2026-11-04 17:28:45.291972262 +0000
+@@ -29,10 +29,13 @@
+ 
+ }  // namespace trid_detail
+ 
+-std::size_t completion_group_size(std::size_t slots, bool first_level_ack) {
++std::size_t completion_group_size(std::size_t slots, bool first_level_ack, std::size_t group_override) {
+     if (first_level_ack) {
+         return 1;
+     }
++    if (group_override != 0) {
++        return group_override;
++    }
+     return slots < 8 ? 1 : (slots < 16 ? 2 : 4);
+ }
+ 
+@@ -41,7 +44,7 @@
+     std::size_t total = 0;
+     for (const ReceiverChannel& in : channels) {
+         ChannelIds c;
+-        c.group_size = completion_group_size(in.slots, in.first_level_ack);
++        c.group_size = completion_group_size(in.slots, in.first_level_ack, in.group_override);
+         c.groups = (in.slots + c.group_size - 1) / c.group_size;
+         c.num_ids = c.groups == 0 ? 1 : c.groups;
+         total += c.num_ids;
+@@ -88,7 +91,7 @@
+     std::size_t start = 0;
+     for (const ReceiverChannel& in : channels) {
+         ChannelIds c;
+-        c.group_size = completion_group_size(in.slots, in.first_level_ack);
++        c.group_size = completion_group_size(in.slots, in.first_level_ack, in.group_override);
+         c.groups = (in.slots + c.group_size - 1) / c.group_size;
+         c.num_ids = per_channel;
+         c.start = start;

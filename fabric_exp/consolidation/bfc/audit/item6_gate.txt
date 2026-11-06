@@ -1,0 +1,2 @@
+a_item5 vs a_item6: shared 5010, identical 4998, differ 12, only base 0, only new 0
+   bh_2d_telemetry E1           x12: fabric_router::receiver::run 664->664

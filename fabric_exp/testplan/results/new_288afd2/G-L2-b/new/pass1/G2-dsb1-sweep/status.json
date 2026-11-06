@@ -1,0 +1,19 @@
+{
+ "ci": {
+  "list": "demo_sp_release_tests.yaml",
+  "name": "Single Galaxy - Decoder Sweep vs reference (DeepSeek V3 B1)",
+  "sku": "bh_galaxy"
+ },
+ "duration_s": 0,
+ "end": "2026-11-04T08:37:12+00:00",
+ "group": "G-L2-b",
+ "label": "new_288afd2",
+ "node": "bh-glx-110-a06u20",
+ "pass": 1,
+ "rc": null,
+ "reason": "NOT RUN: needs /mnt/MLPerf/tt_dnn-models/deepseek-ai/{DeepSeek-R1-0528-Cache/CI/test_host_io_v3_b1,debug_trace}, missing on a09u32 and the 110-a Galaxies; run it in CI",
+ "router": "new",
+ "start": "2026-11-04T08:37:12+00:00",
+ "status": "NOT_RUN",
+ "step": "G2-dsb1-sweep"
+}

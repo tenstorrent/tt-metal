@@ -1,0 +1,1 @@
+TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth --gtest_filter='MeshDeviceFixture.ActiveEthKernels*AllConnectedChips'

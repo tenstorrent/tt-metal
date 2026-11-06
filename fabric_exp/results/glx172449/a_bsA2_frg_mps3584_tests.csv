@@ -1,0 +1,5 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+GlxRingMcastNS_size_3072_ntype_unicast_write,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,20,31,1,S,7,20000,3072,27115219,21.412624,6970255.339
+GlxRingMcastNS_size_3584_ntype_unicast_write,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,20,31,1,S,7,20000,3584,42219282,16.044233,4476627.528
+GlxRingMcastEW_size_3584_ntype_unicast_write,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,20,31,1,W,3,20000,3584,16488610,17.606336,4912482.010
+GlxHalfRingMulticast_size_3584_ntype_unicast_write,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,20,31,1,W,2,20000,3584,21345110,9.066995,2529853.442

@@ -1,0 +1,53 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 65,
+  "filtered": true,
+  "list": "demo_sp_release_tests.yaml",
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 3900,
+ "deviation": "fabric_2d bucket only, test_attention_block deselected (it runs alone in G2-dsb1-attn); run_isolated_unit_tests.py --no-reset (deviation for main and new): its reset/validation/smoke preflight validates the single-Galaxy XY-torus cabling and fails on every quad-cabled 110-a node (job 172241, ENV like G0-health-cv); the job still resets at start and after any failing step",
+ "duration_s": 626.1,
+ "end": "2026-11-04T05:44:13+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --no-reset --pytest-arg=--deselect=models/demos/deepseek_v3_b1/tests/unit_tests/test_attention_block.py --bucket fabric_2d"
+ ],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172490/cache/main-main",
+ "junit_files": 0,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a07u08",
+ "note": "the runner sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 for every bucket (as in CI)",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "172490",
+ "start": "2026-11-04T05:33:47+00:00",
+ "status": "FAIL",
+ "step": "G2-dsb1-f2d",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 6,
+  "KNOWN_FAIL": 0,
+  "PASS": 30,
+  "PERF_WINDOW": 0,
+  "SKIP": 37
+ },
+ "tests_from_log": true,
+ "timeout_note": null,
+ "timeout_s": 3900,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

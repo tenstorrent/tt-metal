@@ -1,0 +1,53 @@
+{
+ "benchmark_files": 1,
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 30,
+  "filtered": false,
+  "list": "models_e2e_tests.yaml",
+  "name": "GPT-OSS 120B e2e tests",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 1800,
+ "data_inodes_at_submit": "8165095",
+ "data_inodes_free": 8115385,
+ "deviation": null,
+ "duration_s": 901.6,
+ "end": "2026-11-04T16:24:16+00:00",
+ "failed_lines": [],
+ "group": "G-L2-a",
+ "jit_cache": "/tmp/aagarwal-regress/174449/cache/new_288afd2-new",
+ "junit_files": 1,
+ "label": "new_288afd2",
+ "metrics": 3,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a09u02",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "174449",
+ "start": "2026-11-04T16:09:14+00:00",
+ "status": "PASS",
+ "step": "G2-oss",
+ "step_env": null,
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 12
+ },
+ "timeout_note": null,
+ "timeout_s": 1800,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

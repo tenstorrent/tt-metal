@@ -1,0 +1,2 @@
+axes=Y=LINE X=RING want=Y=LINE X=RING
+deadlock_avoidance=E: {'1': 64}, N: {'1': 52}, S: {'1': 52}, W: {'1': 64}

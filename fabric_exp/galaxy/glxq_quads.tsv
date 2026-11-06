@@ -15,3 +15,13 @@ a07	bh_110a_sc16:bh-glx-110-a07u[02,08,14,20]	bh-glx-110-a07u02,bh-glx-110-a07u0
 a08	bh_110a_sc16:bh-glx-110-a08u[02,08,14,20]	bh-glx-110-a08u02,bh-glx-110-a08u08,bh-glx-110-a08u14,bh-glx-110-a08u20	110-SC16_4x4_A7-10
 a09	bh_110a_sc16:bh-glx-110-a09u[02,08,14,20]	bh-glx-110-a09u02,bh-glx-110-a09u08,bh-glx-110-a09u14,bh-glx-110-a09u20	110-SC16_4x4_A7-10
 a10	bh_110a_sc16:bh-glx-110-a10u[02,08,14,20]	bh-glx-110-a10u02,bh-glx-110-a10u08,bh-glx-110-a10u14,bh-glx-110-a10u20	110-SC16_4x4_A7-10
+# bh_sc36_2 120-c pods: ONE-TIME EXCEPTION granted by the user on 2026-11-04 for the pending pod smoke run only. Usable
+# only with GLXQ_C120_EXCEPTION=1 (glxq_run.sh --quad c120pods | allpods). Ring order from the 120-SC36_4x4_C1-10
+# cabling_descriptor.textproto (/data/pbara/tt-cluster-config, read 2026-11-04): 8 QSFP-DD cables between ring
+# neighbours, none across the ring's diagonal, as in the 110-a quads. These hosts also cable to other pods (unused here).
+# Pods 3, 4, 5 and 9 had drained or down nodes on 2026-11-04 and are not listed.
+c120_pod1	bh_sc36_2_120c_pod1	bh-glx-120-c01u02,bh-glx-120-c01u08,bh-glx-120-c01u14,bh-glx-120-c01u20	120-SC36_4x4_C1-10
+c120_pod2	bh_sc36_2_120c_pod2	bh-glx-120-c02u02,bh-glx-120-c02u08,bh-glx-120-c03u08,bh-glx-120-c03u02	120-SC36_4x4_C1-10
+c120_pod6	bh_sc36_2_120c_pod6	bh-glx-120-c07u02,bh-glx-120-c07u08,bh-glx-120-c07u14,bh-glx-120-c07u20	120-SC36_4x4_C1-10
+c120_pod7	bh_sc36_2_120c_pod7	bh-glx-120-c08u02,bh-glx-120-c08u08,bh-glx-120-c08u14,bh-glx-120-c08u20	120-SC36_4x4_C1-10
+c120_pod8	bh_sc36_2_120c_pod8	bh-glx-120-c09u02,bh-glx-120-c09u08,bh-glx-120-c09u14,bh-glx-120-c09u20	120-SC36_4x4_C1-10

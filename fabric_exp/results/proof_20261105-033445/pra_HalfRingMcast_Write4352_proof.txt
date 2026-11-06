@@ -1,0 +1,16 @@
+chip 0 eth  6 (from chip 1) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 200077 g1_pass 200077 g1_deferred 0 slots_credited 200077
+chip 0 eth  7 (from chip 2) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 186287 g1_pass 150077 g1_deferred 36210 slots_credited 150077
+chip 1 eth  5 (from chip ?) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 200077 g1_pass 200077 g1_deferred 0 slots_credited 200077
+chip 1 eth  8 (from chip 5) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 186720 g1_pass 150077 g1_deferred 36643 slots_credited 150077
+chip 2 eth  4 (from chip ?) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 186499 g1_pass 150077 g1_deferred 36422 slots_credited 150077
+chip 2 eth  5 (from chip 3) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 200126 g1_pass 200077 g1_deferred 49 slots_credited 200077
+chip 3 eth  6 (from chip ?) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 200077 g1_pass 200077 g1_deferred 0 slots_credited 200077
+chip 3 eth  8 (from chip 7) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 186893 g1_pass 150077 g1_deferred 36816 slots_credited 150077
+chip 4 eth  4 (from chip 5) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 200100 g1_pass 200077 g1_deferred 23 slots_credited 200077
+chip 4 eth  5 (from chip 6) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 186899 g1_pass 150077 g1_deferred 36822 slots_credited 150077
+chip 5 eth  7 (from chip ?) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 200230 g1_pass 200077 g1_deferred 153 slots_credited 200077
+chip 5 eth 11 (from chip ?) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 186350 g1_pass 150077 g1_deferred 36273 slots_credited 150077
+chip 6 eth  6 (from chip ?) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 186993 g1_pass 150077 g1_deferred 36916 slots_credited 150077
+chip 6 eth  7 (from chip 7) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 200077 g1_pass 200077 g1_deferred 0 slots_credited 200077
+chip 7 eth  4 (from chip ?) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 200077 g1_pass 200077 g1_deferred 0 slots_credited 200077
+chip 7 eth 11 (from chip ?) VC0 G1 slots 32: attempts 0 reads 0 h1 0 h2_4 0 h5_8 0 h9_16 0 h17_32 0 cap_hits 0 g1_checks 186638 g1_pass 150077 g1_deferred 36561 slots_credited 150077

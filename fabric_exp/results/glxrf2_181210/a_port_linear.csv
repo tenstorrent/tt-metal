@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+GlxLinear1HopEW,CHIP_UNICAST,NOC_FUSED_UNICAST_ATOMIC_INC,Linear,"[4]",1,1024,1,7067745.000000,9550429.450978,9.779640,9.779640,9.779640,0.000000,1.000000
+GlxLinear1HopEW,CHIP_UNICAST,NOC_FUSED_UNICAST_ATOMIC_INC,Linear,"[4]",1,4096,1,11778307.000000,5730874.564570,23.473662,23.473662,23.473662,0.000000,1.000000
+GlxLinear1HopEW,CHIP_UNICAST,NOC_FUSED_UNICAST_ATOMIC_INC,Linear,"[4]",1,4352,1,12472800.000000,5411776.024630,23.552049,23.552049,23.552049,0.000000,1.000000

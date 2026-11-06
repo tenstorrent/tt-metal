@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="35" failures="0" disabled="0" errors="0" time="11.835" timestamp="2026-11-04T08:44:06.046" name="AllTests">
+  <testsuite name="UnitMeshCQSingleCardProgramFixture" tests="2" failures="0" disabled="0" skipped="2" errors="0" time="4.342" timestamp="2026-11-04T08:44:06.046">
+    <testcase name="ActiveEthKernelsNocReadNoSend" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="388" status="run" result="skipped" time="3.967" timestamp="2026-11-04T08:44:06.046" classname="UnitMeshCQSingleCardProgramFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp:390&#x0A;fast dispatch to active ethernet has been removed"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp:390
+fast dispatch to active ethernet has been removed]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsNocWriteNoReceive" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="430" status="run" result="skipped" time="0.374" timestamp="2026-11-04T08:44:10.013" classname="UnitMeshCQSingleCardProgramFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp:432&#x0A;fast dispatch to active ethernet has been removed"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp:432
+fast dispatch to active ethernet has been removed]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="N300MeshDeviceFixture" tests="9" failures="0" disabled="0" skipped="9" errors="0" time="0.247" timestamp="2026-11-04T08:44:14.993">
+    <testcase name="ActiveEthKernelsNocReadNoSend" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="474" status="run" result="skipped" time="0.027" timestamp="2026-11-04T08:44:14.993" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsNocWriteNoReceive" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="522" status="run" result="skipped" time="0.026" timestamp="2026-11-04T08:44:15.021" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsSendInterleavedBufferChip0ToChip1" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp" line="476" status="run" result="skipped" time="0.026" timestamp="2026-11-04T08:44:15.047" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthSingleCoreDirectSendChip0ToChip1" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="316" status="run" result="skipped" time="0.033" timestamp="2026-11-04T08:44:15.074" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthSingleCoreDirectSendChip1ToChip0" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="358" status="run" result="skipped" time="0.028" timestamp="2026-11-04T08:44:15.107" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthBidirectionalCoreDirectSend" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="400" status="run" result="skipped" time="0.026" timestamp="2026-11-04T08:44:15.135" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthRandomDirectSendTests" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="458" status="run" result="skipped" time="0.026" timestamp="2026-11-04T08:44:15.161" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsDirectSendChip0ToChip1" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="490" status="run" result="skipped" time="0.026" timestamp="2026-11-04T08:44:15.188" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsDirectSendChip1ToChip0" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="551" status="run" result="skipped" time="0.025" timestamp="2026-11-04T08:44:15.215" classname="N300MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58&#x0A;This suite can only be run on N300"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58
+This suite can only be run on N300]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="BlackholeSingleCardFixture" tests="7" failures="0" disabled="0" skipped="7" errors="0" time="0" timestamp="2026-11-04T08:44:15.393">
+    <testcase name="IdleEthKernelOnIdleErisc0" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="581" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.393" classname="BlackholeSingleCardFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204
+]]></skipped>
+    </testcase>
+    <testcase name="IdleEthKernelOnIdleErisc1" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="625" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.393" classname="BlackholeSingleCardFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204
+]]></skipped>
+    </testcase>
+    <testcase name="IdleEthKernelOnBothIdleEriscs" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="669" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.393" classname="BlackholeSingleCardFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthPtpTraceStamped" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="705" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.393" classname="BlackholeSingleCardFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204
+]]></skipped>
+    </testcase>
+    <testcase name="EthFwStageIdleInAppFw" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="763" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.393" classname="BlackholeSingleCardFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204
+]]></skipped>
+    </testcase>
+    <testcase name="EthFwStageSlotsFollowPhysicalErisc" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="786" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.393" classname="BlackholeSingleCardFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204
+]]></skipped>
+    </testcase>
+    <testcase name="EthFwStageKernelWhileKernelRuns" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="827" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.393" classname="BlackholeSingleCardFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:204
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="EthFwStage" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0" timestamp="2026-11-04T08:44:15.393">
+    <testcase name="DecodesStageValues" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp" line="750" status="run" result="completed" time="0" timestamp="2026-11-04T08:44:15.393" classname="EthFwStage" />
+  </testsuite>
+  <testsuite name="TwoMeshDeviceFixture" tests="6" failures="0" disabled="0" skipped="6" errors="0" time="0" timestamp="2026-11-04T08:44:15.736">
+    <testcase name="ActiveEthKernelsSendDramBufferChip0ToChip1" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp" line="370" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.736" classname="TwoMeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsSendDramBufferChip1ToChip0" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp" line="423" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.736" classname="TwoMeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsBidirectionalDirectSend" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="674" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.736" classname="TwoMeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsRepeatedDirectSends" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="790" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.736" classname="TwoMeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsRandomDirectSendTests" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="834" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.736" classname="TwoMeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsRandomEthPacketSizeDirectSendTests" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="902" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.736" classname="TwoMeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="MeshDeviceFixture" tests="5" failures="0" disabled="0" skipped="5" errors="0" time="0" timestamp="2026-11-04T08:44:15.864">
+    <testcase name="ActiveEthKernelsSendInterleavedBufferAllConnectedChips" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp" line="563" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.865" classname="MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsDirectSendAllConnectedChips" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="612" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.865" classname="MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthPtpStamps" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_eth_ptp_stamps.cpp" line="192" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.865" classname="MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsDirectRingGatherAllChips" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_ring_gather_kernels.cpp" line="548" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.865" classname="MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81
+]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsInterleavedRingGatherAllChips" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_ring_gather_kernels.cpp" line="562" status="run" result="skipped" time="0" timestamp="2026-11-04T08:44:15.865" classname="MeshDeviceFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81&#x0A;"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/device_fixture.hpp:81
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="UnitMeshCQMultiDeviceProgramFixture" tests="3" failures="0" disabled="0" skipped="3" errors="0" time="1.486" timestamp="2026-11-04T08:44:15.865">
+    <testcase name="ActiveEthKernelsSendDramBufferAllConnectedChips" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp" line="651" status="run" result="skipped" time="0.485" timestamp="2026-11-04T08:44:15.865" classname="UnitMeshCQMultiDeviceProgramFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp:653&#x0A;fast dispatch to active ethernet has been removed"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp:653
+fast dispatch to active ethernet has been removed]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsSendInterleavedBufferAllConnectedChips" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp" line="728" status="run" result="skipped" time="0.503" timestamp="2026-11-04T08:44:16.351" classname="UnitMeshCQMultiDeviceProgramFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp:730&#x0A;fast dispatch to active ethernet has been removed"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp:730
+fast dispatch to active ethernet has been removed]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthKernelsDirectSendAllConnectedChips" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="972" status="run" result="skipped" time="0.496" timestamp="2026-11-04T08:44:16.854" classname="UnitMeshCQMultiDeviceProgramFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp:974&#x0A;fast dispatch to active ethernet has been removed"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp:974
+fast dispatch to active ethernet has been removed]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="TwoDeviceBlackholeFixture" tests="2" failures="0" disabled="0" skipped="2" errors="0" time="0.052" timestamp="2026-11-04T08:44:17.703">
+    <testcase name="ActiveEthChipToChipMultiTxqRxq_Both0" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_eth_multi_txq_rxq.cpp" line="173" status="run" result="skipped" time="0.027" timestamp="2026-11-04T08:44:17.703" classname="TwoDeviceBlackholeFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:78&#x0A;This suite can only be run on two chip Blackhole systems"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:78
+This suite can only be run on two chip Blackhole systems]]></skipped>
+    </testcase>
+    <testcase name="ActiveEthChipToChipMultiTxqRxq_Qs_0_and_1" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/eth/test_eth_multi_txq_rxq.cpp" line="179" status="run" result="skipped" time="0.024" timestamp="2026-11-04T08:44:17.730" classname="TwoDeviceBlackholeFixture">
+      <skipped message="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:78&#x0A;This suite can only be run on two chip Blackhole systems"><![CDATA[/home/aagarwal/tt-metal-new/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:78
+This suite can only be run on two chip Blackhole systems]]></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>

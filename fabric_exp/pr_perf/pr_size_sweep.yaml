@@ -1,0 +1,58 @@
+# PR perf refresh, the lead rows' packet-size sweep for the "% of wire against packet size" chart (user, 2026-11-05):
+# 1-hop E/W unicast write (2D Mesh1HopEW and 1D Linear1HopEW, two ERISCs, as exp_2d_4352.yaml / exp_1d_4352.yaml) and the
+# NeighborExchange write (as exp_1d_4352.yaml's NeighborExchange row, 1 link), 256 to 4352 B, 50k packets.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "Mesh1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [256, 512, 1024, 2048, 3072, 4096, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "Linear1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [256, 512, 1024, 2048, 3072, 4096, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "NeighborExchange"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+      size: [256, 512, 1024, 2048, 3072, 4096, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    patterns:
+      - type: neighbor_exchange
+        iterations: 1

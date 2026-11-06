@@ -1,0 +1,53 @@
+{
+ "capped": true,
+ "ci": {
+  "ci_timeout_min": 30,
+  "filtered": true,
+  "list": "fabric_tests.yaml",
+  "name": "BH ccl nightly tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 1800,
+ "data_inodes_at_submit": null,
+ "data_inodes_free": null,
+ "deviation": null,
+ "duration_s": 865.8,
+ "end": "2026-11-04T09:10:10+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_minimal_reduce_scatter_async_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_slot_invariance_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_new_all_reduce.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_minimal_direct_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_batch_invariance_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_cache_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_2d_fabric.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_to_root_trace.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_minimal_reduce_scatter_async.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_perf_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_ccl_perf.py"
+ ],
+ "group": "LB-L1",
+ "jit_cache": "/home/aagarwal/.tt-metal-cache-regress/new_288afd2-new",
+ "junit_files": 1,
+ "label": "new_288afd2",
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": null,
+ "start": "2026-11-04T08:55:44+00:00",
+ "status": "PASS",
+ "step": "B1-night-a",
+ "step_env": null,
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 2,
+  "PASS": 134,
+  "PERF_WINDOW": 0,
+  "SKIP": 185
+ },
+ "timeout_note": null,
+ "timeout_s": 1359,
+ "tree": "/home/aagarwal/tt-metal-new",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

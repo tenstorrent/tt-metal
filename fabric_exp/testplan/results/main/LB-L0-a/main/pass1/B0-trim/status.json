@@ -1,0 +1,40 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 10,
+  "filtered": false,
+  "list": "fabric_tests.yaml",
+  "name": "BH fabric channel trimming tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 600,
+ "duration_s": 230.2,
+ "end": "2026-11-03T21:10:26+00:00",
+ "failed_lines": [],
+ "group": "LB-L0-a",
+ "junit_files": 2,
+ "label": "main",
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-03T21:06:36+00:00",
+ "status": "PASS",
+ "step": "B0-trim",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 126,
+  "PERF_WINDOW": 0,
+  "SKIP": 6
+ },
+ "timeout_s": 600,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

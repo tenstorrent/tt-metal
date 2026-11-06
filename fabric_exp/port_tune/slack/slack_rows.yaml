@@ -1,0 +1,42 @@
+# Slack study rows (NOTES.md), P150 2x4 LoudBox at 400G, two ERISCs, router telemetry off (TT_FABRIC_NO_BW_TELEMETRY=1).
+# Mesh1HopEW: exp_2d_4352.yaml's one-flow 1-hop E/W unicast write (chip [0,0] -> [0,1]) at 4096 and 4352 B, and at
+# 2048 B as the contrast row well below the wire. NeighborExchange: the CI ubench row (test_fabric_ubench_at_least_2x2_mesh,
+# NeighborExchangeUnicast) at 4096 B unicast write, num_links 1 and 2, three iterations of 100k packets per config (as CI).
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "Mesh1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [2048, 4096, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "NeighborExchangeUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write]
+      size: [4096]
+    defaults:
+      ftype: unicast
+      num_packets: 100000
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3

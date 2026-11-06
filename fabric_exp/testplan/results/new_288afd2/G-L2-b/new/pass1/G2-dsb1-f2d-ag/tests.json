@@ -1,0 +1,50 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 5,
+  "PERF_WINDOW": 0,
+  "SKIP": 1
+ },
+ "files": [
+  "pytest_1849287_1793781502643718668_20261104_083822.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather[blackhole-True-device_params0-30-15-1-output_shape0]": {
+   "file": "pytest_1849287_1793781502643718668_20261104_083822.xml",
+   "message": "CCL all-gather trace test needs fast dispatch",
+   "status": "SKIP",
+   "time": 5.224
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_chunk_matrix[blackhole-True-device_params0-2048-1-output_shape0]": {
+   "file": "pytest_1849287_1793781502643718668_20261104_083822.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.112
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_chunk_matrix[blackhole-True-device_params0-2048-1-output_shape1]": {
+   "file": "pytest_1849287_1793781502643718668_20261104_083822.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.481
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_chunk_matrix[blackhole-True-device_params0-None-1-output_shape0]": {
+   "file": "pytest_1849287_1793781502643718668_20261104_083822.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.807
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_chunk_matrix[blackhole-True-device_params0-None-1-output_shape1]": {
+   "file": "pytest_1849287_1793781502643718668_20261104_083822.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.887
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_deterministic_fill[blackhole-True-device_params0-1-output_shape0]": {
+   "file": "pytest_1849287_1793781502643718668_20261104_083822.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 29.858
+  }
+ }
+}

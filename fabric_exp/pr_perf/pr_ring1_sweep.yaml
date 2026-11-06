@@ -1,0 +1,34 @@
+# PR perf gap runs (mk_pr_gap_yamls.py): ring 1 hop E/W, two ERISCs, write, 256-4352 B (v4/exp_ring.yaml's Ring1HopEW).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Ring1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

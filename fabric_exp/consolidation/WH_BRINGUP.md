@@ -1,21 +1,43 @@
 # Wormhole bring-up notes for the new fabric router
 
-For the agent doing the Wormhole bring-up on a WH machine, once the mainline branch is pushed. Written 2026-11-03 from
-MAINLINE_PLAN.md (the read-only port audit). That plan, §7, has the full branch shape. The router code is the
-Blackhole-validated final build (study variant `fabric_exp/variants/v4txa11`), ported onto origin/main.
+> Temporary working notes for the Wormhole bring-up. Drop this file before the branch is merged.
+
+For the agent doing the Wormhole bring-up on a WH machine. Written 2026-11-03 from MAINLINE_PLAN.md (the read-only
+port audit), updated 2026-11-04 for the pushed branch. The router code is the Blackhole-validated final build (study
+variant `v4txa11`), ported onto origin/main.
+
+Study documents referenced below (MAINLINE_PLAN.md, TEST_PLAN.md, V4_SIZE.md, V4_SINGLE_ERISC.md) are on branch
+`origin/aagarwal/fabric-router-study` under `fabric_exp/consolidation/`; the study variant is under
+`fabric_exp/variants/v4txa11/` there.
 
 ## Starting point
 
-- **The new router replaces main's router under main's own kernel name** (`fabric_erisc_router.cpp`; user decision
-  2026-11-03).
+- **Branch:** `aagarwal/fabric-router-mainline`, on main d2bd12f. The port is six commits:
+  1. NoC API: command-buffer choice for inline writes, node-addressed stateful writes (`*_to_node_with_state`), and
+     `skip_cmdbuf_chk` on the set-trid and inline `*_with_state` forms. Wormhole and Blackhole get the new forms;
+     Quasar v2/v3 get only the `skip_cmdbuf_chk` parameter (the `_to_node_` forms are guarded off there).
+  2. Fabric library pieces (packed-header load/unpack, counter-credit accumulate/flush, the flush template argument,
+     compile-time args).
+  3. Host compile-time args for the new router.
+  4. `TT_FABRIC_NO_BW_TELEMETRY` in test_tt_fabric (keeps router bandwidth telemetry off).
+  5. The router itself: `fabric_erisc_router.cpp` plus `tt_metal/fabric/hw/inc/edm_fabric/router/*.hpp`; the old
+     implementation is gone.
+  6. The streaming-profiler hook (compiled out unless `PROFILE_STREAMING`).
+  Cleanup commits (comments, unused headers) follow on the same branch.
+- **The new router replaces main's router under main's own kernel name** (`fabric_erisc_router.cpp`).
 - **Blackhole is the only arch validated so far.** P150x8 LoudBox at 400G and BH Galaxy at 200G: 1D, 2D, ring, torus,
-  VC0/VC1/VC2, one and two ERISCs, mux, UDM, channel trimming.
+  VC0/VC1/VC2 (VC2 is neighbour exchange, as on main), one and two ERISCs, mux, UDM, channel trimming. The pushed
+  branch passed the P150 validation set (two ERISCs, one ERISC, inline write + UDM, VC1 / VC1+VC2).
 - **The router's supported-configuration checks (router_common.hpp) reject non-Blackhole today.** Lifting them for
-  Wormhole is the first step (MAINLINE_PLAN §7.2, commit 7).
+  Wormhole is the first step (the "Wormhole commit" section below).
 - **Line references** like `rc:294` below are to the study variant's files:
   - rc = router/router_common.hpp, rd = router_downstream.hpp, rs = router_sender.hpp, rr = router_receiver.hpp;
   - ri = router_init.hpp, rld = router_local_delivery.hpp, rrt = router_routing.hpp, k = the kernel file.
-  The port may shift lines; search by name.
+  The port shifts lines; search by name.
+- **tt-run gotcha (cost one validation run on Blackhole):** tt-run puts `<cwd>/build/lib` on `LD_LIBRARY_PATH`. If that
+  directory holds an installed `libtt_metal.so` from an older build (ninja-only rebuilds don't re-install), multi-rank
+  runs load the stale library and the router fails to compile on missing named args. Run `cmake --install` after
+  rebuilding, or make sure `build/lib` has no stale copy.
 
 ## 6. Wormhole and other arches
 
@@ -72,29 +94,31 @@ Blackhole-validated final build (study variant `fabric_exp/variants/v4txa11`), p
 
 ### 6.3 Host for Wormhole
 
-Router kind allowed on Wormhole; credit plan "counters everywhere" for v4; worker-credit buffers by role; opt level by
-code size (measure first); slot policy: the tier table until measured.
+On the pushed branch the host has no router-kind switch any more (one router). Still to check for Wormhole: credit
+plan "counters everywhere" (on one TXQ too); worker-credit buffers by role; opt level by code size (the branch builds
+-O3, or -Os only when VC1 and VC2 are both on; under review, measure first); slot policy: main's tier table until
+measured.
 
-### 6.4 Quasar (API only; v4 does not target it)
+### 6.4 Quasar (API only; the new router does not target it)
 
-- The variant has no Quasar NoC copies.
-- `dataflow_api.h`'s `noc_inline_dw_write_with_state` passes `skip_cmdbuf_chk` as an 8th template argument.
-  Quasar's `noc_fast_write_dw_inline_with_state` has 7 (`noc_nonblocking_api_v3.h:840-848`). Callers exist (e.g.
-  `fabric_router_adapter.hpp`, `tt_fabric_mux_v2_sender.hpp`, test kernels).
-- Add the parameter and the `_to_node_` forms to v1/v2/v3, or the API PR breaks Quasar builds (by reading; not built).
+Done in commit 1 of the branch: Quasar v2/v3 `noc_fast_write_dw_inline_with_state` take the `skip_cmdbuf_chk`
+parameter, so `noc_inline_dw_write_with_state` keeps compiling there; the `_to_node_` forms are not provided on
+Quasar. Quasar v1 was already incompatible upstream and is untouched. Not built for Quasar.
 
 ---
 
 
-## The Wormhole commit in the minimal first push (from MAINLINE_PLAN §7.2)
+## The Wormhole commit (MAINLINE_PLAN §7.2, commit 7)
 
-- **Commit 7 (Wormhole try):**
-  - arch assert relaxed when `ARCH_WORMHOLE`;
-  - the `sync_ready` fix;
-  - TXQ status through the commit-2 API (bring commit 2 in, or a local per-arch `txq_busy` as a stopgap);
-  - host counter credits on one TXQ.
+Not on the branch yet; this is the first Wormhole commit to make:
+- arch assert relaxed when `ARCH_WORMHOLE`;
+- the `sync_ready` fix (still present on the branch: `FullPresetForwards::forward` in router_downstream.hpp declares it
+  inside `#if defined(ARCH_BLACKHOLE)` and reads it after the `#endif`);
+- TXQ status through a per-arch API (MAINLINE_PLAN §4's Ethernet API commit), or a local per-arch `txq_busy` as a
+  stopgap;
+- host counter credits on one TXQ.
 
-  Expect an IRAM size question first.
+Expect an IRAM size question first.
 
 ## Validation to aim for on Wormhole
 

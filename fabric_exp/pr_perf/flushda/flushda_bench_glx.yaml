@@ -1,0 +1,135 @@
+# Flushed-atomic perf rows (3efd636e8df check): one flow, write / fused (flush off, on) / scatter + atomic_inc (flush off,
+# on), 1024 and 4096 B, benchmark mode.
+# Galaxy rows (rows of 4): ring 1-hop, torus 1-hop E/W, wrap E/W and N/S.
+Tests:
+- name: FlushGlxRing1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - type: fused_atomic_inc
+      flush:
+      - false
+      - true
+    - type: unicast_scatter_write
+      atomic_inc: true
+      flush:
+      - false
+      - true
+    size:
+    - 1024
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: FlushGlxTorus1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - type: fused_atomic_inc
+      flush:
+      - false
+      - true
+    - type: unicast_scatter_write
+      atomic_inc: true
+      flush:
+      - false
+      - true
+    size:
+    - 1024
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: FlushGlxTorusWrapEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - type: fused_atomic_inc
+      flush:
+      - false
+      - true
+    - type: unicast_scatter_write
+      atomic_inc: true
+      flush:
+      - false
+      - true
+    size:
+    - 1024
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: FlushGlxTorusWrapNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - type: fused_atomic_inc
+      flush:
+      - false
+      - true
+    - type: unicast_scatter_write
+      atomic_inc: true
+      flush:
+      - false
+      - true
+    size:
+    - 1024
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 28

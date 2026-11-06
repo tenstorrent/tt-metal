@@ -1,0 +1,885 @@
+{
+ "targets": [
+  {
+   "chip": 0,
+   "chan": "f15-5",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "f15-6",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "f15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "f15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "f15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "f15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "f15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "e1-1",
+   "erisc": "erisc0"
+  },
+  {
+   "chip": 0,
+   "chan": "e1-1",
+   "erisc": "erisc1"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-0",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-1",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-11",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-2",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-10",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-3",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-9",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-4",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-8",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-5",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-7",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d0-6",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-0",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-1",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-11",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-2",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-10",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-3",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-9",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-4",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-8",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-5",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-7",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 0,
+   "chan": "d9-6",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 1,
+   "chan": "f15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "f15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "f15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "f15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "f15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "e1-1",
+   "erisc": "erisc0"
+  },
+  {
+   "chip": 1,
+   "chan": "e1-1",
+   "erisc": "erisc1"
+  },
+  {
+   "chip": 2,
+   "chan": "f15-5",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "f15-6",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "f15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "f15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "f15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "f15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "f15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "e1-1",
+   "erisc": "erisc0"
+  },
+  {
+   "chip": 2,
+   "chan": "e1-1",
+   "erisc": "erisc1"
+  },
+  {
+   "chip": 3,
+   "chan": "f15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "f15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "f15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "f15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "f15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "e1-1",
+   "erisc": "erisc0"
+  },
+  {
+   "chip": 3,
+   "chan": "e1-1",
+   "erisc": "erisc1"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-0",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-1",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-11",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-2",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-10",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-3",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-9",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-4",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-8",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-5",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-7",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d0-6",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-0",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-1",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-11",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-2",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-10",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-3",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-9",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-4",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-8",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-5",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-7",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 3,
+   "chan": "d9-6",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 4,
+   "chan": "f15-5",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "f15-6",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "f15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "f15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "f15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "f15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "f15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "e1-1",
+   "erisc": "erisc0"
+  },
+  {
+   "chip": 4,
+   "chan": "e1-1",
+   "erisc": "erisc1"
+  },
+  {
+   "chip": 5,
+   "chan": "f15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "f15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "f15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "f15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "f15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "e1-1",
+   "erisc": "erisc0"
+  },
+  {
+   "chip": 5,
+   "chan": "e1-1",
+   "erisc": "erisc1"
+  },
+  {
+   "chip": 6,
+   "chan": "f15-5",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "f15-6",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "f15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "f15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "f15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "f15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "f15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "e1-1",
+   "erisc": "erisc0"
+  },
+  {
+   "chip": 6,
+   "chan": "e1-1",
+   "erisc": "erisc1"
+  },
+  {
+   "chip": 7,
+   "chan": "f15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "f15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "f15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "f15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "f15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "e1-1",
+   "erisc": "erisc0"
+  },
+  {
+   "chip": 7,
+   "chan": "e1-1",
+   "erisc": "erisc1"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-0",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-1",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-11",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-2",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-10",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-3",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-9",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-4",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-8",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-5",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-7",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d0-6",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-0",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-1",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-11",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-2",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-10",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-3",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-9",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-4",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-8",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-5",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-7",
+   "erisc": "drisc"
+  },
+  {
+   "chip": 7,
+   "chan": "d9-6",
+   "erisc": "drisc"
+  }
+ ],
+ "layouts": {},
+ "layouts_end": {},
+ "samples": 810560,
+ "snap_cores": [
+  {
+   "chip": 0,
+   "core": "f15-5"
+  },
+  {
+   "chip": 0,
+   "core": "f15-6"
+  },
+  {
+   "chip": 0,
+   "core": "f15-7"
+  },
+  {
+   "chip": 0,
+   "core": "f15-8"
+  },
+  {
+   "chip": 0,
+   "core": "f15-9"
+  },
+  {
+   "chip": 0,
+   "core": "f15-10"
+  },
+  {
+   "chip": 0,
+   "core": "f15-11"
+  },
+  {
+   "chip": 1,
+   "core": "f15-7"
+  },
+  {
+   "chip": 1,
+   "core": "f15-8"
+  },
+  {
+   "chip": 1,
+   "core": "f15-9"
+  },
+  {
+   "chip": 1,
+   "core": "f15-10"
+  },
+  {
+   "chip": 1,
+   "core": "f15-11"
+  },
+  {
+   "chip": 2,
+   "core": "f15-5"
+  },
+  {
+   "chip": 2,
+   "core": "f15-6"
+  },
+  {
+   "chip": 2,
+   "core": "f15-7"
+  },
+  {
+   "chip": 2,
+   "core": "f15-8"
+  },
+  {
+   "chip": 2,
+   "core": "f15-9"
+  },
+  {
+   "chip": 2,
+   "core": "f15-10"
+  },
+  {
+   "chip": 2,
+   "core": "f15-11"
+  },
+  {
+   "chip": 3,
+   "core": "f15-7"
+  },
+  {
+   "chip": 3,
+   "core": "f15-8"
+  },
+  {
+   "chip": 3,
+   "core": "f15-9"
+  },
+  {
+   "chip": 3,
+   "core": "f15-10"
+  },
+  {
+   "chip": 3,
+   "core": "f15-11"
+  },
+  {
+   "chip": 4,
+   "core": "f15-5"
+  },
+  {
+   "chip": 4,
+   "core": "f15-6"
+  },
+  {
+   "chip": 4,
+   "core": "f15-7"
+  },
+  {
+   "chip": 4,
+   "core": "f15-8"
+  },
+  {
+   "chip": 4,
+   "core": "f15-9"
+  },
+  {
+   "chip": 4,
+   "core": "f15-10"
+  },
+  {
+   "chip": 4,
+   "core": "f15-11"
+  },
+  {
+   "chip": 5,
+   "core": "f15-7"
+  },
+  {
+   "chip": 5,
+   "core": "f15-8"
+  },
+  {
+   "chip": 5,
+   "core": "f15-9"
+  },
+  {
+   "chip": 5,
+   "core": "f15-10"
+  },
+  {
+   "chip": 5,
+   "core": "f15-11"
+  },
+  {
+   "chip": 6,
+   "core": "f15-5"
+  },
+  {
+   "chip": 6,
+   "core": "f15-6"
+  },
+  {
+   "chip": 6,
+   "core": "f15-7"
+  },
+  {
+   "chip": 6,
+   "core": "f15-8"
+  },
+  {
+   "chip": 6,
+   "core": "f15-9"
+  },
+  {
+   "chip": 6,
+   "core": "f15-10"
+  },
+  {
+   "chip": 6,
+   "core": "f15-11"
+  },
+  {
+   "chip": 7,
+   "core": "f15-7"
+  },
+  {
+   "chip": 7,
+   "core": "f15-8"
+  },
+  {
+   "chip": 7,
+   "core": "f15-9"
+  },
+  {
+   "chip": 7,
+   "core": "f15-10"
+  },
+  {
+   "chip": 7,
+   "core": "f15-11"
+  }
+ ],
+ "t_start_epoch": 1793871817.3437474,
+ "duration_s": 10.797,
+ "rate_per_s": 75073.1,
+ "errors": {}
+}

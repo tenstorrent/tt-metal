@@ -1,0 +1,31 @@
+== job D (cycles/packet; flag *: |d| > max(spread, 0.5))
+-- kim_r713 vc1: router images 48 distinct, 12 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    175.2   +0.0    0.0
+   AuVC1fab1Hop                4352    193.2    193.2    193.2   +0.1    0.0
+   AuVC1fab2Hop                 256    425.8    425.8    425.9   +0.2    0.0
+   AuVC1fab2Hop                4352    478.8    478.7    478.5   -0.3    0.1
+-- kim_s755 vc1: router images 48 distinct, 30 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    175.2   -0.0    0.0
+   AuVC1fab1Hop                4352    193.2    193.2    193.2   +0.0    0.0
+   AuVC1fab2Hop                 256    425.8    425.8    425.8   -0.0    0.0
+   AuVC1fab2Hop                4352    478.8    478.7    478.7   -0.1    0.1
+-- rg_d414 vc1: router images 48 distinct, 18 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    175.2   -0.0    0.0
+   AuVC1fab1Hop                4352    193.2    193.2    193.2   +0.0    0.0
+   AuVC1fab2Hop                 256    425.8    425.8    430.3   +4.5    0.0 *
+   AuVC1fab2Hop                4352    478.8    478.7    482.7   +4.0    0.1 *
+-- rg_s673 vc1: router images 48 distinct, 30 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    173.7   -1.5    0.0 *
+   AuVC1fab1Hop                4352    193.2    193.2    192.9   -0.3    0.0
+   AuVC1fab2Hop                 256    425.8    425.8    426.4   +0.6    0.0 *
+   AuVC1fab2Hop                4352    478.8    478.7    480.8   +2.0    0.1 *
+-- rg_s583 vc1: router images 48 distinct, 30 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    174.2   -1.0    0.0 *
+   AuVC1fab1Hop                4352    193.2    193.2    193.5   +0.3    0.0
+   AuVC1fab2Hop                 256    425.8    425.8    424.6   -1.2    0.0 *
+   AuVC1fab2Hop                4352    478.8    478.7    477.7   -1.1    0.1 *

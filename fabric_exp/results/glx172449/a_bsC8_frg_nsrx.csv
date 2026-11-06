@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+GlxRingMcastNS,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,"[20]",1,3072,1,28749174.000000,6574101.920285,20.195641,20.195641,20.195641,0.000000,1.000000
+GlxRingMcastNS,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,"[20]",1,3584,1,30559188.000000,6184719.306023,22.166034,22.166034,22.166034,0.000000,1.000000
+GlxRingMcastNS,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,"[20]",1,4352,1,36105242.000000,5234696.945114,22.781401,22.781401,22.781401,0.000000,1.000000

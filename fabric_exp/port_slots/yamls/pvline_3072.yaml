@@ -1,0 +1,72 @@
+# mk_p1d_yamls.py: val1d_m1.yaml's Linear tests, num_links 1-2, 3072 B slots. Data-checked.
+Tests:
+- name: LinearMulticast
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 3072
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+    - unicast_scatter_write
+  defaults:
+    ftype: mcast
+    size: 1024
+    num_packets: 100
+  patterns:
+  - type: all_to_all
+- name: LinearMulticastMicroLooped
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 3072
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+  defaults:
+    ftype: mcast
+    size: 64
+    num_packets: 1
+  patterns:
+  - type: all_to_all
+    iterations: 20
+- name: UnidirLinearMulticast
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 3072
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+    - unicast_scatter_write
+  defaults:
+    ftype: mcast
+    size: 1024
+    num_packets: 100
+  patterns:
+  - type: unidirectional_linear
+- name: SingleSenderLinearUnicastAllDevices
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 3072
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+    - unicast_scatter_write
+  defaults:
+    ftype: unicast
+    ssize: 1024
+    num_packets: 100
+  patterns:
+  - type: one_to_all

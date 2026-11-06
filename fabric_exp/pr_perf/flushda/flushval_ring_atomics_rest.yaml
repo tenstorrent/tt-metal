@@ -1,0 +1,59 @@
+# Rest of flushval_ring_atomics.yaml after a09u32 job 844 (coordinator 2026-11-05): every test that had not run, minus
+# FlushRing1HopEW_size_4096_ntype_fused_atomic_inc (no flush), whose verdict comes from the A/B (851 PR base, 852 main:
+# both DATA_MISMATCH). Same rows otherwise; the 2-hop 4096 B fused atomic without flush (same pattern) runs last.
+Tests:
+- name: FlushRing1HopEWRest
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype:
+    - {type: fused_atomic_inc, flush: [true]}
+    - {type: unicast_scatter_write, atomic_inc: true, flush: [false, true]}
+    size: [4096]
+  defaults: {ftype: unicast, num_packets: 2000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]
+- name: FlushRing2HopEW
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype:
+    - atomic_inc
+    - {type: fused_atomic_inc, flush: [true]}
+    - {type: unicast_scatter_write, atomic_inc: true, flush: [false, true]}
+    size: [1024, 4096]
+  defaults: {ftype: unicast, num_packets: 2000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 2]
+- name: FlushRing2HopEWFusedNoFlush1024
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype:
+    - {type: fused_atomic_inc, flush: [false]}
+    size: [1024]
+  defaults: {ftype: unicast, num_packets: 2000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 2]
+- name: FlushRing2HopEWFusedNoFlush4096
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype:
+    - {type: fused_atomic_inc, flush: [false]}
+    size: [4096]
+  defaults: {ftype: unicast, num_packets: 2000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 2]

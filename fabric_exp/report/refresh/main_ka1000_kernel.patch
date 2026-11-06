@@ -1,0 +1,54 @@
+diff --git a/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp b/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
+index 66738190f57..8a9f8c38a6a 100644
+--- a/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
++++ b/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
+@@ -2450,6 +2450,33 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
+ 
+ constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
+ 
++// Report refresh only (fabric_exp/report/refresh/main_ka1000_kernel.patch; never committed): main's router at the
++// study's 1000-cycle Ethernet keepalive, as the study tree's TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000 did for kernel v1.
++// ERISC0 sets ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT on both of this tile's TX queues before the handshake and restores the
++// firmware value in teardown.
++constexpr uint32_t refresh_seq_update_timeout = 1000;
++uint32_t firmware_seq_update_timeouts[2];
++
++__attribute__((optimize("Os"))) void refresh_set_seq_update_timeouts() {
++    if constexpr (IS_TEARDOWN_MASTER()) {
++        firmware_seq_update_timeouts[0] = eth_txq_reg_read(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
++        eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, refresh_seq_update_timeout);
++        if constexpr (receiver_txq_id != sender_txq_id) {
++            firmware_seq_update_timeouts[1] = eth_txq_reg_read(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
++            eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, refresh_seq_update_timeout);
++        }
++    }
++}
++
++__attribute__((optimize("Os"))) void refresh_restore_seq_update_timeouts() {
++    if constexpr (IS_TEARDOWN_MASTER()) {
++        eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_seq_update_timeouts[0]);
++        if constexpr (receiver_txq_id != sender_txq_id) {
++            eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_seq_update_timeouts[1]);
++        }
++    }
++}
++
+ // Note: No termination check is added here intentionally. Both local ERISCs share
+ // the same termination signal, so both will see it and exit their respective wait
+ // loops naturally. Adding a termination check here would be unsafe — if one ERISC
+@@ -2556,6 +2583,7 @@ __attribute__((optimize("Os"))) void teardown(
+     if constexpr (NUM_ACTIVE_ERISCS > 1) {
+         wait_for_other_local_erisc();
+     }
++    refresh_restore_seq_update_timeouts();
+     if constexpr (IS_TEARDOWN_MASTER()) {
+         *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
+     }
+@@ -2636,6 +2664,7 @@ void kernel_main() {
+     initialize_fabric_telemetry();
+ 
+     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
++    refresh_set_seq_update_timeouts();
+     asm volatile("nop");
+     static_assert(
+         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,

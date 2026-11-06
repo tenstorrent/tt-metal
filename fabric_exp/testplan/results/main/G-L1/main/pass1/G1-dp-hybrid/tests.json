@@ -1,0 +1,50 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 6,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_2993185_1793768222849537005_20261104_045702.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-glm-53-8x4-balanced]": {
+   "file": "pytest_2993185_1793768222849537005_20261104_045702.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 152.556
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-glm-53-8x4-hot-expert]": {
+   "file": "pytest_2993185_1793768222849537005_20261104_045702.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 99.094
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-balanced]": {
+   "file": "pytest_2993185_1793768222849537005_20261104_045702.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 178.88
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-hot-expert]": {
+   "file": "pytest_2993185_1793768222849537005_20261104_045702.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 130.589
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-real-L11c9]": {
+   "file": "pytest_2993185_1793768222849537005_20261104_045702.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 129.335
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-real-L45c3]": {
+   "file": "pytest_2993185_1793768222849537005_20261104_045702.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 129.971
+  }
+ }
+}

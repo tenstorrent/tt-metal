@@ -1,0 +1,133 @@
+{
+ "group": "LB-L0-a",
+ "label": "main",
+ "updated": "2026-11-03T21:19:54+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-1d",
+   "status": "PASS",
+   "duration_s": 60.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 24,
+    "SKIP": 7
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:01:46+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-1e",
+   "status": "PASS",
+   "duration_s": 45.0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 24,
+    "SKIP": 7
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:03:56+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-2d",
+   "status": "PASS",
+   "duration_s": 70.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 38,
+    "SKIP": 13
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:02:46+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-mux",
+   "status": "PASS",
+   "duration_s": 115.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 68,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:04:41+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-trim",
+   "status": "PASS",
+   "duration_s": 230.2,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 126,
+    "SKIP": 6
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:06:36+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-udm-ttnn",
+   "status": "PASS",
+   "duration_s": 75.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 44,
+    "SKIP": 16
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:18:38+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-udm",
+   "status": "PASS",
+   "duration_s": 490.5,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 76,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:10:26+00:00"
+  }
+ ]
+}

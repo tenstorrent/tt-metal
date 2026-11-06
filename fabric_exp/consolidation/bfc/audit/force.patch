@@ -1,0 +1,22 @@
+1604c1604,1622
+<     validate_router_config(config.arch, named_args);
+---
+>     // TEMPORARY (not for commit): force named args for the support-matrix check, TT_DEBUG_FORCE_ROUTER_ARGS="A=1,B=0";
+>     // TT_DEBUG_FORCE_ROUTER_ARCH=wormhole checks the arch test.
+>     auto checked_args = named_args;
+>     tt::ARCH checked_arch = config.arch;
+>     if (const char* f = std::getenv("TT_DEBUG_FORCE_ROUTER_ARGS")) {
+>         std::string spec(f);
+>         size_t pos = 0;
+>         while (pos < spec.size()) {
+>             size_t end = spec.find(',', pos);
+>             std::string kv = spec.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+>             size_t eq = kv.find('=');
+>             checked_args[kv.substr(0, eq)] = static_cast<uint32_t>(std::stoul(kv.substr(eq + 1)));
+>             pos = end == std::string::npos ? spec.size() : end + 1;
+>         }
+>     }
+>     if (std::getenv("TT_DEBUG_FORCE_ROUTER_ARCH") != nullptr) {
+>         checked_arch = tt::ARCH::WORMHOLE_B0;
+>     }
+>     validate_router_config(checked_arch, checked_args);

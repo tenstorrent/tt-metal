@@ -1,0 +1,685 @@
+{
+ "targets": [
+  {
+   "chip": 0,
+   "chan": "15-5",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-5",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-6",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-6",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-7",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-8",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-9",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-10",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 0,
+   "chan": "15-11",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-7",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-8",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-9",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-10",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 1,
+   "chan": "15-11",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-5",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-5",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-6",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-6",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-7",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-8",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-9",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-10",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 2,
+   "chan": "15-11",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-7",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-8",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-9",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-10",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 3,
+   "chan": "15-11",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-5",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-5",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-6",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-6",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-7",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-8",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-9",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-10",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 4,
+   "chan": "15-11",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-7",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-8",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-9",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-10",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 5,
+   "chan": "15-11",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-5",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-5",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-6",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-6",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-7",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-8",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-9",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-10",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 6,
+   "chan": "15-11",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-7",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-7",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-8",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-8",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-9",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-9",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-10",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-10",
+   "erisc": "ncrisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-11",
+   "erisc": "brisc"
+  },
+  {
+   "chip": 7,
+   "chan": "15-11",
+   "erisc": "ncrisc"
+  }
+ ],
+ "layouts": {},
+ "layouts_end": {},
+ "samples": 807264,
+ "snap_cores": [
+  {
+   "chip": 0,
+   "core": "15-5"
+  },
+  {
+   "chip": 0,
+   "core": "15-6"
+  },
+  {
+   "chip": 0,
+   "core": "15-7"
+  },
+  {
+   "chip": 0,
+   "core": "15-8"
+  },
+  {
+   "chip": 0,
+   "core": "15-9"
+  },
+  {
+   "chip": 0,
+   "core": "15-10"
+  },
+  {
+   "chip": 0,
+   "core": "15-11"
+  },
+  {
+   "chip": 1,
+   "core": "15-7"
+  },
+  {
+   "chip": 1,
+   "core": "15-8"
+  },
+  {
+   "chip": 1,
+   "core": "15-9"
+  },
+  {
+   "chip": 1,
+   "core": "15-10"
+  },
+  {
+   "chip": 1,
+   "core": "15-11"
+  },
+  {
+   "chip": 2,
+   "core": "15-5"
+  },
+  {
+   "chip": 2,
+   "core": "15-6"
+  },
+  {
+   "chip": 2,
+   "core": "15-7"
+  },
+  {
+   "chip": 2,
+   "core": "15-8"
+  },
+  {
+   "chip": 2,
+   "core": "15-9"
+  },
+  {
+   "chip": 2,
+   "core": "15-10"
+  },
+  {
+   "chip": 2,
+   "core": "15-11"
+  },
+  {
+   "chip": 3,
+   "core": "15-7"
+  },
+  {
+   "chip": 3,
+   "core": "15-8"
+  },
+  {
+   "chip": 3,
+   "core": "15-9"
+  },
+  {
+   "chip": 3,
+   "core": "15-10"
+  },
+  {
+   "chip": 3,
+   "core": "15-11"
+  },
+  {
+   "chip": 4,
+   "core": "15-5"
+  },
+  {
+   "chip": 4,
+   "core": "15-6"
+  },
+  {
+   "chip": 4,
+   "core": "15-7"
+  },
+  {
+   "chip": 4,
+   "core": "15-8"
+  },
+  {
+   "chip": 4,
+   "core": "15-9"
+  },
+  {
+   "chip": 4,
+   "core": "15-10"
+  },
+  {
+   "chip": 4,
+   "core": "15-11"
+  },
+  {
+   "chip": 5,
+   "core": "15-7"
+  },
+  {
+   "chip": 5,
+   "core": "15-8"
+  },
+  {
+   "chip": 5,
+   "core": "15-9"
+  },
+  {
+   "chip": 5,
+   "core": "15-10"
+  },
+  {
+   "chip": 5,
+   "core": "15-11"
+  },
+  {
+   "chip": 6,
+   "core": "15-5"
+  },
+  {
+   "chip": 6,
+   "core": "15-6"
+  },
+  {
+   "chip": 6,
+   "core": "15-7"
+  },
+  {
+   "chip": 6,
+   "core": "15-8"
+  },
+  {
+   "chip": 6,
+   "core": "15-9"
+  },
+  {
+   "chip": 6,
+   "core": "15-10"
+  },
+  {
+   "chip": 6,
+   "core": "15-11"
+  },
+  {
+   "chip": 7,
+   "core": "15-7"
+  },
+  {
+   "chip": 7,
+   "core": "15-8"
+  },
+  {
+   "chip": 7,
+   "core": "15-9"
+  },
+  {
+   "chip": 7,
+   "core": "15-10"
+  },
+  {
+   "chip": 7,
+   "core": "15-11"
+  }
+ ],
+ "t_start_epoch": 1793871561.9278119,
+ "duration_s": 10.786,
+ "rate_per_s": 74841.7,
+ "errors": {}
+}

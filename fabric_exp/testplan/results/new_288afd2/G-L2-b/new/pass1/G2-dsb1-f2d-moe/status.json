@@ -1,0 +1,56 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "demo_sp_release_tests.yaml",
+  "mirrored": true,
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 1200,
+ "data_inodes_at_submit": "3279117",
+ "data_inodes_free": 5064198,
+ "deviation": "fabric_2d bucket split per test file (approved 2026-11-04), for main and new alike: one pytest process per file in the bucket's order with the runner's env (TT_METAL_SLOW_DISPATCH_MODE=1, TT_METAL_ALLOCATOR_MODE_HYBRID=1, PYTHONPATH + ttnn + tools) and --timeout=480; the job resets after any failing step; no runner reset/validation/smoke (as --no-reset in the other dsb1 steps); test_attention_block runs in G2-dsb1-attn",
+ "duration_s": 315.4,
+ "end": "2026-11-04T08:55:38+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=134): python -m pytest --timeout=480 models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py"
+ ],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172882/cache/new_288afd2-new",
+ "junit_files": 0,
+ "label": "new_288afd2",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a06u20",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172882",
+ "start": "2026-11-04T08:50:23+00:00",
+ "status": "KNOWN_FAIL",
+ "step": "G2-dsb1-f2d-moe",
+ "step_env": {
+  "TT_METAL_ALLOCATOR_MODE_HYBRID": "1",
+  "TT_METAL_SLOW_DISPATCH_MODE": "1"
+ },
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 2,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 4
+ },
+ "tests_from_log": true,
+ "timeout_note": null,
+ "timeout_s": 1200,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

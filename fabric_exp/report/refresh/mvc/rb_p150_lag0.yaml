@@ -1,0 +1,14 @@
+# Report data refresh: the VC1 split on a P150x8 (two 2x2 meshes; chips {0-3} | {4-7} as cluster-descriptor ids), copy of
+# fabric_exp/vc1/mvc3/p150x8_2x2_split_rank_bindings_lag0.yaml with an absolute descriptor path; TT_RUN_RANK swapped: mesh 0 launches later under the diag delay.
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3"
+      TT_RUN_RANK: "1"
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "4,5,6,7"
+      TT_RUN_RANK: "0"
+mesh_graph_desc_path: "/home/aagarwal/tt-metal/fabric_exp/port_tune/cov/vc1/p150x8_2x2_split_mgd.textproto"

@@ -1,0 +1,1 @@
+for c in 4096:2:4 4352:2:4 8192:2:8 15232:2:8; do IFS=: read s l b <<< $c; python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl sdpa_reduce_to_all --max-payload-sizes $s --sdpa-num-l-chunks $l --sdpa-compute-block-sizes $b --output-dir $REGRESS_STEP_DIR/ccl; done

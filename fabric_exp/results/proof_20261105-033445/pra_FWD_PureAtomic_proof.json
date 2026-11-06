@@ -1,0 +1,1182 @@
+[
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25591524072751,
+  "chip": 0,
+  "eth": 4,
+  "records": 1,
+  "remote": [
+   1,
+   7
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25591524072915,
+  "chip": 0,
+  "eth": 5,
+  "records": 1,
+  "remote": [
+   2,
+   6
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 23659,
+    "reads": 23659,
+    "h1": 23659,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 48022
+   }
+  },
+  "clock": 25591524072722,
+  "chip": 0,
+  "eth": 6,
+  "records": 1,
+  "remote": [
+   1,
+   5
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 24,
+    "reads": 24,
+    "h1": 24,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 44
+   }
+  },
+  "clock": 25591524072807,
+  "chip": 0,
+  "eth": 7,
+  "records": 1,
+  "remote": [
+   2,
+   4
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 11,
+    "reads": 11,
+    "h1": 11,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 11
+   }
+  },
+  "clock": 25591524073171,
+  "chip": 0,
+  "eth": 8,
+  "records": 1,
+  "remote": [
+   4,
+   11
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25591524071280,
+  "chip": 0,
+  "eth": 10,
+  "records": 1,
+  "remote": [
+   4,
+   9
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 47,
+    "reads": 47,
+    "h1": 47,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 66
+   }
+  },
+  "clock": 25591707066747,
+  "chip": 1,
+  "eth": 5,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25591707067084,
+  "chip": 1,
+  "eth": 7,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 11,
+    "reads": 11,
+    "h1": 11,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 11
+   }
+  },
+  "clock": 25591707066951,
+  "chip": 1,
+  "eth": 8,
+  "records": 1,
+  "remote": [
+   5,
+   11
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25591707065747,
+  "chip": 1,
+  "eth": 10,
+  "records": 1,
+  "remote": [
+   5,
+   9
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 24024,
+    "reads": 24024,
+    "h1": 24024,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 96044
+   }
+  },
+  "clock": 25588124673486,
+  "chip": 2,
+  "eth": 4,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 19,
+    "reads": 19,
+    "h1": 19,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 22
+   }
+  },
+  "clock": 25588124673668,
+  "chip": 2,
+  "eth": 5,
+  "records": 1,
+  "remote": [
+   3,
+   6
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25588124673846,
+  "chip": 2,
+  "eth": 6,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25588124673525,
+  "chip": 2,
+  "eth": 7,
+  "records": 1,
+  "remote": [
+   3,
+   4
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 11,
+    "reads": 11,
+    "h1": 11,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 11
+   }
+  },
+  "clock": 25588124673973,
+  "chip": 2,
+  "eth": 8,
+  "records": 1,
+  "remote": [
+   6,
+   11
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25588124672629,
+  "chip": 2,
+  "eth": 10,
+  "records": 1,
+  "remote": [
+   6,
+   9
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25595586395350,
+  "chip": 3,
+  "eth": 4,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 54,
+    "reads": 54,
+    "h1": 54,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 66
+   }
+  },
+  "clock": 25595586395308,
+  "chip": 3,
+  "eth": 6,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 11,
+    "reads": 11,
+    "h1": 11,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 11
+   }
+  },
+  "clock": 25595586395433,
+  "chip": 3,
+  "eth": 8,
+  "records": 1,
+  "remote": [
+   7,
+   11
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25595586393755,
+  "chip": 3,
+  "eth": 10,
+  "records": 1,
+  "remote": [
+   7,
+   9
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 21,
+    "reads": 21,
+    "h1": 21,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 22
+   }
+  },
+  "clock": 25604468658627,
+  "chip": 4,
+  "eth": 4,
+  "records": 1,
+  "remote": [
+   5,
+   7
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 22,
+    "reads": 22,
+    "h1": 22,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 44
+   }
+  },
+  "clock": 25604468658267,
+  "chip": 4,
+  "eth": 5,
+  "records": 1,
+  "remote": [
+   6,
+   6
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25604468658598,
+  "chip": 4,
+  "eth": 6,
+  "records": 1,
+  "remote": [
+   5,
+   5
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25604468658195,
+  "chip": 4,
+  "eth": 7,
+  "records": 1,
+  "remote": [
+   6,
+   4
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25604468657243,
+  "chip": 4,
+  "eth": 9,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 11,
+    "reads": 11,
+    "h1": 11,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 11
+   }
+  },
+  "clock": 25604468658846,
+  "chip": 4,
+  "eth": 11,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25612318774174,
+  "chip": 5,
+  "eth": 5,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 47,
+    "reads": 47,
+    "h1": 47,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 66
+   }
+  },
+  "clock": 25612318774235,
+  "chip": 5,
+  "eth": 7,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25612318773263,
+  "chip": 5,
+  "eth": 9,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 11,
+    "reads": 11,
+    "h1": 11,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 11
+   }
+  },
+  "clock": 25612318774520,
+  "chip": 5,
+  "eth": 11,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25619082345588,
+  "chip": 6,
+  "eth": 4,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25619082345424,
+  "chip": 6,
+  "eth": 5,
+  "records": 1,
+  "remote": [
+   7,
+   6
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 33,
+    "reads": 33,
+    "h1": 33,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 44
+   }
+  },
+  "clock": 25619082345394,
+  "chip": 6,
+  "eth": 6,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 21,
+    "reads": 21,
+    "h1": 21,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 22
+   }
+  },
+  "clock": 25619082345464,
+  "chip": 6,
+  "eth": 7,
+  "records": 1,
+  "remote": [
+   7,
+   4
+  ],
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25619082343289,
+  "chip": 6,
+  "eth": 9,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 11,
+    "reads": 11,
+    "h1": 11,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 11
+   }
+  },
+  "clock": 25619082345842,
+  "chip": 6,
+  "eth": 11,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 49,
+    "reads": 49,
+    "h1": 49,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 66
+   }
+  },
+  "clock": 25611939686026,
+  "chip": 7,
+  "eth": 4,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25611939685874,
+  "chip": 7,
+  "eth": 6,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 0,
+    "reads": 0,
+    "h1": 0,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 0
+   }
+  },
+  "clock": 25611939684711,
+  "chip": 7,
+  "eth": 9,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ },
+ {
+  "addr": 380032,
+  "cap": 32,
+  "vcs": {
+   "0": {
+    "slots": 16,
+    "group": 4,
+    "attempts": 11,
+    "reads": 11,
+    "h1": 11,
+    "h2_4": 0,
+    "h5_8": 0,
+    "h9_16": 0,
+    "h17_32": 0,
+    "cap_hits": 0,
+    "g1_checks": 0,
+    "g1_pass": 0,
+    "g1_deferred": 0,
+    "slots_credited": 11
+   }
+  },
+  "clock": 25611939686222,
+  "chip": 7,
+  "eth": 11,
+  "records": 1,
+  "remote": null,
+  "stale": false
+ }
+]

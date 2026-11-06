@@ -1,0 +1,40 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 3,
+  "PERF_WINDOW": 1,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_3311320_1793784222148794171_20261104_092342.xml",
+  "pytest_3312364_1793784253441808184_20261104_092413.xml",
+  "pytest_3332804_1793784377612150801_20261104_092617.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.perf.test_combine_fabric2d_perf::test_device_perf_combine_fabric2d": {
+   "file": "pytest_3311320_1793784222148794171_20261104_092342.xml",
+   "message": "Failed: Per-op perf checks failed:\n  CombineFabric2dDeviceOperation: measured=10,616,206 ns  expected=9,888,566 ns (bounds [9,295,252, 10,481,880], margin \u00b16%)",
+   "status": "PERF_WINDOW",
+   "time": 96.517
+  },
+  "models.demos.deepseek_v3_d_p.tests.perf.test_dispatch_fabric2d_perf::test_device_perf_dispatch_fabric2d": {
+   "file": "pytest_3311320_1793784222148794171_20261104_092342.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 97.351
+  },
+  "models.demos.deepseek_v3_d_p.tests.perf.test_prefill_combine_fabric2d::test_combine_fabric2d_perf_worker[blackhole-fabric2d-torus-xy-8x4-2link]": {
+   "file": "pytest_3332804_1793784377612150801_20261104_092617.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 27.148
+  },
+  "models.demos.deepseek_v3_d_p.tests.perf.test_prefill_dispatch_fabric2d::test_dispatch_fabric2d_perf_worker[blackhole-fabric2d-torus-xy-8x4-2link]": {
+   "file": "pytest_3312364_1793784253441808184_20261104_092413.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 54.358
+  }
+ }
+}

@@ -1,0 +1,28 @@
+# Data-checked Sls1HopEW at 8704 B packets and slots, 30 packets (= the receiver ring's slots).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: ValSls1HopEW
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 8704
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 8704
+  defaults:
+    ftype: unicast
+    num_packets: 30
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

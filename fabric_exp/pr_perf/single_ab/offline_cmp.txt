@@ -1,0 +1,33 @@
+# offline.sh cmp (covcmp_sig.py, A = /home/aagarwal/tt-metal-single-ab vs B = /home/aagarwal/tt-metal-single-in), 2026-11-05T21:38:11Z
+bh_1d_1erisc             DIFFER    matched   38, differ  36, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 36}
+bh_2d_1erisc             DIFFER    matched   42, differ  40, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 40}
+bh_ring_1erisc           DIFFER    matched   38, differ  36, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 36}
+bh_torus_1erisc          DIFFER    matched   50, differ  48, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 48}
+bh_neighbor_1erisc       DIFFER    matched   39, differ  36, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 36}
+bh_1d_mux                DIFFER    matched   44, differ  36, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 36}
+bh_2d_mux                DIFFER    matched   56, differ  40, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 40}
+bh_ring_mux              DIFFER    matched   44, differ  36, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 36}
+bh_2d_vc2_1erisc         DIFFER    matched   42, differ  40, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 40}
+bh_vc1_1erisc            DIFFER    matched   51, differ  48, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 48}
+bh_vc1_vc2_1erisc_Os_log DIFFER    matched   49, differ  46, unmatched 2/0  differ by kernel: {'fabric_erisc_router': 46}  unmatched kernels: ['fabric_erisc_router']
+bh_2d_1erisc_streaming   DIFFER    matched   42, differ  40, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 40}
+glx_express_1erisc       DIFFER    matched  110, differ 108, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 108}
+glx2_mesh_novc_1erisc    DIFFER    matched  118, differ 116, unmatched 0/0  differ by kernel: {'fabric_erisc_router': 116}
+bh_1d                    IDENTICAL matched   74, differ   0, unmatched 0/0
+bh_2d                    IDENTICAL matched   82, differ   0, unmatched 0/0
+bh_ring                  IDENTICAL matched   74, differ   0, unmatched 0/0
+bh_torus                 IDENTICAL matched   98, differ   0, unmatched 0/0
+bh_neighbor              IDENTICAL matched   75, differ   0, unmatched 0/0
+bh_2d_vc2                IDENTICAL matched   82, differ   0, unmatched 0/0
+bh_torus_vc2             IDENTICAL matched   82, differ   0, unmatched 0/0
+bh_vc1                   IDENTICAL matched   99, differ   0, unmatched 0/0
+bh_vc1_vc2               DIFFER    matched   88, differ   0, unmatched 4/11  unmatched kernels: ['fabric_erisc_router']
+bh_2d_trim               IDENTICAL matched   82, differ   0, unmatched 0/0
+glx_2d                   IDENTICAL matched  170, differ   0, unmatched 0/0
+glx_torus                IDENTICAL matched  122, differ   0, unmatched 0/0
+TOTAL {'DIFFER': 15, 'builds': 1891, 'differ': 706, 'IDENTICAL': 11}
+
+# bh_vc1_vc2 / bh_vc1_vc2_1erisc_Os_log: covcmp_sig's unmatched builds are two-rank log interleaving; every router ELF in the caches paired by (proc, generated headers):
+bh_vc1_vc2: 96 / 96 router ELFs paired, identical 96, differ 0
+bh_vc1_vc2_1erisc_Os_log: 48 / 48 paired, identical 0, differ 48
+bh_vc1, bh_2d (check of the pairing): 96 / 80 paired, all identical

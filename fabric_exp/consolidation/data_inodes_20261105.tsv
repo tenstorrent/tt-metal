@@ -1,0 +1,460 @@
+# /data/aagarwal inode inventory, 2026-11-05 (du --inodes -s per depth-3 dir of frs-glx/regress/lb2/slurm, per top-level dir otherwise; files at depth <= 2 not listed, ~1.1k). Inventory only: nothing deleted.
+# refs: path = a script/manifest/note names the /data path; name = the dir name appears in notes (md/yaml/tsv/sh/py/json under fabric_exp outside results/, memory, mainline manifest); TODO = named in consolidation/TODO.md. Running/pending Slurm jobs: none (only the a09u32 interactive allocation).
+inodes	path	mtime_utc	owner	class	path_refs	name_refs	in_TODO	example_refs
+423744	/data/aagarwal/tt-metal	2026-10-29 04:35	user-own	user's own work (memory: leave alone)	0	0	n	
+248530	/data/aagarwal/tt-metal-2	2026-10-29 04:22	user-own	user's own work (memory: leave alone)	0	0	n	
+175878	/data/aagarwal/regress/trees/main_d2bd12f	2026-11-04 05:14	study	open ref (script/manifest path or TODO)	5	5	n	tt-metal-mainline/.scratch/regress/manifest.yaml; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/galaxy/frs_glx_bfc.sbatch
+175874	/data/aagarwal/regress/trees/new_288afd2	2026-11-04 09:25	study	open ref (script/manifest path or TODO)	1	4	n	tt-metal/fabric_exp/testplan/manifest.yaml
+175784	/data/aagarwal/regress/trees/mainline_c3c1813	2026-11-05 06:33	study	open ref (script/manifest path or TODO)	1	2	n	tt-metal-mainline/.scratch/regress/manifest.yaml
+175780	/data/aagarwal/regress/trees/mainline_cb42eb7	2026-11-04 08:00	study	open ref (script/manifest path or TODO)	1	3	y	tt-metal-mainline/.scratch/regress/manifest.yaml
+175780	/data/aagarwal/regress/trees/mainline_57c55f9	2026-11-05 07:38	study	open ref (script/manifest path or TODO)	1	1	n	tt-metal-mainline/.scratch/regress/manifest.yaml
+175780	/data/aagarwal/regress/trees/mainline_e5b75d1	2026-11-04 23:30	study	open ref (script/manifest path or TODO)	1	2	y	tt-metal-mainline/.scratch/regress/manifest.yaml
+79947	/data/aagarwal/frs-glx/jobs/171994	2026-11-04 01:57	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+64357	/data/aagarwal/frs-glx/jobs/171946	2026-11-04 01:35	study	open ref (script/manifest path or TODO)	1	5	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+64357	/data/aagarwal/frs-glx/jobs/172172	2026-11-04 03:40	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/slotalloc/out/glx_dyn_ab_171946_172172.md
+62889	/data/aagarwal/tt-metal-wf-base	2026-10-29 04:31	user-own	user's own work (memory: leave alone)	0	0	n	
+62883	/data/aagarwal/tt-metal-sweep1d	2026-10-30 02:44	user-own	user's own work (memory: leave alone)	0	0	n	
+55637	/data/aagarwal/tt-metal-3	2026-10-12 01:39	user-own	user's own work (memory: leave alone)	0	0	n	
+52442	/data/aagarwal/frs-glx/jobs/170094	2026-11-03 09:36	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/data/bandwidth_glx_sweep.json
+51504	/data/aagarwal/frs-glx/jobs/170095	2026-11-03 09:33	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/data/bandwidth_glx_sweep.json
+47119	/data/aagarwal/frs-glx/jobs/169903	2026-11-03 05:53	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/data/ring_jam.json
+46856	/data/aagarwal/frs-glx/jobs/172449	2026-11-04 05:23	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/port_slots/report_alloc_glx_176994.md
+45586	/data/aagarwal/frs-glx/jobs/171672	2026-11-04 00:05	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+45186	/data/aagarwal/frs-glx/jobs/169777	2026-11-03 04:26	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md
+43332	/data/aagarwal/frs-glx/jobs/169482	2026-11-03 01:31	study	open ref (script/manifest path or TODO)	0	5	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/data/ring_jam.json
+43332	/data/aagarwal/frs-glx/jobs/169483	2026-11-03 01:47	study	open ref (script/manifest path or TODO)	0	5	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/data/ring_jam.json
+42268	/data/aagarwal/frs-glx/jobs/169343	2026-11-03 00:29	study	open ref (script/manifest path or TODO)	0	6	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/slotalloc/trid_glx.sbatch
+41722	/data/aagarwal/frs-glx/jobs/170016	2026-11-03 07:30	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/data/ring_jam.json
+41535	/data/aagarwal/frs-glx/jobs/172155	2026-11-04 03:23	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+41330	/data/aagarwal/frs-glx/jobs/169403	2026-11-03 00:47	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/scripts/build_glx_sweep.py
+40399	/data/aagarwal/frs-glx/jobs/172673	2026-11-04 06:55	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+38853	/data/aagarwal/frs-glx/jobs/172435	2026-11-04 05:26	study	open ref (script/manifest path or TODO)	1	4	y	tt-metal/fabric_exp/consolidation/TODO.md
+36867	/data/aagarwal/frs-glx/jobs/169870	2026-11-03 05:27	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md
+36698	/data/aagarwal/frs-glx/jobs/169854	2026-11-03 05:13	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md
+36668	/data/aagarwal/frs-glx/jobs/170096	2026-11-03 09:33	study	open ref (script/manifest path or TODO)	2	6	y	tt-metal/fabric_exp/report/breakdown/sets_phase2.json; tt-metal/fabric_exp/report/data/breakdown.json
+36662	/data/aagarwal/frs-glx/jobs/169481	2026-11-03 01:25	study	open ref (script/manifest path or TODO)	2	5	y	tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/breakdown/sets_phase2.json
+36512	/data/aagarwal/frs-glx/jobs/169776	2026-11-03 04:21	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+36454	/data/aagarwal/frs-glx/jobs/169808	2026-11-03 04:33	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md
+35829	/data/aagarwal/frs-glx/jobs/172669	2026-11-04 06:56	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+35699	/data/aagarwal/frs-glx/jobs/172183	2026-11-04 03:38	study	open ref (script/manifest path or TODO)	1	3	y	tt-metal/fabric_exp/consolidation/TRID_ALLOCATION.md
+33823	/data/aagarwal/frs-glx/jobs/171203	2026-11-03 20:42	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+33823	/data/aagarwal/frs-glx/jobs/171300	2026-11-03 21:44	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+33450	/data/aagarwal/frs-glx/jobs/169871	2026-11-03 05:27	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/data/ring_jam.json
+31997	/data/aagarwal/frs-glx/jobs/172240	2026-11-04 04:05	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+31710	/data/aagarwal/frs-glx/jobs/172794	2026-11-04 08:27	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/CHANGES.md
+30262	/data/aagarwal/tt-metal-stateful-credits	2026-10-27 20:02	user-own	user's own work (memory: leave alone)	0	0	n	
+30187	/data/aagarwal/frs-glx/jobs/169265	2026-11-02 23:50	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/galaxy/glx_check_2d.yaml
+30186	/data/aagarwal/frs-glx/jobs/169264	2026-11-02 23:46	study	open ref (script/manifest path or TODO)	1	2	y	tt-metal/fabric_exp/consolidation/TODO.md
+29389	/data/aagarwal/frs-glx/jobs/177271	2026-11-05 06:35	study	named in notes only	0	2	n	.claude/projects/-home-aagarwal-tt-metal/memory/galaxy-slurm-harness.md; tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml
+28282	/data/aagarwal/slurm/cache/sanity2-1793254741-opt	2026-10-29 06:30	user-own	user's own work (memory: leave alone)	0	0	n	
+27767	/data/aagarwal/frs-glx/jobs/169263	2026-11-02 23:31	study	open ref (script/manifest path or TODO)	0	1	y	tt-metal/fabric_exp/consolidation/TODO.md
+26584	/data/aagarwal/frs-glx/trees/mockroot	2026-10-27 04:18	study	open ref (script/manifest path or TODO)	2	2	n	.claude/projects/-home-aagarwal-tt-metal/memory/project-router-consolidation.md; tt-metal/fabric_exp/RESULTS.md
+25294	/data/aagarwal/slurm/cache/sanity-1793248548-opt	2026-10-29 05:09	user-own	user's own work (memory: leave alone)	0	0	n	
+25188	/data/aagarwal/tt-llm-engine	2026-08-29 00:22	user-own	user's own work (memory: leave alone)	0	0	n	
+24372	/data/aagarwal/slurm/cache/sanity-1793248548-base	2026-10-29 04:37	user-own	user's own work (memory: leave alone)	0	0	n	
+24372	/data/aagarwal/slurm/cache/sanity2-1793254741-basecsv	2026-10-29 06:20	user-own	user's own work (memory: leave alone)	0	0	n	
+24247	/data/aagarwal/frs-glx/jobs/175221	2026-11-04 18:48	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md
+24233	/data/aagarwal/frs-glx/jobs/172820	2026-11-04 07:59	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+24230	/data/aagarwal/frs-glx/jobs/172999	2026-11-04 09:42	study	named in notes only	0	2	n	tt-metal/fabric_exp/consolidation/ALLOCATOR_NEEDS_FIRST_v1.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+24209	/data/aagarwal/frs-glx/jobs/172891	2026-11-04 08:35	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+24115	/data/aagarwal/frs-glx/trees/v4txa11id_1104cg	2026-11-04 18:12	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/TRID_ALLOCATION.md
+24105	/data/aagarwal/frs-glx/jobs/172992	2026-11-04 09:17	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+24100	/data/aagarwal/frs-glx/trees/v4txa11_1104	2026-11-04 02:08	study	open ref (script/manifest path or TODO)	2	6	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/slotalloc/knee/knee_vet.sh
+24076	/data/aagarwal/frs-glx/trees/v4txa11_1104cg	2026-11-04 18:12	study	open ref (script/manifest path or TODO)	2	2	n	tt-metal/fabric_exp/consolidation/RECONCILE_HOST.md; tt-metal/fabric_exp/consolidation/reconcile/rc_capture.sh
+24071	/data/aagarwal/frs-glx/trees/v4txa11id_1104	2026-11-04 02:08	study	open ref (script/manifest path or TODO)	2	5	y	tt-metal/fabric_exp/consolidation/TRID_ALLOCATION.md; tt-metal/fabric_exp/consolidation/slotalloc/trid_vet.sh
+24068	/data/aagarwal/frs-glx/trees/v4txa11_dyn	2026-11-04 00:30	study	open ref (script/manifest path or TODO)	3	5	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/slotalloc/dyn_vet.sh
+24040	/data/aagarwal/frs-glx/trees/a11cs_1104	2026-11-04 02:08	study	no reference	0	0	n	
+24040	/data/aagarwal/frs-glx/trees/a11ww_1104	2026-11-04 02:08	study	no reference	0	0	n	
+24040	/data/aagarwal/frs-glx/trees/a11ns_1104	2026-11-04 02:08	study	no reference	0	0	n	
+24037	/data/aagarwal/frs-glx/trees/v4txa11id_pre	2026-11-04 00:30	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/TRID_ALLOCATION.md
+24034	/data/aagarwal/frs-glx/trees/base_1104cg	2026-11-04 18:12	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/RECONCILE_HOST.md
+24032	/data/aagarwal/frs-glx/jobs/171630	2026-11-03 23:42	study	named in notes only	0	3	n	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/testplan/manifest.yaml; tt-metal/fabric_exp/testplan/run_group.py
+24030	/data/aagarwal/frs-glx/trees/v4txa11t_1103	2026-11-02 22:47	study	named in notes only	0	3	n	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/slotalloc/trid_glx.sbatch; tt-metal/fabric_exp/galaxy/frs_glx_frgap.sbatch
+24029	/data/aagarwal/frs-glx/trees/base_1104trid	2026-11-04 02:08	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/TRID_ALLOCATION.md
+24026	/data/aagarwal/frs-glx/trees/base_1103dyn	2026-11-04 00:30	study	no reference	0	0	n	
+24024	/data/aagarwal/frs-glx/trees/v4txa11j_1103	2026-11-02 22:47	study	open ref (script/manifest path or TODO)	1	3	n	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md
+24024	/data/aagarwal/frs-glx/trees/v4txa11k_1103	2026-11-02 22:47	study	open ref (script/manifest path or TODO)	2	4	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+24024	/data/aagarwal/frs-glx/trees/v4rxg3it_1102	2026-11-02 22:47	study	open ref (script/manifest path or TODO)	2	4	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md
+24021	/data/aagarwal/frs-glx/trees/v4txa11_1103	2026-11-02 22:47	study	open ref (script/manifest path or TODO)	3	7	y	tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/report/data/bandwidth_glx_sweep.json; tt-metal/fabric_exp/report/scripts/build_glx_sweep.py
+24021	/data/aagarwal/frs-glx/trees/v4rxg3bd_1102	2026-11-02 22:47	study	open ref (script/manifest path or TODO)	1	3	n	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md
+24020	/data/aagarwal/frs-glx/trees/v4rxg3sl_1102	2026-11-02 22:47	study	open ref (script/manifest path or TODO)	1	3	n	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md
+24020	/data/aagarwal/frs-glx/trees/v4rxg3_1102	2026-11-02 22:48	study	open ref (script/manifest path or TODO)	1	6	n	tt-metal/fabric_exp/report/scripts/build_glx_sweep.py
+24012	/data/aagarwal/frs-glx/trees/nsf_g3	2026-11-02 22:47	study	open ref (script/manifest path or TODO)	1	2	n	tt-metal/fabric_exp/consolidation/V4_NS_PRESETS.md
+24012	/data/aagarwal/frs-glx/trees/nsf_nsa	2026-11-02 22:47	study	named in notes only	0	2	n	tt-metal/fabric_exp/consolidation/V4_NS_PRESETS.md; tt-metal/fabric_exp/consolidation/ns_glx.sbatch
+24010	/data/aagarwal/frs-glx/trees/base_1102	2026-11-02 22:47	study	open ref (script/manifest path or TODO)	4	13	y	.claude/projects/-home-aagarwal-tt-metal/memory/galaxy-slurm-harness.md; tt-metal/fabric_exp/port_slots/alloc_glx.sbatch; tt-metal/fabric_exp/report/data/bandwidth_glx_sweep.json
+22349	/data/aagarwal/frs-glx/trees/vc2l_g3a	2026-11-01 17:58	study	named in notes only	0	5	n	tt-metal/fabric_exp/report/DATA_INVENTORY.md; tt-metal/fabric_exp/report/data/fanin.json; tt-metal/fabric_exp/report/data/gaps.json
+22310	/data/aagarwal/frs-glx/trees/sls_lead	2026-11-01 20:29	study	open ref (script/manifest path or TODO)	5	14	y	tt-metal/fabric_exp/consolidation/SLOT_STUDY.md; tt-metal/fabric_exp/consolidation/bd_mock_vet.sh; tt-metal/fabric_exp/consolidation/reconcile/rc_mock_vet.sh
+22310	/data/aagarwal/frs-glx/trees/sls_bdd	2026-11-01 20:29	study	open ref (script/manifest path or TODO)	0	10	y	tt-metal/fabric_exp/consolidation/SLOT_STUDY.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/V4_NS_FLOOR.md
+22304	/data/aagarwal/frs-glx/trees/sls_bddsl	2026-11-01 20:29	study	open ref (script/manifest path or TODO)	0	5	y	tt-metal/fabric_exp/consolidation/SLOT_STUDY.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/V4_NS_FLOOR.md
+22304	/data/aagarwal/frs-glx/trees/sls_bddml	2026-11-01 20:29	study	open ref (script/manifest path or TODO)	0	5	y	tt-metal/fabric_exp/consolidation/SLOT_STUDY.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/V4_NS_FLOOR.md
+22290	/data/aagarwal/frs-glx/trees/vc2l_p4d	2026-11-01 17:58	study	no reference	0	0	n	
+22287	/data/aagarwal/frs-glx/trees/vc2l_p4c	2026-11-01 17:58	study	no reference	0	0	n	
+22286	/data/aagarwal/frs-glx/trees/vc2l_p4b	2026-11-01 17:58	study	no reference	0	0	n	
+22284	/data/aagarwal/frs-glx/trees/vc2l_p4	2026-11-01 17:58	study	named in notes only	0	3	n	tt-metal/fabric_exp/consolidation/SLOT_STUDY.md; tt-metal/fabric_exp/report/data/fanin.json; tt-metal/fabric_exp/report/scripts/agents/gen_fanin.py
+20151	/data/aagarwal/frs-glx/trees/vc2l_p3	2026-11-01 17:58	study	open ref (script/manifest path or TODO)	2	2	n	tt-metal/fabric_exp/report/BREAKDOWN_PLAN.md; tt-metal/fabric_exp/slotstudy/mk_sls_tree.sh
+19394	/data/aagarwal/frs-glx/jobs/177399	2026-11-05 06:48	study	no reference	0	0	n	
+19312	/data/aagarwal/slurm/cache/164231	2026-10-30 02:13	user-own	user's own work (memory: leave alone)	0	0	n	
+18280	/data/aagarwal/lb2/trees/port_slots_22cd	2026-11-04 21:52	study	open ref (script/manifest path or TODO)	3	3	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/port_slots/port_lib.sh
+18279	/data/aagarwal/lb2/trees/port_tune_alloc_9ce0	2026-11-05 06:00	study	open ref (script/manifest path or TODO)	1	1	n	tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md
+18278	/data/aagarwal/lb2/trees/port_tune_22cd	2026-11-05 00:14	study	open ref (script/manifest path or TODO)	4	4	y	tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/port_tune/stage_port_tree.sh
+18189	/data/aagarwal/frs-glx/trees/vc2l_p2	2026-11-01 07:50	study	no reference	0	0	n	
+18186	/data/aagarwal/frs-glx/trees/vc2l_p1	2026-11-01 07:50	study	no reference	0	0	n	
+16958	/data/aagarwal/frs-glx/jobs/177393	2026-11-05 06:43	study	named in notes only	0	1	n	tt-metal/fabric_exp/galaxy/glxp_torus_multi_mesh_cut.yaml
+16189	/data/aagarwal/slurm/cache/164232	2026-10-30 02:42	user-own	user's own work (memory: leave alone)	0	0	n	
+14059	/data/aagarwal/slurm/cache/164233	2026-10-30 02:14	user-own	user's own work (memory: leave alone)	0	0	n	
+12041	/data/aagarwal/lb2/jobs/172668	2026-11-04 07:05	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+11612	/data/aagarwal/frs-glx/jobs/177426	2026-11-05 07:08	study	no reference	0	0	n	
+11381	/data/aagarwal/lb2/jobs/169770	2026-11-03 04:30	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/V4_SENDER_CONSOLIDATION.md
+11282	/data/aagarwal/frs-glx/jobs/177934	2026-11-05 08:29	study	no reference	0	0	n	
+11105	/data/aagarwal/lb2/jobs/172799	2026-11-04 08:11	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+10974	/data/aagarwal/frs-glx/jobs/177600	2026-11-05 07:15	study	no reference	0	0	n	
+10869	/data/aagarwal/lb2/jobs/172863	2026-11-04 08:40	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+10700	/data/aagarwal/tt-metal-infra-opts-c	2026-10-28 03:32	user-own	user's own work (memory: leave alone)	0	0	n	
+10687	/data/aagarwal/tt-metal-infra-opts-b	2026-10-28 03:32	user-own	user's own work (memory: leave alone)	0	0	n	
+10680	/data/aagarwal/tt-metal-infra-baseline	2026-10-29 04:31	user-own	user's own work (memory: leave alone)	0	0	n	
+10571	/data/aagarwal/tt-metal-infra-opts	2026-10-28 00:28	user-own	user's own work (memory: leave alone)	0	0	n	
+8517	/data/aagarwal/lb2/jobs/171629	2026-11-04 00:52	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+6753	/data/aagarwal/lb2/jobs/170034	2026-11-03 07:59	study	open ref (script/manifest path or TODO)	1	5	y	tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md
+5948	/data/aagarwal/regress/uv/cpython-3.10.19-linux-x86_64-gnu	2026-10-08 21:50	study	open ref (script/manifest path or TODO)	1	4	n	tt-metal/fabric_exp/testplan/README.md
+5529	/data/aagarwal/slurm/cache/162621	2026-10-29 04:23	user-own	user's own work (memory: leave alone)	0	0	n	
+5529	/data/aagarwal/slurm/cache/162568	2026-10-29 03:34	user-own	user's own work (memory: leave alone)	0	0	n	
+5493	/data/aagarwal/slurm/cache/162540	2026-10-29 03:02	user-own	user's own work (memory: leave alone)	0	0	n	
+5178	/data/aagarwal/frs-glx/jobs/176705	2026-11-05 04:30	study	open ref (script/manifest path or TODO)	0	2	y	.claude/projects/-home-aagarwal-tt-metal/memory/galaxy-slurm-harness.md; tt-metal/fabric_exp/consolidation/TODO.md
+4285	/data/aagarwal/lb2/jobs/172838	2026-11-04 08:19	study	named in notes only	0	2	n	tt-metal/fabric_exp/consolidation/ALLOCATOR_NEEDS_FIRST_v1.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+3921	/data/aagarwal/lb2/jobs/171579	2026-11-04 00:39	study	open ref (script/manifest path or TODO)	1	3	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+3466	/data/aagarwal/frs-glx/jobs/172983	2026-11-04 09:23	study	open ref (script/manifest path or TODO)	0	8	y	tt-metal/fabric_exp/consolidation/PARITY.md; tt-metal/fabric_exp/consolidation/RECONCILE_DEVICE.md; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md
+3245	/data/aagarwal/lb2/stage/git	2026-11-05 04:12	study	no reference	0	0	n	
+2833	/data/aagarwal/lb2/jobs/169531	2026-11-03 01:07	study	open ref (script/manifest path or TODO)	0	3	y	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/TODO.md
+2833	/data/aagarwal/lb2/jobs/169656	2026-11-03 02:36	study	open ref (script/manifest path or TODO)	0	1	y	tt-metal/fabric_exp/consolidation/TODO.md
+2626	/data/aagarwal/lb2/jobs/176226	2026-11-05 00:23	study	open ref (script/manifest path or TODO)	2	8	y	tt-metal/fabric_exp/port_slots/report_pvs_176226.md; tt-metal/fabric_exp/port_tune/gap_loop_report.py
+2553	/data/aagarwal/lb2/jobs/169657	2026-11-03 02:36	study	open ref (script/manifest path or TODO)	0	1	y	tt-metal/fabric_exp/consolidation/TODO.md
+2421	/data/aagarwal/lb2/jobs/175939	2026-11-04 23:03	study	open ref (script/manifest path or TODO)	0	4	y	.claude/projects/-home-aagarwal-tt-metal/memory/project-study-port-drift.md; tt-metal/fabric_exp/consolidation/RECONCILE_DEVICE.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+2222	/data/aagarwal/frs-glx/jobs/172652	2026-11-04 06:23	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+2138	/data/aagarwal/tt-blaze	2026-10-12 01:39	user-own	user's own work (memory: leave alone)	0	0	n	
+1723	/data/aagarwal/slurm/cache/jitprobe-nfs1-843375	2026-10-29 15:49	user-own	user's own work (memory: leave alone)	0	0	n	
+1723	/data/aagarwal/slurm/cache/jitprobe-nfs2-843375	2026-10-29 15:51	user-own	user's own work (memory: leave alone)	0	0	n	
+1495	/data/aagarwal/slurm/triage_venv/lib	2026-10-26 19:32	user-own	user's own work (memory: leave alone)	0	0	n	
+1351	/data/aagarwal/regress/results/ord2_e5b75d1_a08u08	2026-11-05 08:55	study	no reference	0	0	n	
+996	/data/aagarwal/lb2/jobs/171410	2026-11-03 23:07	study	open ref (script/manifest path or TODO)	0	3	y	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+989	/data/aagarwal/lb2/jobs/169891	2026-11-03 05:31	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md
+800	/data/aagarwal/regress/results/main	2026-11-04 04:02	study	open ref (script/manifest path or TODO)	1	0	n	tt-metal/fabric_exp/testplan/README.md
+789	/data/aagarwal/regress/results/batch_any_c3c1813	2026-11-05 08:25	study	no reference	0	0	n	
+728	/data/aagarwal/slurm/results/credit-breakdown-outline	2026-10-28 00:40	user-own	user's own work (memory: leave alone)	0	0	n	
+684	/data/aagarwal/slurm/results/credit-ab2	2026-10-27 22:50	user-own	user's own work (memory: leave alone)	0	0	n	
+580	/data/aagarwal/slurm/results/sw1d-ccl-2k-20261030	2026-10-30 02:16	user-own	user's own work (memory: leave alone)	0	0	n	
+577	/data/aagarwal/slurm/results/credit-breakdown	2026-10-27 23:27	user-own	user's own work (memory: leave alone)	0	0	n	
+548	/data/aagarwal/slurm/results/sw1d-fab-1k-20261030	2026-10-30 02:15	user-own	user's own work (memory: leave alone)	0	0	n	
+547	/data/aagarwal/slurm/results/slots1d-cclbench-8192-r2	2026-10-28 04:02	user-own	user's own work (memory: leave alone)	0	0	n	
+512	/data/aagarwal/lb2/jobs/170018	2026-11-03 07:31	study	open ref (script/manifest path or TODO)	0	6	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/frg_it_p150_runs.sh
+509	/data/aagarwal/lb2/jobs/169780	2026-11-03 04:22	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md
+508	/data/aagarwal/slurm/results/slots1d-8k-r2	2026-10-28 03:59	user-own	user's own work (memory: leave alone)	0	0	n	
+502	/data/aagarwal/lb2/jobs/170023	2026-11-03 07:36	study	open ref (script/manifest path or TODO)	0	5	y	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/frgap/p150_fcval_fullring.yaml
+473	/data/aagarwal/regress/results/_jobs	2026-11-05 08:54	study	open ref (script/manifest path or TODO)	1	2	n	tt-metal/fabric_exp/testplan/README.md
+464	/data/aagarwal/tt-metal-infra-opts-d	2026-10-29 06:18	user-own	user's own work (memory: leave alone)	0	0	n	
+464	/data/aagarwal/tt-metal-infra-opts-e	2026-10-30 00:14	user-own	user's own work (memory: leave alone)	0	0	n	
+464	/data/aagarwal/tt-metal-infra-opts-g	2026-10-30 01:12	user-own	user's own work (memory: leave alone)	0	0	n	
+459	/data/aagarwal/tt-metal-infra-baseline-csv	2026-10-29 06:17	user-own	user's own work (memory: leave alone)	0	0	n	
+451	/data/aagarwal/tt-metal-infra-opts-f	2026-10-30 00:50	user-own	user's own work (memory: leave alone)	0	0	n	
+449	/data/aagarwal/regress/results-lb2/ab_288afd2_lb2	2026-11-04 09:37	study	no reference	0	0	n	
+425	/data/aagarwal/slurm/results/sw1d-fab-2k-20261030	2026-10-30 02:43	user-own	user's own work (memory: leave alone)	0	0	n	
+423	/data/aagarwal/slurm/results/wf-ccl4k-20261029-wf3	2026-10-29 03:20	user-own	user's own work (memory: leave alone)	0	0	n	
+417	/data/aagarwal/frs-glx/glxq/stage	2026-11-05 08:25	study	open ref (script/manifest path or TODO)	2	106	y	tt-metal/fabric_exp/galaxy/MULTI_GALAXY_HARNESS.md; tt-metal/fabric_exp/galaxy/glxq_run.sh
+415	/data/aagarwal/regress/results/ab_288afd2	2026-11-04 09:01	study	named in notes only	0	3	n	tt-metal/fabric_exp/testplan/ab_pair.sh; tt-metal/fabric_exp/testplan/manifest.yaml; tt-metal/fabric_exp/testplan/seq_submit.py
+396	/data/aagarwal/regress/results/new_288afd2	2026-11-04 09:33	study	named in notes only	0	4	n	tt-metal/fabric_exp/testplan/ab_pair.sh; tt-metal/fabric_exp/testplan/lb2_trees.sh; tt-metal/fabric_exp/testplan/manifest.yaml
+358	/data/aagarwal/slurm/results/slots1d-default-r2	2026-10-28 04:34	user-own	user's own work (memory: leave alone)	0	0	n	
+356	/data/aagarwal/slurm/results/slots1d-cclbench-4352-r2	2026-10-28 04:19	user-own	user's own work (memory: leave alone)	0	0	n	
+338	/data/aagarwal/slurm/results/wf-ccl8k-20261029-wf3	2026-10-29 04:41	user-own	user's own work (memory: leave alone)	0	0	n	
+326	/data/aagarwal/slurm/results/slots1d-cclbench-8192-r3	2026-10-28 21:48	user-own	user's own work (memory: leave alone)	0	0	n	
+285	/data/aagarwal/lb2/trees/port_alloc_c53b	2026-11-05 02:26	study	open ref (script/manifest path or TODO)	1	2	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+283	/data/aagarwal/slurm/results/wf-fab6k15k-20261029-wf3	2026-10-29 03:42	user-own	user's own work (memory: leave alone)	0	0	n	
+266	/data/aagarwal/slurm/results/wf-ccl8k-20261029	2026-10-29 01:07	user-own	user's own work (memory: leave alone)	0	0	n	
+264	/data/aagarwal/frs-glx/trees/port_57c55f9	2026-11-05 04:54	study	no reference	0	0	n	
+264	/data/aagarwal/frs-glx/trees/port_330a262	2026-11-05 03:48	study	no reference	0	0	n	
+261	/data/aagarwal/slurm/results/slots1d-cclbench-4352	2026-10-28 02:45	user-own	user's own work (memory: leave alone)	0	0	n	
+261	/data/aagarwal/slurm/results/slots1d-default	2026-10-28 02:54	user-own	user's own work (memory: leave alone)	0	0	n	
+260	/data/aagarwal/slurm/results/slots1d-cclbench-8192	2026-10-28 02:59	user-own	user's own work (memory: leave alone)	0	0	n	
+252	/data/aagarwal/slurm/results/wf-fab4k-20261029-wf3	2026-10-29 02:25	user-own	user's own work (memory: leave alone)	0	0	n	
+251	/data/aagarwal/lb2/jobs/175938	2026-11-04 22:56	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/ALLOCATOR_NEEDS_FIRST.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md
+248	/data/aagarwal/slurm/results/wf-fab8k-20261029-wf3	2026-10-29 02:52	user-own	user's own work (memory: leave alone)	0	0	n	
+240	/data/aagarwal/slurm/results/wf-ccl4k-20261028	2026-10-29 00:32	user-own	user's own work (memory: leave alone)	0	0	n	
+239	/data/aagarwal/slurm/results/slots1d-halo	2026-10-28 02:51	user-own	user's own work (memory: leave alone)	0	0	n	
+237	/data/aagarwal/slurm/results/slots1d-8k	2026-10-28 03:11	user-own	user's own work (memory: leave alone)	0	0	n	
+235	/data/aagarwal/slurm/results/slots1d-8k-r3	2026-10-28 20:47	user-own	user's own work (memory: leave alone)	0	0	n	
+216	/data/aagarwal/lb2/jobs/176714	2026-11-05 04:03	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/ALLOCATOR_NEEDS_FIRST.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md
+205	/data/aagarwal/slurm/results/wf-fab4k-20261028-contaminated	2026-10-29 00:10	user-own	user's own work (memory: leave alone)	0	0	n	
+197	/data/aagarwal/lb2/jobs/176267	2026-11-05 00:33	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md; tt-metal/fabric_exp/consolidation/TODO.md
+197	/data/aagarwal/slurm/results/wf-fab8k-20261028-contaminated	2026-10-29 00:09	user-own	user's own work (memory: leave alone)	0	0	n	
+192	/data/aagarwal/slurm/results/wf-fab6k15k-20261028-contaminated	2026-10-29 00:20	user-own	user's own work (memory: leave alone)	0	0	n	
+189	/data/aagarwal/lb2/jobs/176269	2026-11-05 01:08	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md; tt-metal/fabric_exp/consolidation/TODO.md
+186	/data/aagarwal/slurm/results/wf-fab6k15k-20261029	2026-10-29 01:28	user-own	user's own work (memory: leave alone)	0	0	n	
+181	/data/aagarwal/slurm/results/wf-fab4k-20261029	2026-10-29 00:48	user-own	user's own work (memory: leave alone)	0	0	n	
+177	/data/aagarwal/lb2/jobs/176405	2026-11-05 01:35	study	open ref (script/manifest path or TODO)	1	5	y	tt-metal/fabric_exp/port_slots/hang176405_decode.txt
+177	/data/aagarwal/lb2/jobs/176425	2026-11-05 01:41	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/ALLOCATOR_NEEDS_FIRST.md; tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+168	/data/aagarwal/lb2/jobs/172798	2026-11-04 07:53	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+160	/data/aagarwal/slurm/results/wf-fab8k-20261029	2026-10-29 01:03	user-own	user's own work (memory: leave alone)	0	0	n	
+153	/data/aagarwal/lb2/jobs/176268	2026-11-05 00:48	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md; tt-metal/fabric_exp/consolidation/TODO.md
+152	/data/aagarwal/lb2/jobs/176854	2026-11-05 05:01	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/ALLOCATOR_NEEDS_FIRST.md
+150	/data/aagarwal/lb2/jobs/172797	2026-11-04 07:53	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+125	/data/aagarwal/slurm_logs	2026-10-30 18:13	user-own	user's own work (memory: leave alone)	0	0	n	
+124	/data/aagarwal/regress/results/abdiff_288afd2	2026-11-04 17:46	study	no reference	0	0	n	
+117	/data/aagarwal/lb2/jobs/176756	2026-11-05 04:18	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/consolidation/TRID_ALLOCATION.md
+95	/data/aagarwal/lb2/jobs/176985	2026-11-05 05:35	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md; tt-metal/fabric_exp/port_slots/report_alloc_176985.md
+89	/data/aagarwal/slurm/results/credit-ab-ccl	2026-10-27 21:16	user-own	user's own work (memory: leave alone)	0	0	n	
+84	/data/aagarwal/frs-glx/jobs/176753	2026-11-05 04:09	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/ALLOCATOR_NEEDS_FIRST.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md
+81	/data/aagarwal/lb2/jobs/177108	2026-11-05 06:11	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md; tt-metal/fabric_exp/consolidation/TODO.md
+81	/data/aagarwal/slurm/results/slots1d-cclbench-8192-r3-cancelled	2026-10-28 21:03	user-own	user's own work (memory: leave alone)	0	0	n	
+75	/data/aagarwal/regress/results/_scratch	2026-11-05 09:31	study	open ref (script/manifest path or TODO)	1	2	n	tt-metal/fabric_exp/testplan/README.md
+71	/data/aagarwal/regress/results/mainline_58a9a1e	2026-11-04 00:57	study	named in notes only	0	2	n	tt-metal-mainline/.scratch/regress/manifest.yaml; tt-metal/fabric_exp/consolidation/TEST_PLAN.md
+66	/data/aagarwal/lb2/jobs/172672	2026-11-04 06:57	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+63	/data/aagarwal/slurm/results/infra-perf-r4-159706	2026-10-28 01:59	user-own	user's own work (memory: leave alone)	0	0	n	
+56	/data/aagarwal/frs-glx/jobs/176994	2026-11-05 05:36	study	open ref (script/manifest path or TODO)	1	4	y	tt-metal/fabric_exp/port_slots/report_alloc_glx_176994.md
+50	/data/aagarwal/frs-glx/jobs/163369	2026-11-04 08:52	study	open ref (script/manifest path or TODO)	3	14	n	tt-metal/fabric_exp/report/data/bandwidth.json; tt-metal/fabric_exp/report/data/bandwidth_galaxy.json; tt-metal/fabric_exp/report/data/gaps.json
+50	/data/aagarwal/lb2/jobs/176643	2026-11-05 03:37	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+50	/data/aagarwal/slurm/configs/infra_perf	2026-10-30 02:06	user-own	user's own work (memory: leave alone)	0	0	n	
+46	/data/aagarwal/lb2/jobs/176130	2026-11-04 23:31	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md; tt-metal/fabric_exp/consolidation/TODO.md
+46	/data/aagarwal/lb2/jobs/172995	2026-11-04 09:30	study	no reference	0	0	n	
+46	/data/aagarwal/lb2/jobs/176008	2026-11-04 23:14	study	open ref (script/manifest path or TODO)	0	4	y	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md
+46	/data/aagarwal/lb2/jobs/172175	2026-11-04 03:37	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+46	/data/aagarwal/lb2/jobs/172671	2026-11-04 06:55	study	no reference	0	0	n	
+46	/data/aagarwal/lb2/jobs/172986	2026-11-04 09:23	study	no reference	0	0	n	
+46	/data/aagarwal/lb2/jobs/172826	2026-11-04 08:10	study	no reference	0	0	n	
+46	/data/aagarwal/lb2/jobs/172960	2026-11-04 09:18	study	no reference	0	0	n	
+46	/data/aagarwal/lb2/jobs/172170	2026-11-04 03:28	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md
+44	/data/aagarwal/lb2/jobs/172987	2026-11-04 09:34	study	no reference	0	0	n	
+41	/data/aagarwal/frs-glx/jobs/157929	2026-11-04 08:50	study	open ref (script/manifest path or TODO)	2	7	n	tt-metal/fabric_exp/report/data/bandwidth.json; tt-metal/fabric_exp/report/data/bandwidth_galaxy.json
+40	/data/aagarwal/frs-glx/glxq/locks	2026-11-05 08:25	study	open ref (script/manifest path or TODO)	2	4	y	tt-metal/fabric_exp/galaxy/MULTI_GALAXY_HARNESS.md; tt-metal/fabric_exp/galaxy/glxq_run.sh
+40	/data/aagarwal/frs-glx/jobs/158562	2026-11-04 08:54	study	open ref (script/manifest path or TODO)	2	8	n	tt-metal/fabric_exp/report/data/bandwidth.json; tt-metal/fabric_exp/report/data/bandwidth_galaxy.json
+40	/data/aagarwal/slurm/results/infra-perf-bd-159633	2026-10-28 00:44	user-own	user's own work (memory: leave alone)	0	0	n	
+37	/data/aagarwal/slurm/results/credit-baseline	2026-10-27 20:29	user-own	user's own work (memory: leave alone)	0	0	n	
+36	/data/aagarwal/regress/results/_nodes	2026-11-04 17:46	study	open ref (script/manifest path or TODO)	1	1	n	tt-metal/fabric_exp/testplan/run_group.py
+33	/data/aagarwal/slurm/results/infra-perf-r3-159673	2026-10-28 01:13	user-own	user's own work (memory: leave alone)	0	0	n	
+32	/data/aagarwal/lb2/jobs/172938	2026-11-04 09:03	study	no reference	0	0	n	
+32	/data/aagarwal/slurm/results/infra-perf-r2-159661	2026-10-28 01:06	user-own	user's own work (memory: leave alone)	0	0	n	
+31	/data/aagarwal/frs-glx/jobs/155240	2026-11-04 09:35	study	named in notes only	0	9	n	.claude/projects/-home-aagarwal-tt-metal/memory/galaxy-slurm-harness.md; .claude/projects/-home-aagarwal-tt-metal/memory/project-router-consolidation.md; tt-metal/fabric_exp/RESULTS.md
+29	/data/aagarwal/frs-glx/jobs/158477	2026-11-04 08:53	study	open ref (script/manifest path or TODO)	2	7	n	tt-metal/fabric_exp/report/data/bandwidth.json; tt-metal/fabric_exp/report/data/bandwidth_galaxy.json
+28	/data/aagarwal/lb2/jobs/176742	2026-11-05 04:05	study	named in notes only	0	2	n	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/TRID_ALLOCATION.md
+26	/data/aagarwal/frs-glx/jobs/155281	2026-11-04 09:35	study	named in notes only	0	13	n	.claude/projects/-home-aagarwal-tt-metal/memory/project-router-consolidation.md; tt-metal/fabric_exp/RESULTS.md; tt-metal/fabric_exp/consolidation/SLOT_STUDY.md
+24	/data/aagarwal/lb2/jobs/176973	2026-11-05 05:29	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+23	/data/aagarwal/regress/results/ord_57c55f9_a10u14	2026-11-05 08:51	study	no reference	0	0	n	
+23	/data/aagarwal/slurm/triage_venv/bin	2026-10-26 19:32	user-own	user's own work (memory: leave alone)	0	0	n	
+22	/data/aagarwal/lb2/jobs/176206	2026-11-05 00:07	study	named in notes only	0	2	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md
+21	/data/aagarwal/regress/results/ab_a08u20	2026-11-04 02:20	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/173016	2026-11-04 09:47	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/172937	2026-11-04 08:57	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/172959	2026-11-04 09:14	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/172936	2026-11-04 08:58	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/172963	2026-11-04 09:24	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/172996	2026-11-04 09:36	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/172939	2026-11-04 09:02	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/172958	2026-11-04 09:09	study	no reference	0	0	n	
+20	/data/aagarwal/lb2/jobs/172952	2026-11-04 09:09	study	no reference	0	0	n	
+19	/data/aagarwal/frs-glx/jobs/155833	2026-11-04 09:35	study	open ref (script/manifest path or TODO)	2	7	n	tt-metal/fabric_exp/report/data/bandwidth.json; tt-metal/fabric_exp/report/data/bandwidth_galaxy.json
+19	/data/aagarwal/lb2/jobs/172649	2026-11-04 06:32	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+19	/data/aagarwal/slurm/results/credit-fix-check	2026-10-27 22:19	user-own	user's own work (memory: leave alone)	0	0	n	
+19	/data/aagarwal/slurm/cache/164178	2026-10-30 00:59	user-own	user's own work (memory: leave alone)	0	0	n	
+18	/data/aagarwal/frs-glx/bfc/yamls	2026-11-04 08:24	study	open ref (script/manifest path or TODO)	1	95	y	tt-metal/fabric_exp/port_slots/mk_p1d_yamls.py
+17	/data/aagarwal/regress/results/mainline_c3c1813_rerun	2026-11-05 06:48	study	no reference	0	0	n	
+17	/data/aagarwal/regress/results/ab_batch_a07u02	2026-11-05 07:52	study	no reference	0	0	n	
+17	/data/aagarwal/regress/results/mainline_cb42eb7_a09u02	2026-11-05 00:03	study	no reference	0	0	n	
+17	/data/aagarwal/regress/results/batch_110a_c3c1813	2026-11-05 08:36	study	no reference	0	0	n	
+17	/data/aagarwal/regress/results/mainline_e5b75d1_rerun	2026-11-05 00:00	study	no reference	0	0	n	
+17	/data/aagarwal/regress/results/mainline_cb42eb7	2026-11-04 08:09	study	open ref (script/manifest path or TODO)	0	3	y	tt-metal-mainline/.scratch/regress/manifest.yaml; tt-metal/fabric_exp/consolidation/PARITY.md; tt-metal/fabric_exp/consolidation/TODO.md
+17	/data/aagarwal/regress/results/mainline_e5b75d1	2026-11-04 23:34	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal-mainline/.scratch/regress/manifest.yaml; tt-metal/fabric_exp/consolidation/TODO.md
+17	/data/aagarwal/regress/results/ab_base_a07u02	2026-11-05 07:40	study	no reference	0	0	n	
+17	/data/aagarwal/regress/results/mainline_c3c1813	2026-11-05 06:35	study	named in notes only	0	2	n	tt-metal-mainline/.scratch/regress/manifest.yaml; tt-metal/fabric_exp/consolidation/TEST_PLAN.md
+17	/data/aagarwal/slurm/neg/out-155523	2026-10-26 23:23	user-own	user's own work (memory: leave alone)	0	0	n	
+17	/data/aagarwal/slurm/neg/out-155561	2026-10-26 23:49	user-own	user's own work (memory: leave alone)	0	0	n	
+17	/data/aagarwal/slurm_jobs	2026-10-30 18:01	user-own	user's own work (memory: leave alone)	0	0	n	
+16	/data/aagarwal/frs-glx/jobs/172792	2026-11-04 09:27	study	named in notes only	0	3	n	.claude/projects/-home-aagarwal-tt-metal/memory/MEMORY.md; .claude/projects/-home-aagarwal-tt-metal/memory/galaxy-slurm-harness.md; tt-metal/fabric_exp/galaxy/MULTI_GALAXY_HARNESS.md
+16	/data/aagarwal/slurm/results/sfpu-percfg2-164182	2026-10-30 01:01	user-own	user's own work (memory: leave alone)	0	0	n	
+16	/data/aagarwal/slurm/cache/164179	2026-10-30 01:25	user-own	user's own work (memory: leave alone)	0	0	n	
+15	/data/aagarwal/lb2/jobs/170032	2026-11-03 07:47	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md
+15	/data/aagarwal/lb2/jobs/169606	2026-11-03 02:03	study	open ref (script/manifest path or TODO)	0	1	y	tt-metal/fabric_exp/consolidation/TODO.md
+15	/data/aagarwal/lb2/jobs/172557	2026-11-04 06:00	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md
+15	/data/aagarwal/lb2/jobs/169608	2026-11-03 02:05	study	open ref (script/manifest path or TODO)	0	1	y	tt-metal/fabric_exp/consolidation/TODO.md
+15	/data/aagarwal/lb2/jobs/172808	2026-11-04 07:56	study	named in notes only	0	2	n	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/lb2_run.sh
+15	/data/aagarwal/lb2/jobs/172809	2026-11-04 08:16	study	no reference	0	0	n	
+15	/data/aagarwal/lb2/jobs/172564	2026-11-04 06:04	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md
+15	/data/aagarwal/lb2/jobs/169530	2026-11-03 00:58	study	open ref (script/manifest path or TODO)	0	2	y	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/TODO.md
+14	/data/aagarwal/frs-glx/jobs/162896	2026-11-04 08:58	study	named in notes only	0	3	n	.claude/projects/-home-aagarwal-tt-metal/memory/project-router-consolidation.md; tt-metal/fabric_exp/RESULTS.md; tt-metal/fabric_exp/consolidation/V4_EXPRESS.md
+14	/data/aagarwal/slurm/results/flush-ab-161901	2026-10-28 20:32	user-own	user's own work (memory: leave alone)	0	0	n	
+13	/data/aagarwal/lb2/jobs/172157	2026-11-04 03:18	study	open ref (script/manifest path or TODO)	0	4	y	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md
+13	/data/aagarwal/lb2/jobs/172043	2026-11-04 03:09	study	open ref (script/manifest path or TODO)	0	4	y	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+13	/data/aagarwal/lb2/jobs/172149	2026-11-04 03:14	study	open ref (script/manifest path or TODO)	0	4	y	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md
+13	/data/aagarwal/slurm/results/verify-ab-159775	2026-10-28 02:35	user-own	user's own work (memory: leave alone)	0	0	n	
+13	/data/aagarwal/slurm/results/sfpu-multitile2-164213	2026-10-30 01:37	user-own	user's own work (memory: leave alone)	0	0	n	
+13	/data/aagarwal/slurm/cache/164180	2026-10-30 00:42	user-own	user's own work (memory: leave alone)	0	0	n	
+12	/data/aagarwal/slurm/results/sfpu-percfg-164165	2026-10-30 00:30	user-own	user's own work (memory: leave alone)	0	0	n	
+12	/data/aagarwal/slurm/neg/out-155516	2026-10-26 23:20	user-own	user's own work (memory: leave alone)	0	0	n	
+11	/data/aagarwal/frs-glx/jobs/155963	2026-11-04 09:35	study	named in notes only	0	1	n	tt-metal/fabric_exp/RESULTS.md
+11	/data/aagarwal/frs-glx/jobs/156067	2026-11-04 09:35	study	open ref (script/manifest path or TODO)	2	7	n	tt-metal/fabric_exp/report/data/bandwidth.json; tt-metal/fabric_exp/report/data/bandwidth_galaxy.json
+11	/data/aagarwal/lb2/stage/src-20261105-060108	2026-11-05 06:01	study	no reference	0	0	n	
+11	/data/aagarwal/lb2/stage/src-20261105-052938	2026-11-05 05:29	study	no reference	0	0	n	
+10	/data/aagarwal/lb2/jobs/169605	2026-11-03 02:02	study	open ref (script/manifest path or TODO)	0	1	y	tt-metal/fabric_exp/consolidation/TODO.md
+10	/data/aagarwal/lb2/jobs/171279	2026-11-03 22:08	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/RING_JAM_FIX.md; tt-metal/fabric_exp/consolidation/TODO.md
+10	/data/aagarwal/lb2/jobs/169607	2026-11-03 02:04	study	open ref (script/manifest path or TODO)	0	1	y	tt-metal/fabric_exp/consolidation/TODO.md
+10	/data/aagarwal/lb2/jobs/176205	2026-11-05 00:02	study	named in notes only	0	2	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md
+10	/data/aagarwal/lb2/jobs/169529	2026-11-03 00:57	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md
+10	/data/aagarwal/lb2/jobs/169890	2026-11-03 05:28	study	no reference	0	0	n	
+10	/data/aagarwal/lb2/jobs/170014	2026-11-03 07:19	study	no reference	0	0	n	
+10	/data/aagarwal/lb2/jobs/177103	2026-11-05 06:02	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/RECEIVER_TUNING.md
+10	/data/aagarwal/lb2/jobs/169779	2026-11-03 04:19	study	no reference	0	0	n	
+10	/data/aagarwal/lb2/stage/full-20261104-221405	2026-11-04 22:15	study	no reference	0	0	n	
+9	/data/aagarwal/lb2/jobs/169509	2026-11-03 00:49	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md
+9	/data/aagarwal/lb2/jobs/169525	2026-11-03 00:55	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md
+9	/data/aagarwal/slurm/results/credit-ab-fabric	2026-10-27 21:12	user-own	user's own work (memory: leave alone)	0	0	n	
+9	/data/aagarwal/slurm/results/parbuild-162621	2026-10-29 04:32	user-own	user's own work (memory: leave alone)	0	0	n	
+9	/data/aagarwal/slurm/results/sched-ab-161761	2026-10-28 18:19	user-own	user's own work (memory: leave alone)	0	0	n	
+9	/data/aagarwal/slurm/results/pipe-ab-159871	2026-10-28 03:11	user-own	user's own work (memory: leave alone)	0	0	n	
+9	/data/aagarwal/slurm/results/sfpu-multitile-164192	2026-10-30 01:07	user-own	user's own work (memory: leave alone)	0	0	n	
+9	/data/aagarwal/slurm/results/sendopt-162262	2026-10-28 23:35	user-own	user's own work (memory: leave alone)	0	0	n	
+8	/data/aagarwal/slurm/results/suite-totals-159998	2026-10-28 05:45	user-own	user's own work (memory: leave alone)	0	0	n	
+8	/data/aagarwal/slurm/results/sharedk-162568	2026-10-29 03:44	user-own	user's own work (memory: leave alone)	0	0	n	
+8	/data/aagarwal/slurm/results/scat-verify-161863	2026-10-28 19:41	user-own	user's own work (memory: leave alone)	0	0	n	
+8	/data/aagarwal/slurm/results/sendopt2-162297	2026-10-28 23:53	user-own	user's own work (memory: leave alone)	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-233104-G-PORT	2026-11-04 23:31	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-160429-SEQ-NEW-G2-oss	2026-11-04 16:04	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-063435-G-PORT	2026-11-05 06:34	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-084923-SEQ-AB-G1x-dit-rj	2026-11-04 08:49	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-012415-AB-a08u20	2026-11-04 01:24	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-064718-G-PORT	2026-11-05 06:47	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-160242-SEQ-ABD-G0-eth	2026-11-04 16:02	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-084924-SEQ-AB-G1x-rj-sdpa	2026-11-04 08:49	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-083529-G-PORT	2026-11-05 08:35	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-084923-SEQ-AB-G1x-dp-fab2d	2026-11-04 08:49	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-090658-SEQ-AB-G1x-kimi-moe	2026-11-04 09:06	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-170709-SEQ-ABD-G2-qwen	2026-11-04 17:07	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-082346-G-PORT	2026-11-05 08:23	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-070513-G-PORT	2026-11-05 07:05	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-063430-G-PORT	2026-11-05 06:34	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-235849-G-PORT	2026-11-04 23:58	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-162601-SEQ-AB-G1x-kimi-moe	2026-11-04 16:26	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-073852-G-PORT	2026-11-05 07:38	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-082337-G-PORT	2026-11-05 08:23	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-073900-G-PORT	2026-11-05 07:39	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-083521-G-PORT	2026-11-05 08:35	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-233138-G-PORT	2026-11-04 23:31	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-160241-SEQ-ABD-G0-mm-4x4	2026-11-04 16:02	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-160243-SEQ-ABD-G2-qwen	2026-11-04 16:02	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-090305-SEQ-AB-G1x-rj-sdpa	2026-11-04 09:03	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-235858-G-PORT	2026-11-04 23:58	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-064708-G-PORT	2026-11-05 06:47	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-082312-G-PORT	2026-11-05 08:23	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-090157-SEQ-AB-G1x-kimi-moe	2026-11-04 09:01	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261104-090658-SEQ-AB-G1x-dp-fab2d	2026-11-04 09:06	study	no reference	0	0	n	
+7	/data/aagarwal/regress/stage/20261105-070522-G-PORT	2026-11-05 07:05	study	no reference	0	0	n	
+7	/data/aagarwal/slurm/results/muxiters-ab-159914	2026-10-28 04:03	user-own	user's own work (memory: leave alone)	0	0	n	
+7	/data/aagarwal/slurm/results/sfpu-multitile-perf-164193	2026-10-30 01:18	user-own	user's own work (memory: leave alone)	0	0	n	
+7	/data/aagarwal/slurm/results/rot-skip-161650	2026-10-28 17:29	user-own	user's own work (memory: leave alone)	0	0	n	
+7	/data/aagarwal/slurm/results/sender-hot-161412	2026-10-28 14:55	user-own	user's own work (memory: leave alone)	0	0	n	
+7	/data/aagarwal/slurm/results/sfpu-percfg-perf-164166	2026-10-30 00:29	user-own	user's own work (memory: leave alone)	0	0	n	
+7	/data/aagarwal/slurm/results/sfpu-overhead-164270	2026-10-30 02:29	user-own	user's own work (memory: leave alone)	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-083011-SEQ-AB-GP-GL1P	2026-11-04 08:30	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-080058-G-L2-b	2026-11-04 08:00	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261105-084904-G-PORT-ORD	2026-11-05 08:49	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-083145-SEQ-NEW-GL1-GL2A	2026-11-04 08:31	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-055831-G-L2-b	2026-11-04 05:58	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-052922-G-L2-b	2026-11-04 05:29	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-052906-G-L2-b	2026-11-04 05:29	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-083225-SEQ-NEW-GL2B	2026-11-04 08:32	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-023815-G-PORT	2026-11-04 02:38	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261105-084915-G-PORT-ORD	2026-11-05 08:49	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-051125-SEQ-L1P-qwen	2026-11-04 05:11	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261105-085155-G-PORT-ORD	2026-11-05 08:51	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-083019-SEQ-NEW-GL0	2026-11-04 08:30	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-055832-G-L2-b	2026-11-04 05:58	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-052929-G-L2-b	2026-11-04 05:29	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-055909-G-L2-b	2026-11-04 05:59	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-235823-G-PORT	2026-11-04 23:58	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-080049-G-L2-b	2026-11-04 08:00	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-055910-G-L2-b	2026-11-04 05:59	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-004650-G-L0-b	2026-11-04 00:46	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-080059-G-PORT	2026-11-04 08:00	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261105-084914-G-PORT-ORD	2026-11-05 08:49	study	no reference	0	0	n	
+6	/data/aagarwal/regress/stage/20261104-080053-G-PORT	2026-11-04 08:00	study	no reference	0	0	n	
+6	/data/aagarwal/slurm/results/split-ab-161972	2026-10-28 20:52	user-own	user's own work (memory: leave alone)	0	0	n	
+6	/data/aagarwal/slurm/results/sanity2-162839	2026-10-29 06:50	user-own	user's own work (memory: leave alone)	0	0	n	
+6	/data/aagarwal/slurm/repro/run-155218	2026-10-26 20:28	user-own	user's own work (memory: leave alone)	0	0	n	
+6	/data/aagarwal/slurm/repro/run-155217	2026-10-26 20:25	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/frs-glx/jobs/176715	2026-11-05 04:03	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+5	/data/aagarwal/regress/stage/20261104-050410-G-L2-b	2026-11-04 05:04	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221549-G-L0-a	2026-11-03 22:15	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-004300-G-PORT	2026-11-04 00:43	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-004308-G-PORT	2026-11-04 00:43	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-235628-G-L0-a	2026-11-03 23:56	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221450-G-L0-a	2026-11-03 22:14	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-003302-G-P	2026-11-04 00:33	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-042240-G-L1	2026-11-04 04:22	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-000744-G-L0-a	2026-11-04 00:07	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-042248-G-L2-a	2026-11-04 04:22	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-231850-LB-X-a09fails	2026-11-03 23:18	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-225033-G-L0-mpiab	2026-11-03 22:50	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-232006-LB-X-a09fails	2026-11-03 23:20	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-035812-G-L2-b	2026-11-04 03:58	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-003228-G-L0-mpiab	2026-11-04 00:32	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221451-G-L0-b	2026-11-03 22:14	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-234855-G-L0-mpiab	2026-11-03 23:48	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-004308-G-PORT-lo	2026-11-04 00:43	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-004923-G-L1	2026-11-04 00:49	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221451-G-L1	2026-11-03 22:14	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221451-G-L1P	2026-11-03 22:14	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-004509-G-P	2026-11-04 00:45	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-051125-G-L1P	2026-11-04 05:11	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221452-G-L2-b	2026-11-03 22:14	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221549-G-L0-b	2026-11-03 22:15	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-232021-LB-X-a09fails	2026-11-03 23:20	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-020152-G-L1	2026-11-04 02:01	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-023216-G-L1P	2026-11-04 02:32	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-003219-G-L0-mpiab	2026-11-04 00:32	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-232013-LB-X-a09fails	2026-11-03 23:20	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221451-G-P	2026-11-03 22:14	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-225242-G-L0-mpiab	2026-11-03 22:52	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-223919-G-L0-a	2026-11-03 22:39	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261103-221452-G-L2-a	2026-11-03 22:14	study	no reference	0	0	n	
+5	/data/aagarwal/regress/stage/20261104-030053-G-L2-a	2026-11-04 03:00	study	no reference	0	0	n	
+5	/data/aagarwal/slurm/triage/158595-dit-halo-stateful-on	2026-10-27 21:41	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/results/scat-verify-161824	2026-10-28 19:18	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/results/sanity-162647	2026-10-29 06:19	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/results/skip-ab-161551	2026-10-28 15:35	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/results/hotbd-162142	2026-10-28 22:16	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/results/hostbd-162486	2026-10-29 02:24	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/results/sanity-local-163549	2026-10-29 16:23	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/repro/run-155180	2026-10-26 20:15	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/repro/run-155181	2026-10-26 20:16	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/repro/run-155141	2026-10-26 19:58	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/repro/run-155142	2026-10-26 20:03	user-own	user's own work (memory: leave alone)	0	0	n	
+5	/data/aagarwal/slurm/repro/run-155143	2026-10-26 20:07	user-own	user's own work (memory: leave alone)	0	0	n	
+4	/data/aagarwal/lb2/nodes/bh-lb-120-a07u28	2026-11-03 00:58	study	open ref (script/manifest path or TODO)	1	18	y	tt-metal/fabric_exp/consolidation/torus_xy_mock.sh
+4	/data/aagarwal/lb2/nodes/bh-lb-120-a04u24	2026-11-03 02:05	study	named in notes only	0	11	n	.claude/projects/-home-aagarwal-tt-metal/memory/fabric-drisc-offload-investigation.md; .claude/projects/-home-aagarwal-tt-metal/memory/tt-device-broker-quirks.md; tt-metal-mainline/.scratch/regress/manifest.yaml
+4	/data/aagarwal/lb2/nodes/bh-lb-120-a08u28	2026-11-03 02:03	study	named in notes only	0	10	n	.claude/projects/-home-aagarwal-tt-metal/memory/fabric-drisc-offload-investigation.md; tt-metal-mainline/.scratch/regress/manifest.yaml; tt-metal/fabric_exp/consolidation/FULLRING_MCAST_GAP.md
+4	/data/aagarwal/lb2/nodes/bh-lb-120-a04u28	2026-11-04 07:56	study	named in notes only	0	2	n	tt-metal/fabric_exp/consolidation/lb2.sbatch; tt-metal/fabric_exp/consolidation/lb2_run.sh
+4	/data/aagarwal/lb2/nodes/bh-lb-120-a04u32	2026-11-04 06:03	study	named in notes only	0	5	n	.claude/projects/-home-aagarwal-tt-metal/memory/lb2-slurm-harness.md; tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+4	/data/aagarwal/lb2/jobs/169521	2026-11-03 00:53	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md
+4	/data/aagarwal/lb2/jobs/171943	2026-11-04 01:20	study	open ref (script/manifest path or TODO)	0	4	y	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md; tt-metal/fabric_exp/consolidation/TODO.md
+4	/data/aagarwal/lb2/jobs/172651	2026-11-04 06:22	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+4	/data/aagarwal/slurm/triage/158579-stateful-on	2026-10-27 21:41	user-own	user's own work (memory: leave alone)	0	0	n	
+4	/data/aagarwal/slurm/results/conn-skip-161596	2026-10-28 16:00	user-own	user's own work (memory: leave alone)	0	0	n	
+4	/data/aagarwal/slurm/results/sfpu-check-159729	2026-10-28 01:56	user-own	user's own work (memory: leave alone)	0	0	n	
+4	/data/aagarwal/slurm/results/nbr-rate-160018	2026-10-28 05:37	user-own	user's own work (memory: leave alone)	0	0	n	
+4	/data/aagarwal/slurm/waterfall/steps	2026-10-29 01:29	user-own	user's own work (memory: leave alone)	0	0	n	
+3	/data/aagarwal/frs-glx/yamls/nsfix	2026-11-03 01:46	study	open ref (script/manifest path or TODO)	2	2	n	tt-metal/fabric_exp/consolidation/V4_NS_PRESETS.md; tt-metal/fabric_exp/consolidation/ns_glx.sbatch
+3	/data/aagarwal/frs-glx/jobs/155971	2026-11-04 09:35	study	named in notes only	0	7	n	.claude/projects/-home-aagarwal-tt-metal/memory/galaxy-slurm-harness.md; tt-metal/fabric_exp/RESULTS.md; tt-metal/fabric_exp/consolidation/slotalloc/trid_glx.sbatch
+3	/data/aagarwal/frs-glx/jobs/157804	2026-11-04 08:24	study	named in notes only	0	7	n	.claude/projects/-home-aagarwal-tt-metal/memory/galaxy-slurm-harness.md; tt-metal/fabric_exp/RESULTS.md; tt-metal/fabric_exp/consolidation/slotalloc/trid_glx.sbatch
+3	/data/aagarwal/frs-glx/jobs/157726	2026-11-04 08:24	study	named in notes only	0	8	n	.claude/projects/-home-aagarwal-tt-metal/memory/galaxy-slurm-harness.md; .claude/projects/-home-aagarwal-tt-metal/memory/project-router-consolidation.md; tt-metal/fabric_exp/RESULTS.md
+3	/data/aagarwal/frs-glx/jobs/155913	2026-11-04 09:35	study	named in notes only	0	1	n	tt-metal/fabric_exp/RESULTS.md
+3	/data/aagarwal/lb2/nodes/bh-lb-120-a06u24	2026-11-04 07:56	study	named in notes only	0	2	n	tt-metal/fabric_exp/consolidation/lb2.sbatch; tt-metal/fabric_exp/consolidation/lb2_run.sh
+3	/data/aagarwal/lb2/jobs/172650	2026-11-04 06:22	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+3	/data/aagarwal/lb2/jobs/172556	2026-11-04 05:59	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md
+3	/data/aagarwal/lb2/jobs/172810	2026-11-04 07:54	study	no reference	0	0	n	
+3	/data/aagarwal/slurm/results/send-detail-160024	2026-10-28 05:46	user-own	user's own work (memory: leave alone)	0	0	n	
+2	/data/aagarwal/lb2/jobs/172733	2026-11-04 06:57	study	named in notes only	0	1	n	tt-metal/fabric_exp/consolidation/SLOT_ALLOCATOR.md
+2	/data/aagarwal/slurm/results/kernsig-162540	2026-10-29 03:02	user-own	user's own work (memory: leave alone)	0	0	n	
+1	/data/aagarwal/lb2/locks/torus_xy	2026-11-03 01:51	study	open ref (script/manifest path or TODO)	2	2	y	tt-metal/fabric_exp/consolidation/LB2_HARNESS.md; tt-metal/fabric_exp/consolidation/TODO.md
+1	/data/aagarwal/lb2/nodes/bh-lb-120-a08u32	2026-11-04 07:54	study	no reference	0	0	n	
+1	/data/aagarwal/slurm/results/verify-ab-159774	2026-10-28 02:17	user-own	user's own work (memory: leave alone)	0	0	n	
+1	/data/aagarwal/slurm/results/verify-ab-159771	2026-10-28 02:17	user-own	user's own work (memory: leave alone)	0	0	n	
+1	/data/aagarwal/slurm/results/sfpu-overhead-164262	2026-10-30 02:08	user-own	user's own work (memory: leave alone)	0	0	n	
+1	/data/aagarwal/slurm/results/suite-totals-159995	2026-10-28 05:18	user-own	user's own work (memory: leave alone)	0	0	n	
+1	/data/aagarwal/slurm/results/suite-totals-159996	2026-10-28 05:18	user-own	user's own work (memory: leave alone)	0	0	n	
+1	/data/aagarwal/slurm/results/hostbd-162481	2026-10-29 02:06	user-own	user's own work (memory: leave alone)	0	0	n	
+1	/data/aagarwal/slurm/results/send-detail-160023	2026-10-28 05:44	user-own	user's own work (memory: leave alone)	0	0	n	

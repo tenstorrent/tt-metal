@@ -1,0 +1,18 @@
+== X5 on
+   NX1     :   0/ 48 iterations with a low router; low router-iterations 0/960
+   NXs     :   0/ 48 iterations with a low router; low router-iterations 0/960
+   SO1  C00:   0/ 48 iterations with a low router; low router-iterations 0/96; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SO1  C02:   0/ 48 iterations with a low router; low router-iterations 0/96; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+   SO2  C00:   0/ 48 iterations with a low router; low router-iterations 0/96; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SO2  C02:   0/ 48 iterations with a low router; low router-iterations 0/96; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+== X5 off
+   NX1     :   0/ 48 iterations with a low router; low router-iterations 0/960
+   NXs     :   0/ 48 iterations with a low router; low router-iterations 0/960
+   SO1  C00:   0/ 48 iterations with a low router; low router-iterations 0/96; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SO1  C02:   0/ 48 iterations with a low router; low router-iterations 0/96; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+   SO2  C00:   0/ 48 iterations with a low router; low router-iterations 0/96; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SO2  C02:   0/ 48 iterations with a low router; low router-iterations 0/96; c2/e5->E c3/e6 0/48; c2/e8->S c6/e11 0/48
+== A on
+   NX      :  37/ 96 iterations with a low router; low router-iterations 316/2880
+== A off
+   NX      :   0/ 96 iterations with a low router; low router-iterations 0/2880

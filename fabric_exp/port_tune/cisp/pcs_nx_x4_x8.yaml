@@ -1,0 +1,1926 @@
+# cisp slow-state check X4 (mk_flow_yamls.py): two outbound flows with placed sender cores, 8 repeats.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: X4SOdefC00R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC00R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC00R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC02R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC02R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC02R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC01R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 1]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC03R01
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 3]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC00R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC00R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC00R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC02R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC02R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC02R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC01R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 1]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC03R02
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 3]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC00R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC00R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC00R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC02R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC02R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC02R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC01R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 1]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC03R03
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 3]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC00R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC00R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC00R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC02R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC02R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC02R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC01R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 1]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC03R04
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 3]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC00R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC00R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC00R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC02R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC02R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC02R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC01R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 1]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC03R05
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 3]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC00R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC00R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC00R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC02R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC02R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC02R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC01R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 1]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC03R06
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 3]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC00R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC00R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC00R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC02R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC02R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC02R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC01R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 1]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC03R07
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 3]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC00R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC00R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC00R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 0]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 0]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC02R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOswapC02R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOfarC02R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 2]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 2]
+    core: [5, 2]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC01R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 1]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          E: 1
+  - device: [0, 1]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1
+- name: X4SOdefC03R08
+  benchmark_mode: true
+  sync: true
+  top_level_iterations: 3
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  senders:
+  - device: [0, 3]
+    core: [11, 8]
+    patterns:
+    - destination:
+        hops:
+          W: 1
+  - device: [0, 3]
+    core: [11, 7]
+    patterns:
+    - destination:
+        hops:
+          S: 1

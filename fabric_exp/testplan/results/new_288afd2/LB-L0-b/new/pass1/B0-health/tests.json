@@ -1,0 +1,32 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 3,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "test_system_health.xml"
+ ],
+ "tests": {
+  "Cluster::ReportIntermeshLinks": {
+   "file": "test_system_health.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.609
+  },
+  "Cluster::ReportSystemHealth": {
+   "file": "test_system_health.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "Cluster::TestMeshFullConnectivity": {
+   "file": "test_system_health.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  }
+ }
+}

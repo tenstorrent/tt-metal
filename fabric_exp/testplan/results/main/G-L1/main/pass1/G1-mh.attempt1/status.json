@@ -1,0 +1,44 @@
+{
+ "capped": false,
+ "ci": null,
+ "ci_timeout_s": 2400,
+ "duration_s": 20.0,
+ "end": "2026-11-04T01:58:51+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=5): MESH_DEVICE=SINGLE_BH bash tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/scripts/run_multi_host_ccl_tests.sh"
+ ],
+ "group": "G-L1",
+ "jit_cache": "/tmp/aagarwal-regress/171912/cache/main-main",
+ "junit_files": 1,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u08",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "171912",
+ "start": "2026-11-04T01:58:31+00:00",
+ "status": "FAIL",
+ "step": "G1-mh",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "timeout_note": null,
+ "timeout_s": 2400,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

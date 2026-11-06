@@ -1,0 +1,1 @@
+2026-11-04T04:10:59+00:00: results of this group from before CI=true was set (coordinator decision 2026-11-04) were moved to <step>.attemptN: they ran without CI=true, so CI-dependent pytest parametrization differed from GitHub Actions (e.g. largest-mesh-only). NOT_RUN records and .rerun / cross-host evidence were left in place.

@@ -1,0 +1,6 @@
+# config	label	form	timeout_s	env	yaml
+torus_z	tz_mesh_sanity	torus_z	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+torus_z	tz_multi_mesh	torus_z	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+torus_z	tz_torus_multi_mesh	torus_z	14400	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_multi_mesh.yaml
+torus_z_express	te_mesh_sanity	torus_z_express	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+torus_z_express	te_express	torus_z_express	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml

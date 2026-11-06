@@ -1,0 +1,18 @@
+Ring-jam rule cherry-picked onto 2fc06852f48 (df64d0ad677), two mock captures (base host 2fc06852f48, new host df64d0ad677), 49 configs:
+36 ('bh_ring', 'active_erisc', 16, 1)
+36 ('bh_ring_1erisc', 'subordinate_active_erisc', 16, 1)
+170 ('bytes', 0, 'addrs', 1)
+38 ('glx_1x32_ring', 'active_erisc', 16, 1)
+60 ('glx_ring', 'active_erisc', 16, 1)
+56 ADDR .LM2573                                                      srli a5,a5,0x11              -> srli a5,a5,0x14              visit_worker<0u> router_sender.hp
+53 ADDR .LM2567                                                      srli a5,a5,0x11              -> srli a5,a5,0x14              visit_worker<0u> router_sender.hp
+13 ADDR .LBB2350                                                     srli a2,a2,0x11              -> srli a2,a2,0x14              visit_worker<0u> router_sender.hp
+Streaming profiler (bh_2d_streaming, 80 router images, paired through the JIT cache):
+40 ('subordinate_active_erisc', 0, 3)
+40 ('active_erisc', 0, 3)
+40 lui t5,0x18028               -> lui t5,0x1802c               ring_write_word kernel_profiler_streaming.hpp:202
+40 lui t5,0x10028               -> lui t5,0x1002c               ring_write_word kernel_profiler_streaming.hpp:202
+40 lui t4,0x20028               -> lui t4,0x2002c               ring_write_word kernel_profiler_streaming.hpp:202
+40 lui t5,0x1802c               -> lui t5,0x18028               ring_write_word kernel_profiler_streaming.hpp:202
+40 lui t6,0x1002c               -> lui t6,0x10028               ring_write_word kernel_profiler_streaming.hpp:202
+40 lui t4,0x2002c               -> lui t4,0x20028               ring_write_word kernel_profiler_streaming.hpp:202

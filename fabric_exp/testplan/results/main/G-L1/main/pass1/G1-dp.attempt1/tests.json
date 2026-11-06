@@ -1,0 +1,246 @@
+{
+ "counts": {
+  "FAIL": 9,
+  "KNOWN_FAIL": 0,
+  "PASS": 30,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d[blackhole-rm-in-group-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d[blackhole-rm-production-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d[blackhole-tile-in-group-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d[blackhole-tile-production-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d[blackhole-tile_bfp8-in-group-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d[blackhole-tile_bfp8-production-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_back_to_back[blackhole-rm-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_back_to_back[blackhole-tile-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_next_op_sees_every_token[blackhole-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_overflow[blackhole-rm-in-group-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_overflow[blackhole-rm-production-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_overflow[blackhole-tile-in-group-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_overflow[blackhole-tile-production-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_overlapped_skew[blackhole-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_partial_last_tile[blackhole-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_relaunch[blackhole-emb2880-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_relaunch[blackhole-emb7168-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_unaligned_emb_dim[blackhole-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_unsupported_dtype[blackhole-bfloat4_b-tile-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_unsupported_dtype[blackhole-float32-rm-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_combine_fabric2d::test_combine_fabric2d_unsupported_dtype[blackhole-float32-tile-fabric2d-torus-xy-8x4-2link]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-glm-53-8x4-balanced]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-glm-53-8x4-dg0only-balanced]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-glm-53-8x4-hot-expert]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-balanced]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-dg0only-balanced]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-dg0only-hot-expert]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-hot-expert]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-real-L11c9]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-real-L45c3]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-glm-53-8x4-balanced]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-glm-53-8x4-dg0only-balanced]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-glm-53-8x4-hot-expert]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-kimi-k27-8x4-balanced]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-kimi-k27-8x4-dg0only-balanced]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-kimi-k27-8x4-dg0only-hot-expert]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-kimi-k27-8x4-hot-expert]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-kimi-k27-8x4-real-L11c9]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap_perf[blackhole-kimi-k27-8x4-real-L45c3]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  }
+ }
+}

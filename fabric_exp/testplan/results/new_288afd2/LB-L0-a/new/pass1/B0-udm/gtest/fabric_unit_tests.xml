@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="8" failures="0" disabled="0" errors="0" time="12.514" timestamp="2026-11-04T08:06:16.120" name="AllTests">
+  <testsuite name="Fabric2DUDMModeFixture" tests="8" failures="0" disabled="0" skipped="0" errors="0" time="7.886" timestamp="2026-11-04T08:06:20.595">
+    <testcase name="TestUDMFabricUnicastWriteEast" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="751" status="run" result="completed" time="0.956" timestamp="2026-11-04T08:06:20.595" classname="Fabric2DUDMModeFixture" />
+    <testcase name="TestUDMFabricUnicastWriteWest" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="754" status="run" result="completed" time="0.971" timestamp="2026-11-04T08:06:21.552" classname="Fabric2DUDMModeFixture" />
+    <testcase name="TestUDMFabricUnicastInlineWriteEast" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="757" status="run" result="completed" time="0.907" timestamp="2026-11-04T08:06:22.524" classname="Fabric2DUDMModeFixture" />
+    <testcase name="TestUDMFabricUnicastInlineWriteWest" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="760" status="run" result="completed" time="0.909" timestamp="2026-11-04T08:06:23.431" classname="Fabric2DUDMModeFixture" />
+    <testcase name="TestUDMFabricUnicastAtomicIncEast" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="763" status="run" result="completed" time="0.901" timestamp="2026-11-04T08:06:24.341" classname="Fabric2DUDMModeFixture" />
+    <testcase name="TestUDMFabricUnicastAtomicIncWest" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="766" status="run" result="completed" time="0.917" timestamp="2026-11-04T08:06:25.242" classname="Fabric2DUDMModeFixture" />
+    <testcase name="TestUDMFabricReadEast" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="769" status="run" result="completed" time="1.153" timestamp="2026-11-04T08:06:26.160" classname="Fabric2DUDMModeFixture" />
+    <testcase name="TestUDMFabricReadWest" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp" line="772" status="run" result="completed" time="1.169" timestamp="2026-11-04T08:06:27.313" classname="Fabric2DUDMModeFixture" />
+  </testsuite>
+</testsuites>

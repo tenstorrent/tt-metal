@@ -1,0 +1,57 @@
+# PR perf refresh, Galaxy 200G (user, 2026-11-05): the lead rows' packet-size sweep for the % of wire chart:
+# glx_sweep_mesh.yaml's GlxSweep1HopEW (2D) and glx_sweep_linear.yaml's GlxSweepLinear1HopEW (1D), unicast write,
+# 256-4352 B, 200,000 packets, one link.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxSweep1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: &id001
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxSweepLinear1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: *id001
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

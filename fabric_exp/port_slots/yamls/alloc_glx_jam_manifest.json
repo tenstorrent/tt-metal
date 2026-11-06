@@ -1,0 +1,6 @@
+{
+ "frgval": {"yaml": "fabric_exp/galaxy/frgap/glx_frg_val.yaml", "tests": 10, "ranks": 1, "env": ""},
+ "frgnsrx": {"yaml": "fabric_exp/galaxy/frgap/glx_frg_nsrx.yaml", "tests": 3, "ranks": 1, "env": ""},
+ "frgew": {"yaml": "fabric_exp/galaxy/frgap/glx_frg_ew.yaml", "tests": 1, "ranks": 1, "env": ""},
+ "frgshort4k": {"yaml": "fabric_exp/galaxy/frgap/glx_frg_short4k.yaml", "tests": 2, "ranks": 1, "env": ""}
+}

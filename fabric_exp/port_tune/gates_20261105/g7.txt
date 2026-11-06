@@ -1,0 +1,22 @@
+539cb2a8434 fabric builder: the TRID allocator takes one arch-neutral flag, credit_each_slot
+4942 builds over 52 cases; HEAD 80118e29656
+compiled /home/aagarwal/tt-metal-gate-80118 at 80118e29656 (uncommitted diff md5 d41d8cd9)
+built 4942/4942 into /home/aagarwal/.tt-metal-gate-80118-cov/builds/at_80118e29656
+4942 builds over 52 cases; HEAD 539cb2a8434
+compiled /home/aagarwal/tt-metal-gate-bisect at 539cb2a8434 (uncommitted diff md5 d41d8cd9)
+built 4942/4942 into /home/aagarwal/.tt-metal-gate-80118-cov/builds/at_539cb2a8434
+glx_1x32_ring            router    identical    76  differ    0
+glx_2d                   router    identical   168  differ    0
+glx_express              router    identical   216  differ    0
+glx_express_1erisc       router    identical   108  differ    0
+glx_express_ew           router    identical   260  differ    0
+glx_ring                 router    identical   120  differ    0
+glx_torus                router    identical   120  differ    0
+glxz_mesh                router    identical   108  differ    0
+glxz_mesh_novc           router    identical   108  differ    0
+wh_t3k_line              router    identical    28  differ    0
+wh_t3k_mesh              router    identical    36  differ    0
+wh_t3k_ring              router    identical    28  differ    0
+wh_t3k_ubench_2x2        router    identical    28  differ    0
+totals: {'router differ': 0, 'router identical': 4942}
+shared 4942  identical 4942  differ 0  only in at_80118e29656 0  only in at_539cb2a8434 0

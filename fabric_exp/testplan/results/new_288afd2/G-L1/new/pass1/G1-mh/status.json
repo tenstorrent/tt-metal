@@ -1,0 +1,15 @@
+{
+ "ci": null,
+ "duration_s": 0,
+ "end": "2026-11-04T09:32:53+00:00",
+ "group": "G-L1",
+ "label": "new_288afd2",
+ "node": "bh-glx-110-a06u02",
+ "pass": 1,
+ "rc": null,
+ "reason": "NOT RUN: on main d2bd12f MESH_DEVICE=SINGLE_BH selects 0 of 78 tests (job 171912: 'collected 78 items / 78 deselected / 0 selected', pytest rc 5); the suite has no _8x4 cases",
+ "router": "new",
+ "start": "2026-11-04T09:32:53+00:00",
+ "status": "NOT_RUN",
+ "step": "G1-mh"
+}

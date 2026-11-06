@@ -1,0 +1,74 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 9,
+  "PERF_WINDOW": 0,
+  "SKIP": 1
+ },
+ "files": [
+  "pytest_1888332_1793781777600137078_20261104_084257.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast[blackhole-True-device_params0-1-30-15-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "Skipping trace mode in slow dispatch",
+   "status": "SKIP",
+   "time": 10.927
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_auto_chunk[blackhole-True-1-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED-device_params0]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 25.197
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_host_iter_stamped_chunks[blackhole-True-device_params0-2-1024-8-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.864
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_loop[blackhole-True-device_params0-1-100-DataType.BFLOAT16-Layout.TILE-4-2-0-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 25.289
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_loop[blackhole-True-device_params0-2-100-DataType.BFLOAT16-Layout.TILE-4-2-0-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.932
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_remainder_chunk[blackhole-True-4352-2-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED-device_params0]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.81
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d[blackhole-True-0-0-mesh_device0-device_params0]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.195
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d[blackhole-True-0-2-mesh_device0-device_params0]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.371
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d[blackhole-True-4-2-mesh_device0-device_params0]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.828
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d[blackhole-True-7-3-mesh_device0-device_params0]": {
+   "file": "pytest_1888332_1793781777600137078_20261104_084257.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.415
+  }
+ }
+}

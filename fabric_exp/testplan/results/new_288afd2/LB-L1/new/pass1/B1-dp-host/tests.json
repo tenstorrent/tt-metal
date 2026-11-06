@@ -1,0 +1,866 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 142,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_2715090_1793784198775617721_20261104_092318.xml"
+ ],
+ "tests": {
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[61-4-0-expected9]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[61-4-1-expected10]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.196
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-1-0-expected0]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.189
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-2-0-expected1]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-3-0-expected2]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.208
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-4-0-expected3]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-4-1-expected8]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-5-0-expected4]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-6-0-expected5]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.196
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-7-0-expected6]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.192
+  },
+  "models.demos.common.prefill.tests.test_layer_split::test_even_split_gives_the_remainder_to_the_last_ranks[78-8-0-expected7]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_batched_decode_rejects_a_single_chunk_record": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.188
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_batched_layout_is_prefill_batch_metadata": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_batched_layout_rejects_bad_counts": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.188
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_decode_ignores_trailing_words_and_rejects_short": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.206
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_encoder_rejects_an_empty_forward": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_metadata_size_bytes": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.201
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_pack_forward_tokens[starts0]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.201
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_pack_forward_tokens[starts1]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.189
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_pack_forward_tokens[starts2]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.19
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_packed_forward_capabilities_name_every_flag": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_packed_forward_refusals": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_pad_chunks": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_roundtrip[1]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_roundtrip[2]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.195
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_roundtrip[3]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_roundtrip[4]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_roundtrip[5]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_roundtrip[6]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_roundtrip[7]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_roundtrip[8]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-1-16]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-1-1]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-1-32]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-1-3]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-1-8]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-2-16]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-2-1]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-2-32]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-2-3]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_sentinels_fill_every_word[-2-8]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_single_chunk_is_todays_metadata": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_unpadded_chunk_takes_the_forward_layout": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.19
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_accepts[all_full]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_accepts[empty_any_slot]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.191
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_accepts[empty_tail]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_accepts[mid_slab]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.208
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_accepts[partial_before_full]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_accepts[partial_first]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_accepts[partial_last]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_accepts[single]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[all_empty]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[cache_overflow]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[empty_not_tail]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.189
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[end_before_start]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[gap_in_run]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[misaligned_start]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[more_than_a_chunk]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[negative_start]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[overlap_at_cache_end]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[overlap_not_at_cache_end]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[partial_not_last]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[repeated_chunk]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[shutdown_sentinel]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.218
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[slot_out_of_range]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[split_run]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_chunk::test_validate_rejects[wrong_count]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.184
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_dflash_pcc::test_producer_draft_pcc_uses_model_rope_layout_and_rejects_corruption[deepseek_v3_d_p]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.215
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_dflash_pcc::test_producer_draft_pcc_uses_model_rope_layout_and_rejects_corruption[gemma4_d_p]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.214
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_import_config_defers_budget_check": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_payload": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.189
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_rejects_burst": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_respects_max_requests[random]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_respects_max_requests[round_robin]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule[2-random]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.194
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule[2-round_robin]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.195
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule[4-random]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.193
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule[4-round_robin]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.192
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule_fills_forwards[2-random]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule_fills_forwards[2-round_robin]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule_fills_forwards[3-random]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule_fills_forwards[3-round_robin]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule_fills_forwards[4-random]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.188
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule_fills_forwards[4-round_robin]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule_fills_forwards[8-random]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.189
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_packed_schedule_fills_forwards[8-round_robin]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.189
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_resolve_slot_prompts_keeps_slot_lengths": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_round_robin_rotates_first_slot": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_single_chunk_payload_unchanged[0]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.188
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_single_chunk_payload_unchanged[2048]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_single_chunk_payload_unchanged[2144]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_single_chunk_payload_unchanged[3584]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_single_chunk_schedule_unchanged[random_gap_burst_mid_multiturn]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_single_chunk_schedule_unchanged[random_multiturn]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_single_chunk_schedule_unchanged[round_robin_burst_mid]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_single_chunk_shutdown_unchanged": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_slot_lengths_from_env": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_forwards::test_slot_lengths_next_turn_needs_whole_chunks": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_decode_packed_scaled_fp8_kv_chunk_with_page_padding": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.195
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_decode_row_major_fp8_kv_chunk_with_page_padding": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.204
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_decode_row_major_kv_chunk[bfloat16]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.192
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_decode_row_major_kv_chunk[fp8_e4m3]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.203
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_decode_unknown_kv_chunk_rejected": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.183
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_pcc_window_caps_prefix_golden_at_its_length": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_pcc_window_follows_capture_rows[tail]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.188
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_pcc_window_follows_capture_rows[truncated-request]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_pcc_window_follows_capture_rows[unaligned-start]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_pcc_window_rejects_golden_len_cap_on_windowed_golden": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_pcc_window_rejects_request_short_of_capture": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.196
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_producer_gqa_pcc_reads_named_heads_and_rotates_only_keys[hf]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.439
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_producer_gqa_pcc_reads_named_heads_and_rotates_only_keys[meta]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.447
+  },
+  "models.demos.common.prefill.tests.test_prefill_producer_kv_decode::test_producer_llama_gqa_rejects_missing_layer": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.458
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_a_refused_forward_shuts_down_the_next_rank": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_a_wrong_chunk_output_shuts_down_the_next_rank[False-None-returned no activation]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.19
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_a_wrong_chunk_output_shuts_down_the_next_rank[True-returns1-the last rank's prefill_chunk returned]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_first_rank_refuses_a_bad_forward": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_index_endpoints_use_the_chunk_metadata": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.195
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_layer_ack_fifo_holds_the_warm_pass[False-True-4096]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.188
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_layer_ack_fifo_holds_the_warm_pass[True-False-4096]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_layer_ack_fifo_holds_the_warm_pass[True-True-16384]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_layer_ack_record_size[1-0-12]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.188
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_layer_ack_record_size[1-1-16]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_layer_ack_record_size[4-0-12]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.189
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_layer_ack_record_size[4-1-12]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_per_chunk_forwards_run_each_chunk_once": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.common.prefill.tests.test_prefill_runner_forwards::test_request_id_counts_forwards": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_bf16_sparse_kv_contract_retains_combined_cache": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.187
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_homogeneous_mla_kv_cache_does_not_require_scaled_geometry": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_index_cache_contract_remains_tiled_bfloat8_b": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_mla_kv_cache_allocation_uses_config_geometry": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_mla_kv_cache_contract_covers_dense_and_sparse_physical_formats": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_mla_kv_cache_geometry_is_derived_from_config": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_mla_kv_cache_pack_rejects_inputs_that_disagree_with_config": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_scaled_fp8_packed_host_codec_preserves_mixed_fields": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_scaled_fp8_packing_preserves_logical_kvpe_debug_intermediate": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_scaled_fp8_sparse_kv_contract_owns_one_mixed_format_cache": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_scaled_fp8_sparse_kv_contract_rejects_invalid_packed_storage[packed0-cache must use]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_scaled_fp8_sparse_kv_contract_rejects_invalid_packed_storage[packed1-cache width must be 656]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_scaled_fp8_sparse_kv_contract_rejects_invalid_packed_storage[packed2-ROW_MAJOR]": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_scaled_mla_kv_cache_geometry_rejects_unaligned_rope_offset": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.185
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_sparse_kv_cache_contract::test_synthetic_scaled_fp8_host_codec_uses_geometry_offsets": {
+   "file": "pytest_2715090_1793784198775617721_20261104_092318.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.186
+  }
+ }
+}

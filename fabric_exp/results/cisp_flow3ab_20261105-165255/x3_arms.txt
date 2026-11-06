@@ -1,0 +1,20 @@
+== X3 on
+   Lone C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48
+   Lone C02:   0/ 48 iterations with a low router; c2/e5->E c3/e6 0/48
+   RR   C02:   0/ 48 iterations with a low router; c0/e7->E c2/e4 0/48; c3/e6->W c2/e5 0/48
+   SO   C00:   5/ 48 iterations with a low router; c1/e5->E c0/e6 5/48; c1/e8->S c5/e11 0/48
+   SO   C02:   6/ 48 iterations with a low router; c2/e5->E c3/e6 6/48; c2/e8->S c6/e11 0/48
+   SR   C00:   0/ 48 iterations with a low router; c0/e6->W c1/e5 0/48; c1/e8->S c5/e11 0/48
+   SR   C02:   0/ 48 iterations with a low router; c2/e8->S c6/e11 0/48; c3/e6->W c2/e5 0/48
+== X3 off
+   Lone C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48
+   Lone C02:   0/ 48 iterations with a low router; c2/e5->E c3/e6 0/48
+   RR   C02:   0/ 48 iterations with a low router; c0/e7->E c2/e4 0/48; c3/e6->W c2/e5 0/48
+   SO   C00:   0/ 48 iterations with a low router; c1/e5->E c0/e6 0/48; c1/e8->S c5/e11 0/48
+   SO   C02:   1/ 48 iterations with a low router; c2/e5->E c3/e6 1/48; c2/e8->S c6/e11 0/48
+   SR   C00:   0/ 48 iterations with a low router; c0/e6->W c1/e5 0/48; c1/e8->S c5/e11 0/48
+   SR   C02:   0/ 48 iterations with a low router; c2/e8->S c6/e11 0/48; c3/e6->W c2/e5 0/48
+== A on
+   NX      :  42/ 96 iterations with a low router; c0/e4->W c1/e7 3/48; c0/e5->E c2/e6 2/48; c0/e6->W c1/e5 5/96; c0/e7->E c2/e4 10/96; c0/e8->S c4/e11 7/96; c0/e10->S c4/e9 12/48; c1/e5->E c0/e6 7/96; c1/e7->E c0/e4 13/48; c1/e8->S c5/e11 3/96; c1/e10->S c5/e9 7/48; c2/e4->W c0/e7 7/96; c2/e5->E c3/e6 9/96; c2/e6->W c0/e5 8/48; c2/e7->E c3/e4 7/48; c2/e8->S c6/e11 11/96; c2/e10->S c6/e9 7/48; c3/e4->W c2/e7 4/48; c3/e6->W c2/e5 8/96; c3/e8->S c7/e11 6/96; c3/e10->S c7/e9 8/48; c4/e4->W c5/e7 9/96; c4/e5->E c6/e6 8/96; c4/e6->W c5/e5 5/48; c4/e7->E c6/e4 4/48; c4/e9->N c0/e10 12/48; c4/e11->N c0/e8 10/96; c5/e5->E c4/e6 8/48; c5/e7->E c4/e4 5/96; c5/e9->N c1/e10 9/48; c5/e11->N c1/e8 8/96; c6/e4->W c4/e7 6/48; c6/e5->E c7/e6 4/48; c6/e6->W c4/e5 9/96; c6/e7->E c7/e4 8/96; c6/e9->N c2/e10 5/48; c6/e11->N c2/e8 14/96; c7/e4->W c6/e7 9/96; c7/e6->W c6/e5 11/48; c7/e9->N c3/e10 8/48; c7/e11->N c3/e8 3/96
+== A off
+   NX      :   0/ 96 iterations with a low router; c0/e4->W c1/e7 0/48; c0/e5->E c2/e6 0/48; c0/e6->W c1/e5 0/96; c0/e7->E c2/e4 0/96; c0/e8->S c4/e11 0/96; c0/e10->S c4/e9 0/48; c1/e5->E c0/e6 0/96; c1/e7->E c0/e4 0/48; c1/e8->S c5/e11 0/96; c1/e10->S c5/e9 0/48; c2/e4->W c0/e7 0/96; c2/e5->E c3/e6 0/96; c2/e6->W c0/e5 0/48; c2/e7->E c3/e4 0/48; c2/e8->S c6/e11 0/96; c2/e10->S c6/e9 0/48; c3/e4->W c2/e7 0/48; c3/e6->W c2/e5 0/96; c3/e8->S c7/e11 0/96; c3/e10->S c7/e9 0/48; c4/e4->W c5/e7 0/96; c4/e5->E c6/e6 0/96; c4/e6->W c5/e5 0/48; c4/e7->E c6/e4 0/48; c4/e9->N c0/e10 0/48; c4/e11->N c0/e8 0/96; c5/e5->E c4/e6 0/48; c5/e7->E c4/e4 0/96; c5/e9->N c1/e10 0/48; c5/e11->N c1/e8 0/96; c6/e4->W c4/e7 0/48; c6/e5->E c7/e6 0/48; c6/e6->W c4/e5 0/96; c6/e7->E c7/e4 0/96; c6/e9->N c2/e10 0/48; c6/e11->N c2/e8 0/96; c7/e4->W c6/e7 0/96; c7/e6->W c6/e5 0/48; c7/e9->N c3/e10 0/48; c7/e11->N c3/e8 0/96

@@ -1,0 +1,20 @@
+job 172798 on bh-lb-120-a07u28
+command: n=0; for f in fabric_exp/results/kn[ab]_A_* fabric_exp/results/kn[ab]_D_*; do [ -e "$f" ] && touch "$f" && n=$((n+1)); done; echo "touched $n A+D result files"
+summary: rc=0 hung=0 node=bh-lb-120-a07u28 job=172798 post=none start=2026-11-04 07:53:31 end=2026-11-04T07:53:41Z
+[lb2 07:53:05 +0s] node=bh-lb-120-a07u28 job=172798 mode=run start=2026-11-04T07:53:05Z timeout=600s
+[lb2 07:53:05 +0s] command: n=0; for f in fabric_exp/results/kn[ab]_A_* fabric_exp/results/kn[ab]_D_*; do [ -e "$f" ] && touch "$f" && n=$((n+1)); done; echo "touched $n A+D result files"
+[lb2 07:53:05 +0s] stage src-20261104-061644 (full full-20261104-020334), staged 2026-11-04T06:20:48Z
+[lb2 07:53:05 +0s] busy check: clear
+[lb2 07:53:05 +0s] space: 921 GB free on /home
+[lb2 07:53:12 +7s] verify: 30391 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:14 +9s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:23 +18s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:24 +19s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:25 +20s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:30 +25s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 07:53:31 +26s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 07:53:31 +26s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 581 GB available
+[lb2 07:53:32 +27s] run: n=0; for f in fabric_exp/results/kn[ab]_A_* fabric_exp/results/kn[ab]_D_*; do [ -e "$f" ] && touch "$f" && n=$((n+1)); done; echo "touched $n A+D result files"
+[lb2 07:53:37 +32s] command exit 0
+[lb2 07:53:41 +36s] copied back: 150 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/172798 (MANIFEST.tsv)
+[lb2 07:53:41 +36s] done: rc 0, hung 0; 921 GB free on /home

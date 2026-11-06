@@ -1,0 +1,37 @@
+== job E (cycles/packet; flag *: |d| > max(spread, 0.5))
+-- rg_s583 vc1: router images 48 distinct, 30 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    174.3   -0.9    0.0 *
+   AuVC1fab1Hop                4352    193.3    193.2    193.5   +0.2    0.1
+   AuVC1fab2Hop                 256    425.8    425.7    424.5   -1.2    0.1 *
+   AuVC1fab2Hop                4352    478.6    478.8    477.7   -1.0    0.2 *
+-- rg_s673 vc1: router images 48 distinct, 30 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    173.7   -1.5    0.0 *
+   AuVC1fab1Hop                4352    193.3    193.2    192.9   -0.3    0.1
+   AuVC1fab2Hop                 256    425.8    425.7    426.2   +0.4    0.1
+   AuVC1fab2Hop                4352    478.6    478.8    480.5   +1.9    0.2 *
+-- rg_d414 vc1: router images 48 distinct, 18 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    175.3   +0.1    0.0
+   AuVC1fab1Hop                4352    193.3    193.2    193.2   -0.0    0.1
+   AuVC1fab2Hop                 256    425.8    425.7    430.1   +4.3    0.1 *
+   AuVC1fab2Hop                4352    478.6    478.8    482.9   +4.2    0.2 *
+-- kim_r713 two: router images 48 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC2fab2D1Hop               256    147.9    147.9    147.4   -0.5    0.0 *
+   AuVC2fab2D1Hop              4352    149.9    149.9    149.2   -0.7    0.0 *
+   AuVC2fab2D3Hop               256    265.0    264.9    264.8   -0.2    0.1
+   AuVC2fab2D3Hop              4352    293.9    293.9    293.7   -0.2    0.0
+-- kim_r713 one: router images 28 distinct, 28 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   Au1eVC2fab2D1Hop             256    268.0    268.0    266.0   -2.0    0.0 *
+   Au1eVC2fab2D1Hop            4352    268.5    268.5    266.5   -2.0    0.0 *
+   Au1eVC2fab2D3Hop             256    359.1    359.1    357.7   -1.4    0.0 *
+   Au1eVC2fab2D3Hop            4352    380.8    380.8    379.1   -1.7    0.0 *
+-- kim_r713 vc1: router images 48 distinct, 12 not in the base runs'
+   row                            B  base b0  base b1      arm      d spread
+   AuVC1fab1Hop                 256    175.2    175.2    175.2   -0.0    0.0
+   AuVC1fab1Hop                4352    193.3    193.2    193.2   -0.0    0.1
+   AuVC1fab2Hop                 256    425.8    425.7    425.8   +0.0    0.1
+   AuVC1fab2Hop                4352    478.6    478.8    478.7   -0.0    0.2

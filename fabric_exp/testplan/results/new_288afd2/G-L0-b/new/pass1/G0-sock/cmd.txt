@@ -1,0 +1,1 @@
+tt-run --bare --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_single_galaxy_4x2_ring_4stage_ring_mesh_graph_descriptor.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline

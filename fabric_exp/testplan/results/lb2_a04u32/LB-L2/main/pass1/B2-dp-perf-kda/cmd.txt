@@ -1,0 +1,3 @@
+KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP1" -vvv --tb=short
+KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "linear" -vvv --tb=short
+pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k loudbox -vvv --tb=short

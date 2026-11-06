@@ -1,0 +1,54 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 65,
+  "filtered": true,
+  "list": "demo_sp_release_tests.yaml",
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 3900,
+ "data_inodes_at_submit": "3279117",
+ "data_inodes_free": 6190324,
+ "deviation": "fabric_2d bucket narrowed to test_attention_block (-k), run alone; run_isolated_unit_tests.py --no-reset (deviation for main and new): its reset/validation/smoke preflight validates the single-Galaxy XY-torus cabling and fails on every quad-cabled 110-a node (job 172241, ENV like G0-health-cv); the job still resets at start and after any failing step",
+ "duration_s": 85.1,
+ "end": "2026-11-04T09:22:42+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --no-reset --pytest-arg=-k --pytest-arg=test_attention_block --bucket fabric_2d"
+ ],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172882/cache/new_288afd2-new",
+ "junit_files": 0,
+ "label": "new_288afd2",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a06u20",
+ "note": "the runner sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 for every bucket (as in CI); job 172397 (fabric_2d in one process): pos 127/511 TT_FATAL 'Per-core-allocated buffer has no shard on core 9-8' (host-side allocator/program check), pos 1023 aborted at GC (std::system_error Invalid argument)",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172882",
+ "start": "2026-11-04T09:21:17+00:00",
+ "status": "KNOWN_FAIL",
+ "step": "G2-dsb1-attn",
+ "step_env": null,
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 2,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "tests_from_log": true,
+ "timeout_note": null,
+ "timeout_s": 3900,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

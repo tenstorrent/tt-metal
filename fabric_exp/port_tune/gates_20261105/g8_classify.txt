@@ -1,0 +1,20 @@
+arch BH NUM_ACTIVE_ERISCS 1 CHANGED: 700
+arch BH NUM_ACTIVE_ERISCS 2 identical: 4122
+arch WH NUM_ACTIVE_ERISCS 1 identical: 120
+missing: 0
+
+one-ERISC case           largest code 539cb -> de8a (B, of 26624)
+bh_1d_1erisc               9196 ->   8968  (-228, 33.7%)
+bh_1d_mux                  8380 ->   8332  (-48, 31.3%)
+bh_2d_1erisc              10820 ->  10536  (-284, 39.6%)
+bh_2d_1erisc_streaming    11860 ->  11576  (-284, 43.5%)
+bh_2d_mux                  8700 ->   8480  (-220, 31.9%)
+bh_2d_udm_gtest           10432 ->  10192  (-240, 38.3%)
+bh_2d_vc2_1erisc          13540 ->  13164  (-376, 49.4%)
+bh_neighbor_1erisc         6992 ->   6956  (-36, 26.1%)
+bh_ring_1erisc             9300 ->   8996  (-304, 33.8%)
+bh_ring_mux                8316 ->   8160  (-156, 30.6%)
+bh_torus_1erisc           11196 ->  10816  (-380, 40.6%)
+bh_vc1_1erisc             17504 ->  16924  (-580, 63.6%)
+glx2_mesh_novc_1erisc     14916 ->  14420  (-496, 54.2%)
+glx_express_1erisc        13320 ->  12848  (-472, 48.3%)

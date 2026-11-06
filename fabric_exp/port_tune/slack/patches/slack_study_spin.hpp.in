@@ -1,0 +1,26 @@
+// LOCAL slack study (fabric_exp/port_tune/slack/NOTES.md); never committed. A fixed busy-wait per packet on one side,
+// to measure each ERISC's headroom at saturation: tx after each packet sent over Ethernet (E0), rx after each packet
+// received and handled (E1). Each arm's runtime root holds its own copy with its values; 0 compiles the spin out.
+#pragma once
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "risc_common.h"
+
+namespace slack_study {
+
+constexpr uint32_t tx_spin_cycles = @TX@;
+constexpr uint32_t rx_spin_cycles = @RX@;
+
+// Busy-waits until the RISC wall clock's low word (get_timestamp_32b) has advanced by `cycles`.
+template <uint32_t cycles>
+FORCE_INLINE void spin() {
+    if constexpr (cycles > 0) {
+        const uint32_t start = get_timestamp_32b();
+        while (get_timestamp_32b() - start < cycles) {
+        }
+    }
+}
+
+}  // namespace slack_study

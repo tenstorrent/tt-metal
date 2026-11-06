@@ -1,0 +1,75 @@
+# Slot-need sweep (SLOT_ALLOCATOR.md section 12; mk_knee_yamls.py): SlsLin3HopEW, SlsLinRowMerge from
+# fabric_exp/slotstudy/sls_1d_p150.yaml at [256, 1024, 4352, 8704] B packets, 8704 B slots.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: SlsLin3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 8704
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 4352
+    - 8704
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: SlsLinRowMerge
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 8704
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 4352
+    - 8704
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+  - device:
+    - 0
+    - 2
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3

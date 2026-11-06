@@ -1,0 +1,38 @@
+A: 1820 router ELFs
+B: 1820 router ELFs
+## -O3: code bytes (largest per ERISC; E0+E1 vs 26624) and least free stack bytes
+case                     |        A E0  E1  E0+E1  free E0  E1 |        B E0  E1  E0+E1  free E0  E1
+bh_1d                    |   7816   6284  14100    2036   4496 |   7816   6284  14100    2036   4496
+bh_1d_1erisc             |      -   9196   9196       -   4328 |      -   8968   8968       -   4312
+bh_1d_mux                |      -   8380   8380       -   4376 |      -   8332   8332       -   4376
+bh_2d                    |   9212   6368  15580    1892   4448 |   9212   6368  15580    1892   4448
+bh_2d_1erisc             |      -  10820  10820       -   4120 |      -  10536  10536       -   4104
+bh_2d_1erisc_streaming   |      -  11860  11860       -   4040 |      -  11576  11576       -   4024
+bh_2d_mux                |      -   8700   8700       -   4216 |      -   8480   8480       -   4216
+bh_2d_trim               |   9492   6676  16168    1892   4448 |   9492   6676  16168    1892   4448
+bh_2d_vc2                |  10272   7824  18096    1796   4416 |  10272   7824  18096    1796   4416
+bh_2d_vc2_1erisc         |      -  13540  13540       -   4024 |      -  13164  13164       -   3992
+bh_neighbor              |   6352   5140  11492    2164   4560 |   6352   5140  11492    2164   4560
+bh_neighbor_1erisc       |      -   6992   6992       -   4440 |      -   6956   6956       -   4440
+bh_ring                  |   8068   6048  14116    2020   4496 |   8068   6048  14116    2020   4496
+bh_ring_1erisc           |      -   9320   9320       -   4312 |      -   9048   9048       -   4312
+bh_ring_mux              |      -   8336   8336       -   4376 |      -   8176   8176       -   4376
+bh_torus                 |   9768   6328  16096    1876   4448 |   9768   6328  16096    1876   4448
+bh_torus_1erisc          |      -  11244  11244       -   4104 |      -  10992  10992       -   4104
+bh_torus_vc2             |  10836   7824  18660    1796   4416 |  10836   7824  18660    1796   4416
+bh_vc1                   |  11328  10220  21548    1652   4264 |  11328  10220  21548    1652   4264
+bh_vc1_1erisc            |      -  17504  17504       -   3712 |      -  16924  16924       -   3712
+bh_vc1_vc2               |  11860  11256  23116    1540   4176 |  11860  11256  23116    1540   4176
+bh_vc1_vc2_1erisc_Os_log |      -  19300  19300       -   3544 |      -  19540  19540       -   3560
+glx2_mesh_novc_1erisc    |      -  14916  14916       -   3856 |      -  14420  14420       -   3856
+glx_2d                   |   9276   6844  16120    1876   4432 |   9276   6844  16120    1876   4432
+glx_express_1erisc       |      -  13368  13368       -   3976 |      -  13104  13104       -   3960
+glx_torus                |   9832   6628  16460    1860   4416 |   9832   6628  16460    1860   4416
+
+## -O3: worst over the 26 cases every build has
+A          ELFs  1820  largest code E0  11860 E1  19300  E0+E1 23116 (bh_vc1_vc2, +3508 left)  least free E0 1540 E1 3544  deepest E0 676 E1 992
+           E0 least free bh_vc1_vc2__10890251220434463052/active_erisc: avail 2216, stack 676: _start 208 > _ZN13fabric_router6sender3runEv 336 > _ZN13fabric_router13start_runningEv 16 > _ZN13fabric_router18run_router_commandEv 32 > _ZL41update_boot_results_eth_link_status_checkv 16 > base firmware 68
+           E1 least free bh_vc1_vc2_1erisc_Os_log__10544955708342847669/subordinate_active_erisc: avail 4536, stack 992: _start 0 > _Z11kernel_mainv 320 > _ZN13fabric_router6single3runERNS_21DownstreamConnectionsE 400 > _ZN13fabric_router6single13receiver_passINS_8receiver23ReceiverChannelProgressEEEvRNS0_13ReceiverStateERT_RNS_21DownstreamConnectionsERKNS_15ChipCoordinatesE 80 > _ZN13fabric_router9Routing2DILj1ELb1EE17set_landing_routeEU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEE 0 > _ZN2tt9tt_fabric43fabric_set_2d_intermesh_landing_mcast_routeEU11rvtt_l1_ptrPVNS0_23HybridMeshPacketHeaderTILi36EEERKNS0_17routing_l1_info_tEhh.constprop.0 128 > _ZN2tt9tt_fabric20mcast_walk_directionEPmPhmmmbh.constprop.0 64
+B          ELFs  1820  largest code E0  11860 E1  19540  E0+E1 23116 (bh_vc1_vc2, +3508 left)  least free E0 1540 E1 3560  deepest E0 676 E1 976
+           E0 least free bh_vc1_vc2__10217698702415986271/active_erisc: avail 2216, stack 676: _start 208 > _ZN13fabric_router6sender3runEv 336 > _ZN13fabric_router13start_runningEv 16 > _ZN13fabric_router18run_router_commandEv 32 > _ZL41update_boot_results_eth_link_status_checkv 16 > base firmware 68
+           E1 least free bh_vc1_vc2_1erisc_Os_log__11973120266257998822/subordinate_active_erisc: avail 4536, stack 976: _start 0 > _Z11kernel_mainv 320 > _ZN13fabric_router6single3runERNS_21DownstreamConnectionsE 464 > _ZN13fabric_router9Routing2DILj1ELb1EE17set_landing_routeEU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEE 0 > _ZN2tt9tt_fabric43fabric_set_2d_intermesh_landing_mcast_routeEU11rvtt_l1_ptrPVNS0_23HybridMeshPacketHeaderTILi36EEERKNS0_17routing_l1_info_tEhh.constprop.0 128 > _ZN2tt9tt_fabric20mcast_walk_directionEPmPhmmmbh.constprop.0 64

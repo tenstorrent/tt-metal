@@ -1,0 +1,8 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+Ring1HopEW_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,256,6991517,2.471567,9654557.087
+Ring1HopEW_size_512_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,512,6993418,4.941790,9651932.717
+Ring1HopEW_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,1024,6995137,9.881150,9649560.831
+Ring1HopEW_size_2048_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,2048,7019134,19.694737,9616570.933
+Ring1HopEW_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,3072,7000464,29.620894,9642218.002
+Ring1HopEW_size_4096_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,4096,7010189,39.439736,9628841.676
+Ring1HopEW_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,4352,7006095,41.929206,9634468.274

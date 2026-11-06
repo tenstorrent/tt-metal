@@ -1,0 +1,59 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": false,
+  "list": "demo_sp_release_tests.yaml",
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_MoreFabric",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 900,
+ "duration_s": 576.4,
+ "end": "2026-11-04T04:20:23+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --bucket fabric_2d_torus_x --bucket fabric_2d_torus_y --bucket fabric_2d_torus_y_xy_skip_only --bucket fabric_1d"
+ ],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172241/cache/main-main",
+ "junit_files": 0,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a08u14",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "reason": "no bucket ran: run_isolated_unit_tests.py's reset/validation/smoke preflight runs run_cluster_validation against bh_galaxy_xy_torus.textproto with --hard-fail, which fails on every quad-cabled 110-a node (3 attempts, 'Connection mismatch'); same cause as G0-health-cv (job 172241, a08u14)",
+ "rerun_of": null,
+ "rescored": [
+  {
+   "at": "2026-11-04T04:22:17+00:00",
+   "from": "FAIL",
+   "to": "ENV"
+  }
+ ],
+ "router": "main",
+ "slurm_job": "172241",
+ "start": "2026-11-04T04:10:47+00:00",
+ "status": "ENV",
+ "step": "G2-dsb1-more",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "tests_from_log": true,
+ "timeout_note": null,
+ "timeout_s": 900,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

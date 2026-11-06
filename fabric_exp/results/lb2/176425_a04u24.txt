@@ -1,0 +1,26 @@
+job 176425 on bh-lb-120-a04u24
+command: PORT_TREE=/home/aagarwal/tt-metal-port-tune-alloc PORT_TREE_SRC=/data/aagarwal/lb2/trees/port_tune_alloc_4b52 PT_PREFIX=pta bash fabric_exp/port_tune/tune_runs.sh idlealloc
+summary: rc=1 hung=1 node=bh-lb-120-a04u24 job=176425 post=reset+links OK after the hang start=2026-11-05 01:34:03 end=2026-11-05T01:41:20Z
+[lb2 01:32:54 +0s] node=bh-lb-120-a04u24 job=176425 mode=run start=2026-11-05T01:32:54Z timeout=1200s
+[lb2 01:32:54 +0s] command: PORT_TREE=/home/aagarwal/tt-metal-port-tune-alloc PORT_TREE_SRC=/data/aagarwal/lb2/trees/port_tune_alloc_4b52 PT_PREFIX=pta bash fabric_exp/port_tune/tune_runs.sh idlealloc
+[lb2 01:32:54 +0s] stage src-20261105-013146 (full full-20261104-221405), staged 2026-11-05T01:32:01Z
+[lb2 01:32:54 +0s] busy check: clear
+[lb2 01:32:54 +0s] space: 91 GB free on /home
+[lb2 01:33:03 +9s] verify: 32445 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T01:32:01Z)
+[lb2 01:33:05 +11s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T01:32:01Z)
+[lb2 01:33:14 +20s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T01:32:01Z)
+[lb2 01:33:15 +21s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T01:32:01Z)
+[lb2 01:33:16 +22s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T01:32:01Z)
+[lb2 01:33:21 +27s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 01:33:21 +27s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 01:33:21 +27s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 687 GB available
+[lb2 01:33:21 +27s] reset (start): tt-smi -r
+[lb2 01:34:03 +69s] link check (start, poll 1, +0 s): every fabric link UP/PASS/400 (link gate PASS)
+[lb2 01:34:04 +70s] run: PORT_TREE=/home/aagarwal/tt-metal-port-tune-alloc PORT_TREE_SRC=/data/aagarwal/lb2/trees/port_tune_alloc_4b52 PT_PREFIX=pta bash fabric_exp/port_tune/tune_runs.sh idlealloc
+[lb2 01:40:19 +445s] command exit 1
+[lb2 01:40:19 +445s] hang captures written: fabric_exp/results/ptaa_idlealloc_i2_val_hangcap 
+[lb2 01:40:19 +445s] reset (posthang): tt-smi -r
+[lb2 01:41:15 +501s] link check (posthang, poll 1, +0 s): every fabric link UP/PASS/400 (link gate PASS)
+[lb2 01:41:15 +501s] reset+links OK after the hang
+[lb2 01:41:20 +506s] copied back: 108 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/176425 (MANIFEST.tsv)
+[lb2 01:41:20 +506s] done: rc 1, hung 1; 90 GB free on /home

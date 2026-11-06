@@ -1,0 +1,53 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "ops_unit_tests.yaml",
+  "mirrored": true,
+  "name": "Disaggregated prefill op unit tests (BH Galaxy)",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 1500,
+ "data_inodes_at_submit": "5721455",
+ "data_inodes_free": 6122616,
+ "deviation": "not in pipeline_reorg (models_device_performance_bare_metal wrappers); torus-xy env as the BH Galaxy dp op unit-test entry",
+ "duration_s": 145.2,
+ "end": "2026-11-04T09:22:30+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): python -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_fabric2d_perf.py models/demos/deepseek_v3_d_p/tests/perf/test_combine_fabric2d_perf.py -vvv --tb=short"
+ ],
+ "group": "G-L1P-x",
+ "jit_cache": "/tmp/aagarwal-regress/172971/cache/new_288afd2-new",
+ "junit_files": 3,
+ "label": "ab_288afd2",
+ "metrics": 2,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-120-c08u02",
+ "note": null,
+ "pass": 2,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172971",
+ "start": "2026-11-04T09:20:05+00:00",
+ "status": "PERF_WINDOW",
+ "step": "G1x-dp-fab2d",
+ "step_env": null,
+ "telemetry": "off (prod default)",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 3,
+  "PERF_WINDOW": 1,
+  "SKIP": 0
+ },
+ "timeout_note": null,
+ "timeout_s": 1500,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

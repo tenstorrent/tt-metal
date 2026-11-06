@@ -1,0 +1,55 @@
+{
+ "capped": true,
+ "ci": {
+  "ci_timeout_min": 30,
+  "filtered": true,
+  "list": "ops_unit_tests.yaml",
+  "name": "Disaggregated prefill op unit tests (LB)",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 1800,
+ "duration_s": 455.5,
+ "end": "2026-11-03T23:30:26+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_local.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_fabric2d.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_hybrid_routed_expert_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_masked_bincount.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_padding_config.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_offset_cumsum.py -vvv --tb=short -k \"(not test_ring_joint_mla or (4x2 and pcc_check and fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and (not moe_padding_config or fabric2d-2x4) and (not zero_padded or torus-y-8x1 or fabric2d-2x4) and not single-1 and (not test_hybrid_routed_expert_combine or 8x1) and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))\" -m \"not extended_model\""
+ ],
+ "group": "LB-L1",
+ "junit_files": 1,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "rescored": [
+  {
+   "at": "2026-11-03T23:57:26+00:00",
+   "from": "FAIL",
+   "to": "PASS"
+  }
+ ],
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-03T23:22:51+00:00",
+ "status": "PASS",
+ "step": "B1-dp-ops-b",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 4,
+  "PASS": 53,
+  "PERF_WINDOW": 0,
+  "SKIP": 65
+ },
+ "timeout_s": 1019,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

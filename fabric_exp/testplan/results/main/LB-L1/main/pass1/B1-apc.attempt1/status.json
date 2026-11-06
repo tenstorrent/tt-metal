@@ -1,0 +1,45 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": false,
+  "list": "blackhole_e2e_tests.yaml",
+  "name": "ttnn ops fast unit tests (ccl, DRAM prefetcher)",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 900,
+ "duration_s": 785.8,
+ "end": "2026-11-03T22:01:02+00:00",
+ "failed_lines": [],
+ "group": "LB-L1",
+ "junit_files": 1,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-03T21:47:56+00:00",
+ "status": "PASS",
+ "step": "B1-apc",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 131,
+  "PERF_WINDOW": 0,
+  "SKIP": 22
+ },
+ "timeout_s": 900,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

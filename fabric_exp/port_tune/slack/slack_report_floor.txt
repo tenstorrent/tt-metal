@@ -1,0 +1,80 @@
+### Mesh1HopEW 2048 B, 1 link(s), write: main
+base 223.88 cycles/packet (runs 223.92, 223.90, 223.83, 223.88; noise band 0.50)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | +10.4 * (234.3 / 234.3) | +29.1 * (253.0 / 253.0) | +30.2 * (254.1 / 254.1) | 0 (knee 0-1) |
+| E1 | - | - | - | >= None (no drop) |
+bound: E0
+
+### Mesh1HopEW 2048 B, 1 link(s), write: port
+base 122.40 cycles/packet (runs 122.45, 122.36, 122.40, 122.38; noise band 0.50)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | +2.4 * (124.8 / 124.8) | +4.2 * (126.7 / 126.6) | +19.8 * (142.2 / 142.2) | 0 (knee 0-1); clear drop: 1-2 |
+| E1 | +1.2 * (123.6 / 123.6) | +1.6 * (124.0 / 124.0) | +11.1 * (133.5 / 133.5) | 0 (knee 0-1); clear drop: 2-4 |
+bound: E0 and E1
+
+### Mesh1HopEW 4096 B, 1 link(s), write: main
+base 222.46 cycles/packet (runs 222.46, 222.46, 222.52, 222.38; noise band 0.50)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | +11.4 * (233.8 / 233.9) | +31.1 * (253.6 / 253.6) | +31.9 * (254.4 / 254.3) | 0 (knee 0-1) |
+| E1 | - | - | - | >= None (no drop) |
+bound: E0
+
+### Mesh1HopEW 4096 B, 1 link(s), write: port
+base 126.85 cycles/packet (runs 126.85, 126.88, 126.89, 126.79; noise band 0.50)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | +1.3 * (128.1 / 128.2) | +2.6 * (129.4 / 129.4) | +14.4 * (141.5 / 141.0) | 0 (knee 0-1); clear drop: 2-4 |
+| E1 | +1.6 * (128.4 / 128.5) | +1.8 * (128.6 / 128.7) | +8.0 * (134.8 / 134.8) | 0 (knee 0-1); clear drop: 2-4 |
+bound: E0 and E1
+
+### Mesh1HopEW 4352 B, 1 link(s), write: main
+base 222.72 cycles/packet (runs 222.71, 222.77, 222.71, 222.70; noise band 0.50)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | +11.1 * (233.8 / 233.8) | +30.9 * (253.7 / 253.6) | +31.6 * (254.3 / 254.4) | 0 (knee 0-1) |
+| E1 | - | - | - | >= None (no drop) |
+bound: E0
+
+### Mesh1HopEW 4352 B, 1 link(s), write: port
+base 128.44 cycles/packet (runs 128.44, 128.42, 128.46, 128.44; noise band 0.50)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | +1.4 * (129.8 / 129.8) | +1.8 * (130.2 / 130.2) | +13.0 * (141.3 / 141.6) | 0 (knee 0-1); clear drop: 2-4 |
+| E1 | +1.5 * (130.0 / 130.0) | +2.0 * (130.5 / 130.4) | +6.7 * (135.2 / 135.2) | 0 (knee 0-1); clear drop: 2-4 |
+bound: E0 and E1
+
+### NeighborExchangeUnicast 4096 B, 1 link(s), write: main
+base 126.43 cycles/packet (runs 126.48, 126.41, 126.38, 126.44; noise band 3.07)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | +12.7 * (139.1 / 139.1) | +14.8 * (141.3 / 141.2) | +30.1 * (156.6 / 156.6) | 0 (knee 0-1) |
+| E1 | - | - | - | >= None (no drop) |
+bound: E0
+
+### NeighborExchangeUnicast 4096 B, 1 link(s), write: port
+base 121.79 cycles/packet (runs 121.79, 121.78, 121.79, 121.80; noise band 0.50)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | -0.1 (121.7 / 121.7) | -0.1 (121.7 / 121.7) | +0.1 (121.9 / 121.9) | >= 4 (no drop) |
+| E1 | +0.0 (121.8 / 121.8) | +0.0 (121.8 / 121.8) | -0.0 (121.8 / 121.8) | >= 4 (no drop) |
+bound: neither
+
+### NeighborExchangeUnicast 4096 B, 2 link(s), write: main
+base 126.43 cycles/packet (runs 126.45, 126.43, 126.43, 126.42; noise band 3.07)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | +12.6 * (139.1 / 139.1) | +25.0 * (151.4 / 151.5) | +30.1 * (156.6 / 156.6) | 0 (knee 0-1) |
+| E1 | - | - | - | >= None (no drop) |
+bound: E0
+
+### NeighborExchangeUnicast 4096 B, 2 link(s), write: port
+base 121.80 cycles/packet (runs 121.79, 121.80, 121.80, 121.80; noise band 0.50)
+| side | D=1 | D=2 | D=4 | slack |
+|---|---:|---:|---:|---:|
+| E0 | -0.1 (121.7 / 121.7) | -0.1 (121.7 / 121.7) | +0.1 (121.9 / 121.9) | >= 4 (no drop) |
+| E1 | +0.0 (121.8 / 121.8) | +0.0 (121.8 / 121.8) | -0.0 (121.8 / 121.8) | >= 4 (no drop) |
+bound: neither
+

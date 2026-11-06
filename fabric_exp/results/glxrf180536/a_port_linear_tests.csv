@@ -1,0 +1,8 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+GlxLinear1HopEW_size_256_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Linear,4,0,1,E,1,50000,256,6711827,2.574560,10056874.231
+GlxLinear1HopEW_size_512_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Linear,4,0,1,E,1,50000,512,6710840,5.149877,10058353.351
+GlxLinear1HopEW_size_1024_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Linear,4,0,1,E,1,50000,1024,6713343,10.295914,10054603.198
+GlxLinear1HopEW_size_2048_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Linear,4,0,1,E,1,50000,2048,6722323,20.564320,10041171.779
+GlxLinear1HopEW_size_3072_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Linear,4,0,1,E,1,50000,3072,8848871,23.433498,7628091.764
+GlxLinear1HopEW_size_4096_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Linear,4,0,1,E,1,50000,4096,11778670,23.472939,5730697.948
+GlxLinear1HopEW_size_4352_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Linear,4,0,1,E,1,50000,4352,12472669,23.552297,5411832.864

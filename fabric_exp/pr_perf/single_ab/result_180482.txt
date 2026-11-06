@@ -1,0 +1,107 @@
+# lb2 job 180482 on bh-lb-120-a04u24 (2026-11-05 22:28-22:43 UTC), single_ab_runs.sh; sab_report.py output
+# arms: main d2bd12fcf1f, A ba486eb70ba as built, B = A + arm_b_inline.patch; one ERISC; TT_FABRIC_NO_BW_TELEMETRY=1; cycles/packet at 1.35 GHz
+suite    row                                ntype              B |  main a       b    mean |     A a       b    mean |     B a       b    mean |    B-A      % | A/main B/main
+4352_1e  Mesh1HopEW                         scatter_write   4352 |   317.4   317.4   317.4 |   243.5   243.5   243.5 |   200.9   200.9   200.9 |  -42.6 -17.49 |  0.767  0.633  
+4352_1e  Mesh1HopEW                         write           4352 |   262.4   262.4   262.4 |   199.0   199.0   199.0 |   158.4   158.4   158.4 |  -40.6 -20.41 |  0.759  0.604  
+4352_1e  Mesh1HopEWBidir                    scatter_write   4352 |   425.0   424.9   425.0 |   325.9   325.7   325.8 |   277.4   277.5   277.5 |  -48.3 -14.84 |  0.767  0.653  
+4352_1e  Mesh1HopEWBidir                    write           4352 |   370.1   370.0   370.1 |   281.3   281.1   281.2 |   234.5   234.6   234.6 |  -46.7 -16.59 |  0.760  0.634  
+4352_1e  Mesh1HopNS                         scatter_write   4352 |   330.4   330.3   330.4 |   247.6   247.5   247.6 |   202.6   202.6   202.6 |  -45.0 -18.16 |  0.749  0.613  
+4352_1e  Mesh1HopNS                         write           4352 |   275.2   275.2   275.2 |   203.0   203.0   203.0 |   160.6   160.7   160.6 |  -42.3 -20.86 |  0.738  0.584  
+4352_1e  Mesh3HopEW                         scatter_write   4352 |   317.1   317.1   317.1 |   257.7   257.7   257.7 |   210.3   210.3   210.3 |  -47.4 -18.39 |  0.813  0.663  
+4352_1e  Mesh3HopEW                         write           4352 |   299.2   299.2   299.2 |   257.9   257.9   257.9 |   210.2   210.2   210.2 |  -47.6 -18.48 |  0.862  0.703  
+4352_1e  MeshMulticast                      scatter_write   4352 |   393.4   393.3   393.3 |   367.7   367.6   367.6 |   322.1   322.4   322.2 |  -45.4 -12.35 |  0.935  0.819  
+4352_1e  MeshMulticast                      write           4352 |   343.6   343.2   343.4 |   327.7   327.5   327.6 |   283.2   283.3   283.3 |  -44.4 -13.54 |  0.954  0.825  
+1d_1e    HalfRingMulticast                  scatter_write   4352 |   489.5   487.1   488.3 |   485.4   485.2   485.3 |   421.0   420.9   420.9 |  -64.4 -13.26 |  0.994  0.862  
+1d_1e    HalfRingMulticast                  write           4352 |   444.6   439.3   441.9 |   438.7   438.8   438.7 |   378.9   379.0   379.0 |  -59.7 -13.62 |  0.993  0.858  noisy main
+1d_1e    Linear1HopEW                       scatter_write   4352 |   250.7   250.7   250.7 |   223.2   223.2   223.2 |   176.3   176.3   176.3 |  -46.9 -21.01 |  0.890  0.703  
+1d_1e    Linear1HopEW                       write           4352 |   198.6   198.6   198.6 |   178.4   178.5   178.5 |   133.8   133.8   133.8 |  -44.6 -25.02 |  0.899  0.674  
+1d_1e    Linear1HopEWBidir                  scatter_write   4352 |   353.9   353.9   353.9 |   307.2   307.9   307.6 |   255.6   255.6   255.6 |  -52.0 -16.89 |  0.869  0.722  
+1d_1e    Linear1HopEWBidir                  write           4352 |   302.1   302.0   302.0 |   262.5   263.1   262.8 |   214.6   214.5   214.6 |  -48.2 -18.35 |  0.870  0.710  
+1d_1e    Linear1HopNS                       scatter_write   4352 |   250.7   250.7   250.7 |   223.2   223.3   223.3 |   176.3   176.3   176.3 |  -46.9 -21.02 |  0.890  0.703  
+1d_1e    Linear1HopNS                       write           4352 |   198.6   198.6   198.6 |   178.5   178.5   178.5 |   133.8   133.8   133.8 |  -44.7 -25.02 |  0.899  0.674  
+1d_1e    Linear3HopEW                       scatter_write   4352 |   257.5   257.5   257.5 |   239.7   239.7   239.7 |   189.0   189.1   189.1 |  -50.7 -21.14 |  0.931  0.734  
+1d_1e    Linear3HopEW                       write           4352 |   257.5   257.5   257.5 |   239.9   239.8   239.8 |   189.0   189.1   189.1 |  -50.8 -21.18 |  0.931  0.734  
+1d_1e    LinearMulticast                    scatter_write   4352 |   349.5   349.4   349.5 |   324.4   324.4   324.4 |   272.4   272.2   272.3 |  -52.1 -16.05 |  0.928  0.779  
+1d_1e    LinearMulticast                    write           4352 |   298.7   298.6   298.6 |   278.2   278.2   278.2 |   233.1   233.1   233.1 |  -45.1 -16.21 |  0.931  0.780  
+1d_1e    NeighborExchange                   scatter_write   4352 |   291.1   291.1   291.1 |   283.3   283.4   283.4 |   227.0   227.4   227.2 |  -56.1 -19.81 |  0.973  0.781  
+1d_1e    NeighborExchange                   write           4352 |   230.1   230.0   230.0 |   238.4   238.0   238.2 |   184.4   184.4   184.4 |  -53.8 -22.57 |  1.036  0.802  
+1d_1e    UnidirLinearMulticast              scatter_write   4352 |   485.2   485.1   485.1 |   449.6   449.5   449.6 |   392.0   391.9   391.9 |  -57.6 -12.82 |  0.927  0.808  
+1d_1e    UnidirLinearMulticast              write           4352 |   436.3   436.8   436.5 |   405.7   405.6   405.7 |   349.6   349.6   349.6 |  -56.1 -13.83 |  0.929  0.801  
+rse      FullRingMulticast                  write           1024 |   477.6   490.7   484.2 |   472.1   472.1   472.1 |   408.8   408.8   408.8 |  -63.3 -13.41 |  0.975  0.844  noisy main
+rse      FullRingMulticast                  write           4096 |   487.3   472.3   479.8 |   471.6   471.5   471.5 |   408.3   408.3   408.3 |  -63.2 -13.40 |  0.983  0.851  noisy main
+rse      FullRingMulticast                  write           4352 |   498.1   479.0   488.5 |   471.5   471.5   471.5 |   408.3   408.3   408.3 |  -63.2 -13.40 |  0.965  0.836  noisy main
+rse      HalfRingMulticast                  write           1024 |   433.1   442.2   437.6 |   439.3   439.5   439.4 |   379.3   379.3   379.3 |  -60.1 -13.68 |  1.004  0.867  noisy main
+rse      HalfRingMulticast                  write           4096 |   452.4   441.3   446.8 |   438.4   438.5   438.5 |   379.1   379.0   379.0 |  -59.4 -13.55 |  0.981  0.848  noisy main
+rse      HalfRingMulticast                  write           4352 |   451.2   446.6   448.9 |   438.5   438.4   438.5 |   378.9   379.1   379.0 |  -59.5 -13.57 |  0.977  0.844  noisy main
+rse      Ring1HopEW                         write           1024 |   259.6   259.6   259.6 |   232.9   232.9   232.9 |   186.2   186.2   186.2 |  -46.7 -20.05 |  0.897  0.717  
+rse      Ring1HopEW                         write           4096 |   259.7   259.7   259.7 |   233.0   233.0   233.0 |   186.0   186.0   186.0 |  -47.0 -20.15 |  0.897  0.716  
+rse      Ring1HopEW                         write           4352 |   259.7   259.7   259.7 |   233.0   233.0   233.0 |   186.1   186.1   186.1 |  -46.9 -20.13 |  0.897  0.716  
+rse      Ring1HopEWBidir                    write           1024 |   364.5   364.4   364.4 |   355.7   354.7   355.2 |   296.7   295.6   296.1 |  -59.1 -16.63 |  0.975  0.813  
+rse      Ring1HopEWBidir                    write           4096 |   364.6   364.5   364.6 |   355.8   355.8   355.8 |   296.5   296.5   296.5 |  -59.2 -16.65 |  0.976  0.813  
+rse      Ring1HopEWBidir                    write           4352 |   364.7   364.5   364.6 |   355.8   355.8   355.8 |   296.5   296.3   296.4 |  -59.4 -16.69 |  0.976  0.813  
+rse      Ring1HopNS                         write           1024 |   259.6   259.6   259.6 |   232.9   232.9   232.9 |   186.2   186.2   186.2 |  -46.7 -20.05 |  0.897  0.717  
+rse      Ring1HopNS                         write           4096 |   259.7   259.7   259.7 |   233.0   233.0   233.0 |   186.0   186.0   186.0 |  -47.0 -20.16 |  0.897  0.716  
+rse      Ring1HopNS                         write           4352 |   259.7   259.7   259.7 |   233.0   233.0   233.0 |   186.1   186.0   186.1 |  -46.9 -20.14 |  0.897  0.716  
+rse      Ring3HopEW                         write           1024 |   316.7   316.7   316.7 |   292.3   292.3   292.3 |   238.2   238.1   238.2 |  -54.2 -18.54 |  0.923  0.752  
+rse      Ring3HopEW                         write           4096 |   316.7   316.7   316.7 |   292.4   292.4   292.4 |   236.8   236.8   236.8 |  -55.6 -19.01 |  0.923  0.748  
+rse      Ring3HopEW                         write           4352 |   316.7   316.7   316.7 |   292.4   292.4   292.4 |   236.8   236.8   236.8 |  -55.6 -19.02 |  0.923  0.748  
+rse      RingMulticast                      write           1024 |   372.1   372.0   372.0 |   335.5   335.4   335.4 |   294.7   294.7   294.7 |  -40.7 -12.14 |  0.902  0.792  
+rse      RingMulticast                      write           4096 |   372.0   371.9   372.0 |   338.8   338.6   338.7 |   296.9   297.0   297.0 |  -41.8 -12.33 |  0.911  0.798  
+rse      RingMulticast                      write           4352 |   371.8   372.1   372.0 |   338.9   339.1   339.0 |   297.0   297.0   297.0 |  -42.0 -12.39 |  0.911  0.798  
+rse      UnidirRingMulticast                write           1024 |   497.1   497.0   497.0 |   459.8   459.8   459.8 |   393.8   394.1   394.0 |  -65.8 -14.32 |  0.925  0.793  
+rse      UnidirRingMulticast                write           4096 |   498.9   498.8   498.9 |   459.9   459.4   459.7 |   394.5   394.4   394.5 |  -65.2 -14.19 |  0.921  0.791  
+rse      UnidirRingMulticast                write           4352 |   499.0   499.3   499.2 |   459.2   459.5   459.4 |   394.4   394.5   394.5 |  -64.9 -14.13 |  0.920  0.790  
+mux      MuxFullRingMulticast               write           1024 |   419.7   419.7   419.7 |   408.2   408.2   408.2 |   343.7   343.7   343.7 |  -64.4 -15.79 |  0.973  0.819  
+mux      MuxFullRingMulticast               write           4096 |   419.8   419.8   419.8 |   408.7   408.7   408.7 |   344.0   344.0   344.0 |  -64.7 -15.84 |  0.974  0.819  
+mux      MuxFullRingMulticast               write           4352 |   419.8   419.8   419.8 |   408.7   408.7   408.7 |   344.0   344.0   344.0 |  -64.7 -15.83 |  0.974  0.819  
+mux      MuxLinear1HopEW                    write           1024 |   312.6   312.6   312.6 |   312.7   312.6   312.6 |   312.7   312.6   312.7 |    0.0   0.02 |  1.000  1.000  
+mux      MuxLinear1HopEW                    write           4096 |   329.7   329.6   329.6 |   329.6   329.4   329.5 |   329.4   329.7   329.6 |    0.1   0.02 |  1.000  1.000  
+mux      MuxLinear1HopEW                    write           4352 |   331.1   330.8   330.9 |   330.9   330.7   330.8 |   330.4   331.2   330.8 |   -0.1  -0.02 |  1.000  1.000  
+mux      MuxLinear1HopEWBidir               write           1024 |   313.4   313.4   313.4 |   313.4   313.4   313.4 |   313.4   313.4   313.4 |    0.0   0.01 |  1.000  1.000  
+mux      MuxLinear1HopEWBidir               write           4096 |   330.4   330.5   330.5 |   330.5   330.5   330.5 |   330.4   330.3   330.4 |   -0.1  -0.04 |  1.000  1.000  
+mux      MuxLinear1HopEWBidir               write           4352 |   331.6   331.7   331.6 |   331.6   331.6   331.6 |   331.5   331.8   331.7 |    0.1   0.02 |  1.000  1.000  
+mux      MuxLinear3HopEW                    write           1024 |   312.7   312.7   312.7 |   312.5   312.6   312.6 |   312.6   312.6   312.6 |    0.0   0.02 |  1.000  1.000  
+mux      MuxLinear3HopEW                    write           4096 |   329.6   329.6   329.6 |   329.7   329.7   329.7 |   329.5   329.6   329.6 |   -0.1  -0.02 |  1.000  1.000  
+mux      MuxLinear3HopEW                    write           4352 |   330.6   330.7   330.6 |   330.7   330.5   330.6 |   330.4   331.2   330.8 |    0.2   0.06 |  1.000  1.001  
+mux      MuxLinearMulticast                 write           1024 |   299.7   299.7   299.7 |   279.4   279.4   279.4 |   264.4   264.6   264.5 |  -14.9  -5.33 |  0.932  0.883  
+mux      MuxLinearMulticast                 write           4096 |   316.3   316.2   316.3 |   296.1   295.9   296.0 |   286.8   286.6   286.7 |   -9.3  -3.14 |  0.936  0.906  
+mux      MuxLinearMulticast                 write           4352 |   319.3   319.1   319.2 |   299.2   298.2   298.7 |   291.1   290.5   290.8 |   -7.9  -2.65 |  0.936  0.911  
+mux      MuxMesh1HopEW                      write           1024 |   445.6   445.6   445.6 |   445.5   445.5   445.5 |   445.4   445.5   445.5 |    0.0   0.00 |  1.000  1.000  
+mux      MuxMesh1HopEW                      write           4096 |   462.6   462.6   462.6 |   462.6   462.6   462.6 |   462.6   462.6   462.6 |   -0.0  -0.00 |  1.000  1.000  
+mux      MuxMesh1HopEW                      write           4352 |   465.7   465.5   465.6 |   465.5   465.6   465.5 |   465.4   465.6   465.5 |   -0.1  -0.02 |  1.000  1.000  
+mux      MuxMesh1HopEWBidir                 write           1024 |   446.1   446.0   446.0 |   446.0   446.0   446.0 |   446.0   446.0   446.0 |   -0.0  -0.00 |  1.000  1.000  
+mux      MuxMesh1HopEWBidir                 write           4096 |   463.1   463.1   463.1 |   463.1   463.1   463.1 |   463.2   463.1   463.2 |    0.1   0.01 |  1.000  1.000  
+mux      MuxMesh1HopEWBidir                 write           4352 |   466.1   466.0   466.1 |   466.1   466.0   466.0 |   465.8   466.1   465.9 |   -0.1  -0.02 |  1.000  1.000  
+mux      MuxMesh3HopEW                      write           1024 |   445.7   445.7   445.7 |   445.5   445.4   445.5 |   445.5   445.4   445.5 |    0.0   0.00 |  0.999  0.999  
+mux      MuxMesh3HopEW                      write           4096 |   462.6   462.5   462.5 |   462.7   462.7   462.7 |   462.5   462.5   462.5 |   -0.1  -0.02 |  1.000  1.000  
+mux      MuxMesh3HopEW                      write           4352 |   465.5   465.5   465.5 |   465.6   465.5   465.6 |   465.3   465.6   465.4 |   -0.1  -0.03 |  1.000  1.000  
+mux      MuxMeshMulticast                   write           1024 |   343.7   343.7   343.7 |   343.6   343.7   343.7 |   343.6   343.6   343.6 |   -0.0  -0.01 |  1.000  1.000  
+mux      MuxMeshMulticast                   write           4096 |   364.4   364.4   364.4 |   364.0   364.0   364.0 |   364.2   364.1   364.2 |    0.2   0.06 |  0.999  0.999  
+mux      MuxMeshMulticast                   write           4352 |   368.1   368.1   368.1 |   367.4   367.5   367.5 |   367.8   367.8   367.8 |    0.3   0.09 |  0.998  0.999  
+mux      MuxRing1HopEW                      write           1024 |   340.7   340.7   340.7 |   340.8   340.7   340.7 |   340.9   340.9   340.9 |    0.1   0.04 |  1.000  1.001  
+mux      MuxRing1HopEW                      write           4096 |   357.5   357.5   357.5 |   357.4   357.4   357.4 |   357.4   357.4   357.4 |    0.0   0.00 |  1.000  1.000  
+mux      MuxRing1HopEW                      write           4352 |   358.8   358.8   358.8 |   359.0   358.7   358.8 |   358.8   358.4   358.6 |   -0.2  -0.06 |  1.000  0.999  
+mux      MuxRingMulticast                   write           1024 |   326.2   326.2   326.2 |   322.5   322.5   322.5 |   300.9   300.9   300.9 |  -21.6  -6.69 |  0.989  0.923  
+mux      MuxRingMulticast                   write           4096 |   343.4   343.5   343.5 |   337.6   337.3   337.4 |   316.7   316.7   316.7 |  -20.7  -6.14 |  0.982  0.922  
+mux      MuxRingMulticast                   write           4352 |   344.9   344.9   344.9 |   339.7   339.8   339.8 |   320.1   320.1   320.1 |  -19.6  -5.78 |  0.985  0.928  
+
+B slower than A by > 0.5% and > 1 cycle: none
+
+validation (pass a, one ERISC):
+   main  mesh_1e   Tests: 96 executed, 0 failed  (Test groups: 2 total, 2 ran, 0 skipped)
+   main  val1d_1e  Tests: 143 executed, 0 failed  (Test groups: 10 total, 10 ran, 0 skipped)
+   A     mesh_1e   Tests: 96 executed, 0 failed  (Test groups: 2 total, 2 ran, 0 skipped)
+   A     val1d_1e  Tests: 143 executed, 0 failed  (Test groups: 10 total, 10 ran, 0 skipped)
+   B     mesh_1e   Tests: 96 executed, 0 failed  (Test groups: 2 total, 2 ran, 0 skipped)
+   B     val1d_1e  Tests: 143 executed, 0 failed  (Test groups: 10 total, 10 ran, 0 skipped)
+
+least ACTIVE_ETH config-buffer headroom per run (JIT telemetry, logged at exit):
+   main  least 15680 B left (10944 of 26624 B used) in a/4352_1e; 1d_1ea:15952, 1d_1eb:15952, 4352_1ea:15680, 4352_1eb:15680, mesh_1ea:15680, muxa:16896, muxb:16896, rsea:15952, rseb:15952, val1d_1ea:15680
+   A     least 15616 B left (11008 of 26624 B used) in a/4352_1e; 1d_1ea:17136, 1d_1eb:17136, 4352_1ea:15616, 4352_1eb:15616, mesh_1ea:15616, muxa:17744, muxb:17744, rsea:17136, rseb:17136, val1d_1ea:15616
+   B     least 15904 B left (10720 of 26624 B used) in a/4352_1e; 1d_1ea:17408, 1d_1eb:17408, 4352_1ea:15904, 4352_1eb:15904, mesh_1ea:15904, muxa:17968, muxb:17968, rsea:17408, rseb:17408, val1d_1ea:15904
+
+# device router images (pass a caches, /data/aagarwal/lb2/jobs/180482/routers/sab_routers_<arm>.tar.zst)
+device A vs device B: 208 builds paired by generated headers, all on subordinate_active_erisc: identical 0, differ 208
+out-of-line single::sender_pass / single::receiver_pass symbols: A 208 / 208 ELFs, B 0 / 0 (offline bh_2d_1erisc: A 40 / 40, B 0)
+code bytes (PT_LOAD): main min 6352 median 8344 max 10784; A min 6720 median 8316 max 10820; B min 6684 median 8220 max 10536; paired B - A: min -356, max +68, mean -164
+device vs offline mock builds: no build paired by generated headers (the device configs' headers differ from the mock cases'), so not compared byte for byte

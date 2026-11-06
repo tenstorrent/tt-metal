@@ -1,0 +1,52 @@
+{
+ "benchmark_files": 0,
+ "capped": false,
+ "ci": {
+  "list": "blaze_models_prefill_tests.yaml",
+  "mirrored": true,
+  "name": "high_bw_all_gather CCL perf + accuracy",
+  "sku": "bh_sc1_high_power"
+ },
+ "ci_timeout_s": 1200,
+ "data_inodes_at_submit": "3059768",
+ "data_inodes_free": 5483724,
+ "deviation": null,
+ "duration_s": 816.4,
+ "end": "2026-11-04T09:11:59+00:00",
+ "failed_lines": [],
+ "group": "G-L1P",
+ "jit_cache": "/tmp/aagarwal-regress/172872/cache/new_288afd2-new",
+ "junit_files": 7,
+ "label": "ab_288afd2",
+ "metrics": 32,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a01u08",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172872",
+ "start": "2026-11-04T08:58:22+00:00",
+ "status": "PASS",
+ "step": "G1-hbw",
+ "step_env": null,
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 28,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "timeout_note": null,
+ "timeout_s": 1200,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

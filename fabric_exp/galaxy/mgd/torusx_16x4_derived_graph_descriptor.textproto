@@ -1,0 +1,12 @@
+# DERIVED (not in the tree): express_links_16x4_mesh_graph_descriptor.textproto without its express_links: 16x4 LINE x RING (torus X) over 2 hosts.
+# 16x4 BLACKHOLE mesh (2 hosts, 2x1 along the 16-row axis) with two dim-0 express-link
+# device_topology [16,4] dim_types [LINE,RING] -> FABRIC_2D_TORUS_X.
+# blocks along the 16-row LINE ([2,5][6,9][10,13]) x 4 columns = 12 express edges.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [16, 4] dim_types: [LINE, RING] }
+  host_topology   { dims: [2, 1] }
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

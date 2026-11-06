@@ -1,0 +1,41 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 3,
+  "PERF_WINDOW": 1,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_101016_1793771077424924806_20261104_054437.xml",
+  "pytest_104897_1793771083779909132_20261104_054443.xml",
+  "pytest_90220_1793771032119794999_20261104_054352.xml",
+  "pytest_91247_1793771038287816962_20261104_054358.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe::test_mistral4_moe[blackhole-mistral4-torus-y-8x1-mistral4-5k-perf]": {
+   "file": "pytest_91247_1793771038287816962_20261104_054358.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 26.851
+  },
+  "models.demos.deepseek_v3_d_p.tests.perf.test_mla_perf::test_mistral4_mla_chunked_perf_loudbox": {
+   "file": "pytest_101016_1793771077424924806_20261104_054437.xml",
+   "message": "AssertionError: Some performance metrics are outside of expected range, see above for details.",
+   "status": "PERF_WINDOW",
+   "time": 51.076
+  },
+  "models.demos.deepseek_v3_d_p.tests.perf.test_moe_perf::test_mistral4_moe_perf_loudbox": {
+   "file": "pytest_90220_1793771032119794999_20261104_054352.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 37.775
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_mla::test_mistral4_mla_chunked_prefill_loudbox[blackhole-mistral4-torus-y-8x1]": {
+   "file": "pytest_104897_1793771083779909132_20261104_054443.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 38.561
+  }
+ }
+}

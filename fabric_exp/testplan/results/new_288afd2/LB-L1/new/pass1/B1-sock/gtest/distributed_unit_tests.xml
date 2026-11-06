@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="5" failures="0" disabled="0" errors="0" time="19.933" timestamp="2026-11-04T09:52:04.755" name="AllTests">
+  <testsuite name="HDSocketFixture" tests="5" failures="0" disabled="0" skipped="0" errors="0" time="19.932" timestamp="2026-11-04T09:52:04.755">
+    <testcase name="H2DSocket" file="/home/aagarwal/tt-metal-new/tests/tt_metal/distributed/test_hd_sockets.cpp" line="528" status="run" result="completed" time="5.42" timestamp="2026-11-04T09:52:04.755" classname="HDSocketFixture" />
+    <testcase name="D2HSocket" file="/home/aagarwal/tt-metal-new/tests/tt_metal/distributed/test_hd_sockets.cpp" line="553" status="run" result="completed" time="2.839" timestamp="2026-11-04T09:52:10.176" classname="HDSocketFixture" />
+    <testcase name="H2DSocketLoopback" file="/home/aagarwal/tt-metal-new/tests/tt_metal/distributed/test_hd_sockets.cpp" line="582" status="run" result="completed" time="4.394" timestamp="2026-11-04T09:52:13.015" classname="HDSocketFixture" />
+    <testcase name="H2DSocketLoopbackMultiThreadedStress" file="/home/aagarwal/tt-metal-new/tests/tt_metal/distributed/test_hd_sockets.cpp" line="610" status="run" result="completed" time="4.579" timestamp="2026-11-04T09:52:17.410" classname="HDSocketFixture" />
+    <testcase name="H2DSocketStagedLoopback" file="/home/aagarwal/tt-metal-new/tests/tt_metal/distributed/test_hd_sockets.cpp" line="638" status="run" result="completed" time="2.697" timestamp="2026-11-04T09:52:21.990" classname="HDSocketFixture" />
+  </testsuite>
+</testsuites>

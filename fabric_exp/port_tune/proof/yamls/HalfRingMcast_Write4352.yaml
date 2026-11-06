@@ -1,0 +1,24 @@
+# proof-count diagnostic row (port_tune/proof/proof_runs.sh): HalfRingMcast_Write4352
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: HalfRingMcast_Write4352
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+    num_links:
+    - 1
+  defaults:
+    ftype: mcast
+    num_packets: 50000
+  patterns:
+  - type: half_ring
+    iterations: 1

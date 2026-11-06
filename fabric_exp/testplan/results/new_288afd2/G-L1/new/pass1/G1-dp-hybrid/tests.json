@@ -1,0 +1,50 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 6,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_291445_1793783874182477015_20261104_091754.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-glm-53-8x4-balanced]": {
+   "file": "pytest_291445_1793783874182477015_20261104_091754.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 167.353
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-glm-53-8x4-hot-expert]": {
+   "file": "pytest_291445_1793783874182477015_20261104_091754.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 107.508
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-balanced]": {
+   "file": "pytest_291445_1793783874182477015_20261104_091754.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 190.945
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-hot-expert]": {
+   "file": "pytest_291445_1793783874182477015_20261104_091754.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 143.356
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-real-L11c9]": {
+   "file": "pytest_291445_1793783874182477015_20261104_091754.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 141.764
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_hybrid_routed_expert_combine::test_hybrid_routed_expert_combine_overlap[blackhole-kimi-k27-8x4-real-L45c3]": {
+   "file": "pytest_291445_1793783874182477015_20261104_091754.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 138.386
+  }
+ }
+}

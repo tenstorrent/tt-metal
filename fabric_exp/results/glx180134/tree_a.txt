@@ -1,0 +1,5 @@
+e7fe1899049032249c1a4438a3311b5456cc71d9 (farm of /data/aagarwal/frs-glx/trees/port_e7fe189; host libraries and test_tt_fabric from /home/aagarwal/tt-metal-port-nxab/build_Release, 13 files; local diff:
+ .../tt_fabric/test_infra/test_tt_fabric.cpp        |  9 +++--
+ .../fabric_static_sized_channels_allocator.cpp     | 40 +++++++++++++++++++++-
+ 2 files changed, 46 insertions(+), 3 deletions(-)
+)

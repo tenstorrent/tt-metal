@@ -1,0 +1,61 @@
+# Slot-need sweep (SLOT_ALLOCATOR.md section 12; mk_knee_yamls.py): SlsLin1HopEW, Lin1HopEWBidir from
+# fabric_exp/slotstudy/sls_1d_p150.yaml at [256, 1024, 2048, 4352] B packets, 4352 B slots.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: SlsLin1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: Lin1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device: &id002
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device: &id001
+        - 0
+        - 1
+  - device: *id001
+    patterns:
+    - destination:
+        device: *id002

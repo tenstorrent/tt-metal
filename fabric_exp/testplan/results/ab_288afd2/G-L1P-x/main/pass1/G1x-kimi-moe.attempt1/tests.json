@@ -1,0 +1,26 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 2
+ },
+ "files": [
+  "pytest_652382_1793783546809739137_20261104_091226.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.perf.test_kimi_moe_perf::test_kimi_moe_perf[blackhole-k2_7-galaxy-torus-xy-8x4]": {
+   "file": "pytest_652382_1793783546809739137_20261104_091226.xml",
+   "message": "Wrapped fabric requires a compatible physical ring; Galaxy TorusXY additionally requires an explicit ring/ring descriptor and a cabling-certified allocation",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_d_p.tests.perf.test_kimi_moe_perf::test_kimi_moe_perf[blackhole-k3-galaxy-torus-xy-8x4]": {
+   "file": "pytest_652382_1793783546809739137_20261104_091226.xml",
+   "message": "Wrapped fabric requires a compatible physical ring; Galaxy TorusXY additionally requires an explicit ring/ring descriptor and a cabling-certified allocation",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

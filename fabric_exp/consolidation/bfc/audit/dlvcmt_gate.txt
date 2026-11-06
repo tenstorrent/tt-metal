@@ -1,0 +1,6 @@
+alt root /home/aagarwal/.tt-metal-mainline-cov-bfc-rjcred/rtx2: tt_metal -> /home/aagarwal/tt-metal-mainline-cleanup/tt_metal
+alt root /home/aagarwal/.tt-metal-mainline-cov-bfc-rjcred/rtx2 -> /home/aagarwal/tt-metal-mainline-cleanup
+compiled /home/aagarwal/tt-metal-mainline-cleanup at c7a4d0fb29f (uncommitted diff md5 d41d8cd9)
+built 5010/5010 into /home/aagarwal/.tt-metal-mainline-cov-bfc-rjcred/builds/a_dlvcmt
+== dlvcmt vs base: shared 5010, identical 5010, differ 0, only base 0, only arm 0
+DLVCMT_GATE_DONE

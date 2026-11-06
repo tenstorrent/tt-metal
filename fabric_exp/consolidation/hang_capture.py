@@ -4,7 +4,8 @@
   hang_capture.py OUT_DIR [--all-eth] [--chips 0,1,..] [--noc 0|1] [--time-budget S] [--meta KEY=VALUE ...]
 
 Run with /home/aagarwal/tt-metal/python_env/bin/python after every process using the device has exited. For each
-chip and each connected Ethernet core (--all-eth: every non-harvested one) it reads, in this order:
+chip and each connected or trained Ethernet core (trained: the cluster descriptor's active channels, which include
+cross-host links; --all-eth: every non-harvested one) it reads, in this order:
   pass1  registers: NoC overlay stream registers 0..31 (indices 4 REMOTE_SRC/scratch, 10 REMOTE_DEST_BUF_SIZE,
          297 REMOTE_DEST_BUF_SPACE_AVAILABLE = the free-slots / packets / credit counts), the RISC soft-reset register
          (0xFFB121B0) and a few L1 words that move while a router runs (fabric heartbeat 0x7CC70, fabric postcode
@@ -277,6 +278,13 @@ class Capture:
                 pass
             self.index["chips"][str(chip_id)] = crec
             active = set(conns.get(chip_id, {}).keys())
+            # Trained channels whose peer is not in this cluster descriptor (a cross-host link: the exit / entry routers
+            # of an inter-mesh link to another host), which get_ethernet_connections leaves out.
+            trained = set()
+            try:
+                trained = {int(c) for c in cd.get_active_eth_channels(chip_id)}
+            except Exception as e:  # noqa: BLE001
+                self.err(f"chip {chip_id} get_active_eth_channels", e)
             try:
                 locs = dev.get_block_locations("eth")
             except Exception as e:  # noqa: BLE001
@@ -300,11 +308,13 @@ class Capture:
                         chan = rec["translated"][0] - 20
                 rec["eth_channel"] = chan
                 rec["connected_to"] = list(conns[chip_id][chan]) if chan in active else None
-                if chan in active or self.args.all_eth:
+                rec["cross_host"] = chan in trained and chan not in active
+                if chan in active or chan in trained or self.args.all_eth:
                     crec["cores"][str(chan)] = rec
                     self.cores.append((chip_id, chan, loc, rec))
-            print(f"chip {chip_id}: uid {crec['unique_id']}, eth cores {sorted(int(c) for c in crec['cores'])}",
-                  flush=True)
+            xh = sorted(int(c) for c, r in crec["cores"].items() if r.get("cross_host"))
+            print(f"chip {chip_id}: uid {crec['unique_id']}, eth cores {sorted(int(c) for c in crec['cores'])}"
+                  + (f" (cross-host {xh})" if xh else ""), flush=True)
         self.save_index()
 
     def reg_pass(self, name, txq_only=False):
@@ -663,7 +673,7 @@ class Capture:
         for d in sorted(glob.glob(f"{src}/*/kernels/*/*/") + glob.glob(f"{src}/kernels/*/*/")):
             parts = d.rstrip("/").split("/")
             name, hsh = parts[-2], parts[-1]
-            if name == "fabric_erisc_router_v2" or (name, hsh) in seen:
+            if name in ("fabric_erisc_router_v2", "fabric_erisc_router") or (name, hsh) in seen:
                 continue
             seen.add((name, hsh))
             for risc in ("brisc", "ncrisc", "trisc0", "trisc1", "trisc2"):

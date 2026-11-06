@@ -1,0 +1,158 @@
+# cisp slow-state check X1 (mk_flow_yamls.py): one neighbor pair per iteration, 8 repeats.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: SeqNeighborExchangeR01
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: sequential_neighbor_exchange
+- name: SeqNeighborExchangeR02
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: sequential_neighbor_exchange
+- name: SeqNeighborExchangeR03
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: sequential_neighbor_exchange
+- name: SeqNeighborExchangeR04
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: sequential_neighbor_exchange
+- name: SeqNeighborExchangeR05
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: sequential_neighbor_exchange
+- name: SeqNeighborExchangeR06
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: sequential_neighbor_exchange
+- name: SeqNeighborExchangeR07
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: sequential_neighbor_exchange
+- name: SeqNeighborExchangeR08
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: sequential_neighbor_exchange

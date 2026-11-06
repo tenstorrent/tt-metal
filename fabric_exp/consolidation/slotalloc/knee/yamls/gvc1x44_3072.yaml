@@ -1,0 +1,293 @@
+# Slot-need sweep (SLOT_ALLOCATOR.md section 12; mk_knee_yamls.py): X44Inter_0_0_to_1_0, X44Inter_0_0_to_1_3, X44Inter_0_0_to_1_12, X44Inter_0_0_to_1_15, X44Inter_0_15_to_1_0, X44Inter_0_15_to_1_3, X44Inter_0_15_to_1_12, X44Inter_0_15_to_1_15, X44Mesh3HopEW, X44Mesh3HopNS, X44MeshCorner6 from
+# fabric_exp/slotstudy/sls_glx_vc1_4x4.yaml at [256, 1024, 2048, 3072] B packets, 3072 B slots.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: X44Inter_0_0_to_1_0
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 0
+- name: X44Inter_0_0_to_1_3
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 3
+- name: X44Inter_0_0_to_1_12
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 12
+- name: X44Inter_0_0_to_1_15
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 15
+- name: X44Inter_0_15_to_1_0
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 15
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 0
+- name: X44Inter_0_15_to_1_3
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 15
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 3
+- name: X44Inter_0_15_to_1_12
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 15
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 12
+- name: X44Inter_0_15_to_1_15
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 15
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 15
+- name: X44Mesh3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: X44Mesh3HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 12
+- name: X44MeshCorner6
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 15

@@ -1,0 +1,80 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 2,
+  "PERF_WINDOW": 0,
+  "SKIP": 9
+ },
+ "files": [
+  "pytest_1934660_1793782198686662987_20261104_084958.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-1-1-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 5.248
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-1-128-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 1.274
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-1-64-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 1.305
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-16-1-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 1.406
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-16-128-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 1.308
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-16-64-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 1.309
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-32-1-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 1.302
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-32-128-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 1.298
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_and_decode[blackhole-32-64-1]": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "Skipping prefill/decode test on Blackhole: decode_step is not available",
+   "status": "SKIP",
+   "time": 1.339
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_drains_tail_when_prompt_shorter_than_pipeline_depth": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.13
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_model::test_prefill_starts_readback_once_pipeline_is_saturated": {
+   "file": "pytest_1934660_1793782198686662987_20261104_084958.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.16
+  }
+ }
+}

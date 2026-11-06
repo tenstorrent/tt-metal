@@ -1,0 +1,1130 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 139,
+  "PERF_WINDOW": 0,
+  "SKIP": 47
+ },
+ "files": [
+  "fabric_unit_tests.xml"
+ ],
+ "tests": {
+  "NightlyFabric1DFixture::TestEDMConnectionStressTestQuick": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 678.24
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.886
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.91
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.941
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.945
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.933
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.97
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedScatterWriteAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.933
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedScatterWriteAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.951
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedScatterWriteAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.975
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.903
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.921
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.963
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.956
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.973
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.002
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.636
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.94
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.953
+  },
+  "NightlyFabric1DFixture::TestLinearFabricSparseMulticastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.93
+  },
+  "NightlyFabric1DFixture::TestLinearFabricSparseMulticastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.922
+  },
+  "NightlyFabric1DFixture::TestLinearFabricSparseMulticastNocUnicastWriteSingleHop": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.002
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.882
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.887
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.897
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.913
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.927
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.948
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedScatterWriteAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.971
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedScatterWriteAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.992
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedScatterWriteAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.959
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.899
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.904
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.918
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.95
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.975
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.976
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.925
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.94
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.93
+  },
+  "NightlyFabric1DTensixFixture::TestLinearFabricMulticastNocMux": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.971
+  },
+  "NightlyFabric2DFixture::Test2DMCast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.297
+  },
+  "NightlyFabric2DFixture::TestLineMcastE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN1HopE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN1HopW7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN2HopE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN2HopsE3HopsW4Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN2HopsE4HopsW3Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN3HopsE3HopsW4Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN3HopsE4HopsW3Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS1HopE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS1HopW7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS2HopE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS2HopsE3HopsW4Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS3HopsE3HopsW4Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS3HopsE4HopsW3Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastW7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:190\nMcast group not found for line mcast test",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.103
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.145
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.133
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.189
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.141
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3395\nNo multicast destinations found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.655
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.695
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.674
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.716
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.687
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.123
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.139
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.203
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.188
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocFusedScatterWriteAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.229
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocFusedScatterWriteAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.212
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocInlineUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.136
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocInlineUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.155
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocScatterUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.243
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocScatterUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.221
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.166
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.177
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.979
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.314
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedScatterWriteAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.036
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedScatterWriteAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedScatterWriteAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.998
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.044
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.987
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2136\nNo path found for requested directions",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DTensixFixture::TestMeshFabricMulticastNocMux": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.489
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode0ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.435
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode0ForwardSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.51
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.994
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 21.642
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.955
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.846
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.56
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.71
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode3ForwardSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.061
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode3ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.582
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode4ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.478
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode4ForwardNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.175
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.829
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 19.161
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.318
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.228
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 20.023
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.444
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode7ForwardNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.235
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode7ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.578
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.209
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.17
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.161
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.177
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.156
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncAllToAll": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.274
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncAllToAllDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.85
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.929
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.919
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.925
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.924
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.929
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteAllToAll": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.264
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteAllToAllDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.855
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.946
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.915
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.922
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.906
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.919
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllToAll": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.436
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllToAllDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.975
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllWorkerCoords": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.913
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllWorkerCoordsDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.963
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode0": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.709
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.567
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode2": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.693
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode3": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.585
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode4": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.212
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode5": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.589
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode6": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.494
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode7": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.478
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllToAll": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.312
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllToAllDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.933
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllWorkerCoords": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.293
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllWorkerCoordsDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.302
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.989
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.953
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode0": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.416
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.422
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode2": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.463
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode3": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.442
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode4": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.432
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode5": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.409
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode6": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.383
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode7": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.997
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.971
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.961
+  }
+ }
+}

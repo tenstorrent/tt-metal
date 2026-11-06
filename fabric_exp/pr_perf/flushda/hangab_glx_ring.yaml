@@ -1,0 +1,19 @@
+# Hang A/B (coordinator 2026-11-05): the one test that hung on the PR base in Galaxy 180570 (a_unp_val_ring), from
+# flushda_val_glx_ring.yaml narrowed to that test: FlushA2ARing_size_4096_ntype_atomic_inc_ftype_unicast; run on main.
+Tests:
+- name: FlushA2ARing
+  sync: true
+  enable_flow_control: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ftype:
+    - unicast
+    ntype:
+    - atomic_inc
+    size:
+    - 4096
+  defaults:
+    num_packets: 200
+  patterns:
+  - type: all_to_all

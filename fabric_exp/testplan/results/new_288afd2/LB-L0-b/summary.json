@@ -1,0 +1,95 @@
+{
+ "group": "LB-L0-b",
+ "label": "new_288afd2",
+ "updated": "2026-11-04T08:44:45+00:00",
+ "steps": [
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-eth",
+   "status": "PASS",
+   "duration_s": 40.0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 2,
+    "PASS": 11,
+    "PERF_WINDOW": 0,
+    "SKIP": 92
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:44:05+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-health",
+   "status": "PASS",
+   "duration_s": 5.0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 3,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:15:50+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-infra",
+   "status": "PASS",
+   "duration_s": 355.3,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:15:55+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-night",
+   "status": "PASS",
+   "duration_s": 1186.2,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 139,
+    "PERF_WINDOW": 0,
+    "SKIP": 47
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:24:18+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-stab",
+   "status": "PASS",
+   "duration_s": 145.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:21:51+00:00"
+  }
+ ]
+}

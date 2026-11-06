@@ -1,0 +1,20 @@
+{
+ "counts": {
+  "FAIL": 1,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_2107000_1793766455554617240_20261104_042735.xml"
+ ],
+ "tests": {
+  "models.demos.llama3_70b_galaxy.demo.text_qwen_demo::test_qwen_demo_text[blackhole-mesh_device0-device_params0-10-performance-ci-token-matching]": {
+   "file": "pytest_2107000_1793766455554617240_20261104_042735.xml",
+   "message": "Failed: Timeout (>900.0s) from pytest-timeout.",
+   "status": "FAIL",
+   "time": 903.947
+  }
+ }
+}

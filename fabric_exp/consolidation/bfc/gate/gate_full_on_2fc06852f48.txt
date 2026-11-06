@@ -1,0 +1,53 @@
+bh_1d                      other identical 2  router identical 72
+bh_1d_1erisc               other identical 2  router identical 36
+bh_1d_mux                  other identical 8  router identical 36
+bh_1d_telemetry            other identical 2  router identical 72
+bh_1d_trim                 other identical 2  router identical 72
+bh_2d                      other identical 2  router identical 80
+bh_2d_1erisc               other identical 2  router identical 40
+bh_2d_1erisc_streaming     router identical 40  unpaired base 2  unpaired new 2
+bh_2d_bwtelemetry          other identical 2  router identical 80
+bh_2d_codeprof             router identical 80
+bh_2d_mux                  other identical 16  router identical 40
+bh_2d_streaming            other identical 2  unpaired base 80  unpaired new 80
+bh_2d_telemetry            other identical 2  router identical 80
+bh_2d_trim                 other identical 2  router identical 80
+bh_2d_udm_gtest            other identical 104  router identical 40  unpaired base 2  unpaired new 2
+bh_2d_vc2                  other identical 2  router identical 80
+bh_2d_vc2_1erisc           other identical 2  router identical 40
+bh_neighbor                other identical 3  router identical 72
+bh_neighbor_1erisc         other identical 3  router identical 36
+bh_ring                    other identical 2  router differ 36  router identical 36   new arg: T16 x36 (E0), T16 x36 (E1)
+bh_ring_1erisc             other identical 2  router differ 36   new arg: T16 x36 (E1)
+bh_ring_mux                other identical 8  router identical 36   new arg: T16 x36 (E1)
+bh_torus                   other identical 2  router identical 96   new arg: T2 x48 (E0), T2 x48 (E1)
+bh_torus_1erisc            other identical 2  router identical 48   new arg: T2 x48 (E1)
+bh_torus_vc2               other identical 2  router identical 80   new arg: T2 x16 (E0), T2 x16 (E1)
+bh_torus_x                 other identical 2  router identical 96   new arg: T2 x32 (E0), T2 x32 (E1)
+bh_torus_y                 other identical 2  router identical 80   new arg: T2 x16 (E0), T2 x16 (E1)
+bh_trim_gtest              other identical 6  router identical 436   new arg: T2 x32 (E0), T2 x32 (E1)
+bh_vc1                     other identical 3  router identical 96
+bh_vc1_1erisc              other identical 1  router identical 48  unpaired new 1
+bh_vc1_vc2                 other identical 3  router identical 96
+glx2_mesh                  other identical 2  router identical 232
+glx2_mesh_novc             other identical 2  router identical 232
+glx2_mesh_novc_1erisc      other identical 1  router identical 116  unpaired new 1
+glx3_mesh                  other identical 1  router identical 424  unpaired base 2  unpaired new 3
+glx3_passthrough           other identical 3  router identical 428
+glx3_torus_yx              other identical 2  router identical 208   new arg: T2 x48 (E0), T2 x48 (E1)
+glx_1d                     other identical 2  router identical 120
+glx_1x32_line              other identical 2  router identical 72
+glx_1x32_ring              other identical 2  router differ 38  router identical 38   new arg: T16 x38 (E0), T16 x38 (E1)
+glx_2d                     other identical 2  router identical 168
+glx_express                other identical 2  router identical 216   new arg: T2 x108 (E0), T2 x108 (E1)
+glx_express_1erisc         other identical 2  router identical 108   new arg: T2 x108 (E1)
+glx_express_ew             other identical 2  router identical 260   new arg: T2 x130 (E0), T2 x130 (E1)
+glx_ring                   other identical 2  router differ 60  router identical 60   new arg: T16 x60 (E0), T16 x60 (E1)
+glx_torus                  other identical 2  router identical 120   new arg: T2 x60 (E0), T2 x60 (E1)
+glx_torus_y                other identical 2  router identical 120   new arg: T2 x36 (E0), T2 x36 (E1)
+glxz_mesh                  other identical 4  router identical 108
+glxz_mesh_novc             other identical 4  router identical 108
+totals: other identical 232  router differ 170  router identical 5362  unpaired base 86  unpaired new 89
+  differs: bh_ring active_erisc T 16 /home/aagarwal/.tt-metal-mainline-cov-bfc-rjnew/cases/bh_ring/cache/tt-metal-cache14405037646996279691/kernels/fabric_erisc_router/441748193477729214/active_erisc/active_erisc.elf
+  differs: bh_ring active_erisc T 16 /home/aagarwal/.tt-metal-mainline-cov-bfc-rjnew/cases/bh_ring/cache/tt-metal-cache14405037646996279691/kernels/fabric_erisc_router/7460820899683063020/active_erisc/active_erisc.elf
+  differs: bh_ring active_erisc T 16 /home/aagarwal/.tt-metal-mainline-cov-bfc-rjnew/cases/bh_ring/cache/tt-metal-cache14405037646996279691/kernels/fabric_erisc_router/18230802266422315750/active_erisc/active_erisc.elf

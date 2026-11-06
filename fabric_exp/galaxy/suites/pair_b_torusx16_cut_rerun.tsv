@@ -1,0 +1,2 @@
+# config	label	form	timeout_s	env	yaml
+torusx16	tx_torus_multi_mesh_cut	torusx16	5400	-	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_torus_multi_mesh_cut.yaml

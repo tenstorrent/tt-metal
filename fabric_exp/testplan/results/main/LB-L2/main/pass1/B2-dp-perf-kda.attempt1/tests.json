@@ -1,0 +1,43 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 2,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_1326341_1793747006413121267.xml",
+  "pytest_1344352_1793747055979538003.xml",
+  "pytest_1349927_1793747073282331486.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.kda.components.test_qkv_convolution_exchange::test_qkv_convolution_exchange_kimi_k3_perf[blackhole-loudbox-SP8xTP1-ring]": {
+   "file": "pytest_1349927_1793747073282331486.xml",
+   "measured": 60.0,
+   "message": "AssertionError: 60.0 us per call outside [60.4, 66.8] (reference 63.6 us, margin +/- 5%)\nassert 60.42 <= 60.00830326229334",
+   "status": "PERF_WINDOW",
+   "time": 9.418,
+   "window": [
+    60.4,
+    66.8
+   ]
+  },
+  "models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf::test_kimi_k3_tp_reduce_scatter_perf[blackhole-TP4-linear]": {
+   "file": "pytest_1344352_1793747055979538003.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.335
+  },
+  "models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf::test_synthetic_kimi_k3_perf[blackhole-traced-SP8xTP1-ring]": {
+   "file": "pytest_1326341_1793747006413121267.xml",
+   "measured": 1.11,
+   "message": "AssertionError: SP8xTP1 median trace wall 1.110 ms is outside performance range [1.261, 1.339] ms (reference 1.300 ms \u00b1 3%)\nassert 1.261 <= 1.1101955082267523",
+   "status": "PERF_WINDOW",
+   "time": 37.952,
+   "window": [
+    1.261,
+    1.339
+   ]
+  }
+ }
+}

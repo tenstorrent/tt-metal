@@ -599,41 +599,44 @@ FORCE_INLINE bool send(
 // Ring-jam samples (study telemetry; fabric_exp/consolidation/RING_JAM_FIX.md §8.2)
 // ---------------------------------------------------------------------------------------------------------------------
 
-// On VC0 of a deadlock-avoiding (ring / torus) router, with the host's phase profile at level 1 (TT_FABRIC_PHASE_PROFILE=1,
-// which allocates the block): one sample per round of VC0's channels and far ring, taken between two passes at a
-// rotating index (round r samples before pass (13 r + 5) mod 32: 13 is coprime with 32, so every position in the round is
-// sampled equally often and the samples weigh every pass alike, whatever the traffic's period in passes). Nothing is
-// added inside the pass; the round loop gains one compare. Every 16 rounds the samples and the VC0 channels' send counts
-// (their existing `sent` counters) go into this ERISC's FabricPhaseProfile block, which test_tt_fabric reads before and
-// after each test (TT_FABRIC_PHASE_PROFILE_CSV). Without the block: compiled out.
+// On VC0 of a deadlock-avoiding (ring / torus) router, with the host's phase profile at level 1
+// (TT_FABRIC_PHASE_PROFILE=1, which allocates the block): one sample per round of VC0's channels and far ring, taken
+// between two passes at a rotating index: round r samples before pass (13 r + 5) mod 32. 13 is odd, so over 32 rounds
+// every position in the round is sampled once: the samples weigh every pass alike, and no traffic period that divides
+// the round's 32 passes can lock them to one phase (a fixed index would; and the round's own boundary work comes before
+// pass 0). Nothing is added inside the pass; the round loop gains one compare. Every 16 rounds the samples and the VC0
+// channels' send counts (their existing `sent` counters) go into this ERISC's FabricPhaseProfile block, which
+// test_tt_fabric reads before and after each test (TT_FABRIC_PHASE_PROFILE_CSV). Without the block: compiled out.
 // The block's fields hold (the readback names them after the phase profile's own meaning):
 //   iters samples, wall_ts rounds, pkts VC0 sends, busy_ticks contests (an injection channel and the in-ring channel
 //   both hold a packet), blocked_ticks contests with < 2 free far slots, idle_ticks samples with the in-ring channel
 //   holding a packet, gap_ticks in-ring sends, events[0] samples with the in-ring channel holding a packet and no free
 //   far slot, events[1] samples with an injection channel holding a packet and < 2 free far slots, events[2] injection
-//   sends, phase_count[i] contests with i free far slots (11: 11 or more), phase_ticks[i] contests with an in-ring
-//   backlog of i packets (11: 11 or more), info: in-ring channel | injection channels << 8 | far ring slots << 16 |
-//   "jsk" << 40.
+//   sends, events[3] samples with an injection channel holding a packet, phase_count[i] contests with i free far slots
+//   (11: 11 or more), phase_ticks[i] contests with an in-ring backlog of i packets (11: 11 or more), info: in-ring
+//   channel | injection channels << 8 | far ring slots << 16 | "jsk" << 40.
 namespace jam {
 constexpr uint32_t injection_channels = [] {
     uint32_t mask = 0;
     for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
         const bool vc0 = ((SenderVc<0>::sender_channels >> ch) & 1u) != 0;
-        mask |= (vc0 && enable_deadlock_avoidance && sender_channel_is_traffic_injection_channel_all_[ch]) ? 1u << ch : 0u;
+        const bool injection = enable_deadlock_avoidance && sender_channel_is_traffic_injection_channel_all_[ch];
+        mask |= (vc0 && injection) ? 1u << ch : 0u;
     }
     return mask;
 }();
 constexpr uint32_t in_ring_channels = SenderVc<0>::forwarding_channels & ~injection_channels;
 constexpr uint32_t injection_forwarding = injection_channels & SenderVc<0>::forwarding_channels;  // torus turns
-constexpr bool counts = exp_phase_profile_buffer_addr != 0 && exp_phase_profile_mode == 1 && enable_deadlock_avoidance &&
-                        SenderVc<0>::has_worker_channel && popcount(in_ring_channels) == 1 && injection_channels != 0;
+constexpr bool counts = exp_phase_profile_buffer_addr != 0 && exp_phase_profile_mode == 1 &&
+                        enable_deadlock_avoidance && SenderVc<0>::has_worker_channel &&
+                        popcount(in_ring_channels) == 1 && injection_channels != 0;
 constexpr size_t in_ring = counts ? lowest_bit(in_ring_channels) : 0;
 constexpr uint32_t buckets = PHASE_COUNT;  // 12
 constexpr uint32_t flush_every_rounds = 16;
 
 struct Counts {
-    uint32_t rounds, samples, contests, contests_room_lt2, in_ring_ready, in_ring_refusal, injection_refusal;
-    uint32_t sample_at;  // this round's pass index
+    uint32_t rounds, samples, contests, contests_room_lt2, in_ring_ready, in_ring_refusal, injection_ready,
+        injection_refusal;
     uint32_t room[buckets], backlog[buckets];
 };
 // The counts, zero-initialized; a template, so a build without the samples has no storage for them.
@@ -655,20 +658,21 @@ FORCE_INLINE bool any_holds() {
     }
 }
 
-// One sample, between two passes: VC0's channels (their registers, read now) and its far ring (`remote`).
-template <size_t CH = in_ring, typename Remote>
-FORCE_INLINE void sample(const Remote& remote) {
+// One sample, between two passes: VC0's channels (their registers, read now) and ROOM, the free far slots VC0's sender
+// knows of. Out of line: the round loop keeps its registers.
+template <size_t CH = in_ring>
+__attribute__((noinline)) void take_sample(uint32_t room) {
     auto& c = the_counts();
     const uint32_t in_ring_register = read_stream_raw<SenderChannel<CH>::free_slots_stream>();
     const bool in_ring_holds = SenderChannel<CH>::holds_packet(in_ring_register);
     const bool injection_holds = any_holds<injection_channels>();
-    const uint32_t room = remote.free_slot_count();
     c.samples++;
     if (in_ring_holds) {
         c.in_ring_ready++;
         c.in_ring_refusal += room < 1 ? 1 : 0;
     }
     if (injection_holds) {
+        c.injection_ready++;
         c.injection_refusal += room < 2 ? 1 : 0;
     }
     if (in_ring_holds && injection_holds) {
@@ -680,12 +684,19 @@ FORCE_INLINE void sample(const Remote& remote) {
     }
 }
 
+// The sample, from the round loop: VC0's far room is the loop's copy where VC0 is the loop-local VC.
+template <typename LoopCopy, typename States>
+FORCE_INLINE void sample(LoopCopy& loop_copy, States& states) {
+    if constexpr (counts) {  // (run() names it in a discarded branch without the samples)
+        take_sample(states.template progress_for<0>(loop_copy).remote.free_slot_count());
+    }
+}
+
 // Before a round: this round's sample index (rotating; see above).
 template <typename T = Counts>
 FORCE_INLINE uint32_t start_round() {
-    auto& c = the_counts<T>();
-    c.sample_at = (c.rounds * 13u + 5u) % iterations_between_ctx_switch_and_teardown_checks;
-    return c.sample_at;
+    static_assert(iterations_between_ctx_switch_and_teardown_checks % 13 != 0, "the stride visits every pass index");
+    return (the_counts<T>().rounds * 13u + 5u) % iterations_between_ctx_switch_and_teardown_checks;
 }
 
 // Sends so far on the turn (injection forwarding) channels in MASK.
@@ -699,23 +710,17 @@ FORCE_INLINE uint32_t turn_sends(States& states) {
     }
 }
 
-// After a round: count it; every flush_every_rounds rounds, the counts into this ERISC's block (running totals; the
-// host subtracts across a test).
-template <typename LoopCopy, typename States>
-FORCE_INLINE void end_round(LoopCopy& loop_copy, States& states) {
-    auto& c = the_counts();
-    if (++c.rounds % flush_every_rounds != 0) {
-        return;
-    }
+// The counts and the VC0 channels' sends into this ERISC's block (running totals; the host subtracts across a test).
+// Out of line, as take_sample.
+template <typename T = Counts>
+__attribute__((noinline)) void flush(uint32_t in_ring_sends, uint32_t injection_sends) {
+    const T& c = the_counts<T>();
     const uint32_t base = exp_phase_profile_buffer_addr + MY_ERISC_ID * sizeof(FabricPhaseProfile);
     auto put = [base](size_t offset, uint64_t v) {
         auto* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + offset);
         p[0] = static_cast<uint32_t>(v);
         p[1] = static_cast<uint32_t>(v >> 32);
     };
-    const uint32_t worker_sends = states.template progress_for<0>(loop_copy).worker.progress.sent;
-    const uint32_t in_ring_sends = states.forwarding.template get<in_ring>().progress.sent;
-    const uint32_t injection_sends = worker_sends + turn_sends<injection_forwarding>(states);
     put(offsetof(FabricPhaseProfile, iters), c.samples);
     put(offsetof(FabricPhaseProfile, wall_ts), c.rounds);
     put(offsetof(FabricPhaseProfile, pkts), static_cast<uint64_t>(in_ring_sends) + injection_sends);
@@ -726,28 +731,26 @@ FORCE_INLINE void end_round(LoopCopy& loop_copy, States& states) {
     put(offsetof(FabricPhaseProfile, events) + 0 * sizeof(uint64_t), c.in_ring_refusal);
     put(offsetof(FabricPhaseProfile, events) + 1 * sizeof(uint64_t), c.injection_refusal);
     put(offsetof(FabricPhaseProfile, events) + 2 * sizeof(uint64_t), injection_sends);
+    put(offsetof(FabricPhaseProfile, events) + 3 * sizeof(uint64_t), c.injection_ready);
     for (uint32_t i = 0; i < buckets; i++) {
         put(offsetof(FabricPhaseProfile, phase_count) + i * sizeof(uint64_t), c.room[i]);
         put(offsetof(FabricPhaseProfile, phase_ticks) + i * sizeof(uint64_t), c.backlog[i]);
     }
-    put(offsetof(FabricPhaseProfile, info),
-        in_ring | static_cast<uint64_t>(injection_channels) << 8 |
-            static_cast<uint64_t>(RemoteReceiverChannel<0>::num_slots) << 16 | static_cast<uint64_t>(0x6A736B) << 40);
+    constexpr uint64_t far_slots = RemoteReceiverChannel<0>::num_slots;
+    constexpr uint64_t tag = 0x6A736B;  // "jsk"
+    put(offsetof(FabricPhaseProfile, info), in_ring | uint64_t{injection_channels} << 8 | far_slots << 16 | tag << 40);
 }
 
-// A round of passes (PASS_ONCE: one pass) with this round's sample before the pass at its rotating index; the counts
-// flushed after it (every flush_every_rounds rounds). The round loop's only addition is the index compare.
-template <typename LoopCopy, typename States, typename PassOnce>
-FORCE_INLINE void sampled_round(LoopCopy& loop_copy, States& states, PassOnce&& pass_once) {
-    if constexpr (counts) {
-        const uint32_t sample_at = start_round();
-        for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
-            if (n == sample_at) {
-                sample(states.template progress_for<0>(loop_copy).remote);
-            }
-            pass_once();
+// After a round: count it; every flush_every_rounds rounds, flush.
+template <typename LoopCopy, typename States>
+FORCE_INLINE void end_round(LoopCopy& loop_copy, States& states) {
+    if constexpr (counts) {  // (as sample)
+        if (++the_counts().rounds % flush_every_rounds == 0) {
+            const uint32_t worker_sends = states.template progress_for<0>(loop_copy).worker.progress.sent;
+            flush(
+                states.forwarding.template get<in_ring>().progress.sent,
+                worker_sends + turn_sends<injection_forwarding>(states));
         }
-        end_round(loop_copy, states);
     }
 }
 }  // namespace jam
@@ -1174,10 +1177,15 @@ __attribute__((noinline)) void run() {
         restore_worker_credit_presets(loop_copy, states);
         while (next_round()) {
             before_round(round, loop_copy, states);
-            if constexpr (jam::counts) {  // study telemetry: one sample per round (jam::sampled_round)
-                jam::sampled_round(loop_copy, states, [&] {
+            if constexpr (jam::counts) {  // study telemetry: one sample at this round's rotating pass index (jam)
+                const uint32_t sample_at = jam::start_round();
+                for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
+                    if (n == sample_at) {
+                        jam::sample(loop_copy, states);
+                    }
                     pass(loop_copy, states, channels_in_flight, round.send_yielded);
-                });
+                }
+                jam::end_round(loop_copy, states);
             } else {
                 for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
                     pass(loop_copy, states, channels_in_flight, round.send_yielded);

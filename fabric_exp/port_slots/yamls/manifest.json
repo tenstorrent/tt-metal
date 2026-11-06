@@ -1,0 +1,86 @@
+{
+ "pf2d_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pf2d_3072.yaml",
+  "tests": 16
+ },
+ "pf1d_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pf1d_3072.yaml",
+  "tests": 8
+ },
+ "pf2dns_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pf2dns_3072.yaml",
+  "tests": 4
+ },
+ "pw2d_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pw2d_3072.yaml",
+  "tests": 9
+ },
+ "pf2ds_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pf2ds_3072.yaml",
+  "tests": 12
+ },
+ "pw2d_4352": {
+  "yaml": "fabric_exp/port_slots/yamls/pw2d_4352.yaml",
+  "tests": 9
+ },
+ "pf2ds_4352": {
+  "yaml": "fabric_exp/port_slots/yamls/pf2ds_4352.yaml",
+  "tests": 12
+ },
+ "pval2d_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pval2d_3072.yaml",
+  "tests": 1
+ },
+ "pval1d_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pval1d_3072.yaml",
+  "tests": 1
+ },
+ "pval2d_4352": {
+  "yaml": "fabric_exp/port_slots/yamls/pval2d_4352.yaml",
+  "tests": 1
+ },
+ "pvs_ns": {
+  "yaml": "fabric_exp/port_slots/yamls/pvs_ns.yaml",
+  "tests": 6
+ },
+ "pvs_t42ns": {
+  "yaml": "fabric_exp/port_slots/yamls/pvs_t42ns.yaml",
+  "tests": 50
+ },
+ "pvs_c2d": {
+  "yaml": "fabric_exp/port_slots/yamls/pvs_c2d.yaml",
+  "tests": 10
+ },
+ "pvs_c1lin": {
+  "yaml": "fabric_exp/port_slots/yamls/pvs_c1lin.yaml",
+  "tests": 12
+ },
+ "pvs_c1ring": {
+  "yaml": "fabric_exp/port_slots/yamls/pvs_c1ring.yaml",
+  "tests": 2
+ },
+ "pvs_c1ne": {
+  "yaml": "fabric_exp/port_slots/yamls/pvs_c1ne.yaml",
+  "tests": 2
+ },
+ "pvline_4352": {
+  "yaml": "fabric_exp/port_slots/yamls/pvline_4352.yaml",
+  "tests": 38
+ },
+ "pvring_4352": {
+  "yaml": "fabric_exp/port_slots/yamls/pvring_4352.yaml",
+  "tests": 19
+ },
+ "pvline_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pvline_3072.yaml",
+  "tests": 38
+ },
+ "pvring_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/pvring_3072.yaml",
+  "tests": 19
+ },
+ "pval1d_4352": {
+  "yaml": "fabric_exp/port_slots/yamls/pval1d_4352.yaml",
+  "tests": 1
+ }
+}

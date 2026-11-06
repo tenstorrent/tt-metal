@@ -1,0 +1,20 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 1
+ },
+ "files": [
+  "pytest_2428605_1793784060997756609_20261104_092100.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_passthrough_pipeline_block[blackhole-device_params0-mesh_device0]": {
+   "file": "pytest_2428605_1793784060997756609_20261104_092100.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_passthrough_pipeline_block hit Fabric Router Sync timeout after 10000 ms on Device 3 with FABRIC_2D; expected 0xa2b2c2d2, got 0xa1b1c1d1. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

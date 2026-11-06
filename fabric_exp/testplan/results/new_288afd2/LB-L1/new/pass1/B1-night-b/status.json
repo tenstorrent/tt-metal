@@ -1,0 +1,53 @@
+{
+ "capped": true,
+ "ci": {
+  "ci_timeout_min": 30,
+  "filtered": true,
+  "list": "fabric_tests.yaml",
+  "name": "BH ccl nightly tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 1800,
+ "data_inodes_at_submit": null,
+ "data_inodes_free": null,
+ "deviation": null,
+ "duration_s": 755.8,
+ "end": "2026-11-04T09:22:47+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_to_all.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_to_all_dispatch_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_new_all_broadcast.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_reduce_2d_fabric_turning.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_2d_fabric.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_to_all_combine_bh.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_to_all_async_generic_perf.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_broadcast_2d_fabric.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_reduce_2d_fabric.py"
+ ],
+ "group": "LB-L1",
+ "jit_cache": "/home/aagarwal/.tt-metal-cache-regress/new_288afd2-new",
+ "junit_files": 1,
+ "label": "new_288afd2",
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": null,
+ "start": "2026-11-04T09:10:11+00:00",
+ "status": "PASS",
+ "step": "B1-night-b",
+ "step_env": null,
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 8,
+  "PASS": 110,
+  "PERF_WINDOW": 0,
+  "SKIP": 34
+ },
+ "timeout_note": null,
+ "timeout_s": 1359,
+ "tree": "/home/aagarwal/tt-metal-new",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

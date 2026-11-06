@@ -1,0 +1,164 @@
+{
+ "counts": {
+  "FAIL": 6,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 18
+ },
+ "files": [
+  "pytest_2073296_1793782708964883454_20261104_085828.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_get_device_mla_work_assignment": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.183
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-0-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA single-device skip_ccl path hits ncrisc build failure in broadcast.hpp: static_assert(num_chunks > 0). Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-0-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/impl/program/program.cpp:421: tt::exception\ninfo:\nFailed to generate binaries for pre_sdpa_kernel TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\ntrisc0 build failed. Log: In file included from",
+   "status": "FAIL",
+   "time": 43.911
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-1-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA single-device skip_ccl path hits ncrisc build failure in broadcast.hpp: static_assert(num_chunks > 0). Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-1-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/impl/program/program.cpp:421: tt::exception\ninfo:\nFailed to generate binaries for pre_sdpa_kernel TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\ntrisc0 build failed. Log: In file included from",
+   "status": "FAIL",
+   "time": 31.652
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-1023-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-1023-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-11664-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-11664-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-127-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA single-device skip_ccl path hits ncrisc build failure in broadcast.hpp: static_assert(num_chunks > 0). Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-127-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/impl/program/program.cpp:421: tt::exception\ninfo:\nFailed to generate binaries for pre_sdpa_kernel TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\ntrisc0 build failed. Log: In file included from",
+   "status": "FAIL",
+   "time": 29.105
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-2047-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-2047-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-242-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA single-device skip_ccl path hits ncrisc build failure in broadcast.hpp: static_assert(num_chunks > 0). Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-242-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/impl/program/program.cpp:421: tt::exception\ninfo:\nFailed to generate binaries for pre_sdpa_kernel TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\ntrisc0 build failed. Log: In file included from",
+   "status": "FAIL",
+   "time": 30.953
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-255-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA single-device skip_ccl path hits ncrisc build failure in broadcast.hpp: static_assert(num_chunks > 0). Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-255-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/impl/program/program.cpp:421: tt::exception\ninfo:\nFailed to generate binaries for pre_sdpa_kernel TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\nbrisc build failed. Log: In file included from ",
+   "status": "FAIL",
+   "time": 32.08
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-4096-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-4096-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-564-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA single-device skip_ccl path hits ncrisc build failure in broadcast.hpp: static_assert(num_chunks > 0). Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-564-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/impl/program/program.cpp:421: tt::exception\ninfo:\nFailed to generate binaries for pre_sdpa_kernel TT_THROW @ /home/aagarwal/tt-metal-new/tt_metal/jit_build/build.cpp:149: tt::exception\ninfo:\ntrisc0 build failed. Log: In file included from",
+   "status": "FAIL",
+   "time": 28.505
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-6644-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-6644-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-9916-32768-1-1-1-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa::test_pre_sdpa[blackhole-True-NOC_MODE.DM_DYNAMIC_NOC-device_params0-9916-32768-1-4-2-False-1e-06-1-0]": {
+   "file": "pytest_2073296_1793782708964883454_20261104_085828.xml",
+   "message": "[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

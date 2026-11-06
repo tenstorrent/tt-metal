@@ -1,0 +1,59 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 65,
+  "filtered": true,
+  "list": "demo_sp_release_tests.yaml",
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 3900,
+ "deviation": "fabric_2d bucket narrowed to test_attention_block (-k), run alone; run_isolated_unit_tests.py --no-reset (deviation for main and new): its reset/validation/smoke preflight validates the single-Galaxy XY-torus cabling and fails on every quad-cabled 110-a node (job 172241, ENV like G0-health-cv); the job still resets at start and after any failing step",
+ "duration_s": 3903.0,
+ "end": "2026-11-04T06:50:06+00:00",
+ "failed_lines": [],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172490/cache/main-main",
+ "junit_files": 0,
+ "known_fail": "main d2bd12f (jobs 172397 a08u02, 172490 a07u08 alone after a reset): test_attention_block pos 127 and 511 fail at op launch with TT_FATAL: Per-core-allocated buffer has no shard on core 9-8, so it has no address on cores {[0-0 - 11-9], [12-0 - 12-7], [12-9 - 12-9]}; limit the cores to the buffer's shard grid (host-side allocator/program check; TT_METAL_ALLOCATOR_MODE_HYBRID=1); the later cases in the same process then abort (172397, exit -6) or hang (172490) at GC in fixture setup, so the rest of test_attention_block does not run; hypothesis, untested: that abort/hang follows from the two failed cases. Kept in main-vs-new: a pass on new counts as a gain",
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a07u08",
+ "note": "the runner sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 for every bucket (as in CI); job 172397 (fabric_2d in one process): pos 127/511 TT_FATAL 'Per-core-allocated buffer has no shard on core 9-8' (host-side allocator/program check), pos 1023 aborted at GC (std::system_error Invalid argument)",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": -15,
+ "rerun_of": null,
+ "rescored": [
+  {
+   "at": "2026-11-04T06:59:13+00:00",
+   "from": "HANG",
+   "to": "KNOWN_FAIL"
+  }
+ ],
+ "router": "main",
+ "slurm_job": "172490",
+ "start": "2026-11-04T05:45:03+00:00",
+ "status": "KNOWN_FAIL",
+ "step": "G2-dsb1-attn",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 2,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "tests_from_log": true,
+ "timeout_note": null,
+ "timeout_s": 3900,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

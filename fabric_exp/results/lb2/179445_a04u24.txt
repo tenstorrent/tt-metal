@@ -1,0 +1,22 @@
+job 179445 on bh-lb-120-a04u24
+command: bash fabric_exp/pr_perf/pr_perf_runs.sh one
+summary: rc=0 hung=0 node=bh-lb-120-a04u24 job=179445 post=none start=2026-11-05 16:44:10 end=2026-11-05T16:53:32Z
+[lb2 16:42:44 +0s] node=bh-lb-120-a04u24 job=179445 mode=run start=2026-11-05T16:42:44Z timeout=4200s
+[lb2 16:42:44 +0s] command: bash fabric_exp/pr_perf/pr_perf_runs.sh one
+[lb2 16:42:44 +0s] stage src-20261105-163727 (full full-20261104-221405), staged 2026-11-05T16:37:43Z
+[lb2 16:42:44 +0s] busy check: clear
+[lb2 16:42:44 +0s] space: 84 GB free on /home
+[lb2 16:42:53 +9s] verify: 32633 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T16:37:43Z)
+[lb2 16:42:56 +12s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T16:37:43Z)
+[lb2 16:43:05 +21s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T16:37:43Z)
+[lb2 16:43:06 +22s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T16:37:43Z)
+[lb2 16:43:06 +22s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T16:37:43Z)
+[lb2 16:43:13 +29s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 16:43:13 +29s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 16:43:13 +29s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 684 GB available
+[lb2 16:43:13 +29s] reset (start): tt-smi -r
+[lb2 16:44:10 +86s] link check (start, poll 1, +0 s): every fabric link UP/PASS/400 (link gate PASS)
+[lb2 16:44:11 +87s] run: bash fabric_exp/pr_perf/pr_perf_runs.sh one
+[lb2 16:53:27 +643s] command exit 0
+[lb2 16:53:32 +648s] copied back: 60 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/179445 (MANIFEST.tsv)
+[lb2 16:53:32 +648s] done: rc 0, hung 0; 76 GB free on /home

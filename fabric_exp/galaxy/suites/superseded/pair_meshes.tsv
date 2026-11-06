@@ -1,0 +1,7 @@
+# config	label	form	timeout_s	env	yaml
+mesh_z	mz_mesh_sanity	mesh_z	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+mesh_z	mz_multi_mesh	mesh_z	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+mesh_noz	mn_mesh_sanity	mesh_noz	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+mesh_noz	mn_multi_mesh	mesh_noz	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+override_mesh_z	ov_mesh_z	mesh_z	1800	TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml
+override_mesh_noz	ov_mesh_noz	mesh_noz	1800	TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml

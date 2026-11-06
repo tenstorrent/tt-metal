@@ -1,0 +1,4 @@
+layout,name,value
+SP8xTP1,KDA_SYNTHETIC_PERF,1.1101955082267523
+TP4-linear,KDA_TP_REDUCE_SCATTER_PERF,0.18876760732382536
+,qkv_causal_conv1d_silu_with_carry,60.0

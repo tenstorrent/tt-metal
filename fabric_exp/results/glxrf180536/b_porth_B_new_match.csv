@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+MVC3_B_new_M01_s256,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[4]",1,256,1,1488626328.000000,3326422.425064,0.851564,0.851564,0.851564,0.000000,1.000000
+MVC3_B_new_M01_s1024,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[4]",1,1024,1,1499903990.000000,3249207.970972,3.327189,3.327189,3.327189,0.000000,1.000000
+MVC3_B_new_M01_s4352,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[4]",1,4352,1,1499623803.000000,1804052.452747,7.851236,7.851236,7.851236,0.000000,1.000000

@@ -1,0 +1,36 @@
+--- a/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
++++ b/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+@@ -32,6 +32,7 @@
+ #include "router_round.hpp"
+ #include "router_routing.hpp"
+ #include "router_telemetry.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp"  // LOCAL slack study, never committed
+ 
+ namespace fabric_router::receiver {
+ 
+@@ -390,6 +391,7 @@
+             ReceiverChannel<VC>::CompletionTrids::of_slot(progress.next_index));
+     }
+     retire<VC>(progress, sources, source_channel(packet.src_ch_id));
++    slack_study::spin<slack_study::rx_spin_cycles>();  // LOCAL slack study: E1, per packet received and handled
+     return true;
+ }
+ 
+--- a/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
++++ b/tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp
+@@ -32,6 +32,7 @@
+ #include "router_common.hpp"
+ #include "router_round.hpp"
+ #include "router_telemetry.hpp"
++#include "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp"  // LOCAL slack study, never committed
+ 
+ namespace fabric_router::sender {
+ 
+@@ -585,6 +586,7 @@
+     }
+     // The remote router's packets-received register +1: after the data, on the same TX queue.
+     remote_update_ptr_val<RemoteReceiverChannel<VC>::packets_received_stream, sender_txq_id>(1);
++    slack_study::spin<slack_study::tx_spin_cycles>();  // LOCAL slack study: E0, per packet sent
+     sent++;
+     if constexpr (telemetry::counts_sent) {
+         telemetry::note_sent(size);

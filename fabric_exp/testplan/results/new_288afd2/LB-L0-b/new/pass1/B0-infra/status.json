@@ -1,0 +1,43 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": false,
+  "list": "fabric_tests.yaml",
+  "name": "BH fabric infra unit tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 900,
+ "data_inodes_at_submit": null,
+ "data_inodes_free": null,
+ "deviation": null,
+ "duration_s": 355.3,
+ "end": "2026-11-04T08:21:50+00:00",
+ "failed_lines": [],
+ "group": "LB-L0-b",
+ "jit_cache": "/home/aagarwal/.tt-metal-cache-regress/new_288afd2-new",
+ "label": "new_288afd2",
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": null,
+ "start": "2026-11-04T08:15:55+00:00",
+ "status": "PASS",
+ "step": "B0-infra",
+ "step_env": null,
+ "telemetry": "CI default",
+ "timeout_note": null,
+ "timeout_s": 900,
+ "tree": "/home/aagarwal/tt-metal-new",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

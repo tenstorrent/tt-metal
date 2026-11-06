@@ -1,0 +1,35 @@
+# Flush validation of 7326d59a864 on the tip de8a2ac17a8 (coordinator 2026-11-05): ring 1-hop and 2-hop unicast (not
+# full-ring, no flow control) with the flushed-atomic ntypes of test_fabric_sanity_common.yaml (atomic_inc,
+# fused_atomic_inc and scatter + atomic_inc, flush off and on), 1024 / 4096 B, data-checked. The change is in local
+# delivery of atomics on deadlock-avoiding (ring) receivers.
+Tests:
+- name: FlushRing1HopEW
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype:
+    - atomic_inc
+    - {type: fused_atomic_inc, flush: [false, true]}
+    - {type: unicast_scatter_write, atomic_inc: true, flush: [false, true]}
+    size: [1024, 4096]
+  defaults: {ftype: unicast, num_packets: 2000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 1]
+- name: FlushRing2HopEW
+  sync: true
+  fabric_setup: {topology: Ring}
+  parametrization_params:
+    ntype:
+    - atomic_inc
+    - {type: fused_atomic_inc, flush: [false, true]}
+    - {type: unicast_scatter_write, atomic_inc: true, flush: [false, true]}
+    size: [1024, 4096]
+  defaults: {ftype: unicast, num_packets: 2000}
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 2]

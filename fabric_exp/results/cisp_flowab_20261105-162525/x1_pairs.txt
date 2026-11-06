@@ -1,0 +1,21 @@
+X1 (one directed neighbor pair per iteration): per pair, its routers with low / iterations, num_links 2 (num_links 1: the P0 router alone)
+pair  0: c1/e8->S c5/e11 P0: on 9/16, off 0/16 | c1/e10->S c5/e9 P1: on 0/16, off 0/16 || L1 low 0/32
+pair  1: c1/e5->E c0/e6 P0: on 11/16, off 1/16 | c1/e7->E c0/e4 P1: on 0/16, off 0/16 || L1 low 0/32
+pair  2: c0/e8->S c4/e11 P0: on 0/16, off 0/16 | c0/e10->S c4/e9 P1: on 0/16, off 0/16 || L1 low 0/32
+pair  3: c0/e5->E c2/e6 P1: on 0/16, off 0/16 | c0/e7->E c2/e4 P0: on 0/16, off 0/16 || L1 low 0/32
+pair  4: c0/e4->W c1/e7 P1: on 0/16, off 0/16 | c0/e6->W c1/e5 P0: on 0/16, off 0/16 || L1 low 0/32
+pair  5: c2/e8->S c6/e11 P0: on 6/16, off 2/16 | c2/e10->S c6/e9 P1: on 0/16, off 0/16 || L1 low 0/32
+pair  6: c2/e5->E c3/e6 P0: on 14/16, off 0/16 | c2/e7->E c3/e4 P1: on 0/16, off 0/16 || L1 low 0/32
+pair  7: c2/e4->W c0/e7 P0: on 0/16, off 2/16 | c2/e6->W c0/e5 P1: on 0/16, off 0/16 || L1 low 0/32
+pair  8: c3/e8->S c7/e11 P0: on 0/16, off 0/16 | c3/e10->S c7/e9 P1: on 0/16, off 0/16 || L1 low 0/32
+pair  9: c3/e4->W c2/e7 P1: on 0/16, off 0/16 | c3/e6->W c2/e5 P0: on 0/16, off 1/16 || L1 low 0/32
+pair 10: c5/e9->N c1/e10 P1: on 0/16, off 0/16 | c5/e11->N c1/e8 P0: on 8/16, off 0/16 || L1 low 0/32
+pair 11: c5/e5->E c4/e6 P1: on 0/16, off 0/16 | c5/e7->E c4/e4 P0: on 14/16, off 2/16 || L1 low 0/32
+pair 12: c4/e9->N c0/e10 P1: on 0/16, off 0/16 | c4/e11->N c0/e8 P0: on 0/16, off 0/16 || L1 low 0/32
+pair 13: c4/e5->E c6/e6 P0: on 0/16, off 0/16 | c4/e7->E c6/e4 P1: on 0/16, off 0/16 || L1 low 0/32
+pair 14: c4/e4->W c5/e7 P0: on 0/16, off 0/16 | c4/e6->W c5/e5 P1: on 0/16, off 0/16 || L1 low 0/32
+pair 15: c6/e9->N c2/e10 P1: on 0/16, off 0/16 | c6/e11->N c2/e8 P0: on 7/16, off 2/16 || L1 low 0/32
+pair 16: c6/e5->E c7/e6 P1: on 0/16, off 0/16 | c6/e7->E c7/e4 P0: on 11/16, off 0/16 || L1 low 0/32
+pair 17: c6/e4->W c4/e7 P1: on 0/16, off 0/16 | c6/e6->W c4/e5 P0: on 0/16, off 0/16 || L1 low 0/32
+pair 18: c7/e9->N c3/e10 P1: on 0/16, off 0/16 | c7/e11->N c3/e8 P0: on 0/16, off 0/16 || L1 low 0/32
+pair 19: c7/e4->W c6/e7 P0: on 0/16, off 0/16 | c7/e6->W c6/e5 P1: on 0/16, off 0/16 || L1 low 0/32

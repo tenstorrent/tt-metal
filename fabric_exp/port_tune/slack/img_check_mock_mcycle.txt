@@ -1,0 +1,81 @@
+## main Mesh1HopEW: 80 router images; plain largest E0 12072 B, E1 6572 B, sum 18644 of 26624
+  rx1    E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+9 insns) x4; kernel_main (-5 insns) x12; kernel_main (-9 insns) x24, largest 6608 B || E0+E1 18680 B fits
+  rx2    E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+18 insns) x4; kernel_main (-2 insns) x12; kernel_main (-5 insns) x24, largest 6644 B || E0+E1 18716 B fits
+  tx1    E0 40/40 differ: kernel_main (+16 insns) x1; kernel_main (+17 insns) x1; kernel_main (+18 insns) x7; kernel_main (+19 insns) x11; kernel_main (+22 insns) x16; kernel_main (+23 insns) x1; kernel_main (+24 insns) x1; kernel_main (+28 insns) x2, largest 12184 B || E1 0/40 differ, largest 6572 B || E0+E1 18756 B fits
+  tx2    E0 40/40 differ: kernel_main (+20 insns) x1; kernel_main (+21 insns) x1; kernel_main (+22 insns) x7; kernel_main (+23 insns) x11; kernel_main (+26 insns) x16; kernel_main (+27 insns) x1; kernel_main (+28 insns) x1; kernel_main (+32 insns) x2, largest 12200 B || E1 0/40 differ, largest 6572 B || E0+E1 18772 B fits
+  mz     E0 0/40 differ, largest 12072 B || E1 0/40 differ, largest 6572 B || E0+E1 18644 B fits
+  mrx1   E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+3 insns) x28; kernel_main (-2 insns) x12, largest 6584 B || E0+E1 18656 B fits
+  mrx2   E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+8 insns) x4; kernel_main (-4 insns) x12; kernel_main (-8 insns) x24, largest 6604 B || E0+E1 18676 B fits
+  mrx4   E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+10 insns) x4; kernel_main (-4 insns) x12; kernel_main (-8 insns) x24, largest 6612 B || E0+E1 18684 B fits
+  mrx8   E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+10 insns) x4; kernel_main (-4 insns) x12; kernel_main (-8 insns) x24, largest 6612 B || E0+E1 18684 B fits
+  mrx16  E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+13 insns) x4; kernel_main (-13 insns) x24; kernel_main (-4 insns) x12, largest 6624 B || E0+E1 18696 B fits
+  mrx32  E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+10 insns) x4; kernel_main (-4 insns) x12; kernel_main (-8 insns) x24, largest 6612 B || E0+E1 18684 B fits
+  mrx64  E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+10 insns) x4; kernel_main (-4 insns) x12; kernel_main (-8 insns) x24, largest 6612 B || E0+E1 18684 B fits
+  mrx128 E0 0/40 differ, largest 12072 B || E1 40/40 differ: kernel_main (+10 insns) x4; kernel_main (-4 insns) x12; kernel_main (-8 insns) x24, largest 6612 B || E0+E1 18684 B fits
+  mtx1   E0 40/40 differ: kernel_main (+12 insns) x34; kernel_main (+13 insns) x6, largest 12124 B || E1 0/40 differ, largest 6572 B || E0+E1 18696 B fits
+  mtx2   E0 40/40 differ: kernel_main (+16 insns) x25; kernel_main (+17 insns) x15, largest 12140 B || E1 0/40 differ, largest 6572 B || E0+E1 18712 B fits
+  mtx4   E0 40/40 differ: kernel_main (+19 insns) x1; kernel_main (+20 insns) x1; kernel_main (+21 insns) x7; kernel_main (+22 insns) x11; kernel_main (+25 insns) x16; kernel_main (+26 insns) x1; kernel_main (+27 insns) x1; kernel_main (+31 insns) x2, largest 12196 B || E1 0/40 differ, largest 6572 B || E0+E1 18768 B fits
+  mtx8   E0 40/40 differ: kernel_main (+20 insns) x1; kernel_main (+21 insns) x1; kernel_main (+22 insns) x7; kernel_main (+23 insns) x11; kernel_main (+26 insns) x16; kernel_main (+27 insns) x1; kernel_main (+28 insns) x1; kernel_main (+32 insns) x2, largest 12200 B || E1 0/40 differ, largest 6572 B || E0+E1 18772 B fits
+  mtx16  E0 40/40 differ: kernel_main (+18 insns) x1; kernel_main (+19 insns) x2; kernel_main (+20 insns) x8; kernel_main (+21 insns) x11; kernel_main (+23 insns) x2; kernel_main (+24 insns) x16, largest 12164 B || E1 0/40 differ, largest 6572 B || E0+E1 18736 B fits
+  mtx32  E0 40/40 differ: kernel_main (+20 insns) x1; kernel_main (+21 insns) x1; kernel_main (+22 insns) x7; kernel_main (+23 insns) x11; kernel_main (+26 insns) x16; kernel_main (+27 insns) x1; kernel_main (+28 insns) x1; kernel_main (+32 insns) x2, largest 12200 B || E1 0/40 differ, largest 6572 B || E0+E1 18772 B fits
+## main NeighborExchangeUnicast: 72 router images; plain largest E0 7952 B, E1 5044 B, sum 12996 of 26624
+  rx1    E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+6 insns) x36, largest 5068 B || E0+E1 13020 B fits
+  rx2    E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+10 insns) x36, largest 5084 B || E0+E1 13036 B fits
+  tx1    E0 36/36 differ: kernel_main (+10 insns) x3; kernel_main (+3 insns) x15; kernel_main (+6 insns) x3; kernel_main (-7 insns) x15, largest 7984 B || E1 0/36 differ, largest 5044 B || E0+E1 13028 B fits
+  tx2    E0 36/36 differ: kernel_main (+4 insns) x15; kernel_main (+7 insns) x3; kernel_main (+8 insns) x3; kernel_main (-6 insns) x15, largest 7980 B || E1 0/36 differ, largest 5044 B || E0+E1 13024 B fits
+  mz     E0 0/36 differ, largest 7952 B || E1 0/36 differ, largest 5044 B || E0+E1 12996 B fits
+  mrx1   E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+3 insns) x36, largest 5056 B || E0+E1 13008 B fits
+  mrx2   E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (-2 insns) x36, largest 5036 B || E0+E1 12988 B fits
+  mrx4   E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+4 insns) x36, largest 5060 B || E0+E1 13012 B fits
+  mrx8   E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+7 insns) x36, largest 5072 B || E0+E1 13024 B fits
+  mrx16  E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+7 insns) x36, largest 5072 B || E0+E1 13024 B fits
+  mrx32  E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+7 insns) x36, largest 5072 B || E0+E1 13024 B fits
+  mrx64  E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+7 insns) x36, largest 5072 B || E0+E1 13024 B fits
+  mrx128 E0 0/36 differ, largest 7952 B || E1 36/36 differ: kernel_main (+7 insns) x36, largest 5072 B || E0+E1 13024 B fits
+  mtx1   E0 36/36 differ: kernel_main (+4 insns) x36, largest 7968 B || E1 0/36 differ, largest 5044 B || E0+E1 13012 B fits
+  mtx2   E0 36/36 differ: kernel_main (+5 insns) x36, largest 7972 B || E1 0/36 differ, largest 5044 B || E0+E1 13016 B fits
+  mtx4   E0 36/36 differ: kernel_main (+11 insns) x3; kernel_main (+4 insns) x15; kernel_main (+7 insns) x3; kernel_main (-6 insns) x15, largest 7988 B || E1 0/36 differ, largest 5044 B || E0+E1 13032 B fits
+  mtx8   E0 36/36 differ: kernel_main (+11 insns) x3; kernel_main (+4 insns) x15; kernel_main (+7 insns) x3; kernel_main (-6 insns) x15, largest 7988 B || E1 0/36 differ, largest 5044 B || E0+E1 13032 B fits
+  mtx16  E0 36/36 differ: kernel_main (+11 insns) x3; kernel_main (+4 insns) x15; kernel_main (+7 insns) x3; kernel_main (-6 insns) x15, largest 7988 B || E1 0/36 differ, largest 5044 B || E0+E1 13032 B fits
+  mtx32  E0 36/36 differ: kernel_main (+11 insns) x3; kernel_main (+4 insns) x15; kernel_main (+7 insns) x3; kernel_main (-6 insns) x15, largest 7988 B || E1 0/36 differ, largest 5044 B || E0+E1 13032 B fits
+## port Mesh1HopEW: 80 router images; plain largest E0 9212 B, E1 6368 B, sum 15580 of 26624
+  rx1    E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+4 insns) x16; fabric_router::receiver::run (-3 insns) x12; fabric_router::receiver::run (-6 insns) x12, largest 6352 B || E0+E1 15564 B fits
+  rx2    E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+6 insns) x16; fabric_router::receiver::run (-1 insns) x12; fabric_router::receiver::run (-4 insns) x12, largest 6360 B || E0+E1 15572 B fits
+  tx1    E0 40/40 differ: fabric_router::sender::run (+16 insns) x40, largest 9276 B || E1 0/40 differ, largest 6368 B || E0+E1 15644 B fits
+  tx2    E0 40/40 differ: fabric_router::sender::run (+24 insns) x40, largest 9308 B || E1 0/40 differ, largest 6368 B || E0+E1 15676 B fits
+  mz     E0 0/40 differ, largest 9212 B || E1 0/40 differ, largest 6368 B || E0+E1 15580 B fits
+  mrx1   E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+3 insns) x16; fabric_router::receiver::run (-4 insns) x12; fabric_router::receiver::run (-7 insns) x12, largest 6348 B || E0+E1 15560 B fits
+  mrx2   E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+5 insns) x16; fabric_router::receiver::run (-2 insns) x12; fabric_router::receiver::run (-5 insns) x12, largest 6356 B || E0+E1 15568 B fits
+  mrx4   E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+5 insns) x16; fabric_router::receiver::run (-2 insns) x12; fabric_router::receiver::run (-5 insns) x12, largest 6356 B || E0+E1 15568 B fits
+  mrx8   E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+5 insns) x16; fabric_router::receiver::run (-2 insns) x12; fabric_router::receiver::run (-5 insns) x12, largest 6356 B || E0+E1 15568 B fits
+  mrx16  E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+5 insns) x16; fabric_router::receiver::run (-2 insns) x12; fabric_router::receiver::run (-5 insns) x12, largest 6356 B || E0+E1 15568 B fits
+  mrx32  E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+5 insns) x16; fabric_router::receiver::run (-2 insns) x12; fabric_router::receiver::run (-5 insns) x12, largest 6356 B || E0+E1 15568 B fits
+  mrx64  E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+5 insns) x16; fabric_router::receiver::run (-2 insns) x12; fabric_router::receiver::run (-5 insns) x12, largest 6356 B || E0+E1 15568 B fits
+  mrx128 E0 0/40 differ, largest 9212 B || E1 40/40 differ: fabric_router::receiver::run (+5 insns) x16; fabric_router::receiver::run (-2 insns) x12; fabric_router::receiver::run (-5 insns) x12, largest 6356 B || E0+E1 15568 B fits
+  mtx1   E0 40/40 differ: fabric_router::sender::run (+12 insns) x40, largest 9260 B || E1 0/40 differ, largest 6368 B || E0+E1 15628 B fits
+  mtx2   E0 40/40 differ: fabric_router::sender::run (+20 insns) x40, largest 9292 B || E1 0/40 differ, largest 6368 B || E0+E1 15660 B fits
+  mtx4   E0 40/40 differ: fabric_router::sender::run (+20 insns) x40, largest 9292 B || E1 0/40 differ, largest 6368 B || E0+E1 15660 B fits
+  mtx8   E0 40/40 differ: fabric_router::sender::run (+20 insns) x40, largest 9292 B || E1 0/40 differ, largest 6368 B || E0+E1 15660 B fits
+  mtx16  E0 40/40 differ: fabric_router::sender::run (+20 insns) x40, largest 9292 B || E1 0/40 differ, largest 6368 B || E0+E1 15660 B fits
+  mtx32  E0 40/40 differ: fabric_router::sender::run (+20 insns) x40, largest 9292 B || E1 0/40 differ, largest 6368 B || E0+E1 15660 B fits
+## port NeighborExchangeUnicast: 72 router images; plain largest E0 6352 B, E1 5140 B, sum 11492 of 26624
+  rx1    E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+28 insns) x36, largest 5252 B || E0+E1 11604 B fits
+  rx2    E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+30 insns) x36, largest 5260 B || E0+E1 11612 B fits
+  tx1    E0 36/36 differ: fabric_router::sender::run (+4 insns) x36, largest 6368 B || E1 0/36 differ, largest 5140 B || E0+E1 11508 B fits
+  tx2    E0 36/36 differ: fabric_router::sender::run (+6 insns) x36, largest 6376 B || E1 0/36 differ, largest 5140 B || E0+E1 11516 B fits
+  mz     E0 0/36 differ, largest 6352 B || E1 0/36 differ, largest 5140 B || E0+E1 11492 B fits
+  mrx1   E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+27 insns) x36, largest 5248 B || E0+E1 11600 B fits
+  mrx2   E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+29 insns) x36, largest 5256 B || E0+E1 11608 B fits
+  mrx4   E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+29 insns) x36, largest 5256 B || E0+E1 11608 B fits
+  mrx8   E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+29 insns) x36, largest 5256 B || E0+E1 11608 B fits
+  mrx16  E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+29 insns) x36, largest 5256 B || E0+E1 11608 B fits
+  mrx32  E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+29 insns) x36, largest 5256 B || E0+E1 11608 B fits
+  mrx64  E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+29 insns) x36, largest 5256 B || E0+E1 11608 B fits
+  mrx128 E0 0/36 differ, largest 6352 B || E1 36/36 differ: fabric_router::receiver::run (+29 insns) x36, largest 5256 B || E0+E1 11608 B fits
+  mtx1   E0 36/36 differ: fabric_router::sender::run (+3 insns) x36, largest 6364 B || E1 0/36 differ, largest 5140 B || E0+E1 11504 B fits
+  mtx2   E0 36/36 differ: fabric_router::sender::run (+5 insns) x36, largest 6372 B || E1 0/36 differ, largest 5140 B || E0+E1 11512 B fits
+  mtx4   E0 36/36 differ: fabric_router::sender::run (+5 insns) x36, largest 6372 B || E1 0/36 differ, largest 5140 B || E0+E1 11512 B fits
+  mtx8   E0 36/36 differ: fabric_router::sender::run (+5 insns) x36, largest 6372 B || E1 0/36 differ, largest 5140 B || E0+E1 11512 B fits
+  mtx16  E0 36/36 differ: fabric_router::sender::run (+5 insns) x36, largest 6372 B || E1 0/36 differ, largest 5140 B || E0+E1 11512 B fits
+  mtx32  E0 36/36 differ: fabric_router::sender::run (+5 insns) x36, largest 6372 B || E1 0/36 differ, largest 5140 B || E0+E1 11512 B fits
+IMG_CHECK_OK

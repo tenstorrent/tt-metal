@@ -1,0 +1,529 @@
+{
+ "opt": "Os",
+ "tree": "d51e42cd78a (/home/aagarwal/tt-metal-rf-port)",
+ "cases": {
+  "bh_1d": {
+   "images": 72,
+   "builds": 72,
+   "per_erisc": {
+    "E0": {
+     "code": 7172,
+     "free": 2036
+    },
+    "E1": {
+     "code": 6284,
+     "free": 4416
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:23:20.485 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_1d_1erisc": {
+   "images": 36,
+   "builds": 36,
+   "per_erisc": {
+    "E1": {
+     "code": 9276,
+     "free": 4248
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:23:22.080 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_1d_mux": {
+   "images": 36,
+   "builds": 36,
+   "per_erisc": {
+    "E1": {
+     "code": 8512,
+     "free": 4296
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:23:21.233 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_1d_telemetry": {
+   "images": 72,
+   "builds": 72,
+   "per_erisc": {
+    "E0": {
+     "code": 7784,
+     "free": 1916
+    },
+    "E1": {
+     "code": 6772,
+     "free": 4296
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:23:21.303 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_1d_trim": {
+   "images": 72,
+   "builds": 72,
+   "per_erisc": {
+    "E0": {
+     "code": 7324,
+     "free": 2036
+    },
+    "E1": {
+     "code": 6500,
+     "free": 4400
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:23:21.271 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_2d": {
+   "images": 80,
+   "builds": 80,
+   "per_erisc": {
+    "E0": {
+     "code": 8744,
+     "free": 1876
+    },
+    "E1": {
+     "code": 6280,
+     "free": 4384
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:23:22.355 | critical |          Always | TT_FATAL: Sender on device: (M0, D6) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_2d_1erisc": {
+   "images": 40,
+   "builds": 40,
+   "per_erisc": {
+    "E1": {
+     "code": 10776,
+     "free": 4040
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:24:40.342 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_2d_bwtelemetry": {
+   "images": 80,
+   "builds": 80,
+   "per_erisc": {
+    "E0": {
+     "code": 9420,
+     "free": 1756
+    },
+    "E1": {
+     "code": 6396,
+     "free": 4264
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:24:40.102 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_2d_mux": {
+   "images": 40,
+   "builds": 40,
+   "per_erisc": {
+    "E1": {
+     "code": 8700,
+     "free": 4152
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:24:41.230 | critical |          Always | TT_FATAL: Sender on device: (M0, D6) core: 12-8 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_2d_telemetry": {
+   "images": 80,
+   "builds": 80,
+   "per_erisc": {
+    "E0": {
+     "code": 9468,
+     "free": 1756
+    },
+    "E1": {
+     "code": 6760,
+     "free": 4264
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:24:39.904 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_2d_trim": {
+   "images": 80,
+   "builds": 80,
+   "per_erisc": {
+    "E0": {
+     "code": 8988,
+     "free": 1876
+    },
+    "E1": {
+     "code": 6564,
+     "free": 4384
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:24:40.803 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_2d_vc2": {
+   "images": 80,
+   "builds": 80,
+   "per_erisc": {
+    "E0": {
+     "code": 9716,
+     "free": 1796
+    },
+    "E1": {
+     "code": 7640,
+     "free": 4352
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:24:42.611 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_2d_vc2_1erisc": {
+   "images": 40,
+   "builds": 40,
+   "per_erisc": {
+    "E1": {
+     "code": 13080,
+     "free": 3944
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:25:54.214 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_neighbor": {
+   "images": 72,
+   "builds": 72,
+   "per_erisc": {
+    "E0": {
+     "code": 5716,
+     "free": 2148
+    },
+    "E1": {
+     "code": 4912,
+     "free": 4512
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:25:41.061 | critical |          Always | TT_FATAL: Sender on device: (M0, D6) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_neighbor_1erisc": {
+   "images": 36,
+   "builds": 36,
+   "per_erisc": {
+    "E1": {
+     "code": 6912,
+     "free": 4424
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:25:43.129 | critical |          Always | TT_FATAL: Sender on device: (M0, D6) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_ring": {
+   "images": 72,
+   "builds": 72,
+   "per_erisc": {
+    "E0": {
+     "code": 7332,
+     "free": 2020
+    },
+    "E1": {
+     "code": 6328,
+     "free": 4416
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:25:44.087 | critical |          Always | TT_FATAL: Sender on device: (M0, D6) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_ring_1erisc": {
+   "images": 36,
+   "builds": 36,
+   "per_erisc": {
+    "E1": {
+     "code": 9384,
+     "free": 4248
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:25:45.781 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_ring_mux": {
+   "images": 36,
+   "builds": 36,
+   "per_erisc": {
+    "E1": {
+     "code": 8524,
+     "free": 4296
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:25:49.802 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_torus": {
+   "images": 96,
+   "builds": 96,
+   "per_erisc": {
+    "E0": {
+     "code": 9060,
+     "free": 1860
+    },
+    "E1": {
+     "code": 6300,
+     "free": 4384
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:27:24.502 | critical |          Always | TT_FATAL: Sender on device: (M0, D6) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_torus_1erisc": {
+   "images": 48,
+   "builds": 48,
+   "per_erisc": {
+    "E1": {
+     "code": 11088,
+     "free": 4040
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:27:28.985 | critical |          Always | TT_FATAL: Sender on device: (M0, D6) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_torus_vc2": {
+   "images": 80,
+   "builds": 80,
+   "per_erisc": {
+    "E0": {
+     "code": 10064,
+     "free": 1796
+    },
+    "E1": {
+     "code": 7752,
+     "free": 4352
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:27:33.298 | critical |          Always | TT_FATAL: Sender on device: (M0, D6) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_torus_vc2_1erisc": {
+   "images": 40,
+   "builds": 40,
+   "per_erisc": {
+    "E1": {
+     "code": 13472,
+     "free": 3944
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:27:42.918 | critical |          Always | TT_FATAL: Receiver on device: (M0, D6) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "bh_vc1": {
+   "images": 96,
+   "builds": 96,
+   "per_erisc": {
+    "E0": {
+     "code": 10884,
+     "free": 1636
+    },
+    "E1": {
+     "code": 9892,
+     "free": 4208
+    }
+   },
+   "fatal": [
+    "[1,0]<stdout>: \u001b[90m2026-11-05 22:27:19.857\u001b[0m | \u001b[1m\u001b[41mcritical\u001b[m | \u001b[35m         Always\u001b[0m | \u001b[37mTT_FATAL: Sender on device: (M0, D3) core: 11-8 failed\u001b[0m \u001b[90m(assert.hpp:104)\u001b[0m",
+    "[1,0]<stderr>:   what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "bh_vc1_vc2": {
+   "images": 96,
+   "builds": 96,
+   "per_erisc": {
+    "E0": {
+     "code": 11860,
+     "free": 1540
+    },
+    "E1": {
+     "code": 11256,
+     "free": 4176
+    }
+   },
+   "fatal": [
+    "[1,1]<stdout>: \u001b[90m2026-11-05 22:27:22.534\u001b[0m | \u001b[1m\u001b[41mcritical\u001b[m | \u001b[35m         Always\u001b[0m | \u001b[37mTT_FATAL: Sender on device: (M1, D3) core: 11-8 failed\u001b[0m \u001b[90m(assert.hpp:104)\u001b[0m",
+    "[1,1]<stderr>:   what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "glx_1d": {
+   "images": 120,
+   "builds": 120,
+   "per_erisc": {
+    "E0": {
+     "code": 7172,
+     "free": 2036
+    },
+    "E1": {
+     "code": 6284,
+     "free": 4416
+    }
+   },
+   "fatal": [],
+   "flags": []
+  },
+  "glx_2d": {
+   "images": 168,
+   "builds": 168,
+   "per_erisc": {
+    "E0": {
+     "code": 8828,
+     "free": 1860
+    },
+    "E1": {
+     "code": 6736,
+     "free": 4368
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:30:08.185 | critical |          Always | TT_FATAL: Receiver on device: (M0, D31) core: 0-0 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1373: pass"
+   ],
+   "flags": []
+  },
+  "glx_express": {
+   "images": 216,
+   "builds": 216,
+   "per_erisc": {
+    "E0": {
+     "code": 9840,
+     "free": 1764
+    },
+    "E1": {
+     "code": 7224,
+     "free": 4336
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:30:34.154 | critical |          Always | TT_FATAL: Sender on device: (M0, D31) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "glx_express_1erisc": {
+   "images": 108,
+   "builds": 108,
+   "per_erisc": {
+    "E1": {
+     "code": 13040,
+     "free": 3912
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:30:39.639 | critical |          Always | TT_FATAL: Sender on device: (M0, D31) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "glx_ring": {
+   "images": 120,
+   "builds": 120,
+   "per_erisc": {
+    "E0": {
+     "code": 7332,
+     "free": 2020
+    },
+    "E1": {
+     "code": 6328,
+     "free": 4416
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:30:00.714 | critical |          Always | TT_FATAL: Sender on device: (M0, D31) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  },
+  "glx_torus": {
+   "images": 120,
+   "builds": 120,
+   "per_erisc": {
+    "E0": {
+     "code": 9144,
+     "free": 1844
+    },
+    "E1": {
+     "code": 6764,
+     "free": 4368
+    }
+   },
+   "fatal": [
+    "2026-11-05 22:30:13.602 | critical |          Always | TT_FATAL: Sender on device: (M0, D31) core: 11-9 failed (assert.hpp:104)",
+    "what():  TT_FATAL @ ../tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp:1364: pass"
+   ],
+   "flags": []
+  }
+ }
+}

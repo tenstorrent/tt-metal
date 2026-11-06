@@ -1,0 +1,21 @@
+coord,eth_channel,bw_gbps,pps,connected_coord,connected_eth_channel
+"1,3",11,20.373,9.82437e+06,MeshCoordinate([0, 3]),8
+"0,1",8,20.3454,9.81109e+06,MeshCoordinate([1, 1]),11
+"0,1",7,20.3022,9.79026e+06,MeshCoordinate([0, 2]),4
+"0,2",8,20.2885,9.78366e+06,MeshCoordinate([1, 2]),11
+"1,1",11,20.2788,9.77896e+06,MeshCoordinate([0, 1]),8
+"0,3",8,20.2446,9.76246e+06,MeshCoordinate([1, 3]),11
+"0,2",5,20.2418,9.76113e+06,MeshCoordinate([0, 3]),6
+"1,2",11,20.2259,9.75346e+06,MeshCoordinate([0, 2]),8
+"1,0",11,20.1959,9.73898e+06,MeshCoordinate([0, 0]),8
+"0,1",6,20.1921,9.73717e+06,MeshCoordinate([0, 0]),5
+"1,0",7,20.145,9.71444e+06,MeshCoordinate([1, 1]),4
+"0,0",5,20.1294,9.70691e+06,MeshCoordinate([0, 1]),6
+"1,1",4,20.1212,9.70298e+06,MeshCoordinate([1, 0]),7
+"1,2",6,20.1197,9.70222e+06,MeshCoordinate([1, 1]),5
+"0,0",8,20.0959,9.69078e+06,MeshCoordinate([1, 0]),11
+"1,3",4,20.0807,9.68343e+06,MeshCoordinate([1, 2]),7
+"0,3",6,20.0686,9.67759e+06,MeshCoordinate([0, 2]),5
+"0,2",4,20.0212,9.65473e+06,MeshCoordinate([0, 1]),7
+"1,2",7,19.9895,9.63945e+06,MeshCoordinate([1, 3]),4
+"1,1",5,19.8542,9.5742e+06,MeshCoordinate([1, 2]),6

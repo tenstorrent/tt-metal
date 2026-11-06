@@ -3,7 +3,7 @@
 # lb2_run.sh (it sets the partition, the node and the LB2_* settings); never sbatch this directly.
 #
 # Steps, in order (any failure stops the job before the device is touched):
-#   guard    the node must be bh-lb-120-a07u28, a08u28 or a04u24 (user, 2026-11-03); never a09u32
+#   guard    the node must be bh-lb-120-a07u28, a08u28, a04u24 (user, 2026-11-03) or a04u32 (2026-11-04); never a09u32
 #   busy     other users' device processes (ps) or a running job in the node's own tt-device broker: stop
 #   space    /home free space; our oldest node-local JIT caches pruned below LB2_MIN_FREE_GB (default 25)
 #   restore  a leftover swap in the node-local tree (swap.py restore ~/.tt-metal-p1-swap-backup)
@@ -12,13 +12,15 @@
 #            (= the live a09u32 tree, unswapped view) and git status / diff checksums against the live tree's
 #   preflight test binaries, sfpi, python modules, MPI, tt-smi; every fabric_exp path, script and variant named in
 #            LB2_CMD (plus LB2_INPUTS) present in the node tree
-#   reset    tt-smi -r in this allocation (LB2_RESET=0 skips; host checks), then the link check: every Ethernet core
-#            that was UP / PASS / 400G in the node's host-check baseline still is
+#   reset    tt-smi -r in this allocation (LB2_RESET=0 skips; host checks), then the link check, polled for up to
+#            90 s (links can still be training), with up to 2 more resets while links stay down (reset_and_check):
+#            the link gate (lb2_linkcheck.py): every fabric link of the node's host-check descriptor (its
+#            ethernet_connections) present and UP / PASS / 400G at both ends; other ports logged, never gating
 #   run      LB2_CMD in the node tree, in its own session, SLURM_* removed from its environment (mpirun would read
 #            the 1-CPU Slurm allocation), TT_FABRIC_NO_BW_TELEMETRY=1, output streamed, timeout LB2_TIMEOUT
 #   hang     past LB2_TIMEOUT: the session is killed (TERM, then KILL), the router state captured (hang_capture.py)
 #            into the job's results; after any hang (this timeout, or a study script's own *_hangcap) the devices are
-#            reset and the links checked again
+#            reset and the links checked again, with the same polling and resets
 #   end      swap.py restore; new results, saved builds and the router ELFs/headers of the caches the job wrote copied
 #            to /data/aagarwal/lb2/jobs/<job>/ with MANIFEST.tsv (lb2_collect.sh then copies them into a09u32's tree)
 # Modes (LB2_MODE): run (default); hostcheck (read-only host check, lb2_hostcheck.sh, no reset); dry (everything up to
@@ -48,8 +50,11 @@ STAGE_NAME=guard
 
 # ---- guard
 case "$NODE" in
-    bh-lb-120-a07u28|bh-lb-120-a08u28|bh-lb-120-a04u24) ;;
-    *) echo "!!! node $NODE is not an approved extra LB (bh-lb-120-a07u28, a08u28, a04u24): stopping"; exit 1 ;;
+    bh-lb-120-a07u28|bh-lb-120-a08u28|bh-lb-120-a04u24|bh-lb-120-a04u32|bh-lb-120-a04u28) ;;
+    # Candidate (coordinator, 2026-11-04): only the read-only host check until it passes and is approved.
+    bh-lb-120-a06u24)
+        [ "${LB2_MODE:-run}" = hostcheck ] || { echo "!!! node $NODE is a candidate LB: host check only (LB2_MODE=hostcheck): stopping"; exit 1; } ;;
+    *) echo "!!! node $NODE is not an approved extra LB (bh-lb-120-a07u28, a08u28, a04u24, a04u32, a04u28): stopping"; exit 1 ;;
 esac
 [ "$(hostname)" = "$NODE" ] || { echo "!!! hostname $(hostname) != SLURMD_NODENAME $NODE"; exit 1; }
 case $MODE in run|hostcheck|dry) ;; *) echo "!!! LB2_MODE $MODE"; exit 1 ;; esac
@@ -70,8 +75,11 @@ mkdir -p $NB
 
 # ---- busy: other users' processes that could hold the device; the node's broker queue
 STAGE_NAME=busy
-busy=$(ps -eo user:20,uid,comm,args --no-headers | awk -v me="$USER" '$1 != me && $1 != "root" && $2 >= 1000 && $2 < 60000 &&
-    $3 ~ /^(python|pytest|test_|unit_tests|tt-smi|tt_|ttnn|prte|prted|mpirun|orted|run_|tt-train|fabric_)/' | cut -c1-200 | head -8)
+# Zombies (state Z, "<defunct>") are left out: they hold no device file and no memory, only a pid entry for a parent that
+# has not reaped them (a04u32, 2026-11-04: another user's defunct run_safe_pytest).
+busy=$(ps -eo user:20,uid,stat,comm,args --no-headers | awk -v me="$USER" '$1 != me && $1 != "root" && $2 >= 1000 && $2 < 60000 &&
+    $3 !~ /^Z/ && $4 ~ /^(python|pytest|test_|unit_tests|tt-smi|tt_|ttnn|prte|prted|mpirun|orted|run_|tt-train|fabric_)/' |
+    cut -c1-200 | head -8)
 if [ -n "$busy" ] && [ -z "${LB2_IGNORE_BUSY:-}" ]; then
     echo "$busy"; die "other users' processes that may hold the device"
 fi
@@ -186,39 +194,44 @@ say "cpus: nproc $ncpu, $(grep Cpus_allowed_list /proc/self/status | tr -s '\t' 
 unset $(env | grep -oE '^(SLURM|SBATCH|SRUN|PMI|PMIX|OMPI)_[A-Za-z0-9_]*' | tr '\n' ' ')
 
 # ---- the node's host-check baseline (link states) and the link check
-eth_check() {  # label: read_eth_speed.py now vs the baseline; returns 1 when a link that was UP/PASS/400 is not
-    local now=$J/eth_$1.txt
-    timeout 300 python_env/bin/python -I fabric_exp/read_eth_speed.py 8 > $now 2>&1 || { tail -5 $now; return 1; }
-    [ -f $NB/eth_baseline.txt ] || { say "link check $1: no baseline yet ($NB/eth_baseline.txt)"; return 1; }
-    python3 - $NB/eth_baseline.txt $now <<'EOF'
-import re, sys
-def load(p):
-    d = {}
-    for l in open(p):
-        m = re.match(r"chip (\d+) eth \(\s*(\d+),\s*(\d+)\): port_status=(\d+) train_status=(\d+) train_speed=(\d+)", l)
-        if m:
-            d[m.group(1, 2, 3)] = m.group(4, 5, 6)
-    return d
-b, n = load(sys.argv[1]), load(sys.argv[2])
-good = [k for k, v in b.items() if v == ("1", "2", "400")]
-lost = [k for k in good if n.get(k) != ("1", "2", "400")]
-print(f"   link check: {len(n)} cores read, {len(good)} UP/PASS/400 in the baseline, {len(lost)} of them not now")
-for k in lost:
-    print(f"   !!! chip {k[0]} eth ({k[1]},{k[2]}): baseline {b[k]}, now {n.get(k)}")
-sys.exit(1 if lost or len(n) != len(b) else 0)
-EOF
+eth_check() {  # label: the link gate (lb2_linkcheck.py live; LB2_HARNESS.md "Link gate"); returns 1 unless it passes
+    # It gates only on the fabric's links: the baseline descriptor's ethernet_connections must all be present again
+    # (mapping-free), and each connection end's core (channel -> core per chip from UMD, cross-checked against the
+    # descriptor) must be UP / PASS / 400G. Other ports are logged, never gating. Fails closed on any error.
+    [ -f $NB/cluster_desc.yaml ] || { say "link check $1: no baseline descriptor ($NB/cluster_desc.yaml)"; return 1; }
+    # shellcheck disable=SC2086
+    timeout 300 ${LB2_LINKCHECK:-python_env/bin/python -I fabric_exp/consolidation/lb2_linkcheck.py} live \
+        $NB/cluster_desc.yaml $J/eth_$1
 }
-reset_and_check() {  # label: tt-smi -r, then the link check; links retrain after a reset, so up to 8 tries 15 s apart
-    local try
-    say "reset ($1): tt-smi -r"
-    timeout 600 /usr/local/bin/tt-smi -r > $J/reset_$1.txt 2>&1; local rc=$?
-    tail -3 $J/reset_$1.txt | sed 's/^/   | /'
-    [ $rc = 0 ] || { say "!!! tt-smi -r exit $rc"; return 1; }
-    for try in 1 2 3 4 5 6 7 8; do
-        eth_check $1 > $J/eth_$1_check.txt 2>&1 && { cat $J/eth_$1_check.txt; return 0; }
-        sleep 15
+# reset_and_check LABEL: tt-smi -r, then poll the link check every LB2_LINK_POLL_S (10) s for up to LB2_LINK_WAIT_S
+# (90) s, since links can still be training after a reset. Links still down: reset again and poll again, at most
+# LB2_EXTRA_RESETS (2) more resets. Every poll is logged (the cores that are not as in the baseline) and its readout
+# kept in $J/eth_<label>[_r<n>]_p<k>_{eth.txt,cluster_desc.yaml}. Returns 0 only when the link gate passes: a job never
+# runs with a fabric link (a baseline ethernet_connections pair) down; other ports are logged only (2026-11-04).
+reset_and_check() {
+    local r tag try tp rc
+    for r in $(seq 0 "${LB2_EXTRA_RESETS:-2}"); do
+        tag=$1; [ "$r" -gt 0 ] && tag=${1}_r$r
+        say "reset ($tag): tt-smi -r"
+        timeout 600 ${LB2_TSMI:-/usr/local/bin/tt-smi} -r > $J/reset_$tag.txt 2>&1; rc=$?
+        tail -3 $J/reset_$tag.txt | sed 's/^/   | /'
+        if [ $rc != 0 ]; then say "!!! tt-smi -r exit $rc ($tag)"; continue; fi
+        tp=$SECONDS; try=0
+        while :; do
+            try=$((try + 1))
+            if eth_check ${tag}_p$try > $J/eth_${tag}_check.txt 2>&1; then
+                say "link check ($tag, poll $try, +$((SECONDS - tp)) s): every fabric link UP/PASS/400 (link gate PASS)"
+                cat $J/eth_${tag}_check.txt
+                return 0
+            fi
+            say "link check ($tag, poll $try, +$((SECONDS - tp)) s): not yet"
+            sed 's/^ */   /' $J/eth_${tag}_check.txt
+            [ $((SECONDS - tp)) -ge "${LB2_LINK_WAIT_S:-90}" ] && break
+            sleep "${LB2_LINK_POLL_S:-10}"
+        done
+        [ "$r" -lt "${LB2_EXTRA_RESETS:-2}" ] && say "links still down after ${LB2_LINK_WAIT_S:-90} s: resetting again"
     done
-    cat $J/eth_$1_check.txt; return 1
+    return 1
 }
 
 # ---- hostcheck / dry
@@ -230,7 +243,7 @@ if [ $MODE = hostcheck ]; then
     exit $rc
 fi
 if [ $MODE = dry ]; then
-    say "DRY: would reset (tt-smi -r: ${LB2_RESET:-1}), check links against $NB/eth_baseline.txt ($([ -f $NB/eth_baseline.txt ] && echo present || echo 'not yet'))"
+    say "DRY: would reset (tt-smi -r: ${LB2_RESET:-1}), run the link gate against $NB/cluster_desc.yaml ($([ -f $NB/cluster_desc.yaml ] && echo present || echo 'not yet')), polling every ${LB2_LINK_POLL_S:-10} s for ${LB2_LINK_WAIT_S:-90} s, up to ${LB2_EXTRA_RESETS:-2} more resets"
     say "DRY: would run in $T with SLURM_* removed, TT_FABRIC_NO_BW_TELEMETRY=1, timeout ${TO}s: $CMD"
     echo "rc=0 stage=dry" > $J/SUMMARY
     exit 0

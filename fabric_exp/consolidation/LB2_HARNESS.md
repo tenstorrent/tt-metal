@@ -6,12 +6,41 @@ node-local copy of the study tree at the same path, `/home/aagarwal/tt-metal`, s
 
 ## Nodes
 
-- Approved: **bh-lb-120-a07u28** (partition `bh_lb_C45`), **bh-lb-120-a08u28** (`bh_lb_C67`) and, from 2026-11-03, **bh-lb-120-a04u24** (`bh_lb_120_A45`). The user OKed renaming old trees aside on these nodes (`--move-aside`). At most one job runs
+- Approved: **bh-lb-120-a07u28** (partition `bh_lb_C45`), **bh-lb-120-a08u28** (`bh_lb_C67`) **bh-lb-120-a04u24** (`bh_lb_120_A45`, from 2026-11-03) and **bh-lb-120-a04u32** (`bh_lb_120_A456`, from 2026-11-04). The user OKed renaming old trees aside on these nodes (`--move-aside`). At most one job runs
   per node at a time (Slurm singleton, job name `lb2-<node>`), so there are at most two LB allocations.
+- **`-n any` (user, 2026-11-03):** ONE job that starts on whichever approved LB frees first.
+  - Slurm gets the approved nodes' partitions (`bh_lb_C45,bh_lb_C67,bh_lb_120_A45`, `-N 1`) and `--exclude` for every
+    other node in them. That list is built from `sinfo` at submit time, so a09u32 is always excluded.
+  - An approved node that `sinfo` doesn't list is left out.
+  - The job is named `lb2-any`, its log is `logs/lb2-any-<job>.log`, and it has no per-node singleton (`--exclusive`
+    still keeps one job per node).
+  - It runs on `$SLURMD_NODENAME`, and lb2.sbatch's guard, host-check baseline and reset all use that node. `SUMMARY`
+    and lb2_collect.sh's manifest (`results/lb2/<job>_<node>.tsv`) record the node.
+  - Use it for jobs whose A/B arms all run in the one job (same host).
+  - Never submit the same work twice, once per node: both could start, and running jobs are never cancelled.
+- **`--test-only`** shows what Slurm accepts without submitting anything that can run. `sbatch --test-only` answers
+  "allocation failure" while every candidate is allocated, so the job is also submitted held. Its
+  partitions / excluded nodes / node count are printed, and it is cancelled while still held.
 - Never use bh-lb-120-a04u24 (released, do-not-use) or a08u24 (another tenant). Ask the user before using any other
   node. `bh_lb_single` nodes are single cards, so they are not usable.
 - The nodes are shared Slurm nodes. They also run a tt-device broker, k8s agents and other users' shells. Another
   user can take a node between our jobs (a08u28 was taken at 00:37 on 2026-11-03 by arichins' `buildall`).
+- **Node status (2026-11-04)**:
+  | node | /home free | links | any-mode |
+  | --- | --- | --- | --- |
+  | a07u28 | 936 GB | all 48 mesh link ends UP / PASS / 400G in host check 172557 (06:00, read-only, no reset); the new baseline has 60 UP links | in |
+  | a04u32 | 1247 GB | all 48 mesh link ends UP / PASS / 400G in host check 172564 (first job there; wiring identical to a09u32); baseline 55 UP links | in |
+  | a04u24 | 223 GB (11-03) | | in, but held by another user's 4 h job at 06:00 |
+  | a08u28 | 13 GB (job 171943) | | **out**: below the 25 GB floor; `-n a08u28` still reaches it |
+  - a07u28's chip 6 eth (7,1) did not train after any reset in 172043, 172149, 172157 or 172175. 172175 used the new
+    poll: 3 resets with 90 s each. It was UP again at host check 172557. Its next job's reset shows whether it holds.
+  - Any-mode leaves out the nodes in lb2_run.sh's `ANY_SKIP_DEFAULT`. Set `LB2_ANY_SKIP` to change that for one
+    submit; an explicit `-n` list overrides it.
+  - The busy check ignores zombie processes (`<defunct>`). An unreaped zombie of another user's test stopped the first
+    a04u32 host check (172556); a zombie holds no device file.
+  - The host check's mock runs (step 4: torusns, torusns_scatter, VC1 split) failed on both a07u28 and a04u32 on
+    2026-11-04 (exit 1 / 134). They are reported, not gating. Failing the same way on two nodes points at the tree's
+    mock setup rather than the nodes; not looked into.
 - Each node gets a host check before it is used (below). Its baseline is in `/data/aagarwal/lb2/nodes/<node>/`:
   `cluster_desc.yaml`, `eth_baseline.txt` and `mock_mapping.yaml`. Every job's link check compares against that
   baseline.
@@ -22,9 +51,10 @@ node-local copy of the study tree at the same path, `/home/aagarwal/tt-metal`, s
 |---|---|
 | `lb2_stage.sh [refresh\|full]` | runs on a09u32 and only reads the live tree. It writes the snapshot to `/data/aagarwal/lb2/stage` (see below). |
 | `lb2_pack.py` | packs a scope as a zstd tarball and writes a sha256 reference list from the same bytes. `check` reads the archive back; `live` re-hashes the tree. |
-| `lb2_run.sh -n NODE [opts] "<cmd>"` | submit wrapper, run on a09u32. It first checks that the live inputs match the stage, then submits `lb2.sbatch`. |
+| `lb2_run.sh -n NODE [opts] "<cmd>"` | submit wrapper, run on a09u32. It first checks that the live inputs match the stage, then submits `lb2.sbatch`. `-n any`: see below. |
 | `lb2.sbatch` | the job (see the header). Steps: node guard, busy check, space, swap restore, sync + verify, preflight, `tt-smi -r`, link check, the command, hang handling, swap restore, copy-back. |
 | `lb2_hostcheck.sh` | read-only host check: topology, wiring vs a09u32, links, and mock runs of the torus rows and the VC1 split. |
+| `lb2_linkcheck.py` | the link gate after each reset (section "Link gate"): `live` on the node, `replay` on saved files. |
 | `lb2_calib_runs.sh TAG` | calibration rows: main_fw and v4rxg3 on pcs3 ew4352 / hop3 / lin3, plus the 2D / 1D size sweep. |
 | `lb2_collect.sh JOBID` | runs on a09u32. It copies a finished job's results into `fabric_exp/results` (it never overwrites) and writes the manifest `fabric_exp/results/lb2/<job>_<node>.tsv`. |
 
@@ -48,6 +78,10 @@ NFS creates small files at ~10/s (measured 2026-11-03), so the stage is a set of
   `STAGE_TIME`.
   - `current` points at the newest src stage. The two newest are kept. A job resolves `current` once at its start.
 - `git/`: an rsync of `.git`, used only for the node's git status check. It is never copied to a node.
+  - A full stage syncs it, and so does a refresh when the live HEAD moved (since 2026-11-03).
+  - Before that, a commit after the last full stage failed every job's git check: the node computed git status with
+    the old HEAD, so every committed file showed as changed. This stopped lb2 171279 at verify, before any device
+    work.
 - The snapshot is the **unswapped** tree. A broker job's active swap (`~/.tt-metal-p1-swap-backup/manifest.json`) is
   undone in the copy: saved files are taken from the backup and created files are left out. A pack is repeated when
   a swap was applied or restored during it.
@@ -60,6 +94,75 @@ NFS creates small files at ~10/s (measured 2026-11-03), so the stage is a set of
     tree (unswapped view) at stage time;
   - git status and git diff checksums over the source scope are compared with the live tree's. fabric_exp/results
     and the swapped files are excluded on both sides.
+
+## Link gate (2026-11-04)
+
+The job's link check, after every reset poll, gates only on the links the fabric uses
+(`lb2_linkcheck.py live`, called by lb2.sbatch's `eth_check`).
+
+**Why it changed.** The old check required every Ethernet core that was UP / PASS / 400G in the host-check
+baseline to be so again. That baseline included ports the fabric never uses, mostly cables to other hosts
+(`ethernet_connections_to_remote_devices`), whose state follows the other machine. Two sweep jobs stopped before
+any device work on such ports:
+- lb2 176008 on a04u24: chip 1 (11,1), chips 4 and 7 (6,1);
+- lb2 176130 on a07u28: chip 6 (6,1).
+The coordinator chose option (b), fail closed.
+
+**The gate** (exit 0 only when all three pass):
+- **A. Link set, mapping-free.** A fresh UMD cluster descriptor (TopologyDiscovery, as topo_dump.py makes it) must
+  have exactly the baseline's `ethernet_connections`. They are compared as unordered (chip unique id, channel) pairs,
+  so a chip renumbering does not matter. A missing pair is a fabric link down; an extra pair is unexpected wiring.
+- **B. Channel to core, per chip.**
+  - Each connection end's channel goes to a core two ways: UMD's soc descriptor of that device
+    (`get_eth_cores_for_channels`), and the descriptor (the arch file's eth order with the chip's
+    `eth_harvesting_mask` positions removed).
+  - Both must give the same single core, or the gate fails.
+  - Descriptor chips are matched to PCI devices by BDF, else by bus id; one-to-one, or it fails.
+- **C. State.** Every connection end's core must read port UP, train PASS, speed 400.
+
+Every other Ethernet core goes into the job log as information ("port down (a link to another host)" or "(not a
+fabric link)"), with counts of UP and unused ports. It never gates. Each poll keeps `eth_<label>_eth.txt` (each
+core's state and channel) and `eth_<label>_cluster_desc.yaml` in the job directory. Any error fails the gate.
+
+**The channel mapping.** Two readings disagreed:
+- the arch file's raw order puts (6,1) at index 10 and (11,1) at 11;
+- this harness's a07u28 notes put them at channels 8 and 9.
+
+With eth_harvesting_mask 288 (positions 5 and 8 harvested, on every chip of all four nodes), removing the harvested
+positions gives channels 8 and 9. Only that mapping puts all 48 connection ends on cores present in the readouts: the
+raw order would place two ends on harvested cores, which the readout does not list. The live gate cross-checks it
+against UMD on every poll and fails closed on any disagreement.
+
+**Tests** (offline, `lb2_linkcheck.py replay BASELINE_DESC NOW_DESC NOW_ETH`):
+- Every saved poll of 176008 (30 readouts, a04u24) and 176130 (30, a07u28) passes. Each node's baseline descriptor
+  stands in for the current one, since those runs saved none, so gate A is not exercised by them. All 48 fabric link
+  ends were UP / PASS / 400; the failing ports were links to another host or unconnected.
+- Every node's own baseline readout passes (a04u24, a04u28, a04u32, a07u28).
+- Synthetic cases:
+  - one fabric link end down: FAIL (gate C);
+  - one pair missing from the current descriptor: FAIL (gate A);
+  - an end's core missing from the readout: FAIL (gate C);
+  - chips renumbered with the same wiring: PASS (gate A).
+- **Live, first run** (lb2 176206 on a04u24, 2026-11-05 00:03): the gate passed at the first poll after the reset.
+  - A: 24 of 24 links present.
+  - B: 48 of 48 ends mapped, with UMD's `get_eth_cores_for_channels` and the descriptor mapping in agreement. This
+    settles the mapping on that node: with this harvesting, (6,1) = ch8 and (11,1) = ch9.
+  - C: 48 of 48 UP/PASS/400.
+  - Other ports: 8 up, 32 unused, 8 down; logged, not gating.
+  - The dry run 176205 passed before it.
+- **Finding: descriptor chip ids are not PCI device numbers.** On a04u24 the gate mapped descriptor chips to PCI
+  devices as {0: 2, 1: 3, 2: 1, 3: 0, 4: 6, 5: 7, 6: 5, 7: 4}.
+  - read_eth_speed.py (the old check, and lb2_hostcheck.sh step 3) labels its readout "chip N" by PCI device N, and
+    those labels were compared with descriptor chip N.
+  - That is harmless only because the permutation stays inside each 2x2 group, and every chip of a group uses the
+    same channels.
+  - The replay tests above read the saved readouts with the same assumption, so their per-chip labels are PCI
+    numbers. Their pass / fail results hold for the same reason.
+  - The live gate maps chips by BDF.
+
+**Staging.** The gate is in lb2.sbatch, which Slurm stores at submit time, plus lb2_linkcheck.py from the stage.
+Jobs submitted before the change keep their old sbatch, and their old check needs only read_eth_speed.py, which is
+unchanged. Stages are never modified in place.
 
 ## Rules: which jobs go to an extra LB
 

@@ -1,0 +1,56 @@
+== 1056792534790732563 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d2f4 <.L113> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 11037001355823110937 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3f0 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 11909608467758571766 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3d8 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 12223562869119955127 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d2f4 <.L113> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 12970712534366286632 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3d8 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 13774202097416937748 (0 sites)
+== 14218214994196553134 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3f0 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 14627855761920828749 (0 sites)
+== 14817555600510874601 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d2f4 <.L113> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 15009493872602441134 (0 sites)
+== 15850480450664625162 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3d8 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 16267906393655988836 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d2f4 <.L113> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 16685926356862332332 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3f0 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 1699851999375107702 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3f0 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 17287856416153567764 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3f0 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 17380349847824213530 (0 sites)
+== 17646815904961554486 (0 sites)
+== 17713842565755027455 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3f0 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 178841973098916038 (0 sites)
+== 2347343506841296773 (0 sites)
+== 3228957489716619669 (0 sites)
+== 3539433703127299858 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3f0 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 4081241872125048936 (0 sites)
+== 4587834369892220813 (0 sites)
+== 484866895154165331 (0 sites)
+== 5485554373073357876 (0 sites)
+== 5690505603137450357 (0 sites)
+== 6040538495317602034 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3f0 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 6098957991272500158 (0 sites)
+== 7644088381201797029 (0 sites)
+== 8235079390484324923 (0 sites)
+== 8350090326705517338 (0 sites)
+== 8539828387133608712 (0 sites)
+== 8918417038761124133 (0 sites)
+== 9041284424798861630 (0 sites)
+== 9192935514926098891 (1 sites)
+   _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: add	a3,a5,s9 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: lbu	a3,0(a3) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:358: zext.b	a0,a3 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:359: bnez	a3,d3d8 <.L125> | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: add	a5,a5,a6 | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: lbu	a0,2(a5) | _ZN2tt9tt_fabric14Routing2DCodec21decode_action_y_firstEPVKhmmm:362: zext.b	a0,a0
+== 9329723638430425035 (0 sites)
+== 9459203066896904440 (0 sites)
+== 9470664207781732735 (0 sites)
+== 9775972746176371149 (0 sites)

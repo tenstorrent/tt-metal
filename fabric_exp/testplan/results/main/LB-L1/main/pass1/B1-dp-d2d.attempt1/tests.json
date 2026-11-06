@@ -1,0 +1,494 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 80,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "unit_tests_ttnn_tensor.xml"
+ ],
+ "tests": {
+  "D2DStreamServiceTest::CreatableRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.542
+  },
+  "D2DStreamServiceTest::CreatableSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.266
+  },
+  "D2DStreamServiceTest::FabricLeaseRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.488
+  },
+  "D2DStreamServiceTest::FabricLeaseSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.011
+  },
+  "D2DStreamServiceTest::FabricLeaseStressSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 30.389
+  },
+  "D2DStreamServiceTest::FabricLeaseTeardownMidTransferSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.496
+  },
+  "D2DStreamServiceTest::FoldedChainSenderFirstFailsCleanly": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.5
+  },
+  "D2DStreamServiceTest::FoldedChainSenderSkipsReceiverLink": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.238
+  },
+  "D2DStreamServiceTest::H2DtoD2DBridge1Core": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.955
+  },
+  "D2DStreamServiceTest::H2DtoD2DBridge4Cores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.961
+  },
+  "D2DStreamServiceTest::H2DtoD2DBridgeAllCores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.682
+  },
+  "D2DStreamServiceTest::H2DtoD2DBridgeMetadataAllCores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.132
+  },
+  "D2DStreamServiceTest::H2DtoD2DBridgeReuseAllCores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.166
+  },
+  "D2DStreamServiceTest::H2DtoD2DBridgeRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.472
+  },
+  "D2DStreamServiceTest::HandshakeRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.484
+  },
+  "D2DStreamServiceTest::HandshakeSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.032
+  },
+  "D2DStreamServiceTest::LeaseGroupNeedsLeaseMode": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.467
+  },
+  "D2DStreamServiceTest::LeaseGroupPairsShareRouters": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.418
+  },
+  "D2DStreamServiceTest::MetadataEndToEnd2Cores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.218
+  },
+  "D2DStreamServiceTest::MetadataEndToEnd4Cores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.823
+  },
+  "D2DStreamServiceTest::MetadataEndToEndAllCores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.345
+  },
+  "D2DStreamServiceTest::MetadataEndToEndSingleCore": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.777
+  },
+  "D2DStreamServiceTest::MetadataReuse4Cores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.728
+  },
+  "D2DStreamServiceTest::MetadataSenderWrite4Cores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.235
+  },
+  "D2DStreamServiceTest::MetadataSenderWriteSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.238
+  },
+  "D2DStreamServiceTest::NoLeaseGroupSecondSenderHasNoRouter": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.456
+  },
+  "D2DStreamServiceTest::PipelineDescriptorExportRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.508
+  },
+  "D2DStreamServiceTest::PipelineDescriptorExportSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.965
+  },
+  "D2DStreamServiceTest::RecreateAfterTeardown": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.04
+  },
+  "D2DStreamServiceTest::ReuseRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.478
+  },
+  "D2DStreamServiceTest::ReuseSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.919
+  },
+  "D2DStreamServiceTest::StageGateApiRejectsOutOfRange": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.457
+  },
+  "D2DStreamServiceTest::StageGateDescriptorSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.172
+  },
+  "D2DStreamServiceTest::StageGateDisabledByDefault": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.48
+  },
+  "D2DStreamServiceTest::StageGateHostForceCloseSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.791
+  },
+  "D2DStreamServiceTest::StageGateLeaseModeRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.796
+  },
+  "D2DStreamServiceTest::StageGateLeaseModeSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.266
+  },
+  "D2DStreamServiceTest::StageGatePerCoordIndependenceRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.098
+  },
+  "D2DStreamServiceTest::StageGateRecordReachesWorkersSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.778
+  },
+  "D2DStreamServiceTest::StageGateRejectsBadConfig": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.478
+  },
+  "D2DStreamServiceTest::StageGateRemoteFabricOpener": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.024
+  },
+  "D2DStreamServiceTest::StageGateRequiresMetadata": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.475
+  },
+  "D2DStreamServiceTest::StageGateSemanticsRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.095
+  },
+  "D2DStreamServiceTest::StageGateSemanticsSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.112
+  },
+  "D2DStreamServiceTest::StageGateWorkerKeepOpenRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.144
+  },
+  "D2DStreamServiceTest::StageGateWorkerKeepOpenSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.438
+  },
+  "D2DStreamServiceTest::StageGateWorkerLockstepRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.721
+  },
+  "D2DStreamServiceTest::StageGateWorkerLockstepSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.047
+  },
+  "D2DStreamServiceTest::StageGateWorkerOutOfOrderRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.411
+  },
+  "D2DStreamServiceTest::StageGateWorkerOutOfOrderSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.435
+  },
+  "D2DStreamServiceTest::StageGateZeroGatesIsOff": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.913
+  },
+  "D2DStreamServiceTest::SyncResourceAddresses": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.492
+  },
+  "D2DStreamServiceTest::ThreeStageChainFoldedOwn": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.909
+  },
+  "D2DStreamServiceTest::ThreeStageChainOwnIteration": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.579
+  },
+  "D2DStreamServiceTest::TransferRowPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.498
+  },
+  "D2DStreamServiceTest::TransferSingleChipPair": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.499
+  },
+  "StreamPipelineTest::DtypeBfloat16": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.069
+  },
+  "StreamPipelineTest::DtypeBfloat16ShapeUneven": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.145
+  },
+  "StreamPipelineTest::DtypeBfloat4B": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.076
+  },
+  "StreamPipelineTest::DtypeBfloat4BShapeUneven": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.498
+  },
+  "StreamPipelineTest::DtypeBfloat8B": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.194
+  },
+  "StreamPipelineTest::DtypeBfloat8BShapeUneven": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.583
+  },
+  "StreamPipelineTest::DtypeFloat32": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.466
+  },
+  "StreamPipelineTest::DtypeFloat32ShapeUneven": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.881
+  },
+  "StreamPipelineTest::DtypeUint8": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.946
+  },
+  "StreamPipelineTest::DtypeUint8ShapeUneven": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.039
+  },
+  "StreamPipelineTest::EightStageAllCores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.629
+  },
+  "StreamPipelineTest::EightStageLargeAllCores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.627
+  },
+  "StreamPipelineTest::FourStageAllCores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.685
+  },
+  "StreamPipelineTest::FourStageLargeAllCores": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.833
+  },
+  "StreamPipelineTest::MetadataFullPage": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.059
+  },
+  "StreamPipelineTest::MetadataOneWord": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.862
+  },
+  "StreamPipelineTest::MetadataThreeStage": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.694
+  },
+  "StreamPipelineTest::MetadataTriple": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.058
+  },
+  "StreamPipelineTest::ShapeLarge": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.757
+  },
+  "StreamPipelineTest::ShapeLongUneven": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.983
+  },
+  "StreamPipelineTest::ShapeNarrowUneven": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.597
+  },
+  "StreamPipelineTest::ShapeUneven": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.198
+  },
+  "StreamPipelineTest::ThreeStage": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.618
+  },
+  "StreamPipelineTest::TwoStageReuse": {
+   "file": "unit_tests_ttnn_tensor.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.856
+  }
+ }
+}

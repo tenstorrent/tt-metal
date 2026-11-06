@@ -1,0 +1,134 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 4,
+  "PERF_WINDOW": 0,
+  "SKIP": 16
+ },
+ "files": [
+  "pytest_3469280_1793772253434035193_20261104_060413.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-1-131072-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.601
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-1-32768-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 28.153
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-1-65536-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.562
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-32-131072-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.828
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-32-32768-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.528
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-32-65536-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.725
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-64-131072-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.53
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-64-32768-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.674
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-64-65536-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.648
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-1-131072-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.513
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-1-32768-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.751
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-1-65536-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.559
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-32-131072-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.497
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-32-32768-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.497
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-32-65536-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.522
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-64-131072-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.497
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-64-32768-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.508
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-64-65536-device_params0]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode",
+   "status": "SKIP",
+   "time": 1.51
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill_row_major_formats[blackhole-True-bf16_row_major]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.758
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill_row_major_formats[blackhole-True-fp8_e4m3_row_major]": {
+   "file": "pytest_3469280_1793772253434035193_20261104_060413.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.795
+  }
+ }
+}

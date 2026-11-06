@@ -1,0 +1,18 @@
+{
+ "counts": {
+  "FAIL": 1,
+  "PASS": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_1597642_1793747801101477822.xml"
+ ],
+ "tests": {
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.watcher.test_matmul_reduce_scatter_fp32_bh::test_fused_matmul_reduce_scatter_atomic_barrier[silicon_arch_name=blackhole-M128_scatter_header-mesh_device=(1, 4)-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'l1_small_size': 24576}]": {
+   "file": "pytest_1597642_1793747801101477822.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.401
+  }
+ }
+}

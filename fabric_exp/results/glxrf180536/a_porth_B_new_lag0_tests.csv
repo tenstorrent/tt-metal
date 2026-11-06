@@ -1,0 +1,7 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+MVC3_B_new_P01m1_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,E,1,1050000,256,429426603,0.845034,3300913.334
+MVC3_B_new_P01m1_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,E,1,17000000,256,3189045572,1.842307,7196510.518
+MVC3_B_new_P01m1_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,E,1,1050000,1024,436258856,3.327199,3249217.708
+MVC3_B_new_P01m1_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,E,1,17000000,1024,3244507073,7.243257,7073493.595
+MVC3_B_new_P01m1_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,E,1,1050000,4352,785741796,7.851129,1804027.745
+MVC3_B_new_P01m1_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,E,1,17000000,4352,4550237485,21.950151,5043692.791

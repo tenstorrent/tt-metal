@@ -1,0 +1,8 @@
+images 5010 in every build
+== 993c99a564b (rg_s537): 2477 images change; function sets as the single arm's in 5010 / 5010
+== aa11a8786df (rg_s583): 2896 images change; function sets as the single arm's in 5010 / 5010
+== 82ea91f44a4 (rg_r755): 1344 images change; function sets as the single arm's in 5010 / 5010
+== 5fb378a7880 (kim_s816): 56 images change; function sets as the single arm's in 5010 / 5010
+== bc0108869e2 (kim_r713): 667 images change; function sets as the single arm's in 5010 / 5010
+== 22cdb1e55c3 (comment only): 0 images change; function sets as the single arm's in 5010 / 5010
+== last commit vs a_drop5: identical 5010 / 5010

@@ -1,0 +1,8 @@
+# config	label	form	timeout_s	env	yaml
+torusx16	tx_mesh_sanity	torusx16	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+torusx16	tx_express_rows	torusx16	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml
+torusx16	tx_torus_multi_mesh_cut	torusx16	5400	-	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_torus_multi_mesh_cut.yaml
+express16	ex_mesh_sanity	express16	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+express16	ex_express	express16	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml
+16x4	b16_mesh_sanity	16x4	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+16x4	b16_big_mesh	16x4	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_big_mesh_sanity_common.yaml

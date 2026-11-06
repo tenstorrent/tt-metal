@@ -1,0 +1,82 @@
+# Completion-group 1D rows (SLOT_ALLOCATOR.md section 12.11): P150 1D line, 8704 B slots, on the link
+# chip 1 -> chip 2: k1 = the worker from chip 1 alone; k1f = the pass-through from chip 0 alone (chip 1's
+# forwarding channel); k2 = both into chip 2's receiver. Data-checked, packets <= the receiver ring's slots (30 of 8704 B).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Merge_p1d_k1
+  sync: true
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 8704
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 8704
+  defaults:
+    ftype: unicast
+    num_packets: 30
+  senders:
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2
+- name: Merge_p1d_k1f
+  sync: true
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 8704
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 8704
+  defaults:
+    ftype: unicast
+    num_packets: 30
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2
+- name: Merge_p1d_k2
+  sync: true
+  fabric_setup:
+    topology: Linear
+    max_packet_size: 8704
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 8704
+  defaults:
+    ftype: unicast
+    num_packets: 30
+  senders:
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2

@@ -1,0 +1,270 @@
+# Slot-need sweep (SLOT_ALLOCATOR.md section 12; mk_knee_yamls.py): VC1Inter_0_0_to_1_0, VC1Inter_0_0_to_1_1, VC1Inter_0_0_to_1_2, VC1Inter_0_0_to_1_3, VC1MixWorker, VC1MixForward, VC1SoloWorker, VC1SoloForward, VC1Mesh2Hop, VC1MeshMulticast from
+# fabric_exp/vc1/sls_vc1_all.yaml at [256, 1024, 2048, 4352] B packets, 4352 B slots.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: VC1Inter_0_0_to_1_0
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 0
+- name: VC1Inter_0_0_to_1_1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 1
+- name: VC1Inter_0_0_to_1_2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 2
+- name: VC1Inter_0_0_to_1_3
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 3
+- name: VC1MixWorker
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 1
+      num_packets: 40000
+  - device:
+    - 1
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 1
+      num_packets: 100000
+- name: VC1MixForward
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 1
+      num_packets: 40000
+  - device:
+    - 1
+    - 2
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 1
+      num_packets: 60000
+- name: VC1SoloWorker
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 1
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 1
+      num_packets: 100000
+- name: VC1SoloForward
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+  senders:
+  - device:
+    - 1
+    - 2
+    patterns:
+    - destination:
+        device:
+        - 1
+        - 1
+      num_packets: 60000
+- name: VC1Mesh2Hop
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: VC1MeshMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1
+    mesh_scope: intra_mesh

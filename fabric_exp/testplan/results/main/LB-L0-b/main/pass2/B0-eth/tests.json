@@ -1,0 +1,648 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 2,
+  "PASS": 11,
+  "PERF_WINDOW": 0,
+  "SKIP": 92
+ },
+ "files": [
+  "unit_tests_eth.xml",
+  "unit_tests_eth_1.xml",
+  "unit_tests_eth_2.xml"
+ ],
+ "tests": {
+  "BlackholeSingleCardFixture::ActiveEthPtpTraceStamped": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::ActiveEthPtpTraceStamped#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.287
+  },
+  "BlackholeSingleCardFixture::ActiveEthPtpTraceStamped#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::EthFwStageIdleInAppFw": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::EthFwStageIdleInAppFw#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.29
+  },
+  "BlackholeSingleCardFixture::EthFwStageIdleInAppFw#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::EthFwStageKernelWhileKernelRuns": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::EthFwStageKernelWhileKernelRuns#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.297
+  },
+  "BlackholeSingleCardFixture::EthFwStageKernelWhileKernelRuns#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::EthFwStageSlotsFollowPhysicalErisc": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::EthFwStageSlotsFollowPhysicalErisc#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.273
+  },
+  "BlackholeSingleCardFixture::EthFwStageSlotsFollowPhysicalErisc#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnBothIdleEriscs": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnBothIdleEriscs#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.352
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnBothIdleEriscs#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnIdleErisc0": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnIdleErisc0#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.387
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnIdleErisc0#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnIdleErisc1": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnIdleErisc1#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.383
+  },
+  "BlackholeSingleCardFixture::IdleEthKernelOnIdleErisc1#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:204\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "EthFwStage::DecodesStageValues": {
+   "file": "unit_tests_eth.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "EthFwStage::DecodesStageValues#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "EthFwStage::DecodesStageValues#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthKernelsDirectRingGatherAllChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthKernelsDirectRingGatherAllChips#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_ring_gather_kernels.cpp:556\n",
+   "status": "SKIP",
+   "time": 0.38
+  },
+  "MeshDeviceFixture::ActiveEthKernelsDirectRingGatherAllChips#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthKernelsDirectSendAllConnectedChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthKernelsDirectSendAllConnectedChips#2": {
+   "file": "unit_tests_eth_1.xml",
+   "known_fail": "main, lab LoudBoxes a09u32 + a07u28 (TEST_PLAN 4.5): slow dispatch TT_FATAL tt_cluster.cpp:1564-1567 'Chip N logical eth core 0-9 connects to a remote mmio device'",
+   "message": "unknown file\nC++ exception with description \"TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/llrt/tt_cluster.cpp:1569: ethernet_connections_within_cluster.contains(std::get<0>(eth_core)) and ethernet_connections_within_cluster.at(std::get<0>(eth_core)).contains(eth_chan)\ninfo:\nChip 1 logical eth co",
+   "status": "KNOWN_FAIL",
+   "time": 0.463
+  },
+  "MeshDeviceFixture::ActiveEthKernelsDirectSendAllConnectedChips#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthKernelsInterleavedRingGatherAllChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthKernelsInterleavedRingGatherAllChips#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_ring_gather_kernels.cpp:572\n",
+   "status": "SKIP",
+   "time": 0.335
+  },
+  "MeshDeviceFixture::ActiveEthKernelsInterleavedRingGatherAllChips#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthKernelsSendInterleavedBufferAllConnectedChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthKernelsSendInterleavedBufferAllConnectedChips#2": {
+   "file": "unit_tests_eth_1.xml",
+   "known_fail": "main, lab LoudBoxes a09u32 + a07u28 (TEST_PLAN 4.5): slow dispatch TT_FATAL tt_cluster.cpp:1564-1567 'Chip N logical eth core 0-9 connects to a remote mmio device'",
+   "message": "unknown file\nC++ exception with description \"TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/llrt/tt_cluster.cpp:1569: ethernet_connections_within_cluster.contains(std::get<0>(eth_core)) and ethernet_connections_within_cluster.at(std::get<0>(eth_core)).contains(eth_chan)\ninfo:\nChip 1 logical eth co",
+   "status": "KNOWN_FAIL",
+   "time": 1.414
+  },
+  "MeshDeviceFixture::ActiveEthKernelsSendInterleavedBufferAllConnectedChips#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthPtpStamps": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDeviceFixture::ActiveEthPtpStamps#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.503
+  },
+  "MeshDeviceFixture::ActiveEthPtpStamps#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/device_fixture.hpp:81\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthBidirectionalCoreDirectSend": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.035
+  },
+  "N300MeshDeviceFixture::ActiveEthBidirectionalCoreDirectSend#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthBidirectionalCoreDirectSend#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.035
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsDirectSendChip0ToChip1": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.033
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsDirectSendChip0ToChip1#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsDirectSendChip0ToChip1#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.036
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsDirectSendChip1ToChip0": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.036
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsDirectSendChip1ToChip0#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsDirectSendChip1ToChip0#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.036
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsNocReadNoSend": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.04
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsNocReadNoSend#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsNocReadNoSend#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.04
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsNocWriteNoReceive": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.034
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsNocWriteNoReceive#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsNocWriteNoReceive#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.034
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsSendInterleavedBufferChip0ToChip1": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.036
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsSendInterleavedBufferChip0ToChip1#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthKernelsSendInterleavedBufferChip0ToChip1#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.036
+  },
+  "N300MeshDeviceFixture::ActiveEthRandomDirectSendTests": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.032
+  },
+  "N300MeshDeviceFixture::ActiveEthRandomDirectSendTests#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthRandomDirectSendTests#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.035
+  },
+  "N300MeshDeviceFixture::ActiveEthSingleCoreDirectSendChip0ToChip1": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.036
+  },
+  "N300MeshDeviceFixture::ActiveEthSingleCoreDirectSendChip0ToChip1#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthSingleCoreDirectSendChip0ToChip1#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.037
+  },
+  "N300MeshDeviceFixture::ActiveEthSingleCoreDirectSendChip1ToChip0": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.036
+  },
+  "N300MeshDeviceFixture::ActiveEthSingleCoreDirectSendChip1ToChip0#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:49\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "N300MeshDeviceFixture::ActiveEthSingleCoreDirectSendChip1ToChip0#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:58\nThis suite can only be run on N300",
+   "status": "SKIP",
+   "time": 0.043
+  },
+  "TwoDeviceBlackholeFixture::ActiveEthChipToChipMultiTxqRxq_Both0": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:78\nThis suite can only be run on two chip Blackhole systems",
+   "status": "SKIP",
+   "time": 0.038
+  },
+  "TwoDeviceBlackholeFixture::ActiveEthChipToChipMultiTxqRxq_Both0#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:69\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoDeviceBlackholeFixture::ActiveEthChipToChipMultiTxqRxq_Both0#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:78\nThis suite can only be run on two chip Blackhole systems",
+   "status": "SKIP",
+   "time": 0.034
+  },
+  "TwoDeviceBlackholeFixture::ActiveEthChipToChipMultiTxqRxq_Qs_0_and_1": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:78\nThis suite can only be run on two chip Blackhole systems",
+   "status": "SKIP",
+   "time": 0.036
+  },
+  "TwoDeviceBlackholeFixture::ActiveEthChipToChipMultiTxqRxq_Qs_0_and_1#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:69\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoDeviceBlackholeFixture::ActiveEthChipToChipMultiTxqRxq_Qs_0_and_1#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:78\nThis suite can only be run on two chip Blackhole systems",
+   "status": "SKIP",
+   "time": 0.037
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsBidirectionalDirectSend": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsBidirectionalDirectSend#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:36\nTwoDeviceFixture can only be run on machines with two devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsBidirectionalDirectSend#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRandomDirectSendTests": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRandomDirectSendTests#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:36\nTwoDeviceFixture can only be run on machines with two devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRandomDirectSendTests#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRandomEthPacketSizeDirectSendTests": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRandomEthPacketSizeDirectSendTests#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:36\nTwoDeviceFixture can only be run on machines with two devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRandomEthPacketSizeDirectSendTests#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRepeatedDirectSends": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRepeatedDirectSends#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:36\nTwoDeviceFixture can only be run on machines with two devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsRepeatedDirectSends#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsSendDramBufferChip0ToChip1": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsSendDramBufferChip0ToChip1#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:36\nTwoDeviceFixture can only be run on machines with two devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsSendDramBufferChip0ToChip1#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsSendDramBufferChip1ToChip0": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsSendDramBufferChip1ToChip0#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:36\nTwoDeviceFixture can only be run on machines with two devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "TwoMeshDeviceFixture::ActiveEthKernelsSendDramBufferChip1ToChip0#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:31\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsDirectSendAllConnectedChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp:974\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 0.645
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsDirectSendAllConnectedChips#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/command_queue_fixture.hpp:333\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsDirectSendAllConnectedChips#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp:974\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 0.518
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsSendDramBufferAllConnectedChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp:653\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 0.676
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsSendDramBufferAllConnectedChips#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/command_queue_fixture.hpp:333\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsSendDramBufferAllConnectedChips#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp:653\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 0.525
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsSendInterleavedBufferAllConnectedChips": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp:730\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 0.692
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsSendInterleavedBufferAllConnectedChips#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/command_queue_fixture.hpp:333\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "UnitMeshCQMultiDeviceProgramFixture::ActiveEthKernelsSendInterleavedBufferAllConnectedChips#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp:730\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 0.504
+  },
+  "UnitMeshCQSingleCardProgramFixture::ActiveEthKernelsNocReadNoSend": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp:390\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 1.848
+  },
+  "UnitMeshCQSingleCardProgramFixture::ActiveEthKernelsNocReadNoSend#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/command_queue_fixture.hpp:109\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "UnitMeshCQSingleCardProgramFixture::ActiveEthKernelsNocReadNoSend#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp:390\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 1.787
+  },
+  "UnitMeshCQSingleCardProgramFixture::ActiveEthKernelsNocWriteNoReceive": {
+   "file": "unit_tests_eth.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp:432\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 0.429
+  },
+  "UnitMeshCQSingleCardProgramFixture::ActiveEthKernelsNocWriteNoReceive#2": {
+   "file": "unit_tests_eth_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/command_queue_fixture.hpp:109\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "UnitMeshCQSingleCardProgramFixture::ActiveEthKernelsNocWriteNoReceive#3": {
+   "file": "unit_tests_eth_2.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_basic_eth.cpp:432\nfast dispatch to active ethernet has been removed",
+   "status": "SKIP",
+   "time": 0.261
+  }
+ }
+}

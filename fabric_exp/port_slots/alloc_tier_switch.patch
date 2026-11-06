@@ -1,0 +1,59 @@
+diff --git a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+index a2975f76a83..6b33d707e6a 100644
+--- a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
++++ b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+@@ -13,6 +13,7 @@
+ #include <tt_stl/assert.hpp>
+ #include <tt_stl/fmt.hpp>
+ #include <algorithm>
++#include <cstdlib>
+ #include <numeric>
+ 
+ namespace tt::tt_fabric {
+@@ -130,6 +131,20 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
+         total_slot_count += vc_sender_slots + vc_receiver_slots;
+ 
+         log_trace(tt::LogFabric, "VC{} num_sender_buffer_slots: {}", vc, num_sender_buffer_slots_per_vc[vc]);
++        // LOCAL (fabric_exp/port_slots/alloc_tier_switch.patch, never committed): the study's slot log.
++        if (std::getenv("TT_FABRIC_EXP_LOG_SLOTS") != nullptr && num_used_sender_channels_per_vc[vc] > 0) {
++            log_info(
++                tt::LogFabric,
++                "VC{} sender slots {} receiver slots {} (channel buffer {} B)",
++                vc,
++                std::vector<size_t>(
++                    num_sender_buffer_slots_per_vc[vc].begin(),
++                    num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc]),
++                std::vector<size_t>(
++                    num_receiver_buffer_slots_per_vc[vc].begin(),
++                    num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc]),
++                channel_buffer_size_bytes);
++        }
+         log_trace(
+             tt::LogFabric, "VC{} num_remote_sender_buffer_slots: {}", vc, num_remote_sender_buffer_slots_per_vc[vc]);
+         log_trace(tt::LogFabric, "VC{} num_receiver_buffer_slots: {}", vc, num_receiver_buffer_slots_per_vc[vc]);
+@@ -668,7 +683,9 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
+     // Blackhole routers take their slots from the staged allocator (fabric_slot_allocator.hpp): each channel kind's
+     // full-rate depth, scaled to the budget. Wormhole keeps the tier table below: the full-rate depths are the
+     // Blackhole router's credit loops.
+-    if (arch == tt::ARCH::BLACKHOLE) {
++    // LOCAL (fabric_exp/port_slots/alloc_tier_switch.patch, never committed): TT_FABRIC_EXP_TIER_SLOTS=1 keeps the tier
++    // table on Blackhole too, for the A/B against it.
++    if (arch == tt::ARCH::BLACKHOLE && std::getenv("TT_FABRIC_EXP_TIER_SLOTS") == nullptr) {
+         configure_staged_buffer_slots(
+             topology,
+             num_sender_buffer_slots_per_vc,
+@@ -811,6 +828,14 @@ void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
+             c.stage,
+             c.reason);
+     }
++    // LOCAL (fabric_exp/port_slots/alloc_tier_switch.patch, never committed): TT_FABRIC_EXP_SKEW_FWD=1 takes a slot
++    // from the first VC0 forwarding channel, so the host's one-ring-size-per-VC guard can be checked on a mock (a 2D
++    // receiver that forwards both straight and into a turn connects to the first and second forwarding channels).
++    if (std::getenv("TT_FABRIC_EXP_SKEW_FWD") != nullptr && vc0_forwarding_channels.size() > 1) {
++        const size_t skewed = vc0_forwarding_channels.front();
++        num_sender_buffer_slots_per_vc[0][skewed]--;
++        num_remote_sender_buffer_slots_per_vc[0][skewed]--;
++    }
+     if (allocation.unused_slots > 0) {
+         log_debug(
+             tt::LogFabric,

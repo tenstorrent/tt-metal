@@ -1,0 +1,20 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_3192068_1793770449931442154_20261104_053409.xml"
+ ],
+ "tests": {
+  "models.demos.llama3_70b_galaxy.demo.text_qwen_demo::test_qwen_demo_text[blackhole-mesh_device0-device_params0-10-performance-ci-token-matching]": {
+   "file": "pytest_3192068_1793770449931442154_20261104_053409.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1633.007
+  }
+ }
+}

@@ -1,0 +1,13 @@
+diff --git a/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp b/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+index a953630..6e85817 100644
+--- a/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
++++ b/tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp
+@@ -44,7 +44,7 @@ namespace fabric_router::receiver {
+ // that packet. After this many passes in a row without a packet, the partial group is credited as it is. Fewer passes
+ // split groups in the short gaps of a steady stream (more credit frames, a cost on both ERISCs; 1 or 2 cost 2D 3-hop
+ // writes up to 7 cycles per packet on Blackhole P150); more hold the slots longer after a burst. Groups of 2 or 4 only.
+-constexpr uint32_t IDLE_PASSES_BEFORE_PARTIAL_CREDIT = 4;
++constexpr uint32_t IDLE_PASSES_BEFORE_PARTIAL_CREDIT = 64;  // LOCAL NX A/B arm d (never committed); stock: 4
+ // Status reads a completion group's proof waits for, at most; then its credit is left to a later pass. A safety bound:
+ // on Blackhole P150 proofs finish within 8 reads (large-write deliverers mostly 5-8); the cap is for slower cases, such
+ // as non-L1 destinations.

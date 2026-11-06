@@ -1,0 +1,41 @@
+{
+ "capped": false,
+ "ci": null,
+ "ci_timeout_s": 1800,
+ "duration_s": 80.1,
+ "end": "2026-11-04T00:47:51+00:00",
+ "fabric_csv": 3,
+ "failed_lines": [],
+ "group": "G-P",
+ "jit_cache": "/tmp/aagarwal-regress/171904/cache/main-main",
+ "label": "main",
+ "marker_found": 1,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u08",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "171904",
+ "start": "2026-11-04T00:46:31+00:00",
+ "status": "PASS",
+ "step": "G0-bench",
+ "telemetry": "off (prod default)",
+ "timeout_note": null,
+ "timeout_s": 1800,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+ "tt_fabric": {
+  "executed": 36,
+  "failed": 0,
+  "runs": 1
+ }
+}

@@ -1,0 +1,45 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": false,
+  "list": "blackhole_e2e_tests.yaml",
+  "name": "fabric sanity benchmark",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 900,
+ "duration_s": 70.1,
+ "end": "2026-11-03T23:13:00+00:00",
+ "fabric_csv": 6,
+ "failed_lines": [],
+ "group": "LB-P",
+ "label": "main",
+ "marker_found": 1,
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 2,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-03T23:11:50+00:00",
+ "status": "PASS",
+ "step": "B0-bench",
+ "telemetry": "off (prod default)",
+ "timeout_s": 900,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+ "tt_fabric": {
+  "executed": 414,
+  "failed": 0,
+  "runs": 1
+ }
+}

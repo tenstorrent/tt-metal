@@ -1,0 +1,41 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": false,
+  "list": "fabric_tests.yaml",
+  "name": "BH fabric system health tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 900,
+ "duration_s": 5.0,
+ "end": "2026-11-03T21:20:01+00:00",
+ "failed_lines": [],
+ "group": "LB-L0-b",
+ "junit_files": 1,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-03T21:19:56+00:00",
+ "status": "PASS",
+ "step": "B0-health",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 3,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "timeout_s": 900,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

@@ -1,0 +1,103 @@
+{
+ "version": "refresh-2026-11-05",
+ "note": "Report data refresh: main as shipped d2bd12fcf1f against the port d51e42cd78a, same job, passes a and b.",
+ "points": [
+  {
+   "point": 1,
+   "label": "2D mesh 1-hop write, 4,352 B",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "2D mesh",
+   "config": "two ERISCs",
+   "send_type": "write",
+   "packet_size_B": 4352,
+   "why": "headline: main ~222 cycles/packet against the new router's ~127 on one link",
+   "slack_test": [
+    "Mesh1HopEW",
+    4352,
+    "write"
+   ],
+   "phase2": {
+    "P150": "fabric_exp/pcs3/ew4352.yaml"
+   },
+   "main": [
+    {
+     "set": "rf1a_main_bd_ew4352",
+     "provisional": false,
+     "notes": "pass a (main then port), main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive); same lb2 job."
+    },
+    {
+     "set": "rf1b_main_bd_ew4352",
+     "provisional": false,
+     "notes": "pass b (port then main), main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive); same lb2 job."
+    }
+   ],
+   "new": [
+    {
+     "set": "rf1a_port_bd_ew4352",
+     "provisional": false,
+     "notes": "pass a (main then port), port d51e42cd78a (PR tip); same lb2 job."
+    },
+    {
+     "set": "rf1b_port_bd_ew4352",
+     "provisional": false,
+     "notes": "pass b (port then main), port d51e42cd78a (PR tip); same lb2 job."
+    }
+   ]
+  },
+  {
+   "point": 3,
+   "label": "2D mesh multicast write, 4,352 B",
+   "link": "400G",
+   "system": "P150x8",
+   "topology": "2D mesh",
+   "config": "two ERISCs",
+   "send_type": "write",
+   "packet_size_B": 4352,
+   "why": "the page's multicast peak, 72.4% of line rate at 400G (the 69-83% range spans the multicast tests of all topologies); the row is exp_2d_4352.yaml's MeshMulticast, write, 4352 B (user, 2026-11-02)",
+   "slack_test": [
+    "MeshMulticast",
+    4352,
+    "write"
+   ],
+   "phase2": {
+    "P150": "fabric_exp/consolidation/bd_rows/mcast.yaml"
+   },
+   "main": [
+    {
+     "set": "rf1a_main_bd_mcast",
+     "provisional": false,
+     "notes": "pass a (main then port), main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive); same lb2 job."
+    },
+    {
+     "set": "rf1b_main_bd_mcast",
+     "provisional": false,
+     "notes": "pass b (port then main), main as shipped (d2bd12fcf1f; kernel v1, firmware keepalive); same lb2 job."
+    }
+   ],
+   "new": [
+    {
+     "set": "rf1a_port_bd_mcast",
+     "provisional": false,
+     "notes": "pass a (main then port), port d51e42cd78a (PR tip); same lb2 job."
+    },
+    {
+     "set": "rf1b_port_bd_mcast",
+     "provisional": false,
+     "notes": "pass b (port then main), port d51e42cd78a (PR tip); same lb2 job."
+    }
+   ],
+   "census_row": [
+    "fabric_exp/exp_2d_4352.yaml",
+    "MeshMulticast",
+    "unicast_write",
+    4352
+   ]
+  }
+ ],
+ "missing_notes": {
+  "main": "No samples of main's router exist at any of the five points: the only main samples (pcse_v1, a09u32 job 131) are one-ERISC ring 1-hop bidirectional 1024 B, used here only to validate main's map.",
+  "5": "No samples of either router on a full-ring multicast (Galaxy or P150, two ERISCs). The nearest existing new-router samples (ring 1-hop write, job 358) are a different traffic pattern and are not used."
+ },
+ "router_rule": "Per ERISC: the router whose ERISC sets the test's rate where an A/B has identified that router (ab_targets in a point or entry, with its source); otherwise the busiest (largest share of samples in that ERISC's work category: E0 Ethernet send, E1 NoC commands). The one-side delay A/Bs (slack.json, V4_BOUNDS \u00a71, V4_NS_FLOOR \u00a71) spin every router's E0 or every router's E1 at once: they name the bound side, not a router, so today every pick is 'busiest' (user, 2026-11-02)."
+}

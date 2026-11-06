@@ -1,0 +1,27 @@
+# SUPERSEDED (2026-11-05): the Galaxy pair suite uses existing descriptors instead (glxq_pairs.tsv). Kept as history.
+# Two cabled BH Galaxies as two meshes, one per host: each an 8x4 mesh LINE x RING with express links on dim 0 (CI's
+# express_links_quad_8x4 mesh form: dim 0 stays LINE because a RING dim 0 would also emit a wrapping chord that is not
+# a physical intra-Galaxy cable), linked over Z by the cables between the hosts (16 Ethernet connections).
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0 pattern { start: 2 step: 4 } }
+  express_links { dim_idx: 0 pattern { start: 0 step: 8 } }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 16 policy: RELAXED }
+    directional: false
+    assign_z_direction: true
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

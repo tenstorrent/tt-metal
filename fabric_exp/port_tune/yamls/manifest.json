@@ -1,0 +1,78 @@
+{
+ "2d": {
+  "yaml": "fabric_exp/exp_2d_4352.yaml",
+  "tests": 10
+ },
+ "1d": {
+  "yaml": "fabric_exp/exp_1d_4352.yaml",
+  "tests": 16
+ },
+ "mix": {
+  "yaml": "fabric_exp/streams/p3_mixes.yaml",
+  "tests": 33
+ },
+ "burst": {
+  "yaml": "fabric_exp/exp_burst.yaml",
+  "tests": 44
+ },
+ "burst612": {
+  "yaml": "fabric_exp/exp_burst612.yaml",
+  "tests": 16
+ },
+ "vc1": {
+  "yaml": "fabric_exp/vc1/vc1_alloc.yaml",
+  "tests": 25
+ },
+ "vc1i": {
+  "yaml": "fabric_exp/vc1/vc1_inter.yaml",
+  "tests": 8
+ },
+ "pert": {
+  "yaml": "fabric_exp/port_tune/yamls/pert.yaml",
+  "tests": 18
+ },
+ "2d_1e": {
+  "yaml": "fabric_exp/exp_2d_4352.yaml",
+  "tests": 10
+ },
+ "1d_1e": {
+  "yaml": "fabric_exp/exp_1d_4352.yaml",
+  "tests": 16
+ },
+ "mux": {
+  "yaml": "fabric_exp/v4/exp_mux.yaml",
+  "tests": 22
+ },
+ "vc2ew": {
+  "yaml": "fabric_exp/pcs3/vc2ew4352.yaml",
+  "tests": 1
+ },
+ "vc02ew": {
+  "yaml": "fabric_exp/pcs3/vc02ew4352.yaml",
+  "tests": 1
+ },
+ "vc02bew": {
+  "yaml": "fabric_exp/pcs3/vc02bew4352.yaml",
+  "tests": 1
+ },
+ "val": {
+  "yaml": "fabric_exp/port_tune/yamls/val.yaml",
+  "tests": 6
+ },
+ "val1d": {
+  "yaml": "fabric_exp/port_tune/yamls/val1d.yaml",
+  "tests": 4
+ },
+ "nx4096": {
+  "yaml": "fabric_exp/port_tune/yamls/nx4096.yaml",
+  "tests": 1
+ },
+ "ring": {
+  "yaml": "fabric_exp/v4/exp_ring.yaml",
+  "tests": 14
+ },
+ "lat": {
+  "yaml": "fabric_exp/exp_latency.yaml",
+  "tests": 12
+ }
+}

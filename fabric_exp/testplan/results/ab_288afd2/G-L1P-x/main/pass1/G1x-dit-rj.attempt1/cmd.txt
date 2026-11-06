@@ -1,0 +1,2 @@
+export TT_METAL_PROFILER_DIR=$TMPDIR/dit_profiler   # the job's own /tmp: the device logs stay off /data
+python $REGRESS_HARNESS_DIR/dit_ring_joint_perf.py --q q256 --k k512

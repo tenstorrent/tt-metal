@@ -1,0 +1,26 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 2,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_504376_1793783291497608659_20261104_090811.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.perf.test_kimi_moe_perf::test_kimi_moe_perf[blackhole-k2_7-loudbox-fabric2d-2x4]": {
+   "file": "pytest_504376_1793783291497608659_20261104_090811.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 33.636
+  },
+  "models.demos.deepseek_v3_d_p.tests.perf.test_kimi_moe_perf::test_kimi_moe_perf[blackhole-k3-loudbox-fabric2d-2x4]": {
+   "file": "pytest_504376_1793783291497608659_20261104_090811.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 36.267
+  }
+ }
+}

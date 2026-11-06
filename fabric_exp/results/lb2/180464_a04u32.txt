@@ -1,0 +1,22 @@
+job 180464 on bh-lb-120-a04u32
+command: bash fabric_exp/report/refresh/rf_lb_harness.sh
+summary: rc=0 hung=0 node=bh-lb-120-a04u32 job=180464 post=none start=2026-11-05 21:53:52 end=2026-11-05T22:12:50Z
+[lb2 21:52:27 +0s] node=bh-lb-120-a04u32 job=180464 mode=run start=2026-11-05T21:52:27Z timeout=13200s
+[lb2 21:52:27 +0s] command: bash fabric_exp/report/refresh/rf_lb_harness.sh
+[lb2 21:52:27 +0s] stage src-20261105-215015 (full full-20261104-221405), staged 2026-11-05T21:50:42Z
+[lb2 21:52:27 +0s] busy check: clear
+[lb2 21:52:27 +0s] space: 884 GB free on /home
+[lb2 21:52:36 +9s] verify: 32758 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T21:50:42Z)
+[lb2 21:52:39 +12s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T21:50:42Z)
+[lb2 21:52:48 +21s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T21:50:42Z)
+[lb2 21:52:49 +22s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T21:50:42Z)
+[lb2 21:52:49 +22s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T21:50:42Z)
+[lb2 21:52:55 +28s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 21:52:55 +28s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 21:52:56 +29s] cpus: nproc 60, Cpus_allowed_list: 0,2-15,17-32,34-47,49-63, memory 638 GB available
+[lb2 21:52:56 +29s] reset (start): tt-smi -r
+[lb2 21:53:52 +85s] link check (start, poll 1, +0 s): every fabric link UP/PASS/400 (link gate PASS)
+[lb2 21:53:53 +86s] run: bash fabric_exp/report/refresh/rf_lb_harness.sh
+[lb2 22:12:14 +1187s] command exit 0
+[lb2 22:12:50 +1223s] copied back: 208 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/180464 (MANIFEST.tsv)
+[lb2 22:12:50 +1223s] done: rc 0, hung 0; 876 GB free on /home

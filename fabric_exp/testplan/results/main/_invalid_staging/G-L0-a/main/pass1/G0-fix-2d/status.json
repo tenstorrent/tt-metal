@@ -1,0 +1,46 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": false,
+  "list": "fabric_tests.yaml",
+  "name": "BH fabric 2D fixture unit tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 1200,
+ "duration_s": 75.1,
+ "end": "2026-11-03T22:25:42+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"Fabric2D*Fixture.*\"",
+  "[regress] command failed (rc=1): ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"FabricTrafficGeneratorKernelIntegrationTest.*\""
+ ],
+ "group": "G-L0-a",
+ "junit_files": 2,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u08",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "router": "main",
+ "slurm_job": "171351",
+ "start": "2026-11-03T22:24:27+00:00",
+ "status": "FAIL",
+ "step": "G0-fix-2d",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "PASS": 0,
+  "SKIP": 51
+ },
+ "timeout_s": 1200,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

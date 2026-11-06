@@ -1,0 +1,36 @@
+{
+ "capped": true,
+ "ci": null,
+ "ci_timeout_s": 1200,
+ "deviation": null,
+ "duration_s": 120.1,
+ "end": "2026-11-04T05:31:17+00:00",
+ "failed_lines": [],
+ "group": "LB-L1P",
+ "jit_cache": "/home/aagarwal/.tt-metal-cache-regress/main-main",
+ "label": "main",
+ "metrics": 10,
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-04T05:29:17+00:00",
+ "status": "PASS",
+ "step": "B1-ccl-bc",
+ "telemetry": "CI default",
+ "timeout_note": null,
+ "timeout_s": 1134,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

@@ -1,0 +1,34 @@
+job 175938 on bh-lb-120-a04u32
+command: bash fabric_exp/port_slots/port_slot_runs.sh V F2 F1 S
+summary: rc=0 hung=0 node=bh-lb-120-a04u32 job=175938 post=none start=2026-11-04 22:41:50 end=2026-11-04T22:56:03Z
+[lb2 22:37:19 +0s] node=bh-lb-120-a04u32 job=175938 mode=run start=2026-11-04T22:37:19Z timeout=7800s
+[lb2 22:37:19 +0s] command: bash fabric_exp/port_slots/port_slot_runs.sh V F2 F1 S
+[lb2 22:37:19 +0s] stage src-20261104-221405 (full full-20261104-221405), staged 2026-11-04T22:15:57Z
+[lb2 22:37:19 +0s] busy check: clear
+[lb2 22:37:19 +0s] space: 1113 GB free on /home
+[lb2 22:37:59 +40s] verify: 32399 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T22:15:57Z)
+[lb2 22:38:02 +43s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T22:15:57Z)
+[lb2 22:38:13 +54s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T22:15:57Z)
+[lb2 22:38:15 +56s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T22:15:57Z)
+[lb2 22:38:15 +56s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T22:15:57Z)
+[lb2 22:38:24 +65s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 22:38:25 +66s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 22:38:25 +66s] cpus: nproc 60, Cpus_allowed_list: 0,2-15,17-32,34-47,49-63, memory 704 GB available
+[lb2 22:38:25 +66s] reset (start): tt-smi -r
+[lb2 22:39:23 +124s] link check (start, poll 1, +1 s): not yet
+[lb2 22:39:33 +134s] link check (start, poll 2, +11 s): not yet
+[lb2 22:39:43 +144s] link check (start, poll 3, +21 s): not yet
+[lb2 22:39:53 +154s] link check (start, poll 4, +31 s): not yet
+[lb2 22:40:03 +164s] link check (start, poll 5, +41 s): not yet
+[lb2 22:40:13 +174s] link check (start, poll 6, +51 s): not yet
+[lb2 22:40:23 +184s] link check (start, poll 7, +61 s): not yet
+[lb2 22:40:33 +194s] link check (start, poll 8, +71 s): not yet
+[lb2 22:40:44 +205s] link check (start, poll 9, +82 s): not yet
+[lb2 22:40:54 +215s] link check (start, poll 10, +92 s): not yet
+[lb2 22:40:54 +215s] links still down after 90 s: resetting again
+[lb2 22:40:54 +215s] reset (start_r1): tt-smi -r
+[lb2 22:41:50 +271s] link check (start_r1, poll 1, +0 s): all baseline links UP/PASS/400
+[lb2 22:41:51 +272s] run: bash fabric_exp/port_slots/port_slot_runs.sh V F2 F1 S
+[lb2 22:55:57 +1118s] command exit 0
+[lb2 22:56:03 +1124s] copied back: 219 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/175938 (MANIFEST.tsv)
+[lb2 22:56:03 +1124s] done: rc 0, hung 0; 1104 GB free on /home

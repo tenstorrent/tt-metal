@@ -1,0 +1,103 @@
+== on: 826560 samples, 10.776 s, 76702.1/s, 80 targets (0 unmatched, 0 relaunched), read errors 0; 288 iteration windows, 36.7% of samples inside
+== off: 859520 samples, 11.025 s, 77964.1/s, 80 targets (0 unmatched, 0 relaunched), read errors 0; 288 iteration windows, 36.8% of samples inside
+
+== ERISC0: share of kernel+firmware samples by bucket (all / inside iteration windows)
+   bucket                      on all     on win      off all    off win   on-off all  on-off win
+   passes                     83.603%    85.445%      84.497%    86.718%      -0.894     -1.272
+   end_round                   2.461%     1.838%       1.835%     1.430%      +0.625     +0.408
+   ctx_switch                  1.489%     0.931%       0.864%     0.587%      +0.626     +0.344
+   telemetry                  10.564%    11.065%      10.703%    11.265%      -0.140     -0.200
+   link_sync                   0.818%     0.698%       0.000%     0.000%      +0.818     +0.698
+   eth_ptp                     0.002%     0.000%       0.000%     0.000%      +0.002     +0.000
+   ring_ensure_room_slow       0.007%     0.015%       0.000%     0.000%      +0.007     +0.015
+   kernel_profiler             0.008%     0.007%       0.000%     0.000%      +0.008     +0.007
+   firmware                    1.049%     0.000%       2.100%     0.001%      -1.052     -0.001
+   samples: on 413280 / 151812, off 429760 / 158006
+   on: top non-passes lines (share of all ERISC0 samples):
+        1.184%  telemetry              fabric_router::telemetry::note_sent router/router_telemetry.hpp:85
+        1.079%  telemetry              fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+        0.956%  telemetry              fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+        0.951%  telemetry              fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+        0.726%  telemetry              fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+        0.718%  end_round              fabric_router::end_round router/router_round.hpp:115
+        0.715%  telemetry              eth_risc_reg_read ethernet/tt_eth_api.h:39
+        0.708%  end_round              fabric_router::end_round router/router_round.hpp:127
+        0.680%  telemetry              fabric_router::sender::SenderChannel::holds_packet router/router_sender.hpp:75
+        0.610%  telemetry              get_timestamp tt-1xx/risc_common.h:238
+        0.497%  telemetry              get_timestamp tt-1xx/risc_common.h:240
+        0.488%  telemetry              get_timestamp tt-1xx/risc_common.h:239
+   off: top non-passes lines (share of all ERISC0 samples):
+        1.155%  telemetry              fabric_router::telemetry::note_sent router/router_telemetry.hpp:85
+        1.094%  telemetry              fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+        0.980%  telemetry              fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+        0.969%  telemetry              fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+        0.856%  end_round              fabric_router::end_round router/router_round.hpp:115
+        0.820%  firmware               pc 0x77900xx
+        0.753%  telemetry              eth_risc_reg_read ethernet/tt_eth_api.h:39
+        0.725%  telemetry              fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+        0.689%  telemetry              fabric_router::sender::SenderChannel::holds_packet router/router_sender.hpp:75
+        0.639%  telemetry              get_timestamp tt-1xx/risc_common.h:238
+        0.588%  end_round              fabric_router::end_round router/router_round.hpp:127
+        0.529%  telemetry              get_timestamp tt-1xx/risc_common.h:240
+
+== ERISC1: share of kernel+firmware samples by bucket (all / inside iteration windows)
+   bucket                      on all     on win      off all    off win   on-off all  on-off win
+   passes                     90.646%    94.047%      89.595%    93.962%      +1.051     +0.085
+   end_round                   1.216%     0.882%       1.253%     0.936%      -0.037     -0.054
+   ctx_switch                  1.804%     1.253%       1.825%     1.292%      -0.021     -0.039
+   telemetry                   5.285%     3.818%       5.227%     3.810%      +0.057     +0.008
+   link_sync                   0.000%     0.000%       0.000%     0.000%      +0.000     +0.000
+   eth_ptp                     0.000%     0.000%       0.000%     0.000%      +0.000     +0.000
+   ring_ensure_room_slow       0.000%     0.000%       0.000%     0.000%      +0.000     +0.000
+   kernel_profiler             0.000%     0.000%       0.000%     0.000%      +0.000     +0.000
+   firmware                    1.050%     0.000%       2.100%     0.000%      -1.050     +0.000
+   samples: on 413280 / 151834, off 429760 / 157993
+   on: top non-passes lines (share of all ERISC1 samples):
+        1.179%  ctx_switch             fabric_router::follow_context_switch router/router_round.hpp:82
+        1.037%  end_round              fabric_router::end_round router/router_round.hpp:115
+        0.905%  telemetry              get_timestamp tt-1xx/risc_common.h:238
+        0.743%  telemetry              get_timestamp tt-1xx/risc_common.h:239
+        0.743%  telemetry              fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+        0.706%  firmware               pc 0x9500xx
+        0.597%  telemetry              get_timestamp tt-1xx/risc_common.h:240
+        0.474%  telemetry              fabric_router::telemetry::round_start router/router_telemetry.hpp:115
+        0.459%  telemetry              eth_risc_reg_read ethernet/tt_eth_api.h:39
+        0.344%  firmware               pc 0xc600xx
+        0.309%  telemetry              fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:107
+        0.296%  telemetry              eth_read_wall_clock ethernet/tt_eth_api.h:43
+   off: top non-passes lines (share of all ERISC1 samples):
+        1.258%  firmware               pc 0x9500xx
+        1.169%  ctx_switch             fabric_router::follow_context_switch router/router_round.hpp:82
+        1.057%  end_round              fabric_router::end_round router/router_round.hpp:115
+        0.900%  telemetry              get_timestamp tt-1xx/risc_common.h:238
+        0.842%  firmware               pc 0xc600xx
+        0.743%  telemetry              fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+        0.719%  telemetry              get_timestamp tt-1xx/risc_common.h:239
+        0.608%  telemetry              get_timestamp tt-1xx/risc_common.h:240
+        0.451%  telemetry              fabric_router::telemetry::round_start router/router_telemetry.hpp:115
+        0.429%  telemetry              eth_risc_reg_read ethernet/tt_eth_api.h:39
+        0.309%  telemetry              fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:110
+        0.303%  telemetry              fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:107
+
+== stall events (on arm): 288 router-iterations over 300k above the off median, 8352 without
+   rows: NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_2 it1 x103, NeighborExchangeUnicast_size_2048_ntype_unicast_write_num_links_2 it1 x59, NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_2 it2 x47, NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_1 it3 x29, NeighborExchangeUnicast_size_2048_ntype_unicast_write_num_links_1 it3 x19, NeighborExchangeUnicast_size_2048_ntype_unicast_write_num_links_2 it2 x19, NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_1 it2 x4, NeighborExchangeUnicast_size_4096_ntype_unicast_write_num_links_2 it3 x4, NeighborExchangeUnicast_size_2048_ntype_unicast_write_num_links_2 it3 x3, NeighborExchangeUnicast_size_2048_ntype_unicast_write_num_links_1 it2 x1
+   ERISC0: samples in event router-iterations 4167, in the others 113153
+      passes                 event    3625 ( 86.99%)   others    97070 ( 85.79%)
+      end_round              event      66 (  1.58%)   others     1757 (  1.55%)
+      ctx_switch             event      21 (  0.50%)   others      757 (  0.67%)
+      telemetry              event     444 ( 10.66%)   others    12818 ( 11.33%)
+      link_sync              event      10 (  0.24%)   others      721 (  0.64%)
+      eth_ptp                event       0 (  0.00%)   others        0 (  0.00%)
+      ring_ensure_room_slow  event       1 (  0.02%)   others       20 (  0.02%)
+      kernel_profiler        event       0 (  0.00%)   others       10 (  0.01%)
+      firmware               event       0 (  0.00%)   others        0 (  0.00%)
+   ERISC1: samples in event router-iterations 4168, in the others 113169
+      passes                 event    3924 ( 94.15%)   others   107885 ( 95.33%)
+      end_round              event      46 (  1.10%)   others      785 (  0.69%)
+      ctx_switch             event      50 (  1.20%)   others     1089 (  0.96%)
+      telemetry              event     148 (  3.55%)   others     3410 (  3.01%)
+      link_sync              event       0 (  0.00%)   others        0 (  0.00%)
+      eth_ptp                event       0 (  0.00%)   others        0 (  0.00%)
+      ring_ensure_room_slow  event       0 (  0.00%)   others        0 (  0.00%)
+      kernel_profiler        event       0 (  0.00%)   others        0 (  0.00%)
+      firmware               event       0 (  0.00%)   others        0 (  0.00%)

@@ -1,0 +1,39 @@
+# Data-checked multi-mesh sanity of the 4x4 split at 3072 B slots (payloads capped to 3072 B, packets <= the ring's slots).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: MultiMeshAllToAll
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+    size:
+    - 1024
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 64
+  patterns:
+  - type: all_to_all
+- name: MultiMeshNeighborExchangeInter
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+  defaults:
+    ftype: unicast
+    size: 32
+    num_packets: 3000
+  patterns:
+  - type: neighbor_exchange
+    mesh_scope: inter_mesh

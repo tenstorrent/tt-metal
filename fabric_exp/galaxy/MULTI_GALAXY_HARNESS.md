@@ -109,6 +109,8 @@ The job sets:
 | `glxq_links.py` | Ethernet preflight: per host, channels UP and trained >= the FSD's endpoints inside the allocation |
 | `glxq_smoke.yaml` | data-checked all-to-all on the quad mesh, the first run of every job |
 | `glxq_quads.tsv` | the quads (section 1) |
+| `glxq_pairs.tsv` | the cabled pairs and the forms each supports (section 4.1) |
+| `glxp_smoke_mesh.yaml` | the smoke row on a pair's one-mesh forms |
 | `glxq_mock.sh` | the plumbing on one host, CPU only: 4 mock ranks of a 32x4 quad (section 5) |
 
 ## 4. Using it
@@ -160,6 +162,41 @@ bash $G/glxq_run.sh --quad pods --tree v4txa11_1103 --router new --time 02:00:00
 - It never cancels anything.
 - The other direction is not enforced: while a quad job is queued, submit no single-Galaxy jobs. The single-Galaxy
   sbatch files do not check for a quad.
+
+## 4.1 Pairs: two cabled Galaxies (2026-11-05)
+
+`glxq_pairs.tsv` lists the 68 bh-glx-110-a host pairs with Ethernet connections in the aggregated FSD (`pairs/fsd_pairs.py`; mocks: `pairs/mk_pair.sh`, `pairs/mock_pair.sh`):
+- 36 ring-neighbour pairs of a quad (16 connections): forms 16x4, 4x16, torus_z, torus_noz;
+- 32 single-cable pairs across quads (2 connections): forms torus_z_strict2, torus_noz_strict2 only (a RELAXED
+  inter-mesh count also passes the control plane on hosts with no cable, so cable pairs take STRICT forms).
+- Forms: 16x4 is main's `16x4_dual_bh_galaxy_2d` MGD; the others are in `mgd/` (`pair_*`). One-mesh forms put ranks 0
+  and 1 on mesh 0; the tori put rank k on mesh k. All forms passed the control-plane mock on one ring pair per quad.
+
+```
+bash $G/glxq_run.sh --pair any --form 16x4 --tree NAME --router port --dry -- <command>
+bash $G/glxq_run.sh --pair any --form 16x4 --tree NAME --router port --time 00:45:00 --timeout 600 -- <command>
+```
+
+**`--pair any`** submits one job per usable pair (a sibling group, job names `glxp-<group>-<pair>`); `--pair NAME`
+submits one. Usable: no standing exclude (`testplan/manifest.yaml`), no node drained, down or failing in sinfo at submit.
+- The first sibling to start takes the group's lock (`mkdir /data/aagarwal/frs-glx/glxq/locks/<group>/won`) and
+  cancels the siblings still pending (`scancel --state=PENDING`: never a running job). A sibling that starts later
+  exits at once, before touching a device.
+- The group counts as ONE study allocation (user rule, 2026-11-05): the submit refuses past four (a pair group once, a
+  quad four, any other job once), and `run_group.py` counts a group once.
+- `/data` free inodes are checked before staging (100k at least).
+- Smoke: `glxp_smoke_mesh.yaml` (the quad smoke's all-to-all row, topology Mesh) on the one-mesh forms; the tori have no
+  smoke row yet (`--no-smoke`).
+- `--router port`: a mainline-port tree, no router selection.
+- **Suites** (`--suite suites/<name>.tsv`, instead of `--form` and a command): one tt-run per line, in order. Columns:
+  config, label, form, timeout (s), env (`K=V,K=V` or `-`), yaml (tree-relative, or a local file that is staged). Each
+  form gets its own rank binding (`rank_binding_<form>.yaml`); the candidate pairs must support every form of the suite.
+  A step that times out is taken as a hang: captured on every node (`hang_capture.py`), every node reset, and that
+  config's remaining steps skipped; a failed step resets every node and the suite goes on. Each rank's log is named by
+  step (`ranks/r<k>_<host>_<label>.log`); the job writes `results/suite_summary.tsv`. No smoke row (each config starts
+  with the mesh sanity yaml). A pair whose partition's time limit is below `--time` is skipped (bh_110a_sc16: 6 h).
+- Forms: `16x4`, `4x16`, `mesh_z`, `mesh_noz`, `torus_z`, `torus_z_express` (does not map: see glxq_pairs.tsv),
+  `torus_z_strict2`. `torus_noz` is not valid (tori connect over Z only; see glxq_pairs.tsv).
 
 ## 5. Validation done without a quad
 
@@ -225,3 +262,19 @@ That is the smoke row only; its job time is ~15-25 min including reset and links
 the ttnn Python package and pytest in its python_env.
 - The lean study trees have `ttnn/ttnn` and `_ttnn.so`; pytest is not checked.
 - Not prepared yet; the harness takes any command.
+
+## 7. One-time exception: bh_sc36_2 pods (2026-11-04)
+
+The user allowed the pending quad smoke run on bh_sc36_2 as a one-time exception.
+- **Job:** 172792, which replaces the pending 171264. `GLXQ_C120_EXCEPTION=1 glxq_run.sh --quad allpods --tree
+  v4txa11_1103 --router new --timeout 900 -- ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config
+  fabric_exp/galaxy/glxq_smoke.yaml`. It is eligible on the 110a pods 3/6/7/8/9 and the 120c pods 1/2/6/7/8.
+- **Quad table:** the c120_pod* rows in glxq_quads.tsv. Ring order is from the 120-SC36_4x4_C1-10
+  cabling_descriptor.textproto: 8 QSFP-DD cables between ring neighbours, none on the diagonal. These hosts also cable to
+  other pods; the quad MGD doesn't use those links. Pods 3, 4, 5 and 9 had drained or down nodes and are left out.
+- **Guard:** the rows load only with GLXQ_C120_EXCEPTION=1, and glxq.sbatch refuses bh-glx-120-c nodes without it.
+  Don't set it again without a new OK from the user.
+- **Unknown on 120c:** whether the MPI NIC ens5f0np0 and mpirun-ulfm exist there. The tools step checks both and stops
+  the job if they're missing.
+- **Checking a submission:** `sbatch --test-only` rejects every pod partition (110a included) while pod nodes are busy.
+  A held submit (`sbatch --hold`, then `scancel` while held) confirmed the partition list is accepted.

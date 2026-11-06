@@ -1,0 +1,147 @@
+{
+ "group": "LB-L0-a",
+ "label": "new_288afd2",
+ "updated": "2026-11-04T08:15:49+00:00",
+ "steps": [
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-1d",
+   "status": "PASS",
+   "duration_s": 45.0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 24,
+    "PERF_WINDOW": 0,
+    "SKIP": 7
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T07:58:00+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-1e",
+   "status": "PASS",
+   "duration_s": 40.0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 24,
+    "PERF_WINDOW": 0,
+    "SKIP": 7
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T07:59:50+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-2d",
+   "status": "PASS",
+   "duration_s": 65.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 38,
+    "PERF_WINDOW": 0,
+    "SKIP": 13
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T07:58:45+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-mux",
+   "status": "PASS",
+   "duration_s": 120.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 68,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:00:30+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-trim",
+   "status": "PASS",
+   "duration_s": 225.2,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 126,
+    "PERF_WINDOW": 0,
+    "SKIP": 6
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:02:30+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-udm-ttnn",
+   "status": "PASS",
+   "duration_s": 205.2,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 44,
+    "PERF_WINDOW": 0,
+    "SKIP": 16
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:12:22+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 1,
+   "step": "B0-udm",
+   "status": "PASS",
+   "duration_s": 365.4,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 76,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T08:06:15+00:00"
+  }
+ ]
+}

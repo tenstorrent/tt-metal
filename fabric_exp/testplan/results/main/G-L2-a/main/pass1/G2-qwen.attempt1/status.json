@@ -1,0 +1,50 @@
+{
+ "benchmark_files": 0,
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": false,
+  "list": "models_e2e_tests.yaml",
+  "name": "Qwen3-32B e2e tests (Galaxy)",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 900,
+ "duration_s": 902.6,
+ "end": "2026-11-04T03:17:36+00:00",
+ "failed_lines": [],
+ "group": "G-L2-a",
+ "jit_cache": "/tmp/aagarwal-regress/172124/cache/main-main",
+ "junit_files": 0,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u08",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": -15,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "172124",
+ "start": "2026-11-04T03:02:33+00:00",
+ "status": "TIMEOUT",
+ "step": "G2-qwen",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "tests_from_log": true,
+ "timeout_note": null,
+ "timeout_s": 900,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

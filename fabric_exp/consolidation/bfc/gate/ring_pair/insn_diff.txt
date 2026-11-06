@@ -1,0 +1,2 @@
+code bytes 7508 -> 7508; .text 7460 -> 7460; instructions 1865 -> 1865; differing addresses 1
+  0x08884 .LM2342                                                      srli a5,a5,0x11              -> srli a5,a5,0x14              visit_worker<0u> router_sender.hpp:643

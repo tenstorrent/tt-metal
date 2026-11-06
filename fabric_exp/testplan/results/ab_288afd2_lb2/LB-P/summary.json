@@ -1,0 +1,43 @@
+{
+ "group": "LB-P",
+ "label": "ab_288afd2_lb2",
+ "updated": "2026-11-04T09:23:57+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 2,
+   "step": "B0-bench",
+   "status": "PASS",
+   "duration_s": 145.2,
+   "node": "bh-lb-120-a07u28",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 414,
+    "failed": 0,
+    "runs": 1
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T09:21:31+00:00"
+  },
+  {
+   "router": "new",
+   "pass": 2,
+   "step": "B0-bench",
+   "status": "PASS",
+   "duration_s": 170.2,
+   "node": "bh-lb-120-a07u28",
+   "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+   "tests": null,
+   "tt_fabric": {
+    "executed": 414,
+    "failed": 0,
+    "runs": 1
+   },
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T09:17:33+00:00"
+  }
+ ]
+}

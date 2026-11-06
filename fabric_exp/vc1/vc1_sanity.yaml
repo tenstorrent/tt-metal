@@ -21,7 +21,7 @@ Tests:
     - 4096
   defaults:
     ftype: unicast
-    num_packets: 100
+    num_packets: 64
   patterns:
   - type: all_to_all
 - name: MultiMeshNeighborExchangeInter

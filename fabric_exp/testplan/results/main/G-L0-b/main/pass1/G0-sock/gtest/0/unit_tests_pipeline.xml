@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="4" failures="0" disabled="0" errors="0" time="43.539" timestamp="2026-11-03T23:42:54.744" name="AllTests">
+  <testsuite name="BlitzDecodePipelineFixture" tests="4" failures="0" disabled="0" skipped="0" errors="0" time="43.539" timestamp="2026-11-03T23:42:54.744">
+    <testcase name="SendRecvPipeline" file="/home/aagarwal/tt-metal-main/tests/tt_metal/multihost/socket_pipeline/multiprocess/multi_host_pipeline.cpp" line="1142" status="run" result="completed" time="38.559" timestamp="2026-11-03T23:42:54.744" classname="BlitzDecodePipelineFixture" />
+    <testcase name="SendRecvPipelineWithCorrectnessCheck" file="/home/aagarwal/tt-metal-main/tests/tt_metal/multihost/socket_pipeline/multiprocess/multi_host_pipeline.cpp" line="1154" status="run" result="completed" time="1.496" timestamp="2026-11-03T23:43:33.304" classname="BlitzDecodePipelineFixture" />
+    <testcase name="RatePipeline" file="/home/aagarwal/tt-metal-main/tests/tt_metal/multihost/socket_pipeline/multiprocess/multi_host_pipeline.cpp" line="1399" status="run" result="completed" time="2.21" timestamp="2026-11-03T23:43:34.801" classname="BlitzDecodePipelineFixture" />
+    <testcase name="RatePipelineWithCorrectnessCheck" file="/home/aagarwal/tt-metal-main/tests/tt_metal/multihost/socket_pipeline/multiprocess/multi_host_pipeline.cpp" line="1407" status="run" result="completed" time="1.272" timestamp="2026-11-03T23:43:37.011" classname="BlitzDecodePipelineFixture" />
+  </testsuite>
+</testsuites>

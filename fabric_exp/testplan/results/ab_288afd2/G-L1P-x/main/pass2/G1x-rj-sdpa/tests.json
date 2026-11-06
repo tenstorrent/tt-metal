@@ -1,0 +1,71 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 9,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_380620_1793786864607523074_20261104_100744.xml",
+  "pytest_399160_1793787048969659920_20261104_101048.xml",
+  "pytest_410512_1793787153156450656_20261104_101233.xml",
+  "pytest_421805_1793787333582896334_20261104_101533.xml"
+ ],
+ "tests": {
+  "tests.nightly.blackhole.sdpa.test_ring_joint_sdpa::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q128-k256-chunk4096-ksplit3-unseg]": {
+   "file": "pytest_399160_1793787048969659920_20261104_101048.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.271
+  },
+  "tests.nightly.blackhole.sdpa.test_ring_joint_sdpa::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q64-k256-chunk2048-ksplit3-unseg]": {
+   "file": "pytest_399160_1793787048969659920_20261104_101048.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 44.617
+  },
+  "tests.nightly.blackhole.sdpa.test_ring_joint_sdpa::test_ring_joint_attention_gemma4_chunked_perf_check[gemma4_global-q96-k256-chunk8192-ksplit1-seg]": {
+   "file": "pytest_399160_1793787048969659920_20261104_101048.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.654
+  },
+  "tests.nightly.blackhole.sdpa.test_ring_joint_sdpa::test_ring_joint_attention_perf_check[mla_100k-q160-k320-ring8]": {
+   "file": "pytest_380620_1793786864607523074_20261104_100744.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 76.179
+  },
+  "tests.nightly.blackhole.sdpa.test_ring_joint_sdpa::test_ring_joint_attention_perf_check[wan2_2_1xGLX-q288-k512-ring8]": {
+   "file": "pytest_380620_1793786864607523074_20261104_100744.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 75.364
+  },
+  "tests.nightly.blackhole.sdpa.test_ring_joint_sdpa::test_ring_mla_chunked_perf_check[kimi50k-q32-k640-ring8]": {
+   "file": "pytest_410512_1793787153156450656_20261104_101233.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 63.821
+  },
+  "tests.nightly.blackhole.sdpa.test_ring_joint_sdpa::test_ring_mla_chunked_perf_check[kimi_k3-q32-k640-ring8]": {
+   "file": "pytest_410512_1793787153156450656_20261104_101233.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 65.791
+  },
+  "tests.nightly.blackhole.sdpa.test_ring_mla_fused_gather::test_ring_mla_split_kv_perf_check[kimi50k-q32-k640-ring8]": {
+   "file": "pytest_421805_1793787333582896334_20261104_101533.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 81.143
+  },
+  "tests.nightly.blackhole.sdpa.test_ring_mla_fused_gather::test_ring_mla_split_kv_perf_check[kimi_k3-q32-k640-ring8]": {
+   "file": "pytest_421805_1793787333582896334_20261104_101533.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 65.494
+  }
+ }
+}

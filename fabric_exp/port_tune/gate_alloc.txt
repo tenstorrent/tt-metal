@@ -1,0 +1,25 @@
+# Offline gate on the allocator tree (4b524653490 + port_tune.patch), 2026-11-05T01:24:11Z; cases bh_2d bh_1d bh_vc1 bh_ring bh_torus
+== cmp base d4_32
+bh_1d                    router    identical    72  differ    0
+bh_2d                    router    identical    80  differ    0
+bh_ring                  router    identical    72  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_vc1                   router    identical    96  differ    0
+totals: {'router differ': 0, 'router identical': 416}
+shared 416  identical 416  differ 0  only in base 0  only in d4_32 0
+== cmp d4_32 i2
+bh_1d                    router    identical    36  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_ring                  router    identical    72  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_vc1                   router    identical    48  differ   48
+totals: {'router differ': 124, 'router identical': 292}
+shared 416  identical 292  differ 124  only in d4_32 0  only in i2 0
+== cmp d4_32 i8
+bh_1d                    router    identical    36  differ   36
+bh_2d                    router    identical    40  differ   40
+bh_ring                  router    identical    72  differ    0
+bh_torus                 router    identical    96  differ    0
+bh_vc1                   router    identical    48  differ   48
+totals: {'router differ': 124, 'router identical': 292}
+shared 416  identical 292  differ 124  only in d4_32 0  only in i8 0

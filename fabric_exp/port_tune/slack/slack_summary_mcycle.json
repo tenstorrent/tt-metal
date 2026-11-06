@@ -1,0 +1,1432 @@
+[
+ {
+  "test": "Mesh1HopEW",
+  "links": 1,
+  "size": 2048,
+  "ntype": "write",
+  "router": "main",
+  "base": 223.88,
+  "base_runs": [
+   223.92,
+   223.9,
+   223.83,
+   223.88
+  ],
+  "band": 0.5,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 234.24,
+       "b": 234.28
+      },
+      "mean": 234.26,
+      "delta": 10.38,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 235.27,
+       "b": 235.22
+      },
+      "mean": 235.24,
+      "delta": 11.36,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 235.21,
+       "b": 235.22
+      },
+      "mean": 235.22,
+      "delta": 11.33,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 270.12,
+       "b": 270.13
+      },
+      "mean": 270.13,
+      "delta": 46.25,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 0,
+    "clear_next": 1,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 4,
+      "passes": {
+       "a": 224.25,
+       "b": 224.26
+      },
+      "mean": 224.25,
+      "delta": 0.37,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 224.11,
+       "b": 224.01
+      },
+      "mean": 224.06,
+      "delta": 0.17,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 224.54,
+       "b": 224.54
+      },
+      "mean": 224.54,
+      "delta": 0.66,
+      "drop": true
+     },
+     {
+      "D": 64,
+      "passes": {
+       "a": 224.96,
+       "b": 224.87
+      },
+      "mean": 224.92,
+      "delta": 1.04,
+      "drop": true
+     },
+     {
+      "D": 128,
+      "passes": {
+       "a": 277.03,
+       "b": 277.03
+      },
+      "mean": 277.03,
+      "delta": 53.14,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 64,
+    "clear_next": 128,
+    "open": false,
+    "max_tested": 128
+   }
+  },
+  "bound": "E0"
+ },
+ {
+  "test": "Mesh1HopEW",
+  "links": 1,
+  "size": 2048,
+  "ntype": "write",
+  "router": "port",
+  "base": 122.4,
+  "base_runs": [
+   122.45,
+   122.36,
+   122.4,
+   122.38
+  ],
+  "band": 0.5,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 124.86,
+       "b": 124.76
+      },
+      "mean": 124.81,
+      "delta": 2.41,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 126.21,
+       "b": 126.3
+      },
+      "mean": 126.25,
+      "delta": 3.86,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 126.24,
+       "b": 126.27
+      },
+      "mean": 126.25,
+      "delta": 3.86,
+      "drop": true
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 138.1,
+       "b": 138.62
+      },
+      "mean": 138.36,
+      "delta": 15.96,
+      "drop": true
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 140.07,
+       "b": 139.56
+      },
+      "mean": 139.82,
+      "delta": 17.42,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 161.57,
+       "b": 161.54
+      },
+      "mean": 161.55,
+      "delta": 39.16,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 4,
+    "clear_next": 8,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 123.41,
+       "b": 123.38
+      },
+      "mean": 123.4,
+      "delta": 1.0,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 123.73,
+       "b": 123.74
+      },
+      "mean": 123.73,
+      "delta": 1.33,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 123.72,
+       "b": 123.7
+      },
+      "mean": 123.71,
+      "delta": 1.31,
+      "drop": true
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 130.07,
+       "b": 130.06
+      },
+      "mean": 130.06,
+      "delta": 7.67,
+      "drop": true
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 130.71,
+       "b": 130.71
+      },
+      "mean": 130.71,
+      "delta": 8.31,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 146.66,
+       "b": 146.65
+      },
+      "mean": 146.66,
+      "delta": 24.26,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 4,
+    "clear_next": 8,
+    "open": false,
+    "max_tested": 32
+   }
+  },
+  "bound": "E0 and E1"
+ },
+ {
+  "test": "Mesh1HopEW",
+  "links": 1,
+  "size": 4096,
+  "ntype": "write",
+  "router": "main",
+  "base": 222.46,
+  "base_runs": [
+   222.46,
+   222.46,
+   222.52,
+   222.38
+  ],
+  "band": 0.5,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 233.79,
+       "b": 233.77
+      },
+      "mean": 233.78,
+      "delta": 11.32,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 234.64,
+       "b": 234.64
+      },
+      "mean": 234.64,
+      "delta": 12.19,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 234.65,
+       "b": 234.64
+      },
+      "mean": 234.64,
+      "delta": 12.19,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 266.06,
+       "b": 266.09
+      },
+      "mean": 266.08,
+      "delta": 43.62,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 0,
+    "clear_next": 1,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 4,
+      "passes": {
+       "a": 220.62,
+       "b": 220.58
+      },
+      "mean": 220.6,
+      "delta": -1.85,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 221.64,
+       "b": 221.9
+      },
+      "mean": 221.77,
+      "delta": -0.69,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 223.83,
+       "b": 223.77
+      },
+      "mean": 223.8,
+      "delta": 1.34,
+      "drop": true
+     },
+     {
+      "D": 64,
+      "passes": {
+       "a": 223.94,
+       "b": 223.96
+      },
+      "mean": 223.95,
+      "delta": 1.49,
+      "drop": true
+     },
+     {
+      "D": 128,
+      "passes": {
+       "a": 277.02,
+       "b": 277.02
+      },
+      "mean": 277.02,
+      "delta": 54.56,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 64,
+    "clear_next": 128,
+    "open": false,
+    "max_tested": 128
+   }
+  },
+  "bound": "E0"
+ },
+ {
+  "test": "Mesh1HopEW",
+  "links": 1,
+  "size": 4096,
+  "ntype": "write",
+  "router": "port",
+  "base": 126.85,
+  "base_runs": [
+   126.85,
+   126.88,
+   126.89,
+   126.79
+  ],
+  "band": 0.5,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 128.08,
+       "b": 128.02
+      },
+      "mean": 128.05,
+      "delta": 1.2,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 129.28,
+       "b": 129.28
+      },
+      "mean": 129.28,
+      "delta": 2.43,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 129.29,
+       "b": 129.27
+      },
+      "mean": 129.28,
+      "delta": 2.43,
+      "drop": true
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 138.03,
+       "b": 138.14
+      },
+      "mean": 138.09,
+      "delta": 11.23,
+      "drop": true
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 139.15,
+       "b": 139.19
+      },
+      "mean": 139.17,
+      "delta": 12.32,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 161.18,
+       "b": 161.09
+      },
+      "mean": 161.13,
+      "delta": 34.28,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 4,
+    "clear_next": 8,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 128.22,
+       "b": 128.25
+      },
+      "mean": 128.23,
+      "delta": 1.38,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 128.56,
+       "b": 128.58
+      },
+      "mean": 128.57,
+      "delta": 1.72,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 128.56,
+       "b": 128.55
+      },
+      "mean": 128.56,
+      "delta": 1.7,
+      "drop": true
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 132.68,
+       "b": 132.72
+      },
+      "mean": 132.7,
+      "delta": 5.85,
+      "drop": true
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 132.86,
+       "b": 132.92
+      },
+      "mean": 132.89,
+      "delta": 6.04,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 147.55,
+       "b": 147.52
+      },
+      "mean": 147.54,
+      "delta": 20.68,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 4,
+    "clear_next": 8,
+    "open": false,
+    "max_tested": 32
+   }
+  },
+  "bound": "E0 and E1"
+ },
+ {
+  "test": "Mesh1HopEW",
+  "links": 1,
+  "size": 4352,
+  "ntype": "write",
+  "router": "main",
+  "base": 222.72,
+  "base_runs": [
+   222.71,
+   222.77,
+   222.71,
+   222.7
+  ],
+  "band": 0.5,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 233.76,
+       "b": 233.79
+      },
+      "mean": 233.78,
+      "delta": 11.05,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 234.76,
+       "b": 234.74
+      },
+      "mean": 234.75,
+      "delta": 12.02,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 234.74,
+       "b": 234.74
+      },
+      "mean": 234.74,
+      "delta": 12.02,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 266.54,
+       "b": 266.61
+      },
+      "mean": 266.57,
+      "delta": 43.85,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 0,
+    "clear_next": 1,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 4,
+      "passes": {
+       "a": 220.73,
+       "b": 220.46
+      },
+      "mean": 220.6,
+      "delta": -2.13,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 221.97,
+       "b": 221.99
+      },
+      "mean": 221.98,
+      "delta": -0.75,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 223.58,
+       "b": 223.59
+      },
+      "mean": 223.58,
+      "delta": 0.86,
+      "drop": true
+     },
+     {
+      "D": 64,
+      "passes": {
+       "a": 223.74,
+       "b": 223.76
+      },
+      "mean": 223.75,
+      "delta": 1.03,
+      "drop": true
+     },
+     {
+      "D": 128,
+      "passes": {
+       "a": 277.03,
+       "b": 277.02
+      },
+      "mean": 277.02,
+      "delta": 54.3,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 64,
+    "clear_next": 128,
+    "open": false,
+    "max_tested": 128
+   }
+  },
+  "bound": "E0"
+ },
+ {
+  "test": "Mesh1HopEW",
+  "links": 1,
+  "size": 4352,
+  "ntype": "write",
+  "router": "port",
+  "base": 128.44,
+  "base_runs": [
+   128.44,
+   128.42,
+   128.46,
+   128.44
+  ],
+  "band": 0.5,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 129.82,
+       "b": 129.73
+      },
+      "mean": 129.78,
+      "delta": 1.34,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 130.06,
+       "b": 129.97
+      },
+      "mean": 130.01,
+      "delta": 1.57,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 130.0,
+       "b": 129.97
+      },
+      "mean": 129.98,
+      "delta": 1.55,
+      "drop": true
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 138.06,
+       "b": 137.82
+      },
+      "mean": 137.94,
+      "delta": 9.5,
+      "drop": true
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 139.55,
+       "b": 139.65
+      },
+      "mean": 139.6,
+      "delta": 11.16,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 160.88,
+       "b": 160.86
+      },
+      "mean": 160.87,
+      "delta": 32.43,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 4,
+    "clear_next": 8,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 129.71,
+       "b": 129.71
+      },
+      "mean": 129.71,
+      "delta": 1.27,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 130.0,
+       "b": 129.98
+      },
+      "mean": 129.99,
+      "delta": 1.55,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 129.95,
+       "b": 130.03
+      },
+      "mean": 129.99,
+      "delta": 1.55,
+      "drop": true
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 133.38,
+       "b": 133.38
+      },
+      "mean": 133.38,
+      "delta": 4.94,
+      "drop": true
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 133.64,
+       "b": 133.65
+      },
+      "mean": 133.65,
+      "delta": 5.21,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 147.69,
+       "b": 147.68
+      },
+      "mean": 147.68,
+      "delta": 19.24,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 4,
+    "clear_next": 8,
+    "open": false,
+    "max_tested": 32
+   }
+  },
+  "bound": "E0 and E1"
+ },
+ {
+  "test": "NeighborExchangeUnicast",
+  "links": 1,
+  "size": 4096,
+  "ntype": "write",
+  "router": "main",
+  "base": 126.43,
+  "base_runs": [
+   126.48,
+   126.41,
+   126.38,
+   126.44
+  ],
+  "band": 3.07,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 137.01,
+       "b": 137.0
+      },
+      "mean": 137.0,
+      "delta": 10.58,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 139.32,
+       "b": 139.29
+      },
+      "mean": 139.3,
+      "delta": 12.88,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 138.55,
+       "b": 138.57
+      },
+      "mean": 138.56,
+      "delta": 12.13,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 171.18,
+       "b": 171.17
+      },
+      "mean": 171.18,
+      "delta": 44.75,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 0,
+    "clear_next": 1,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 4,
+      "passes": {
+       "a": 126.6,
+       "b": 126.58
+      },
+      "mean": 126.59,
+      "delta": 0.17,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 126.62,
+       "b": 126.6
+      },
+      "mean": 126.61,
+      "delta": 0.18,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 138.81,
+       "b": 138.79
+      },
+      "mean": 138.8,
+      "delta": 12.38,
+      "drop": true
+     },
+     {
+      "D": 64,
+      "passes": {
+       "a": 169.81,
+       "b": 169.59
+      },
+      "mean": 169.7,
+      "delta": 43.27,
+      "drop": true
+     },
+     {
+      "D": 128,
+      "passes": {
+       "a": 229.82,
+       "b": 229.7
+      },
+      "mean": 229.76,
+      "delta": 103.33,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 16,
+    "clear_next": 32,
+    "open": false,
+    "max_tested": 128
+   }
+  },
+  "bound": "E0"
+ },
+ {
+  "test": "NeighborExchangeUnicast",
+  "links": 1,
+  "size": 4096,
+  "ntype": "write",
+  "router": "port",
+  "base": 121.79,
+  "base_runs": [
+   121.79,
+   121.78,
+   121.79,
+   121.8
+  ],
+  "band": 0.5,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 121.7,
+       "b": 121.7
+      },
+      "mean": 121.7,
+      "delta": -0.09,
+      "drop": false
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 121.7,
+       "b": 121.69
+      },
+      "mean": 121.7,
+      "delta": -0.1,
+      "drop": false
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 121.7,
+       "b": 121.71
+      },
+      "mean": 121.7,
+      "delta": -0.09,
+      "drop": false
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 121.7,
+       "b": 121.7
+      },
+      "mean": 121.7,
+      "delta": -0.09,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 121.76,
+       "b": 121.77
+      },
+      "mean": 121.77,
+      "delta": -0.03,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 123.19,
+       "b": 123.23
+      },
+      "mean": 123.21,
+      "delta": 1.42,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 32,
+    "clear_next": null,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 121.8,
+       "b": 121.8
+      },
+      "mean": 121.8,
+      "delta": 0.01,
+      "drop": false
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 121.8,
+       "b": 121.8
+      },
+      "mean": 121.8,
+      "delta": 0.0,
+      "drop": false
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 121.8,
+       "b": 121.81
+      },
+      "mean": 121.81,
+      "delta": 0.02,
+      "drop": false
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 121.8,
+       "b": 121.8
+      },
+      "mean": 121.8,
+      "delta": 0.01,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 121.8,
+       "b": 121.8
+      },
+      "mean": 121.8,
+      "delta": 0.01,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 132.1,
+       "b": 132.1
+      },
+      "mean": 132.1,
+      "delta": 10.31,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 16,
+    "clear_next": 32,
+    "open": false,
+    "max_tested": 32
+   }
+  },
+  "bound": "neither"
+ },
+ {
+  "test": "NeighborExchangeUnicast",
+  "links": 2,
+  "size": 4096,
+  "ntype": "write",
+  "router": "main",
+  "base": 126.43,
+  "base_runs": [
+   126.45,
+   126.43,
+   126.43,
+   126.42
+  ],
+  "band": 3.07,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 136.98,
+       "b": 137.01
+      },
+      "mean": 137.0,
+      "delta": 10.56,
+      "drop": true
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 139.26,
+       "b": 139.28
+      },
+      "mean": 139.27,
+      "delta": 12.84,
+      "drop": true
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 138.52,
+       "b": 138.54
+      },
+      "mean": 138.53,
+      "delta": 12.1,
+      "drop": true
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 171.2,
+       "b": 171.2
+      },
+      "mean": 171.2,
+      "delta": 44.77,
+      "drop": true
+     }
+    ],
+    "slack": 0,
+    "knee_next": 1,
+    "clear_slack": 0,
+    "clear_next": 1,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 4,
+      "passes": {
+       "a": 129.41,
+       "b": 126.69
+      },
+      "mean": 128.05,
+      "delta": 1.62,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 127.26,
+       "b": 127.09
+      },
+      "mean": 127.18,
+      "delta": 0.75,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 139.4,
+       "b": 139.43
+      },
+      "mean": 139.42,
+      "delta": 12.99,
+      "drop": true
+     },
+     {
+      "D": 64,
+      "passes": {
+       "a": 169.84,
+       "b": 169.96
+      },
+      "mean": 169.9,
+      "delta": 43.47,
+      "drop": true
+     },
+     {
+      "D": 128,
+      "passes": {
+       "a": 229.76,
+       "b": 229.74
+      },
+      "mean": 229.75,
+      "delta": 103.32,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 16,
+    "clear_next": 32,
+    "open": false,
+    "max_tested": 128
+   }
+  },
+  "bound": "E0"
+ },
+ {
+  "test": "NeighborExchangeUnicast",
+  "links": 2,
+  "size": 4096,
+  "ntype": "write",
+  "router": "port",
+  "base": 121.8,
+  "base_runs": [
+   121.79,
+   121.8,
+   121.8,
+   121.8
+  ],
+  "band": 0.5,
+  "sides": {
+   "E0": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 121.71,
+       "b": 121.7
+      },
+      "mean": 121.7,
+      "delta": -0.09,
+      "drop": false
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 121.7,
+       "b": 121.71
+      },
+      "mean": 121.7,
+      "delta": -0.09,
+      "drop": false
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 121.7,
+       "b": 121.71
+      },
+      "mean": 121.7,
+      "delta": -0.09,
+      "drop": false
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 121.71,
+       "b": 121.7
+      },
+      "mean": 121.7,
+      "delta": -0.09,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 121.77,
+       "b": 121.79
+      },
+      "mean": 121.78,
+      "delta": -0.01,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 123.22,
+       "b": 123.22
+      },
+      "mean": 123.22,
+      "delta": 1.42,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 32,
+    "clear_next": null,
+    "open": false,
+    "max_tested": 32
+   },
+   "E1": {
+    "points": [
+     {
+      "D": 1,
+      "passes": {
+       "a": 121.8,
+       "b": 121.8
+      },
+      "mean": 121.8,
+      "delta": 0.0,
+      "drop": false
+     },
+     {
+      "D": 2,
+      "passes": {
+       "a": 121.8,
+       "b": 121.8
+      },
+      "mean": 121.8,
+      "delta": 0.0,
+      "drop": false
+     },
+     {
+      "D": 4,
+      "passes": {
+       "a": 121.8,
+       "b": 121.8
+      },
+      "mean": 121.8,
+      "delta": 0.0,
+      "drop": false
+     },
+     {
+      "D": 8,
+      "passes": {
+       "a": 121.8,
+       "b": 121.81
+      },
+      "mean": 121.81,
+      "delta": 0.01,
+      "drop": false
+     },
+     {
+      "D": 16,
+      "passes": {
+       "a": 121.8,
+       "b": 121.8
+      },
+      "mean": 121.8,
+      "delta": 0.0,
+      "drop": false
+     },
+     {
+      "D": 32,
+      "passes": {
+       "a": 132.1,
+       "b": 132.1
+      },
+      "mean": 132.1,
+      "delta": 10.3,
+      "drop": true
+     }
+    ],
+    "slack": 16,
+    "knee_next": 32,
+    "clear_slack": 16,
+    "clear_next": 32,
+    "open": false,
+    "max_tested": 32
+   }
+  },
+  "bound": "neither"
+ }
+]

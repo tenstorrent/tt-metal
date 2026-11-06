@@ -312,6 +312,12 @@ read the `cmd` from there rather than copy it (§4.1, `from_ci`).
 | 7 Wormhole bring-up | new | W0-*, W1-*, then W2 smoke | W0-mg |
 | before default-on (later) | new | everything above, both arches, CI on a default-on branch | stress (W0-tg-stress, B0-stab full) |
 
+**Cadence (user, 2026-11-04).** Full main-vs-new (Tier 2: every LB and Galaxy group of fabric_exp/testplan) runs only at
+milestones. Per change: the offline image gate first, then targeted P150 rows, then one Galaxy job only when the change
+touches a Galaxy-specific path. G-L2-b (DeepSeek B1 buckets, ~2 h with its known hangs) runs in full only at the final
+pre-merge run; other milestones run G2 smoke (G2-qwen, G2-oss) instead. The first milestone run (port 2fc06852f48,
+2026-11-04) included G-L2-b because its job had already started when the user decided this.
+
 ---
 
 ## 2. CI quick reference: what to dispatch on a branch
@@ -391,6 +397,17 @@ and the perf dashboards (§3).
     CI numbers are telemetry-on.
   - The study's `TT_FABRIC_NO_BW_TELEMETRY` does not exist on main. Both trees run the same way, so the A/B is fair.
     The numbers are not the study's telemetry-off figures.
+  - **Decision (user, 2026-11-03): main-vs-new fabric perf comparisons run with router bandwidth telemetry OFF for
+    both routers** (`TT_FABRIC_NO_BW_TELEMETRY=1` on top of CI's env), because production has it disabled by default.
+    Results are labelled "telemetry off (prod default)" (fabric_exp/testplan, groups LB-P and G-P, two passes on one
+    host per group).
+    - CI's fabric perf goldens (`golden_{bandwidth,latency}_summary_*.csv`) were recorded with telemetry on, so they will
+      not match these numbers; the golden check in those runs is informational only.
+    - Re-goldening with telemetry off (and having test_tt_fabric honour the switch in CI) is a proposal for the team,
+      not part of this work.
+    - On main, test_tt_fabric ignores the variable (it turns telemetry on unconditionally in benchmark / latency mode,
+      test_tt_fabric.cpp:205-207 and :265). Main's baseline therefore needs the study's two-line switch in the test
+      harness only (fabric_exp/testplan/patches/main_no_bw_telemetry.patch), and the port must carry the same switch.
 
 ---
 
@@ -543,6 +560,192 @@ Stop the line on any L0 regression.
 - never cancel running jobs; reprioritize only the not-started ones.
 
 ---
+
+## 4.5 Main CI defects found while baselining (2026-11-03, for the user)
+
+Found on origin/main d2bd12f. Our harness works around them locally; main's CI files are not edited.
+
+- `tests/pipeline_reorg/demo_sp_release_tests.yaml`, entry `bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO`: its `cmd`
+  block ends with a stray line `model: deepseek_unit_tests` (a YAML key indented into the literal block). CI's shell runs
+  it as a command (`model:: command not found`), so under `bash -e` the entry fails after its tests even when they pass.
+  The harness drops that line (manifest `drop_lines`).
+- **KNOWN-FAIL on main d2bd12f, not scored in main-vs-new:** LB-L1P `B1-ccl-sdpa` (the study's DeepSeek CCL trace perf
+  matrix, `sdpa_reduce_to_all`; not a CI entry). It fails host-side before any device op:
+  `TT_FATAL page_config.cpp:179: Configuring a ROW MAJOR page config with a custom tile configuration is not supported`,
+  from `ttnn.from_torch` in the SDPA trace test's tensor setup (broker jobs 605, 607). No fabric is involved. The
+  manifest marks it `known_fail`; compare reports it and does not score the other side against it.
+- **KNOWN-FAIL on main d2bd12f, case level, not scored in main-vs-new:** 4 cases of the CI entry "Disaggregated
+  prefill op unit tests (LB)" (our step LB-L1 B1-dp-ops-b):
+  `test_hybrid_routed_expert_combine.py::test_hybrid_routed_expert_combine_overlap_perf[blackhole-{glm-53,kimi-k27}-8x1-{balanced,hot-expert}]`.
+  They fail host-side before any device work with `TypeError: ttnn.experimental.deepseek_prefill.combine_fabric2d():
+  incompatible function arguments` (the test's call does not match main's binding). Deterministic, so no rerun. They
+  still run for the record (manifest `known_fail_cases`); the other 53 cases of the step pass and are scored.
+  - The same 10 cases at 8x4 in the BH Galaxy entry ("Disaggregated prefill op unit tests (BH Galaxy)", our step
+    G-L1 G1-dp-hybrid; job 172035) fail with the identical TypeError: KNOWN_FAIL too. The other 10 cases pass.
+- **KNOWN-FAIL on main d2bd12f, a size failure of main's router, keep in main-vs-new:** the mesh pass-through line of
+  "Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests" (our step G-L0-b `G0-mm-2x8-pt`;
+  `TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1 tt-run --mesh-graph-descriptor bh_galaxy_split_2x8_2x4_3_mesh ...
+  test_fabric_mesh_passthrough.yaml`). It aborts at program build with `TT_FATAL: Program size (26720) too large for kernel
+  config buffer (26624) on ACTIVE_ETH, 96 B over` (`program.cpp:3810: state.offset <= max_size`), job 171909 on
+  bh-glx-110-a10u08. The stability line of the same entry passes (3 ranks x 104 executed, 0 failed), and the 4x4 split's
+  pass-through line passes. It is deterministic (a build-time size check).
+  - The main-vs-new run must keep this line: a new router that passes it is a gain, not parity.
+- **KNOWN-FAIL on main d2bd12f, a size failure of main's router, keep in main-vs-new:** "MiniMax-M3 unit tests (BH Galaxy
+  8x4)" (our step G-L2-a `G2-mm3`): all 65 cases fail in setup with `TT_FATAL: Program size (29024) too large for kernel
+  config buffer (26624) on ACTIVE_ETH, 2400 B over` (`program.cpp:3810: state.offset <= max_size`). The entry exports
+  `TT_METAL_WATCHER=30`, and the watcher-instrumented ETH program no longer fits (job 172124, a03u08). A pass on the new
+  router is a gain.
+- **Sub-mesh opens, same signature as the LoudBox 1x4 known failures (one main issue?):** run without `CI=true`, the
+  GPT-OSS-120B demo (G-L2-a `G2-oss`, job 172124) parametrized every mesh shape on the Galaxy (1x1, 1x2, ...). With
+  `CI=true` it keeps only the largest. Those sub-mesh cases fail in setup with `Fabric Router Sync: Timeout after 10000 ms on
+  Device 0` (master chan 3 at STARTED), 78 times: the same signature as the LoudBox 1x4 sub-mesh cases below. CI never
+  runs these shapes on Galaxy; recorded in case the two are one main issue.
+- **Harness corrections (2026-11-04):**
+  - `CI=true` is now set for every step, as GitHub Actions does. Earlier pytest results (LB-L1, LB-L1P, LB-L2, G-L1,
+    G-L1P, G-L2-a) ran without it and are kept as `<step>.attemptN`; those groups are re-baselined.
+  - No C++ reads `CI`, so the gtest / test_tt_fabric baselines stand.
+  - G2-qwen runs with a 30-min timeout instead of CI's 15, for main and new alike: the cached-weight load from
+    /mnt/models took ~10 min (job 172124).
+  - DeepSeek V3 B1 buckets (G-L2-b `G2-dsb1-f2d`, `-attn`, `-hyb`, `G2-dsb1-more`) run with `run_isolated_unit_tests.py --no-reset`, for
+    main and new alike. The runner's reset/validation/smoke preflight runs `run_cluster_validation` against
+    bh_galaxy_xy_torus.textproto with `--hard-fail`, which fails on every quad-cabled 110-a node: no bucket ran in job
+    172241 (ENV, kept as `.attempt1`). Our job still resets at its start and after any failing step.
+  - `Fabric2DHostIO` is split in three steps, for main and new alike: `G2-dsb1-f2d` (fabric_2d bucket with
+    test_attention_block deselected), `G2-dsb1-attn` (test_attention_block alone, `-k`) and `G2-dsb1-hyb`
+    (prepare_weights_hybrid_allocator + host_io_risk). Reason: fabric_2d is one pytest process over 22 targets, and on
+    main (job 172397, a08u02) test_attention_block pos 127/511 failed with a host-side TT_FATAL
+    `Per-core-allocated buffer has no shard on core 9-8, so it has no address on cores {[0-0 - 11-9], [12-0 - 12-7],
+    [12-9 - 12-9]}; limit the cores to the buffer's shard grid`, then pos 1023 aborted the process at GC
+    (`std::system_error: Invalid argument`, exit -6), so the 21 other fabric_2d targets (the CCL all-gather /
+    all-reduce / broadcast tests among them) never ran. The runner sets `TT_METAL_ALLOCATOR_MODE_HYBRID=1` for every
+    bucket, as in CI. Hypotheses, untested: the TT_FATAL is a main defect independent of node and device state; the
+    abort follows from the two failed cases. `G2-dsb1-attn` alone (job 172490) is the check; the combined record is
+    kept as `G2-dsb1-fab.attempt1`.
+  - The rest of fabric_2d (attention deselected, still one process; job 172490, a07u08, kept as
+    `G2-dsb1-f2d.attempt1`): the CCL tests passed (test_ccl_all_gather, test_ccl_all_reduce 12 cases, test_ccl_broadcast
+    incl. torus_8x4_functional_fabric_2d, test_dram_zero_fill); test_lm_head_sampling `test_persistent_mode_spec_decode`
+    (4x2 sub-mesh of the 8x4, FABRIC_2D on 8 devices) errored 4x in setup with `Fabric Router Sync: Timeout after
+    10000 ms on Device 3` (master chan 3 at REMOTE_HANDSHAKE_COMPLETE, chans 4/5 at STARTED); test_moe_mlp
+    `test_moe_fused_with_reduce` (reduce PCC 0.898) and `test_mlp_with_reduce` (0.870) failed on the full 8x4 FABRIC_2D;
+    the next moe case segfaulted at GC in fixture setup (exit -11), so test_model, test_pipeline_stage_sync,
+    test_pre/post_sdpa, test_prepare_weights, test_reduce_to_one_2d, test_sampling, test_sdpa_reduce_to_all,
+    test_broadcast_rms and the multi-host passthrough never ran. Two hypotheses: (a) sub-mesh fabric init fails on the
+    quad-cabled 110-a nodes (CI runs this 4x2 shape on its single Galaxy), untested; (b) the moe PCC failures are state
+    carried over from the failed sub-mesh init under `--no-reset`: **WRONG** (per-file run below: same PCC to the last
+    digit after a reset, on another node). fabric_2d therefore runs as one step per test file (`G2-dsb1-f2d-<file>`,
+    16 steps, the runner's env: `TT_METAL_SLOW_DISPATCH_MODE=1`, `TT_METAL_ALLOCATOR_MODE_HYBRID=1`), with a device
+    reset after any failing step, for main and new alike.
+  - Per-file run on main (jobs 172553 on a08u02, 172554 on a10u08, 2026-11-04):
+    - PASS: ag (5), ar (12), bc (9), dzf (4), model (2), pss (12), r1 (1), samp (19); post PASS with all 16 cases skipped.
+    - lmh KNOWN-FAIL (FABRIC-RELEVANT; a pass on new counts as a gain): `test_persistent_mode_spec_decode` x4 (4x2 sub-mesh, FABRIC_2D on 8 devices), `Fabric Router Sync:
+      Timeout after 10000 ms on Device 3` (master chan 3 at REMOTE_HANDSHAKE_COMPLETE, chans 4/5 at STARTED,
+      fabric_firmware_initializer.cpp:289). Reproduces on a second node (a07u08, a08u02) with no failure before it.
+      Hypothesis (a) still untested: needs a non-quad-cabled Galaxy (CI). Fabric-relevant: router init.
+    - moe KNOWN-FAIL (covers FAIL and HANG): `test_moe_fused_with_reduce` reduce PCC 0.8978637432488931 and `test_mlp_with_reduce` 0.8697955497696891,
+      identical to job 172490 (a07u08), here after a reset on a08u02; the next case then hung until the 20-min step
+      timeout (the GC hang / abort pattern seen after failures in this suite). Deterministic on main; cause not
+      examined (fabric 2D reduce or the op).
+    - pre KNOWN-FAIL (6 of 7): main source defect, kernel does not compile with the device profiler off:
+      `pre_sdpa_kernel.cpp:984: error: expected ';' before 'static_assert'` at `DeviceZoneScopedN("Q_HEADS")
+      static_assert(...)`; with the profiler off the macro is `(void(name))` (kernel_profiler_streaming.hpp:569), so the
+      missing `;` is an error.
+    - pw PASS with a case-level KNOWN-FAIL (1 of 32): `test_prepare_moe_layer_weights_with_sram_expert_ids_4x2`, `TT_THROW: Fast dispatch would
+      claim dispatch cores that hold resident L1 (tt-blaze #2019)`.
+    - sdpa KNOWN-FAIL (8): main source defect, `TT_FATAL ... page_config.cpp:179: Configuring a ROW MAJOR page config with a custom tile
+      configuration is not supported`, the same as LB B1-ccl-sdpa (KNOWN-FAIL above).
+    - brms, mhp: not run. /data ran out of inodes (`df -i`: 400602346 of 400602352 used) and the brms step could not
+      create its junit dir (ENOSPC, 06:22); the job stopped. Infrastructure, not main. Recorded NOT_RUN: a rerun needs
+      >= 2M free inodes on /data at submit (`min_data_inodes_free`, checked by `submit`); at 07:09 /data had 8,020 free,
+      so they stay NOT_RUN (no retry loop). The ENOSPC attempt is kept as `G2-dsb1-f2d-brms.attempt1`. Rerun once
+      /data had room (threshold lowered to 150k by the coordinator; 846,863 free at submit), job 172824 on a04u14:
+      brms PASS (4 cases, all skipped), mhp PASS (1 case, skipped).
+    - All five classifications approved 2026-11-04 and kept in main-vs-new (a pass on new counts as a gain).
+- **Run record, main-vs-new (port 2fc06852f48), 2026-11-04:** job 172879 (seq NEW-GL1-GL2A, bh-glx-110-a06u02) was cancelled at 2026-11-04T10:16:46 while G2-oss was 660 s in: Slurm logged 'CANCELLED AT' with no 'DUE TO' reason, so a scancel (not the time limit, not a node failure; the node's slurmd last restarted 13:22). Slurm accounting is disabled (sacct) and scontrol no longer holds the job; no scancel of 172879 appears in this project's agent transcripts and the regress harness never cancels a running job. Canceller unknown (the user or an admin). New G2-oss rerun alone as job 174449.
+- **bh-glx-110-a07u02 excluded 2026-11-05: 2x8 router-sync failures, cause open (node claim WRONG, below).** It comes out
+  or stays once the G-PORT-ORD A/B (178006 e5b75d1fbcd on a08u08, 178007 57c55f98118 on a10u14) settles tree vs node vs
+  order.
+  P10-mm-2x8 (bh_galaxy_split_2x8_2x4_3_mesh, tt-run 3 ranks) throws at fabric init on rank 0: "Fabric Router Sync:
+  Timeout after 10000 ms on Device 0", master eth chan 3 and sub chan 2 stay at STARTED (0xa0b0c0d0, both ERISCs in
+  KERNEL) while chans 0, 1, 4-7 reach REMOTE_HANDSHAKE_COMPLETE. Same device, channels and signature on 57c55f98118
+  (job 177688) and c3c1813c42a (jobs 177459, 177689). P10-mm-4x4 initializes on the node with both trees (177688 and
+  177689 PASS, 456 tests each). Node-linked (those two links under the 2x8 mapping); links not probed. In the
+  testplan manifest's and the port manifest copy's standing excludes. **WRONG (2026-11-05 08:45):** the same failure
+  (Device 0, master chan 3 and sub chan 2 STARTED) occurs on bh-glx-110-a08u08 with c3c1813c42a (job 177969), so it
+  is not specific to a07u02. P10-mm-2x8 last passed on e5b75d1fbcd (a10u14, 2026-11-05 00:08) and cb42eb72501 (a04u14);
+  tree vs node is open (A/B pending). The a07u02 exclude rests on this claim: the coordinator decides whether it stays.
+- **ENV: multi-process tt-run stalls after device start on specific 110-a nodes, main and port alike; cause unknown.**
+  The nodes are bh-glx-110-a03u14, bh-glx-110-a08u20, bh-glx-110-a09u02 and bh-glx-110-a03u08; all four are in every
+  Galaxy job's standing excludes (testplan manifest, and the port's manifest copy since 2026-11-05), and the port's
+  G-PORT reruns should use a node outside them.
+  - a03u08, job 177242 (2026-11-05, mainline_c3c1813): both P10-mm-4x4 and P10-mm-2x8 (tt-run, 3 ranks) stall on every
+    rank at the first MPI collective: each rank logs "Starting Test" and "Using randomly generated seed", and rank 0
+    never logs "Master seed sent" (the seed broadcast; 25 ms later in a passing run). No mesh graph descriptor, control
+    plane or device open, so no router code ran; no stderr; 600 s kill. A later stage than the stalls below (those stop
+    before argument parsing). The same tree ran both steps' first commands on a07u02 (job 177459).
+  - a09u02, jobs 176161 and 176236 (2026-11-04/05): the port's P10-mm-4x4 and P10-mm-2x8 (multi-mesh stability +
+    pass-through, tt-run, 3 ranks) stall on every rank after "Starting devices in cluster completed", before
+    test_tt_fabric's first log ("Relative fpath ...", its argument parsing), with no stderr; 600 s kill. Both trees
+    stall there: e5b75d1fbcd (176161) and cb42eb72501 (176236), which passed the same steps on a04u14 (job 172825);
+    e5b75d1fbcd passes them on a10u14 (job 176235). So the node, not the tree.
+  - a03u14, job 171352: main's seven non-bare tt-run steps (G0-mm-*) stall right after every rank logs
+    "Starting devices in cluster completed" (cluster.cpp:1491), with no later line. `tt-run --bare` (G0-sock) passes there.
+  - a08u20, job 171987: one allocation, forced reset between arms. Main's G0-mm-z (as CI runs it) and the port's
+    P9-mm-z (same command, mainline_58a9a1e) both stall at that same point (600 s stall timeout). The single-process
+    torus row passes on the node first.
+  - The same CI steps pass on bh-glx-110-a10u08 (job 171909: all G0-mm-* pass) and a09u14 (job 171869: G0-mm-4x4).
+  - WRONG (job 171869): "Open MPI TCP over the host's k8s/CNI interfaces". With tt-run's default
+    `--mca btl self,tcp --mca btl_tcp_if_exclude docker0,lo`, the step passed on a09u14, which has the same interface
+    set.
+- **PERF-WINDOW, not FAIL:** in-test perf windows are two-sided, so a faster host fails them. On a09u32: KDA qkv conv
+  exchange 60.0 us vs [60.4, 66.8]; KDA synthetic SP8xTP1 trace wall 1.110 ms vs [1.261, 1.339]; Mistral-4 MLA chunked
+  device kernel avg 7.49 ms vs (7.64, 8.11). These cases are recorded as PERF_WINDOW with the measured value and
+  window; main vs new is compared on the measured values (metrics), not on the window verdict.
+- **Fail on main on both lab LoudBoxes tested (a09u32; a07u28 = Slurm 171525), not scored in main-vs-new:**
+  - LB-L0-b B0-eth, slow-dispatch pass only: `MeshDeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips` and
+    `...SendInterleavedBufferAllConnectedChips`, `TT_FATAL tt_cluster.cpp:1564-1567`. The assert fires when an active
+    eth core is missing from the intra-cluster connection map ("Chip N logical eth core 0-9 connects to a remote mmio
+    device"): a09u32 chip 1, a07u28 chip 0, and Galaxy a03u14 chip 0 (G-L0-b G0-eth) as well.
+  - LB-L1 B1-night: 10 cases with 1x4 submeshes (`test_matmul_reduce_scatter_cache_hit` x2,
+    `test_moe_compute_fullccl_linear_1x4` x4, `test_selective_reduce_combine_linear_1x4` x4) and B1-watch's
+    `test_fused_matmul_reduce_scatter_atomic_barrier[M128_scatter_header, (1,4)]`. Setup fails with `Fabric Router Sync:
+    Timeout after 10000 ms on Device 0` (fabric_firmware_initializer.cpp:289). Each fails alone, in its own process,
+    on both hosts (a09u32 jobs 603/619; a07u28 job 171525).
+  - Down ports (test_system_health "DOWN/unconnected"):
+    - a09u32: chip 0 ch 9, 11; chip 1 ch 11; chip 2 ch 11; chip 3 ch 9, 11; chips 4, 5, 7 ch 8;
+    - a07u28: chips 0, 1, 2 ch 11; chips 4, 6 ch 8; chip 5 ch 10.
+    The failures don't follow these lists.
+  - WRONG (171525): "a09u32's port layout trips the 1x4 router sync / the slow-dispatch eth map". Both reproduce on
+    a07u28.
+  - WRONG (619): "leftover state from earlier tests in the same pytest session". Every case fails with no earlier
+    test in its process.
+  - Open: whether CI's bh_loudbox runners pass these entries on main ("BH ccl nightly tests", "bh_multicard_eth").
+    The scheduled runs' history answers it. Hypothesis, untested: lab hosts with eth links leaving the 8-chip cluster.
+- **test_tt_fabric benchmark mode: two main defects (found 2026-11-04 by the placement audit, broker jobs 779 / 780 on
+  the port 7cd3c13a0db; both files unchanged from main d2bd12f).** Neither involves the router; both stop a perf row
+  before it reports. No CI yaml uses either combination, so CI does not see them.
+  - **VC2 worker rows do not compile in benchmark mode.** A sender with `vc_id: 2` (fabric `use_vc2: true`) and
+    `benchmark_mode: true`: the test sender kernel fails to build at
+    `tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp:1139`
+    (`fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn)` in `send_one_packet<BENCHMARK_MODE>`: "cannot convert
+    'tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 2>*' to 'tt::tt_fabric::WorkerToFabricEdmSender*'"). The
+    process throws (`program.cpp:421`, "Failed to generate binaries for tt_fabric_test_sender") with the fabric up.
+    Non-benchmark VC2 rows (the VC2 sanity yaml) compile and pass. VC0 workers on a VC2-enabled fabric run in
+    benchmark mode.
+    - After one such abort on a Torus Y + VC2 fabric (780, pauB_4_kim_s816_two), every later fabric init on the host
+      failed with "Device 0: Timed out while waiting for active ethernet core 28-25 to become active again" until a
+      reset. Hypothesis, untested: the abort with the torus fabric up left that core stuck (earlier aborts of the same
+      kind on a Mesh + VC2 fabric were followed by clean runs).
+  - **Inter-mesh rows abort in benchmark mode.** A unicast sender whose destination is on another mesh (the P150x8 split
+    into two 2x2 meshes, two ranks): the traffic runs, then
+    `BandwidthProfiler::trace_line_or_mesh_traffic_path` throws `std::bad_optional_access` at
+    `tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.cpp:133`
+    (`config.hops.value()`; `hops` is empty for a destination-routed inter-mesh sender), from
+    `calculate_outgoing_traffics_through_device_boundaries` in `profile_results`. Rank 0 aborts after the first test;
+    no CSV row. The same `hops.value()` pattern is at line 290 (`get_forwarding_direction`). Intra-mesh rows in the same
+    two-rank split should have `hops` set (hypothesis; the audit's job D runs them on the device; a mock run cannot
+    check benchmark mode, which stops at the device frequency check).
+  - Workaround in the audit: VC0 workers on VC2-enabled fabrics, and VC0 traffic inside mesh 0 of the split, which run
+    the VC2 / VC1 router images without either path.
 
 ## 5. Unverified, and open questions for the user
 

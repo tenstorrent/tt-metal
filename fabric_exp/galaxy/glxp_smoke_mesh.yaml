@@ -1,0 +1,20 @@
+# Galaxy pair smoke row (MULTI_GALAXY_HARNESS.md): glxq_smoke.yaml's row on a pair's one-mesh forms (16x4 and 4x16 over
+# two hosts, LINE x LINE): data-checked (benchmark mode off), short. Every chip sends to every other chip, unicast write
+# and fused atomic inc, 1024 B, 20 packets. A failure or hang here stops the job before the requested command.
+Tests:
+- name: GlxpSmokeAllToAll
+  fabric_setup:
+    topology: Mesh
+    # the pair MGDs' channels are RELAXED; with a Factory System Descriptor the control plane requires the RELAXED
+    # system health mode for a RELAXED mesh graph (control_plane.cpp)
+    fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+  defaults:
+    ftype: unicast
+    size: 1024
+    num_packets: 20
+  patterns:
+  - type: all_to_all

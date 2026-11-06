@@ -1,0 +1,10 @@
+main (179756, 1 link, mean of passes): 3072 B 177.37, 4096 B 235.72, 4352 B 249.55
+arm            3072 B: pass a / b, mean    vs a  - main          4096 B: pass a / b, mean    vs a  - main          4352 B: pass a / b, mean    vs a  - main
+a                                     -                                                 -                                                 -                
+b10                                   -                                                 -                                                 -                
+b30                                   -                                                 -                                                 -                
+b60                                   -                                                 -                                                 -                
+c16                                   -                                                 -                                                 -                
+c64                                   -                                                 -                                                 -                
+d64                                   -                                                 -                                                 -                
+e60                                   -                                                 -                                                 -                

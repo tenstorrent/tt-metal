@@ -1,0 +1,200 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 24,
+  "PERF_WINDOW": 0,
+  "SKIP": 7
+ },
+ "files": [
+  "fabric_unit_tests.xml"
+ ],
+ "tests": {
+  "Fabric1DFixture::TestChipMCast1DWithTracing": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.9
+  },
+  "Fabric1DFixture::TestChipMCast1DWithTracing2": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.004
+  },
+  "Fabric1DFixture::TestGetNextHopRouterDirection1D": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.825
+  },
+  "Fabric1DFixture::TestMCastConnAPI": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.911
+  },
+  "Fabric1DFixture::TestSetUnicastRoute": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1996\nTest applicable only on T3K",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "Fabric1DFixture::TestSetUnicastRouteIdleEth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:2003\nTest applicable only on T3K",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "Fabric1DFixture::TestSparseMcastPerPageNonContiguous": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.002
+  },
+  "Fabric1DFixture::TestSparseMcastPerPageSingleDest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.624
+  },
+  "Fabric1DFixture::TestSparseMcastPerPageTwoContiguous": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.931
+  },
+  "Fabric1DFixture::TestUnicastConnAPI": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.002
+  },
+  "Fabric1DFixture::TestUnicastConnAPIDRAM": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.911
+  },
+  "Fabric1DFixture::TestUnicastRaw": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.172
+  },
+  "Fabric1DFixture::TestUnicastTGGateways": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:832\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "Fabric1DMuxFixture::TestFabricMuxEightChipVariant": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.32
+  },
+  "Fabric1DMuxFixture::TestFabricMuxFiveChipVariant": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.075
+  },
+  "Fabric1DMuxFixture::TestFabricMuxFourChipVariant1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.644
+  },
+  "Fabric1DMuxFixture::TestFabricMuxFourChipVariant2": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.251
+  },
+  "Fabric1DMuxFixture::TestFabricMuxNumFullSizeChannelIters": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.904
+  },
+  "Fabric1DMuxFixture::TestFabricMuxSevenChipVariant": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.121
+  },
+  "Fabric1DMuxFixture::TestFabricMuxSixChipVariant": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.119
+  },
+  "Fabric1DMuxFixture::TestFabricMuxStressOpenClose": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.452
+  },
+  "Fabric1DMuxFixture::TestFabricMuxTerminateFromKernel": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.591
+  },
+  "Fabric1DMuxFixture::TestFabricMuxThreeChipVariant": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.63
+  },
+  "Fabric1DMuxFixture::TestFabricMuxTwoChipVariant1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.74
+  },
+  "Fabric1DMuxFixture::TestFabricMuxTwoChipVariant2": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.686
+  },
+  "Fabric1DMuxFixture::TestFabricMuxTwoChipVariant3": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.158
+  },
+  "Fabric1DMuxFixture::TestFabricMuxTwoChipVariantWithNocTracing": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.006
+  },
+  "Fabric1DTensixFixture::TestLinearFabricMulticastNocAtomicIncMux": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/common/fabric_fixture.hpp:222\nTensix fixture tests are not supported on Galaxy systems",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "Fabric1DTensixFixture::TestLinearFabricMulticastNocUnicastWriteMux": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/common/fabric_fixture.hpp:222\nTensix fixture tests are not supported on Galaxy systems",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "Fabric1DTensixFixture::TestLinearFabricUnicastNocAtomicIncMux": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/common/fabric_fixture.hpp:222\nTensix fixture tests are not supported on Galaxy systems",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "Fabric1DTensixFixture::TestLinearFabricUnicastNocUnicastWriteMux": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/common/fabric_fixture.hpp:222\nTensix fixture tests are not supported on Galaxy systems",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

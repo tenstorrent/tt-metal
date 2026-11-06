@@ -1,0 +1,29 @@
+# SUPERSEDED (2026-11-05): the Galaxy pair suite uses existing descriptors instead (glxq_pairs.tsv). Kept as history.
+# Two cabled BH Galaxies as two meshes, one per host: each an 8x4 2D torus with express links, linked over Z by the
+# cables between the hosts (16 Ethernet connections). Express: the dim-0 ex4 and ex8 patterns of CI's
+# express_links_quad_8x4 MGD (tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/). VARIANT: dim 0 RING here
+# (a full torus); CI's express meshes keep dim 0 LINE because the RING default also emits a wrapping chord that is not
+# a physical intra-Galaxy cable (that file's note), so the mock decides between this and the _linering variant.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0 pattern { start: 2 step: 4 } }
+  express_links { dim_idx: 0 pattern { start: 0 step: 8 } }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 16 policy: RELAXED }
+    directional: false
+    assign_z_direction: true
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

@@ -1,0 +1,184 @@
+validation bfcv_mesh: Tests: 96 executed, 0 failed
+validation bfcv_ring: Tests: 19 executed, 0 failed
+validation bfcv_t24: Tests: 12 executed, 0 failed
+validation bfcv_t42: Tests: 12 executed, 0 failed
+validation bfcv_torusy: Tests: 12 executed, 0 failed
+validation bfcv_val1d: Tests: 143 executed, 0 failed
+| row | test | size | ntype | base (a / b) | bfc (a / b) | bfc vs base |
+| --- | --- | ---: | --- | --- | --- | ---: |
+| ring | HalfRingMulticast | 3072 | NOC_UNICAST_SCATTER_WRITE | 212.7 | 212.6 | -0.0% |
+| ring | HalfRingMulticast | 3072 | NOC_UNICAST_WRITE | 172.4 | 172.3 | -0.0% |
+| ring | HalfRingMulticast | 4352 | NOC_UNICAST_SCATTER_WRITE | 225.9 / 225.8 | 225.4 | -0.2% |
+| ring | HalfRingMulticast | 4352 | NOC_UNICAST_WRITE | 173.3 | 173.0 | -0.2% |
+| ring | Ring1HopEW | 3072 | NOC_UNICAST_SCATTER_WRITE | 179.7 | 179.8 | +0.0% |
+| ring | Ring1HopEW | 3072 | NOC_UNICAST_WRITE | 140.8 / 141.1 | 141.1 / 140.9 | +0.0% |
+| ring | Ring1HopEW | 4352 | NOC_UNICAST_SCATTER_WRITE | 180.0 | 180.2 | +0.1% |
+| ring | Ring1HopEW | 4352 | NOC_UNICAST_WRITE | 141.0 | 141.1 | +0.0% |
+| ring | RingMulticast | 3072 | NOC_UNICAST_SCATTER_WRITE | 180.1 | 180.1 | +0.0% |
+| ring | RingMulticast | 3072 | NOC_UNICAST_WRITE | 142.3 | 141.5 | -0.6% |
+| ring | RingMulticast | 4352 | NOC_UNICAST_SCATTER_WRITE | 180.5 | 180.5 | +0.0% |
+| ring | RingMulticast | 4352 | NOC_UNICAST_WRITE | 151.4 | 151.1 / 151.0 | -0.3% |
+| ring | UnidirRingMulticast | 3072 | NOC_UNICAST_SCATTER_WRITE | 240.5 / 240.6 | 240.2 | -0.1% |
+| ring | UnidirRingMulticast | 3072 | NOC_UNICAST_WRITE | 200.4 | 200.5 | +0.0% |
+| ring | UnidirRingMulticast | 4352 | NOC_UNICAST_SCATTER_WRITE | 266.1 | 265.8 | -0.2% |
+| ring | UnidirRingMulticast | 4352 | NOC_UNICAST_WRITE | 220.9 | 220.8 | -0.0% |
+| t24 | TorusXY1HopEW | 256 | NOC_UNICAST_SCATTER_WRITE | 186.6 | 186.6 / 186.8 | +0.0% |
+| t24 | TorusXY1HopEW | 256 | NOC_UNICAST_WRITE | 146.5 | 146.5 | -0.0% |
+| t24 | TorusXY1HopEW | 1024 | NOC_UNICAST_SCATTER_WRITE | 186.6 | 186.5 | -0.0% |
+| t24 | TorusXY1HopEW | 1024 | NOC_UNICAST_WRITE | 146.6 | 146.6 | -0.0% |
+| t24 | TorusXY1HopEW | 2048 | NOC_UNICAST_SCATTER_WRITE | 186.0 | 186.0 | -0.0% |
+| t24 | TorusXY1HopEW | 2048 | NOC_UNICAST_WRITE | 146.7 | 146.8 | +0.0% |
+| t24 | TorusXY1HopEW | 3072 | NOC_UNICAST_SCATTER_WRITE | 185.9 | 185.9 | +0.0% |
+| t24 | TorusXY1HopEW | 3072 | NOC_UNICAST_WRITE | 146.9 | 146.9 | +0.0% |
+| t24 | TorusXY1HopEW | 4352 | NOC_UNICAST_SCATTER_WRITE | 186.1 | 186.1 | +0.0% |
+| t24 | TorusXY1HopEW | 4352 | NOC_UNICAST_WRITE | 146.8 | 146.8 | +0.0% |
+| t24 | TorusXY1HopEWBidir | 256 | NOC_UNICAST_SCATTER_WRITE | 186.4 | 186.3 | -0.0% |
+| t24 | TorusXY1HopEWBidir | 256 | NOC_UNICAST_WRITE | 146.3 | 146.3 | -0.0% |
+| t24 | TorusXY1HopEWBidir | 1024 | NOC_UNICAST_SCATTER_WRITE | 186.2 | 186.1 | -0.1% |
+| t24 | TorusXY1HopEWBidir | 1024 | NOC_UNICAST_WRITE | 146.4 | 146.4 | -0.0% |
+| t24 | TorusXY1HopEWBidir | 2048 | NOC_UNICAST_SCATTER_WRITE | 185.6 | 185.6 | +0.0% |
+| t24 | TorusXY1HopEWBidir | 2048 | NOC_UNICAST_WRITE | 146.6 | 146.6 | +0.0% |
+| t24 | TorusXY1HopEWBidir | 3072 | NOC_UNICAST_SCATTER_WRITE | 186.2 | 186.2 | -0.0% |
+| t24 | TorusXY1HopEWBidir | 3072 | NOC_UNICAST_WRITE | 146.7 | 146.7 | -0.0% |
+| t24 | TorusXY1HopEWBidir | 4352 | NOC_UNICAST_SCATTER_WRITE | 186.5 | 186.5 | +0.0% |
+| t24 | TorusXY1HopEWBidir | 4352 | NOC_UNICAST_WRITE | 147.0 | 147.0 | -0.0% |
+| t24 | TorusXY1HopNS | 256 | NOC_UNICAST_SCATTER_WRITE | 197.8 | 197.8 | -0.0% |
+| t24 | TorusXY1HopNS | 256 | NOC_UNICAST_WRITE | 156.3 | 156.4 | +0.0% |
+| t24 | TorusXY1HopNS | 1024 | NOC_UNICAST_SCATTER_WRITE | 198.1 | 198.1 | -0.0% |
+| t24 | TorusXY1HopNS | 1024 | NOC_UNICAST_WRITE | 156.3 | 156.3 | +0.0% |
+| t24 | TorusXY1HopNS | 2048 | NOC_UNICAST_SCATTER_WRITE | 198.8 / 198.6 | 198.7 | -0.0% |
+| t24 | TorusXY1HopNS | 2048 | NOC_UNICAST_WRITE | 155.9 | 155.9 | +0.0% |
+| t24 | TorusXY1HopNS | 3072 | NOC_UNICAST_SCATTER_WRITE | 198.1 | 198.1 | -0.0% |
+| t24 | TorusXY1HopNS | 3072 | NOC_UNICAST_WRITE | 155.9 | 155.8 | +0.0% |
+| t24 | TorusXY1HopNS | 4352 | NOC_UNICAST_SCATTER_WRITE | 198.1 | 198.0 | -0.0% |
+| t24 | TorusXY1HopNS | 4352 | NOC_UNICAST_WRITE | 156.3 | 156.3 | -0.0% |
+| t24 | TorusXY1HopNSBidir | 256 | NOC_UNICAST_SCATTER_WRITE | 197.4 | 197.4 | +0.0% |
+| t24 | TorusXY1HopNSBidir | 256 | NOC_UNICAST_WRITE | 156.0 | 156.0 | +0.0% |
+| t24 | TorusXY1HopNSBidir | 1024 | NOC_UNICAST_SCATTER_WRITE | 197.9 | 197.9 | +0.0% |
+| t24 | TorusXY1HopNSBidir | 1024 | NOC_UNICAST_WRITE | 156.0 | 155.9 | -0.0% |
+| t24 | TorusXY1HopNSBidir | 2048 | NOC_UNICAST_SCATTER_WRITE | 198.4 | 198.4 | -0.0% |
+| t24 | TorusXY1HopNSBidir | 2048 | NOC_UNICAST_WRITE | 155.7 | 155.7 | -0.0% |
+| t24 | TorusXY1HopNSBidir | 3072 | NOC_UNICAST_SCATTER_WRITE | 197.9 | 197.9 | +0.0% |
+| t24 | TorusXY1HopNSBidir | 3072 | NOC_UNICAST_WRITE | 156.1 | 156.1 | -0.0% |
+| t24 | TorusXY1HopNSBidir | 4352 | NOC_UNICAST_SCATTER_WRITE | 198.3 | 198.3 | +0.0% |
+| t24 | TorusXY1HopNSBidir | 4352 | NOC_UNICAST_WRITE | 156.1 | 156.1 | -0.0% |
+| t24 | TorusXY3HopEW | 256 | NOC_UNICAST_SCATTER_WRITE | 182.3 | 182.2 | +0.0% |
+| t24 | TorusXY3HopEW | 256 | NOC_UNICAST_WRITE | 142.4 | 142.5 | +0.0% |
+| t24 | TorusXY3HopEW | 1024 | NOC_UNICAST_SCATTER_WRITE | 182.1 | 182.0 | -0.0% |
+| t24 | TorusXY3HopEW | 1024 | NOC_UNICAST_WRITE | 142.5 | 142.5 | -0.0% |
+| t24 | TorusXY3HopEW | 2048 | NOC_UNICAST_SCATTER_WRITE | 182.0 | 182.0 | +0.0% |
+| t24 | TorusXY3HopEW | 2048 | NOC_UNICAST_WRITE | 142.5 | 142.4 | -0.0% |
+| t24 | TorusXY3HopEW | 3072 | NOC_UNICAST_SCATTER_WRITE | 181.9 | 182.0 | +0.0% |
+| t24 | TorusXY3HopEW | 3072 | NOC_UNICAST_WRITE | 142.5 | 142.5 | -0.0% |
+| t24 | TorusXY3HopEW | 4352 | NOC_UNICAST_SCATTER_WRITE | 182.6 | 182.6 | +0.0% |
+| t24 | TorusXY3HopEW | 4352 | NOC_UNICAST_WRITE | 142.7 | 142.8 | +0.0% |
+| t24 | TorusXYMulticast | 256 | NOC_UNICAST_SCATTER_WRITE | 154.4 | 154.4 | -0.0% |
+| t24 | TorusXYMulticast | 256 | NOC_UNICAST_WRITE | 126.2 / 126.3 | 126.2 | -0.0% |
+| t24 | TorusXYMulticast | 1024 | NOC_UNICAST_SCATTER_WRITE | 154.5 | 154.5 | -0.0% |
+| t24 | TorusXYMulticast | 1024 | NOC_UNICAST_WRITE | 126.2 / 126.4 | 126.4 | +0.0% |
+| t24 | TorusXYMulticast | 2048 | NOC_UNICAST_SCATTER_WRITE | 154.9 | 154.9 | +0.0% |
+| t24 | TorusXYMulticast | 2048 | NOC_UNICAST_WRITE | 126.7 / 126.5 | 126.6 / 126.7 | +0.0% |
+| t24 | TorusXYMulticast | 3072 | NOC_UNICAST_SCATTER_WRITE | 156.6 | 156.6 | -0.0% |
+| t24 | TorusXYMulticast | 3072 | NOC_UNICAST_WRITE | 126.7 | 126.7 | -0.0% |
+| t24 | TorusXYMulticast | 4352 | NOC_UNICAST_SCATTER_WRITE | 164.3 | 164.3 | -0.0% |
+| t24 | TorusXYMulticast | 4352 | NOC_UNICAST_WRITE | 126.9 / 126.6 | 127.1 / 126.9 | +0.2% |
+| t24 | TorusXYRowMcast | 256 | NOC_UNICAST_SCATTER_WRITE | 240.4 | 240.4 | -0.0% |
+| t24 | TorusXYRowMcast | 256 | NOC_UNICAST_WRITE | 201.0 | 201.0 | +0.0% |
+| t24 | TorusXYRowMcast | 1024 | NOC_UNICAST_SCATTER_WRITE | 240.8 | 240.8 | -0.0% |
+| t24 | TorusXYRowMcast | 1024 | NOC_UNICAST_WRITE | 201.2 | 201.2 | -0.0% |
+| t24 | TorusXYRowMcast | 2048 | NOC_UNICAST_SCATTER_WRITE | 241.1 | 241.1 | -0.0% |
+| t24 | TorusXYRowMcast | 2048 | NOC_UNICAST_WRITE | 202.6 | 202.6 | -0.0% |
+| t24 | TorusXYRowMcast | 3072 | NOC_UNICAST_SCATTER_WRITE | 240.2 | 240.2 | -0.0% |
+| t24 | TorusXYRowMcast | 3072 | NOC_UNICAST_WRITE | 202.7 | 202.8 | +0.0% |
+| t24 | TorusXYRowMcast | 4352 | NOC_UNICAST_SCATTER_WRITE | 264.3 | 264.3 / 264.2 | -0.0% |
+| t24 | TorusXYRowMcast | 4352 | NOC_UNICAST_WRITE | 202.4 | 202.4 | -0.0% |
+| t24 | TorusXYWrap1HopEW | 256 | NOC_UNICAST_SCATTER_WRITE | 186.7 / 186.6 | 186.8 | +0.0% |
+| t24 | TorusXYWrap1HopEW | 256 | NOC_UNICAST_WRITE | 146.5 | 146.6 | +0.0% |
+| t24 | TorusXYWrap1HopEW | 1024 | NOC_UNICAST_SCATTER_WRITE | 186.6 | 186.6 | -0.0% |
+| t24 | TorusXYWrap1HopEW | 1024 | NOC_UNICAST_WRITE | 146.5 | 146.5 | -0.0% |
+| t24 | TorusXYWrap1HopEW | 2048 | NOC_UNICAST_SCATTER_WRITE | 186.0 | 186.0 | +0.0% |
+| t24 | TorusXYWrap1HopEW | 2048 | NOC_UNICAST_WRITE | 146.7 | 146.8 | +0.0% |
+| t24 | TorusXYWrap1HopEW | 3072 | NOC_UNICAST_SCATTER_WRITE | 185.9 | 185.9 | +0.0% |
+| t24 | TorusXYWrap1HopEW | 3072 | NOC_UNICAST_WRITE | 146.9 | 146.9 | -0.0% |
+| t24 | TorusXYWrap1HopEW | 4352 | NOC_UNICAST_SCATTER_WRITE | 186.1 | 186.1 | +0.0% |
+| t24 | TorusXYWrap1HopEW | 4352 | NOC_UNICAST_WRITE | 146.9 | 146.8 | -0.0% |
+| t42 | TorusXY4x2_1HopEW | 256 | NOC_UNICAST_SCATTER_WRITE | 186.7 | 186.7 | -0.0% |
+| t42 | TorusXY4x2_1HopEW | 256 | NOC_UNICAST_WRITE | 146.5 | 146.6 | +0.0% |
+| t42 | TorusXY4x2_1HopEW | 1024 | NOC_UNICAST_SCATTER_WRITE | 186.6 | 186.5 | -0.0% |
+| t42 | TorusXY4x2_1HopEW | 1024 | NOC_UNICAST_WRITE | 146.6 | 146.6 | +0.0% |
+| t42 | TorusXY4x2_1HopEW | 2048 | NOC_UNICAST_SCATTER_WRITE | 186.0 | 186.0 | +0.0% |
+| t42 | TorusXY4x2_1HopEW | 2048 | NOC_UNICAST_WRITE | 146.7 | 146.8 | -0.0% |
+| t42 | TorusXY4x2_1HopEW | 3072 | NOC_UNICAST_SCATTER_WRITE | 185.9 | 185.9 | -0.0% |
+| t42 | TorusXY4x2_1HopEW | 3072 | NOC_UNICAST_WRITE | 146.8 | 146.9 | +0.0% |
+| t42 | TorusXY4x2_1HopEW | 4352 | NOC_UNICAST_SCATTER_WRITE | 186.1 | 186.1 | -0.0% |
+| t42 | TorusXY4x2_1HopEW | 4352 | NOC_UNICAST_WRITE | 146.8 | 146.9 | -0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 256 | NOC_UNICAST_SCATTER_WRITE | 186.4 | 186.4 / 186.3 | -0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 256 | NOC_UNICAST_WRITE | 146.3 | 146.3 | +0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 1024 | NOC_UNICAST_SCATTER_WRITE | 186.1 | 186.2 | +0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 1024 | NOC_UNICAST_WRITE | 146.4 | 146.4 | -0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 2048 | NOC_UNICAST_SCATTER_WRITE | 185.7 | 185.7 | -0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 2048 | NOC_UNICAST_WRITE | 146.6 | 146.7 | +0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 3072 | NOC_UNICAST_SCATTER_WRITE | 186.2 | 186.2 | -0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 3072 | NOC_UNICAST_WRITE | 146.7 | 146.7 | -0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 4352 | NOC_UNICAST_SCATTER_WRITE | 186.6 | 186.6 | +0.0% |
+| t42 | TorusXY4x2_1HopEWBidir | 4352 | NOC_UNICAST_WRITE | 147.0 | 147.0 | -0.0% |
+| t42 | TorusXY4x2_1HopNS | 256 | NOC_UNICAST_SCATTER_WRITE | 197.8 | 197.8 | -0.0% |
+| t42 | TorusXY4x2_1HopNS | 256 | NOC_UNICAST_WRITE | 159.3 | 159.2 | -0.0% |
+| t42 | TorusXY4x2_1HopNS | 1024 | NOC_UNICAST_SCATTER_WRITE | 198.2 | 198.1 | -0.0% |
+| t42 | TorusXY4x2_1HopNS | 1024 | NOC_UNICAST_WRITE | 159.4 | 159.4 / 159.3 | -0.0% |
+| t42 | TorusXY4x2_1HopNS | 2048 | NOC_UNICAST_SCATTER_WRITE | 198.7 | 198.7 | -0.0% |
+| t42 | TorusXY4x2_1HopNS | 2048 | NOC_UNICAST_WRITE | 158.9 | 158.8 | -0.0% |
+| t42 | TorusXY4x2_1HopNS | 3072 | NOC_UNICAST_SCATTER_WRITE | 198.0 | 198.1 | +0.0% |
+| t42 | TorusXY4x2_1HopNS | 3072 | NOC_UNICAST_WRITE | 158.9 | 159.0 | +0.0% |
+| t42 | TorusXY4x2_1HopNS | 4352 | NOC_UNICAST_SCATTER_WRITE | 198.0 / 198.1 | 198.1 | -0.0% |
+| t42 | TorusXY4x2_1HopNS | 4352 | NOC_UNICAST_WRITE | 159.1 | 159.0 | -0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 256 | NOC_UNICAST_SCATTER_WRITE | 197.4 | 197.4 | +0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 256 | NOC_UNICAST_WRITE | 158.9 | 158.8 | -0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 1024 | NOC_UNICAST_SCATTER_WRITE | 197.9 | 197.9 | +0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 1024 | NOC_UNICAST_WRITE | 159.1 | 159.1 | -0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 2048 | NOC_UNICAST_SCATTER_WRITE | 198.4 | 198.4 | +0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 2048 | NOC_UNICAST_WRITE | 158.7 | 158.7 | -0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 3072 | NOC_UNICAST_SCATTER_WRITE | 197.8 | 197.8 | -0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 3072 | NOC_UNICAST_WRITE | 159.1 | 159.1 | +0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 4352 | NOC_UNICAST_SCATTER_WRITE | 198.3 | 198.3 | -0.0% |
+| t42 | TorusXY4x2_1HopNSBidir | 4352 | NOC_UNICAST_WRITE | 159.2 | 159.2 | -0.0% |
+| t42 | TorusXY4x2_3HopNS | 256 | NOC_UNICAST_SCATTER_WRITE | 197.8 | 197.8 | +0.0% |
+| t42 | TorusXY4x2_3HopNS | 256 | NOC_UNICAST_WRITE | 159.2 | 159.1 | -0.0% |
+| t42 | TorusXY4x2_3HopNS | 1024 | NOC_UNICAST_SCATTER_WRITE | 198.1 | 198.1 | -0.0% |
+| t42 | TorusXY4x2_3HopNS | 1024 | NOC_UNICAST_WRITE | 159.3 | 159.4 | +0.1% |
+| t42 | TorusXY4x2_3HopNS | 2048 | NOC_UNICAST_SCATTER_WRITE | 198.6 | 198.7 | +0.0% |
+| t42 | TorusXY4x2_3HopNS | 2048 | NOC_UNICAST_WRITE | 158.9 | 158.8 | -0.0% |
+| t42 | TorusXY4x2_3HopNS | 3072 | NOC_UNICAST_SCATTER_WRITE | 198.1 | 198.1 | +0.0% |
+| t42 | TorusXY4x2_3HopNS | 3072 | NOC_UNICAST_WRITE | 159.0 | 159.0 | +0.0% |
+| t42 | TorusXY4x2_3HopNS | 4352 | NOC_UNICAST_SCATTER_WRITE | 198.1 | 198.1 | -0.0% |
+| t42 | TorusXY4x2_3HopNS | 4352 | NOC_UNICAST_WRITE | 159.1 | 159.0 | -0.0% |
+| t42 | TorusXY4x2_ColMcast | 256 | NOC_UNICAST_SCATTER_WRITE | 256.3 | 256.3 | +0.0% |
+| t42 | TorusXY4x2_ColMcast | 256 | NOC_UNICAST_WRITE | 217.6 | 217.6 | +0.0% |
+| t42 | TorusXY4x2_ColMcast | 1024 | NOC_UNICAST_SCATTER_WRITE | 256.4 | 256.4 | -0.0% |
+| t42 | TorusXY4x2_ColMcast | 1024 | NOC_UNICAST_WRITE | 217.6 | 217.7 | +0.0% |
+| t42 | TorusXY4x2_ColMcast | 2048 | NOC_UNICAST_SCATTER_WRITE | 257.1 | 257.1 | -0.0% |
+| t42 | TorusXY4x2_ColMcast | 2048 | NOC_UNICAST_WRITE | 218.0 | 217.9 | -0.0% |
+| t42 | TorusXY4x2_ColMcast | 3072 | NOC_UNICAST_SCATTER_WRITE | 258.7 | 258.7 | -0.0% |
+| t42 | TorusXY4x2_ColMcast | 3072 | NOC_UNICAST_WRITE | 218.4 | 218.4 | -0.0% |
+| t42 | TorusXY4x2_ColMcast | 4352 | NOC_UNICAST_SCATTER_WRITE | 284.7 | 284.6 | -0.0% |
+| t42 | TorusXY4x2_ColMcast | 4352 | NOC_UNICAST_WRITE | 218.9 | 218.9 | +0.0% |
+| t42 | TorusXY4x2_Multicast | 256 | NOC_UNICAST_SCATTER_WRITE | 214.2 / 211.4* | 212.2 / 214.2 | +0.2% |
+| t42 | TorusXY4x2_Multicast | 256 | NOC_UNICAST_WRITE | 171.9 / 172.5 | 174.8 / 172.5* | +0.8% |
+| t42 | TorusXY4x2_Multicast | 1024 | NOC_UNICAST_SCATTER_WRITE | 211.9 / 212.4 | 210.5 / 213.2* | -0.2% |
+| t42 | TorusXY4x2_Multicast | 1024 | NOC_UNICAST_WRITE | 173.2 / 175.2* | 174.4 / 172.3* | -0.5% |
+| t42 | TorusXY4x2_Multicast | 2048 | NOC_UNICAST_SCATTER_WRITE | 215.7 / 214.6 | 217.0 / 216.8 | +0.8% |
+| t42 | TorusXY4x2_Multicast | 2048 | NOC_UNICAST_WRITE | 179.1 / 175.2* | 173.7 / 176.1* | -1.2% |
+| t42 | TorusXY4x2_Multicast | 3072 | NOC_UNICAST_SCATTER_WRITE | 224.7 / 219.4* | 221.7 / 220.1 | -0.5% |
+| t42 | TorusXY4x2_Multicast | 3072 | NOC_UNICAST_WRITE | 179.6 / 176.6* | 177.4 / 181.7* | +0.8% |
+| t42 | TorusXY4x2_Multicast | 4352 | NOC_UNICAST_SCATTER_WRITE | 227.1 / 231.2* | 229.6 / 229.2 | +0.1% |
+| t42 | TorusXY4x2_Multicast | 4352 | NOC_UNICAST_WRITE | 180.8 / 188.1* | 184.1 / 185.8 | +0.3% |
+| t42 | TorusXY4x2_Wrap1HopNS | 256 | NOC_UNICAST_SCATTER_WRITE | 197.8 | 197.8 | -0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 256 | NOC_UNICAST_WRITE | 159.2 | 159.2 | +0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 1024 | NOC_UNICAST_SCATTER_WRITE | 198.1 | 198.1 | -0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 1024 | NOC_UNICAST_WRITE | 159.4 | 159.4 | -0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 2048 | NOC_UNICAST_SCATTER_WRITE | 198.8 / 198.7 | 198.7 | -0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 2048 | NOC_UNICAST_WRITE | 158.9 | 158.9 | +0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 3072 | NOC_UNICAST_SCATTER_WRITE | 198.0 / 198.1 | 198.0 / 198.1 | -0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 3072 | NOC_UNICAST_WRITE | 159.0 | 158.9 | -0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 4352 | NOC_UNICAST_SCATTER_WRITE | 198.2 / 198.0 | 198.0 | -0.0% |
+| t42 | TorusXY4x2_Wrap1HopNS | 4352 | NOC_UNICAST_WRITE | 159.0 | 159.1 | +0.0% |

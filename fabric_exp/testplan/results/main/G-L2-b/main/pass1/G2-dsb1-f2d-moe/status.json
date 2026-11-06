@@ -1,0 +1,62 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "demo_sp_release_tests.yaml",
+  "mirrored": true,
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 1200,
+ "deviation": "fabric_2d bucket split per test file (approved 2026-11-04), for main and new alike: one pytest process per file in the bucket's order with the runner's env (TT_METAL_SLOW_DISPATCH_MODE=1, TT_METAL_ALLOCATOR_MODE_HYBRID=1, PYTHONPATH + ttnn + tools) and --timeout=480; the job resets after any failing step; no runner reset/validation/smoke (as --no-reset in the other dsb1 steps); test_attention_block runs in G2-dsb1-attn",
+ "duration_s": 1202.9,
+ "end": "2026-11-04T06:28:28+00:00",
+ "failed_lines": [],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172553/cache/main-main",
+ "junit_files": 0,
+ "known_fail": "main d2bd12f (jobs 172490 a07u08, 172553 a08u02 after a reset): test_moe_fused_with_reduce reduce PCC 0.8978637432488931 and test_mlp_with_reduce 0.8697955497696891, identical on both nodes; the next case then hangs until the step timeout. Carry-over from an earlier failure ruled out (TEST_PLAN 4.5). Kept in main-vs-new: a pass on new counts as a gain",
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a08u02",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": -15,
+ "rerun_of": null,
+ "rescored": [
+  {
+   "at": "2026-11-04T07:09:28+00:00",
+   "from": "HANG",
+   "to": "KNOWN_FAIL"
+  }
+ ],
+ "router": "main",
+ "slurm_job": "172553",
+ "start": "2026-11-04T06:08:25+00:00",
+ "status": "KNOWN_FAIL",
+ "step": "G2-dsb1-f2d-moe",
+ "step_env": {
+  "TT_METAL_ALLOCATOR_MODE_HYBRID": "1",
+  "TT_METAL_SLOW_DISPATCH_MODE": "1"
+ },
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 2,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 4
+ },
+ "tests_from_log": true,
+ "timeout_note": null,
+ "timeout_s": 1200,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

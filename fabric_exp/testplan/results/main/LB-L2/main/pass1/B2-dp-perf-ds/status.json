@@ -1,0 +1,19 @@
+{
+ "ci": {
+  "list": "blackhole_e2e_tests.yaml",
+  "name": "Disaggregated prefill perf tests",
+  "sku": "bh_loudbox"
+ },
+ "duration_s": 0,
+ "end": "2026-11-03T23:03:19+00:00",
+ "group": "LB-L2",
+ "label": "main",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "rc": null,
+ "reason": "NOT RUN: needs /mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528 (absent on a09u32 and in /mnt/models/huggingface); run it in CI (blackhole-e2e-tests, model disaggregated_prefill)",
+ "router": "main",
+ "start": "2026-11-03T23:03:19+00:00",
+ "status": "NOT_RUN",
+ "step": "B2-dp-perf-ds"
+}

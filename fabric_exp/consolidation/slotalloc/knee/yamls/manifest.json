@@ -1,0 +1,154 @@
+{
+  "p2w_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p2w_4352.yaml",
+    "tests": 12
+  },
+  "p2w_3072": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p2w_3072.yaml",
+    "tests": 12
+  },
+  "p2w_8704": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p2w_8704.yaml",
+    "tests": 12
+  },
+  "p2f_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p2f_4352.yaml",
+    "tests": 16
+  },
+  "p1w_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p1w_4352.yaml",
+    "tests": 8
+  },
+  "p1w_8704": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p1w_8704.yaml",
+    "tests": 8
+  },
+  "p1f_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p1f_4352.yaml",
+    "tests": 8
+  },
+  "p1f_8704": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p1f_8704.yaml",
+    "tests": 8
+  },
+  "pvc1_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/pvc1_4352.yaml",
+    "tests": 40
+  },
+  "pvc1_3072": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/pvc1_3072.yaml",
+    "tests": 40
+  },
+  "p2sq_15232": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p2sq_15232.yaml",
+    "tests": 12
+  },
+  "p1sq_15232": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/p1sq_15232.yaml",
+    "tests": 9
+  },
+  "g2w_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/g2w_4352.yaml",
+    "tests": 12
+  },
+  "g2f_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/g2f_4352.yaml",
+    "tests": 20
+  },
+  "gvc1_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/gvc1_4352.yaml",
+    "tests": 56
+  },
+  "gvc1_3072": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/gvc1_3072.yaml",
+    "tests": 56
+  },
+  "gvc1x44_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/gvc1x44_4352.yaml",
+    "tests": 44
+  },
+  "gvc1x44_3072": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/gvc1x44_3072.yaml",
+    "tests": 44
+  },
+  "q1h_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/q1h_4352.yaml",
+    "tests": 4
+  },
+  "q3h_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/q3h_4352.yaml",
+    "tests": 4
+  },
+  "qall_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/qall_4352.yaml",
+    "tests": 8
+  },
+  "x1h_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/x1h_4352.yaml",
+    "tests": 6
+  },
+  "pval2d_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/pval2d_4352.yaml",
+    "tests": 1
+  },
+  "pval2d_8704": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/pval2d_8704.yaml",
+    "tests": 1
+  },
+  "pval2d_15232": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/pval2d_15232.yaml",
+    "tests": 1
+  },
+  "pval1d_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/pval1d_4352.yaml",
+    "tests": 1
+  },
+  "pval1d_8704": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/pval1d_8704.yaml",
+    "tests": 1
+  },
+  "pval1d_15232": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/pval1d_15232.yaml",
+    "tests": 1
+  },
+  "gvc1x44san_4352": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/gvc1x44san_4352.yaml",
+    "tests": 6
+  },
+  "gvc1x44san_3072": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/gvc1x44san_3072.yaml",
+    "tests": 6
+  },
+  "merge_p2x4_bench": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/merge_p2x4_bench.yaml",
+    "tests": 8
+  },
+  "merge_p2x4_val": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/merge_p2x4_val.yaml",
+    "tests": 4
+  },
+  "merge_p4x2_bench": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/merge_p4x2_bench.yaml",
+    "tests": 8
+  },
+  "merge_p4x2_val": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/merge_p4x2_val.yaml",
+    "tests": 4
+  },
+  "merge_g8x4_bench": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/merge_g8x4_bench.yaml",
+    "tests": 10
+  },
+  "merge_g8x4_val": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/merge_g8x4_val.yaml",
+    "tests": 5
+  },
+  "merge_p1d_8704_bench": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/merge_p1d_8704_bench.yaml",
+    "tests": 6
+  },
+  "merge_p1d_8704_val": {
+    "yaml": "fabric_exp/consolidation/slotalloc/knee/yamls/merge_p1d_8704_val.yaml",
+    "tests": 3
+  }
+}

@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+GlxMesh1HopEW,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[32]",1,4096,1,11911347.000000,5666865.384746,23.211481,23.211481,23.211481,0.000000,1.000000
+GlxMesh3HopNS,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[32]",1,1024,1,7656038.000000,8816570.659655,9.028168,9.028168,9.028168,0.000000,1.000000
+GlxMesh3HopNS,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[32]",1,4096,1,11911122.000000,5666972.431313,23.211919,23.211919,23.211919,0.000000,1.000000

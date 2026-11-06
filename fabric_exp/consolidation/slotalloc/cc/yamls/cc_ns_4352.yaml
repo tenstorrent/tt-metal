@@ -1,0 +1,32 @@
+# Credit-cadence A/B (TRID_ALLOCATION.md, 2026-11-04): TorusXY4x2_1HopNS from fabric_exp/torus/torusxy_4x2_sizes.yaml
+# (4x2 XY torus, study descriptor), unicast_write at 4352 B only, 120000000 packets per sender so the run
+# lasts ~13 s at ~148 cycles/packet (well over the TX-queue snapshot window). Run with
+# TT_MESH_GRAPH_DESC_PATH=fabric_exp/torus/p150_x8_4x2_torus_xy_mgd.textproto.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: TorusXY4x2_1HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 120000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2

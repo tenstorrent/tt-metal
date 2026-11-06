@@ -1,0 +1,2 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+PcsVC02M256_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,32,0,1,E,2,2520000,256,682936779,2.550491,9962854.849

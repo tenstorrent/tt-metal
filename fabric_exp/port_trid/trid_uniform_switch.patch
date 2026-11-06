@@ -1,0 +1,100 @@
+diff --git a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+index a2975f76a83..c560e676dd7 100644
+--- a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
++++ b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+@@ -13,6 +13,7 @@
+ #include <tt_stl/assert.hpp>
+ #include <tt_stl/fmt.hpp>
+ #include <algorithm>
++#include <cstdlib>
+ #include <numeric>
+ 
+ namespace tt::tt_fabric {
+@@ -130,6 +131,20 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
+         total_slot_count += vc_sender_slots + vc_receiver_slots;
+ 
+         log_trace(tt::LogFabric, "VC{} num_sender_buffer_slots: {}", vc, num_sender_buffer_slots_per_vc[vc]);
++        // LOCAL (fabric_exp/port_trid/trid_uniform_switch.patch, never committed): the study's slot log.
++        if (std::getenv("TT_FABRIC_EXP_LOG_SLOTS") != nullptr && num_used_sender_channels_per_vc[vc] > 0) {
++            log_info(
++                tt::LogFabric,
++                "VC{} sender slots {} receiver slots {} (channel buffer {} B)",
++                vc,
++                std::vector<size_t>(
++                    num_sender_buffer_slots_per_vc[vc].begin(),
++                    num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc]),
++                std::vector<size_t>(
++                    num_receiver_buffer_slots_per_vc[vc].begin(),
++                    num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc]),
++                channel_buffer_size_bytes);
++        }
+         log_trace(
+             tt::LogFabric, "VC{} num_remote_sender_buffer_slots: {}", vc, num_remote_sender_buffer_slots_per_vc[vc]);
+         log_trace(tt::LogFabric, "VC{} num_receiver_buffer_slots: {}", vc, num_receiver_buffer_slots_per_vc[vc]);
+@@ -668,7 +683,9 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
+     // Blackhole routers take their slots from the staged allocator (fabric_slot_allocator.hpp): each channel kind's
+     // full-rate depth, scaled to the budget. Wormhole keeps the tier table below: the full-rate depths are the
+     // Blackhole router's credit loops.
+-    if (arch == tt::ARCH::BLACKHOLE) {
++    // LOCAL (fabric_exp/port_trid/trid_uniform_switch.patch, never committed): TT_FABRIC_EXP_TIER_SLOTS=1 keeps the tier
++    // table on Blackhole too, for the A/B against it.
++    if (arch == tt::ARCH::BLACKHOLE && std::getenv("TT_FABRIC_EXP_TIER_SLOTS") == nullptr) {
+         configure_staged_buffer_slots(
+             topology,
+             num_sender_buffer_slots_per_vc,
+diff --git a/tt_metal/fabric/erisc_datamover_builder.cpp b/tt_metal/fabric/erisc_datamover_builder.cpp
+index 4b86c2f42f3..14bfb8c4ef4 100644
+--- a/tt_metal/fabric/erisc_datamover_builder.cpp
++++ b/tt_metal/fabric/erisc_datamover_builder.cpp
+@@ -27,6 +27,7 @@
+ #include <numeric>
+ #include <optional>
+ #include <unordered_set>
++#include <cstdlib>
+ #include <vector>
+ #include <fmt/format.h>
+ 
+@@ -1475,7 +1476,23 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
+             "receiver transaction IDs: {} receiver channels by VC, {} on the router",
+             receivers.size(),
+             num_receiver_channels);
+-        const trids::Assignment ids = trids::assign_transaction_ids(receivers);
++        trids::Assignment ids = trids::assign_transaction_ids(receivers);
++        // LOCAL (fabric_exp/port_trid/trid_uniform_switch.patch, never committed): TT_FABRIC_EXP_TRID_UNIFORM=1 gives
++        // every channel the earlier uniform count (16 for a lone channel without deadlock avoidance, else 8 with it,
++        // else 4) with the same group sizes, for the A/B against the rule.
++        const bool trid_uniform = std::getenv("TT_FABRIC_EXP_TRID_UNIFORM") != nullptr;
++        if (trid_uniform) {
++            const size_t per_channel = (receivers.size() == 1 && !final_enable_deadlock_avoidance)
++                                           ? 16
++                                           : (final_enable_deadlock_avoidance ? 8 : 4);
++            for (size_t c = 0; c < ids.channels.size(); ++c) {
++                ids.channels[c].num_ids = per_channel;
++                ids.channels[c].start = c * per_channel;
++                ids.channels[c].reason += " [uniform: " + std::to_string(per_channel) + " from " +
++                                          std::to_string(c * per_channel) + "]";
++            }
++            ids.used_ids = ids.channels.size() * per_channel;
++        }
+         TT_FATAL(
+             !ids.error.has_value(),
+             "receiver transaction IDs at fabric node {}, Ethernet channel {}: {}",
+@@ -1497,6 +1514,18 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
+                     this->my_eth_channel,
+                     c,
+                     ids.channels[c].reason);
++                // LOCAL (trid_uniform_switch.patch): the study's log, per RISC (one-ERISC routers service receivers on RISC 0).
++                if (std::getenv("TT_FABRIC_EXP_LOG_SLOTS") != nullptr) {
++                    log_info(
++                        tt::LogFabric,
++                        "receiver transaction IDs ({}): RX_CH_{} G {} ids {} start {}: {}",
++                        trid_uniform ? "uniform rule" : "rule",
++                        c,
++                        ids.channels[c].group_size,
++                        ids.channels[c].num_ids,
++                        ids.channels[c].start,
++                        ids.channels[c].reason);
++                }
+             }
+         }
+     }

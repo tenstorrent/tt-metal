@@ -1,0 +1,66 @@
+{
+ "t42ns": {
+  "rule": [
+   "RX_CH_0 G 1 ids 16 start 0"
+  ],
+  "uniform": [
+   "RX_CH_0 G 1 ids 8 start 0"
+  ]
+ },
+ "ring": {
+  "rule": [
+   "RX_CH_0 G 1 ids 16 start 0"
+  ],
+  "uniform": [
+   "RX_CH_0 G 1 ids 8 start 0"
+  ]
+ },
+ "c2d": {
+  "rule": [
+   "RX_CH_0 G 4 ids 4 start 0"
+  ],
+  "uniform": [
+   "RX_CH_0 G 4 ids 16 start 0"
+  ]
+ },
+ "c1lin": {
+  "rule": [
+   "RX_CH_0 G 4 ids 8 start 0"
+  ],
+  "uniform": [
+   "RX_CH_0 G 4 ids 16 start 0"
+  ]
+ },
+ "c1ne": {
+  "rule": [
+   "RX_CH_0 G 4 ids 8 start 0"
+  ],
+  "uniform": [
+   "RX_CH_0 G 4 ids 16 start 0"
+  ]
+ },
+ "val2d": {
+  "rule": [
+   "RX_CH_0 G 4 ids 4 start 0"
+  ],
+  "uniform": [
+   "RX_CH_0 G 4 ids 16 start 0"
+  ]
+ },
+ "valring": {
+  "rule": [
+   "RX_CH_0 G 1 ids 16 start 0"
+  ],
+  "uniform": [
+   "RX_CH_0 G 1 ids 8 start 0"
+  ]
+ },
+ "valtorus": {
+  "rule": [
+   "RX_CH_0 G 1 ids 16 start 0"
+  ],
+  "uniform": [
+   "RX_CH_0 G 1 ids 8 start 0"
+  ]
+ }
+}

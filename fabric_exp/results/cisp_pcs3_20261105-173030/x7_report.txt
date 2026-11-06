@@ -1,0 +1,170 @@
+link-0 routers (used by num_links 1 rows): 20; all in the cluster descriptor: True
+
+== arm i: 255840 samples, 80 matched targets (0 router ids not in the cluster descriptor), 96 iterations
+   write iterations with a low router: 39
+
+== arm ii: 117520 samples, 80 matched targets (0 router ids not in the cluster descriptor), 48 iterations
+   write iterations with a low router: 0
+
+== arm gap: 406400 samples, 80 matched targets (0 router ids not in the cluster descriptor), 256 iterations
+   write iterations with a low router: 41
+
+-- arm gap, active, ERISC0: 31990 samples: passes 85.7%, end_round 1.5%, ctx_switch 0.7%, telemetry 11.4%, link_sync 0.7%, ring_ensure_room_slow 0.0%
+       4.25%  fabric_router::telemetry::note_sent router/router_telemetry.hpp:85
+       0.74%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       0.67%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       0.67%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:148
+       0.64%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+       0.61%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:146
+
+-- arm gap, active, ERISC1: 31983 samples: passes 94.9%, end_round 0.8%, ctx_switch 1.1%, telemetry 3.2%
+       0.79%  fabric_router::follow_context_switch router/router_round.hpp:82
+       0.67%  fabric_router::end_round router/router_round.hpp:115
+       0.53%  get_timestamp tt-1xx/risc_common.h:238
+       0.47%  get_timestamp tt-1xx/risc_common.h:239
+       0.40%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.34%  get_timestamp tt-1xx/risc_common.h:240
+
+-- arm gap, active-low, ERISC0: 2815 samples: passes 87.1%, end_round 1.6%, ctx_switch 0.5%, telemetry 10.4%, link_sync 0.3%, kernel_profiler 0.0%
+       4.09%  fabric_router::telemetry::note_sent router/router_telemetry.hpp:85
+       0.67%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       0.60%  eth_risc_reg_read ethernet/tt_eth_api.h:39
+       0.53%  get_timestamp tt-1xx/risc_common.h:238
+       0.50%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       0.50%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+
+-- arm gap, active-low, ERISC1: 2818 samples: passes 95.1%, end_round 0.9%, ctx_switch 1.2%, telemetry 2.8%
+       0.96%  fabric_router::follow_context_switch router/router_round.hpp:82
+       0.57%  fabric_router::end_round router/router_round.hpp:115
+       0.50%  get_timestamp tt-1xx/risc_common.h:238
+       0.50%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.39%  get_timestamp tt-1xx/risc_common.h:240
+       0.35%  get_timestamp tt-1xx/risc_common.h:239
+
+-- arm gap, idle-link1 (normal it), ERISC0: 5908 samples: passes 84.4%, end_round 2.8%, ctx_switch 1.9%, telemetry 9.9%, link_sync 1.0%
+       1.13%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       1.05%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       1.05%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+       0.90%  fabric_router::end_round router/router_round.hpp:115
+       0.81%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.71%  eth_risc_reg_read ethernet/tt_eth_api.h:39
+
+-- arm gap, idle-link1 (normal it), ERISC1: 5910 samples: passes 90.0%, end_round 1.8%, ctx_switch 2.0%, telemetry 6.2%
+       1.62%  fabric_router::end_round router/router_round.hpp:115
+       1.29%  fabric_router::follow_context_switch router/router_round.hpp:82
+       0.96%  get_timestamp tt-1xx/risc_common.h:238
+       0.96%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.88%  get_timestamp tt-1xx/risc_common.h:239
+       0.68%  fabric_router::telemetry::round_start router/router_telemetry.hpp:115
+
+-- arm gap, idle-link1 (slow it), ERISC0: 4030 samples: passes 84.5%, end_round 2.8%, ctx_switch 1.5%, telemetry 10.0%, link_sync 1.1%, ring_ensure_room_slow 0.0%
+       1.14%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       1.09%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+       1.02%  fabric_router::end_round router/router_round.hpp:127
+       0.89%  eth_risc_reg_read ethernet/tt_eth_api.h:39
+       0.87%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       0.82%  fabric_router::sender::SenderChannel::holds_packet router/router_sender.hpp:75
+
+-- arm gap, idle-link1 (slow it), ERISC1: 4028 samples: passes 89.2%, end_round 2.0%, ctx_switch 2.4%, telemetry 6.4%
+       1.71%  fabric_router::follow_context_switch router/router_round.hpp:82
+       1.69%  fabric_router::end_round router/router_round.hpp:115
+       0.94%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.94%  get_timestamp tt-1xx/risc_common.h:238
+       0.92%  get_timestamp tt-1xx/risc_common.h:239
+       0.82%  get_timestamp tt-1xx/risc_common.h:240
+
+-- arm i, active, ERISC0: 31743 samples: passes 85.5%, end_round 1.7%, ctx_switch 0.7%, telemetry 11.5%, link_sync 0.6%, ring_ensure_room_slow 0.0%, kernel_profiler 0.0%
+       3.94%  fabric_router::telemetry::note_sent router/router_telemetry.hpp:85
+       0.85%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       0.61%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       0.61%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+       0.60%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:148
+       0.58%  eth_risc_reg_read ethernet/tt_eth_api.h:39
+
+-- arm i, active, ERISC1: 31739 samples: passes 94.5%, end_round 0.8%, ctx_switch 1.1%, telemetry 3.6%
+       0.80%  fabric_router::follow_context_switch router/router_round.hpp:82
+       0.70%  get_timestamp tt-1xx/risc_common.h:238
+       0.66%  fabric_router::end_round router/router_round.hpp:115
+       0.49%  get_timestamp tt-1xx/risc_common.h:239
+       0.47%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.47%  get_timestamp tt-1xx/risc_common.h:240
+
+-- arm i, active-low, ERISC0: 4254 samples: passes 85.9%, end_round 1.9%, ctx_switch 0.6%, telemetry 11.0%, link_sync 0.5%, ring_ensure_room_slow 0.0%
+       3.67%  fabric_router::telemetry::note_sent router/router_telemetry.hpp:85
+       0.89%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       0.71%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:148
+       0.59%  get_timestamp tt-1xx/risc_common.h:238
+       0.54%  fabric_router::end_round router/router_round.hpp:115
+       0.54%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+
+-- arm i, active-low, ERISC1: 4258 samples: passes 94.4%, end_round 0.8%, ctx_switch 0.8%, telemetry 4.0%
+       0.68%  fabric_router::end_round router/router_round.hpp:115
+       0.63%  get_timestamp tt-1xx/risc_common.h:239
+       0.61%  get_timestamp tt-1xx/risc_common.h:238
+       0.59%  fabric_router::follow_context_switch router/router_round.hpp:82
+       0.54%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.42%  eth_risc_reg_read ethernet/tt_eth_api.h:39
+
+-- arm i, idle-link1 (normal it), ERISC0: 5936 samples: passes 83.5%, end_round 2.8%, ctx_switch 1.9%, telemetry 11.0%, link_sync 0.9%
+       1.26%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       1.20%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       1.13%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+       1.01%  fabric_router::end_round router/router_round.hpp:115
+       0.96%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.94%  get_timestamp tt-1xx/risc_common.h:238
+
+-- arm i, idle-link1 (normal it), ERISC1: 5938 samples: passes 89.9%, end_round 1.4%, ctx_switch 2.2%, telemetry 6.4%
+       1.40%  fabric_router::follow_context_switch router/router_round.hpp:82
+       1.15%  fabric_router::end_round router/router_round.hpp:115
+       1.03%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.98%  get_timestamp tt-1xx/risc_common.h:238
+       0.93%  get_timestamp tt-1xx/risc_common.h:239
+       0.77%  get_timestamp tt-1xx/risc_common.h:240
+
+-- arm i, idle-link1 (slow it), ERISC0: 4146 samples: passes 83.7%, end_round 2.9%, ctx_switch 1.4%, telemetry 11.0%, link_sync 0.8%, kernel_profiler 0.0%
+       1.45%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       1.18%  fabric_router::sender::SenderChannel::holds_packet router/router_sender.hpp:75
+       1.13%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+       1.06%  fabric_router::end_round router/router_round.hpp:127
+       0.99%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       0.96%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+
+-- arm i, idle-link1 (slow it), ERISC1: 4146 samples: passes 91.0%, end_round 1.3%, ctx_switch 1.8%, telemetry 5.9%
+       1.25%  fabric_router::follow_context_switch router/router_round.hpp:82
+       1.16%  fabric_router::end_round router/router_round.hpp:115
+       0.96%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.89%  get_timestamp tt-1xx/risc_common.h:238
+       0.77%  get_timestamp tt-1xx/risc_common.h:239
+       0.75%  get_timestamp tt-1xx/risc_common.h:240
+
+-- arm ii, active, ERISC0: 8138 samples: passes 86.1%, end_round 1.6%, ctx_switch 0.5%, telemetry 11.1%, link_sync 0.6%, ring_ensure_room_slow 0.0%
+       3.91%  fabric_router::telemetry::note_sent router/router_telemetry.hpp:85
+       0.80%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       0.75%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:148
+       0.61%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+       0.59%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:146
+       0.55%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+
+-- arm ii, active, ERISC1: 8143 samples: passes 95.5%, end_round 0.8%, ctx_switch 0.9%, telemetry 2.8%
+       0.66%  fabric_router::end_round router/router_round.hpp:115
+       0.65%  fabric_router::follow_context_switch router/router_round.hpp:82
+       0.50%  get_timestamp tt-1xx/risc_common.h:238
+       0.44%  get_timestamp tt-1xx/risc_common.h:239
+       0.29%  get_timestamp tt-1xx/risc_common.h:240
+       0.29%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+
+-- arm ii, idle-link1 (normal it), ERISC0: 8149 samples: passes 83.5%, end_round 3.3%, ctx_switch 2.0%, telemetry 10.2%, link_sync 1.0%
+       1.10%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:138
+       1.10%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:137
+       1.08%  fabric_router::telemetry::round_end_impl router/router_telemetry.hpp:136
+       1.01%  fabric_router::end_round router/router_round.hpp:115
+       0.97%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.96%  fabric_router::end_round router/router_round.hpp:127
+
+-- arm ii, idle-link1 (normal it), ERISC1: 8149 samples: passes 89.4%, end_round 1.6%, ctx_switch 2.2%, telemetry 6.8%
+       1.47%  fabric_router::follow_context_switch router/router_round.hpp:82
+       1.39%  fabric_router::end_round router/router_round.hpp:115
+       1.35%  get_timestamp tt-1xx/risc_common.h:238
+       0.94%  fabric_router::telemetry::round_start_impl router/router_telemetry.hpp:109
+       0.92%  get_timestamp tt-1xx/risc_common.h:239
+       0.80%  get_timestamp tt-1xx/risc_common.h:240

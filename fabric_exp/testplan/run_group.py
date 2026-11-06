@@ -38,10 +38,13 @@ import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_MANIFEST = os.path.join(HERE, "manifest.yaml")
-DONE = {"PASS", "FAIL", "HANG", "SKIP"}  # a step with one of these is not run again by --resume
-STOPPERS = {"HANG", "CAPPED", "BUSY"}  # after these the device may be wedged: a broker job stops there
+DONE = {"PASS", "FAIL", "HANG", "TIMEOUT", "SKIP", "NOT_RUN", "KNOWN_FAIL", "PERF_WINDOW", "ENV"}
+# a FAIL case whose message says the measured value left the test's own perf window (too fast or too slow)
+PERF_WINDOW_RX = r"outside (?:of )?(?:the )?(?:performance |expected )?range|outside \[|outside \("
+WINDOW_NUM_RX = re.compile(r"([-+]?\d+(?:\.\d+)?)[^\d\[\(]*?(?:is )?outside[^\[\(]*[\[\(]\s*([-+]?\d+(?:\.\d+)?),\s*([-+]?\d+(?:\.\d+)?)")  # a step with one of these is not run again by --resume
+STOPPERS = {"HANG", "TIMEOUT", "CAPPED", "BUSY"}  # after these the device may be wedged: a broker job stops there
 DROP_ENV = {"PYTHONPATH", "VIRTUAL_ENV", "PYTHONHOME", "LD_LIBRARY_PATH", "GTEST_OUTPUT", "PYTEST_ADDOPTS",
-            "CONDA_PREFIX", "ARCH_NAME"}
+            "CONDA_PREFIX", "ARCH_NAME", "PYTHON_ENV_DIR", "VLLM_TARGET_DEVICE"}  # the a09u32 broker injects study-tree values
 KEEP_TT = ("TT_VISIBLE_DEVICES",)  # kept if the caller set it (device selection belongs to the host, not the test)
 STEP_ENV_STRIP = ("SLURM_", "PMI_", "PMIX_", "OMPI_", "PRTE_")  # mpirun inside a step must not read the allocation
 
@@ -68,9 +71,24 @@ def as_list(x):
     return x if isinstance(x, list) else [x]
 
 
+class _NoDupLoader(yaml.SafeLoader):
+    """Safe loader that rejects duplicate mapping keys (YAML would silently keep the last one)."""
+
+
+def _no_dup_mapping(loader, node, deep=False):
+    keys = [loader.construct_object(k, deep=deep) for k, _ in node.value]
+    dup = sorted({str(k) for k in keys if keys.count(k) > 1})
+    if dup:
+        raise RegressError(f"duplicate keys {dup} in the manifest at line {node.start_mark.line + 1}")
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+
+_NoDupLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_mapping)
+
+
 def load_manifest(path):
     with open(path) as f:
-        man = yaml.safe_load(f)
+        man = yaml.load(f, Loader=_NoDupLoader)
     if man.get("version") != 1:
         raise RegressError(f"{path}: unknown manifest version {man.get('version')}")
     ids = [g["id"] for g in man["groups"]]
@@ -102,6 +120,14 @@ def tree_info(man, name_or_path, where):
     return os.path.basename(path.rstrip("/")), path, None
 
 
+def tree_patches(path):
+    try:
+        with open(os.path.join(path, ".regress_tree.json")) as f:
+            return json.load(f).get("patches") or []
+    except (OSError, ValueError):
+        return []
+
+
 def tree_sha(path):
     meta = os.path.join(path, ".regress_tree.json")
     if os.path.exists(meta):
@@ -120,7 +146,12 @@ def resolve_step(man, step, tree):
     """The step as it runs on `tree`: cmd, timeout, CI source, auto_triage, list."""
     r = {"id": step["id"], "result": as_list(step.get("result")), "needs": as_list(step.get("needs")),
          "env": {k: str(v) for k, v in (step.get("env") or {}).items()}, "status": step.get("status", "ready"),
-         "marker": step.get("marker"), "metrics": step.get("metrics"), "est_min": step.get("est_min")}
+         "marker": step.get("marker"), "metrics": step.get("metrics"), "est_min": step.get("est_min"),
+         "on_missing": step.get("on_missing", "skip"), "perf_window": step.get("perf_window"),
+         "known_fail": step.get("known_fail"), "env_fail": step.get("env_fail"),
+         "known_fail_statuses": step.get("known_fail_statuses") or ["FAIL"],
+         "known_fail_cases": step.get("known_fail_cases"), "timeout_note": step.get("timeout_note"),
+         "deviation": step.get("deviation"), "note": step.get("note")}
     src = step.get("from_ci")
     if src:
         lst = os.path.join(tree, man.get("ci_lists", "tests/pipeline_reorg"), src["list"])
@@ -145,6 +176,10 @@ def resolve_step(man, step, tree):
         left = sorted(set(re.findall(r"(?<![$\\])\{([a-z_]+)\}", cmd)))
         if left:
             raise RegressError(f"step {step['id']}: unresolved placeholders {left} in {src['name']!r}")
+        for a, b in src.get("replace") or []:  # literal edits, e.g. a test directory narrowed to a file subset
+            if a not in cmd:
+                raise RegressError(f"step {step['id']}: replace target {a!r} not in {src['name']!r}")
+            cmd = cmd.replace(a, b)
         lines = cmd.splitlines()
         if src.get("lines_matching"):
             lines = [l for l in lines if re.search(src["lines_matching"], l)]
@@ -156,11 +191,13 @@ def resolve_step(man, step, tree):
         r.update(cmd=cmd, timeout_min=step.get("timeout_min", skud.get("timeout")), list=src["list"],
                  auto_triage=e.get("auto_triage", True),
                  ci={"list": src["list"], "name": src["name"], "sku": sku, "ci_timeout_min": skud.get("timeout"),
-                     "filtered": bool(src.get("lines_matching") or src.get("drop_lines"))})
+                     "filtered": bool(src.get("lines_matching") or src.get("drop_lines") or src.get("replace"))})
     else:
         ref = step.get("ci_ref") or {}
         r.update(cmd=step["cmd"].rstrip() + "\n", timeout_min=step["timeout_min"], list=ref.get("list"),
                  auto_triage=step.get("auto_triage", True), ci=dict(ref, mirrored=True) if ref else None)
+    if step.get("pre_cmd"):  # diagnostics before the command (logged in the step), never part of the CI command
+        r["cmd"] = "# pre_cmd (diagnostics)\n" + step["pre_cmd"].rstrip() + "\n# the step's command\n" + r["cmd"]
     if not r["timeout_min"]:
         raise RegressError(f"step {step['id']}: no timeout")
     return r
@@ -168,6 +205,17 @@ def resolve_step(man, step, tree):
 
 def mnt_paths(cmd):
     return sorted(set(m.rstrip("/'\";,)") for m in re.findall(r"/mnt/[A-Za-z0-9_./+=-]+", cmd)))
+
+
+def active_path_map(man):
+    """The manifest's path_map entries that apply on this node: left side missing, right side present."""
+    return {a: b for a, b in (man.get("path_map") or {}).items() if not os.path.exists(a) and os.path.exists(b)}
+
+
+def map_paths(text, pm):
+    for a, b in pm.items():
+        text = text.replace(a, b)
+    return text
 
 
 # ------------------------------------------------------------------------------------------------- context
@@ -193,6 +241,7 @@ class Ctx:
         where = "data" if self.mode == "slurm" else "local"
         self.tree_name, self.tree, self.tree_sha_expected = tree_info(man, args.tree, where)
         self.tree_sha = tree_sha(self.tree)
+        self.tree_patches = tree_patches(self.tree)
         self.out_root = args.out or (man["results"]["data"] if self.mode == "slurm" else man["results"]["local"])
         self.label = args.label
         self.home = self.tree  # TT_METAL_HOME; a Slurm job replaces it with its own farm
@@ -245,16 +294,24 @@ def build_env(ctx, rs, router, sdir):
         "LD_LIBRARY_PATH": os.path.join(tree, "build", "lib"),
         "PATH": f"{venv}/bin:{os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}",
         "VIRTUAL_ENV": venv,
+        "PYTHON_ENV_DIR": venv,
         "TT_METAL_CACHE": ctx.cache(router),
         "GTEST_OUTPUT": f"xml:{sdir}/gtest/",
         "PYTEST_ADDOPTS": "-p regress_junit_plugin",
         "REGRESS_JUNIT_DIR": os.path.join(sdir, "junit"),
         "REGRESS_STEP_DIR": sdir,
+        "REGRESS_HARNESS_DIR": HERE,  # helper scripts next to run_group.py (dit_ring_joint_perf.py)
         "PYTHONUNBUFFERED": "1",
     })
     if ctx.data_tree:
         env["PYTHONDONTWRITEBYTECODE"] = "1"  # the /data tree is shared by every job
+    if getattr(ctx, "tmpdir", None):
+        env["TMPDIR"] = ctx.tmpdir  # mpirun's session dir: the job's own, never a shared full /tmp
     env.update(rs["env"])
+    env.update(json.loads(os.environ.get("REGRESS_STEP_ENV_JSON") or "{}"))  # an A/B's override for every step
+    pm = active_path_map(man)
+    if pm:
+        env = {k: map_paths(v, pm) for k, v in env.items()}
     return env
 
 
@@ -279,19 +336,44 @@ def last_line(path):
     return ""
 
 
-def kill_group(pid, grace=15):
-    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5)):
+def kill_group(p, grace=15):
+    """TERM then KILL the step's process group; done when the leader has exited (polled, so a zombie counts)."""
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 10)):
         try:
-            os.killpg(pid, sig)
+            os.killpg(p.pid, sig)
         except ProcessLookupError:
             return
         t = time.time()
         while time.time() - t < wait:
+            if p.poll() is not None:
+                time.sleep(1)  # let the rest of the group follow the leader
+                break
+            time.sleep(0.5)
+        if p.poll() is not None and sig == signal.SIGTERM:
             try:
-                os.killpg(pid, 0)
+                os.killpg(p.pid, signal.SIGKILL)
             except ProcessLookupError:
-                return
-            time.sleep(1)
+                pass
+            return
+
+
+def hang_capture(rs, env, cwd, sdir):
+    """REGRESS_HANG_CAPTURE (a hang_capture.py the node can read): after a step's timeout kill, a read-only capture of
+    every router on the node into the step's hangcap/ (the routers keep their state until the reset that follows)."""
+    cap = os.environ.get("REGRESS_HANG_CAPTURE")
+    if not cap or not os.path.isfile(cap):
+        return
+    py = os.path.join(env.get("VIRTUAL_ENV", ""), "bin", "python")
+    out = os.path.join(sdir, "hangcap")
+    say(f"   {rs['id']}: hang capture into {out}")
+    try:
+        r = subprocess.run([py if os.path.exists(py) else sys.executable, cap, out, "--time-budget", "540",
+                            "--meta", f"step={rs['id']}"], cwd=cwd, env=env, capture_output=True, text=True, timeout=600)
+        with open(os.path.join(sdir, "hangcap.log"), "w") as f:
+            f.write(r.stdout + r.stderr)
+        say(f"   {rs['id']}: hang capture rc={r.returncode}")
+    except Exception as e:  # the reset still follows
+        say(f"   {rs['id']}: hang capture failed: {e}")
 
 
 def execute(rs, env, cwd, sdir, timeout_s, stop_on_fail=False, heartbeat_s=60, busy_s=180):
@@ -302,9 +384,17 @@ def execute(rs, env, cwd, sdir, timeout_s, stop_on_fail=False, heartbeat_s=60, b
         if stop_on_fail:
             f.write("set -eo pipefail\n")
         else:  # keep going after a failing line (CI stops there); every failure is logged and fails the step
+            # REGRESS_CAPTURE_ON_ERR=1 (with REGRESS_HANG_CAPTURE in the step env): a read-only router capture right
+            # after each failing line, before the next line re-initializes the fabric (a fabric-init failure leaves the
+            # routers as they stopped until the next init or reset)
+            cap = ""
+            if env.get("REGRESS_CAPTURE_ON_ERR") == "1" and env.get("REGRESS_HANG_CAPTURE"):
+                cap = ("\"${VIRTUAL_ENV:-.}/bin/python\" \"$REGRESS_HANG_CAPTURE\" \"$REGRESS_STEP_DIR/errcap_$__regress_fails\" "
+                       "--time-budget 300 --meta step_line=$__regress_fails > \"$REGRESS_STEP_DIR/errcap_$__regress_fails.log\" 2>&1; "
+                       "echo \"[regress] error capture $__regress_fails rc=$?\" >&2; ")
             f.write("set -o pipefail\n__regress_fails=0\n"
                     "trap '__rc=$?; echo \"[regress] command failed (rc=$__rc): $BASH_COMMAND\" >&2; "
-                    "__regress_fails=$((__regress_fails + 1))' ERR\n")
+                    "__regress_fails=$((__regress_fails + 1)); " + cap + "' ERR\n")
         f.write(rs["cmd"])
         if not stop_on_fail:
             f.write("\nexit $(( __regress_fails > 0 ? 1 : 0 ))\n")
@@ -320,14 +410,16 @@ def execute(rs, env, cwd, sdir, timeout_s, stop_on_fail=False, heartbeat_s=60, b
             break
         now = time.time()
         if now - start > timeout_s:
-            verdict = "timeout"
-            say(f"   {rs['id']}: past its {timeout_s} s timeout: killing it")
-            kill_group(p.pid)
+            age = now - os.path.getmtime(log)
+            verdict = "timeout" if age > 120 else "timeout_progressing"
+            say(f"   {rs['id']}: past its {timeout_s} s timeout (log last written {int(age)} s ago): killing it")
+            kill_group(p)
+            hang_capture(rs, env, cwd, sdir)
             break
         if now - start > busy_s and "Waiting for KMD lock" in last_line(log) and now - os.path.getmtime(log) > 60:
             verdict = "busy"
             say(f"   {rs['id']}: waiting on the KMD lock for > {busy_s} s (another process holds the device)")
-            kill_group(p.pid)
+            kill_group(p)
             break
         if now - last_hb >= heartbeat_s:
             say(f"   {rs['id']} {int(now - start)} s / {timeout_s} s | {last_line(log)}")
@@ -376,6 +468,22 @@ def parse_junit_files(files):
     return out
 
 
+def parse_pytest_log(text):
+    """Case outcomes from a pytest -v log (no junit, e.g. a step killed at its timeout); messages are not available."""
+    out, cur = {}, None
+    for line in text.splitlines():
+        m = re.match(r"^(\S+\.py)::(\S+?)(?: |$)", line)
+        if m:
+            cur = f"{m.group(1)[:-3].replace('/', '.')}::{m.group(2)}"
+        if cur:
+            for st, mapped in (("PASSED", "PASS"), ("FAILED", "FAIL"), ("ERROR", "FAIL"), ("SKIPPED", "SKIP")):
+                if line.startswith(st) or line.rstrip().endswith(" " + st):
+                    out[cur] = {"status": mapped, "time": 0.0, "file": "log.txt",
+                                "message": "from the -v log (no junit: the step was killed before the summary)"}
+                    break
+    return out
+
+
 def copy_new(src_dir, dst_dir, since, pattern="**/*"):
     n = 0
     for p in glob.glob(os.path.join(src_dir, pattern), recursive=True):
@@ -387,8 +495,8 @@ def copy_new(src_dir, dst_dir, since, pattern="**/*"):
     return n
 
 
-def collect(rs, ctx, sdir, start):
-    """Collector outputs into sdir; returns a dict merged into status.json."""
+def collect(rs, ctx, sdir, start, copy=True):
+    """Collector outputs into sdir; returns a dict merged into status.json. copy=False: only what is in sdir."""
     res = {}
     log = os.path.join(sdir, "log.txt")
     text = ""
@@ -405,23 +513,39 @@ def collect(rs, ctx, sdir, start):
         xmls += glob.glob(os.path.join(sdir, "junit", "*.xml"))
     if xmls or "gtest" in kinds or "pytest" in kinds:
         tests = parse_junit_files(xmls)
-        counts = {s: sum(1 for t in tests.values() if t["status"] == s) for s in ("PASS", "FAIL", "SKIP")}
+        if not xmls and "pytest" in kinds:  # killed before pytest wrote its junit: case outcomes from the -v log
+            tests = parse_pytest_log(text)
+            res["tests_from_log"] = True
+        if rs.get("perf_window"):  # in-test perf windows: the value is data (metrics), not a functional failure
+            rx = PERF_WINDOW_RX if rs["perf_window"] is True else rs["perf_window"]
+            for t in tests.values():
+                if t["status"] == "FAIL" and re.search(rx, t.get("message", "")):
+                    t["status"] = "PERF_WINDOW"
+                    m = WINDOW_NUM_RX.search(t["message"])
+                    if m:
+                        t["measured"], t["window"] = float(m.group(1)), [float(m.group(2)), float(m.group(3))]
+        for rx, why in (rs.get("known_fail_cases") or {}).items():  # case-level KNOWN_FAIL (TEST_PLAN §4.5)
+            for name, t in tests.items():
+                if t["status"] == "FAIL" and re.search(rx, name):
+                    t["status"], t["known_fail"] = "KNOWN_FAIL", why
+        counts = {s: sum(1 for t in tests.values() if t["status"] == s)
+                  for s in ("PASS", "FAIL", "SKIP", "PERF_WINDOW", "KNOWN_FAIL")}
         with open(os.path.join(sdir, "tests.json"), "w") as f:
             json.dump({"counts": counts, "files": sorted(os.path.basename(x) for x in xmls), "tests": tests}, f,
                       indent=1, sort_keys=True)
         res["tests"] = counts
         res["junit_files"] = len(xmls)
     gen = os.path.join(ctx.home, "generated")
-    if "fabric_csv" in kinds:
+    if "fabric_csv" in kinds and copy:
         res["fabric_csv"] = copy_new(os.path.join(gen, "fabric"), os.path.join(sdir, "fabric"), start, "*.csv")
-    if "benchmark_json" in kinds:
+    if "benchmark_json" in kinds and copy:
         res["benchmark_files"] = copy_new(os.path.join(gen, "benchmark_data"), os.path.join(sdir, "benchmark_data"),
                                           start)
     if "metrics" in kinds and rs.get("metrics"):
         rows = []
-        for m in re.finditer(rs["metrics"], text):
+        for m in (mm for rx in as_list(rs["metrics"]) for mm in re.finditer(rx, text)):
             d = {k: v for k, v in m.groupdict().items() if k != "value" and v is not None}
-            rows.append((d, float(m.group("value"))))
+            rows.append((d, float(m.group("value").replace(",", ""))))  # "10,384,185 ns" style values too
         keys = sorted({k for d, _ in rows for k in d})
         with open(os.path.join(sdir, "metrics.csv"), "w", newline="") as f:
             w = csv.writer(f)
@@ -440,10 +564,27 @@ def collect(rs, ctx, sdir, start):
 
 
 def verdict_status(rc, verdict, capped, res, rs):
-    if verdict == "timeout":
-        return "CAPPED" if capped else "HANG"
+    st = _verdict(rc, verdict, capped, res, rs)
+    if st == "FAIL" and rs.get("env_fail"):
+        return "ENV"  # fails because of the node's environment (recorded, not scored)
+    if rs.get("known_fail") and st in (rs.get("known_fail_statuses") or ["FAIL"]):
+        return "KNOWN_FAIL"
+    return st
+
+
+def _verdict(rc, verdict, capped, res, rs):
+    if verdict in ("timeout", "timeout_progressing"):
+        if capped:
+            return "CAPPED"
+        return "TIMEOUT" if verdict == "timeout_progressing" else "HANG"  # TIMEOUT: still logging when killed
     if verdict == "busy":
         return "BUSY"
+    t = res.get("tests") or {}
+    test_line = re.compile(r"pytest|\./build/test/|unit_tests|test_tt_fabric|tt-run")
+    if rc != 0 and not t.get("FAIL") and (t.get("PERF_WINDOW") or t.get("KNOWN_FAIL")) and \
+            all(test_line.search(l) for l in res.get("failed_lines") or []):
+        # every failing case only missed its own perf window, or is a recorded main KNOWN_FAIL case
+        return "PERF_WINDOW" if t.get("PERF_WINDOW") else "PASS"
     if rc != 0:
         return "FAIL"
     if (res.get("tests") or {}).get("FAIL"):
@@ -488,16 +629,25 @@ def check_needs(ctx, rs):
     man = ctx.man
     for need in rs["needs"]:
         w = (man.get("weights") or {}).get(need)
-        if w and not os.path.isdir(w["mount"]):
-            return f"weights: {w['mount']} not mounted on {ctx.node}"
+        if w and not os.path.isdir(map_paths(w["mount"], active_path_map(man))):
+            return f"weights: {w['mount']} not mounted on {ctx.node} (nor a path_map target)"
         if need == "mpi" and not (shutil.which("mpirun") or os.path.exists(os.path.join(ctx.tree, "python_env/bin/tt-run"))):
             return "mpi: no mpirun"
         if need == "ring_mapping" and ctx.node in ((ctx.system.get("slurm") or {}).get("exclude_for_ring") or []):
             return f"ring_mapping: {ctx.node} cannot map ring/torus"
         if need == "study_tree":
             return "study_tree: planned"
+        if need == "no_bw_telemetry_switch":  # on main the env is a no-op: refuse rather than measure telemetry-on
+            b = os.path.join(ctx.tree, "build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric")
+            try:
+                with open(b, "rb") as f:
+                    has = b"TT_FABRIC_NO_BW_TELEMETRY" in f.read()
+            except OSError:
+                has = False
+            if not has:
+                return "no_bw_telemetry_switch: this tree's test_tt_fabric ignores TT_FABRIC_NO_BW_TELEMETRY (patches/main_no_bw_telemetry.patch)"
     missing = [p for p in mnt_paths(rs["cmd"]) if not os.path.exists(p)]
-    if missing:
+    if missing and rs.get("on_missing", "skip") == "skip":
         return "missing paths: " + ", ".join(missing[:6])
     return ""
 
@@ -519,38 +669,58 @@ def prepare_step_dir(sdir):
 def run_steps(ctx, router, k, steps, resume=True, stop_on_fail=False, reset_cb=None):
     """Runs `steps` (resolved) for one router and pass. Returns (results list, remaining count, stop reason)."""
     out, ran, stop = [], 0, ""
+    pm = active_path_map(ctx.man)
     for i, rs in enumerate(steps):
+        if pm:
+            rs = dict(rs, cmd=map_paths(rs["cmd"], pm), path_map=pm)
         sdir = ctx.step_dir(router, k, rs["id"])
         prev = read_status(sdir)
         if resume and prev and prev.get("status") in DONE:
             say(f"{rs['id']}: done already ({prev['status']}), skipped")
             out.append(prev)
             continue
+        if rs.get("status") == "not_run":
+            if not (prev and prev.get("status") == "NOT_RUN"):
+                prepare_step_dir(sdir)
+                write_status(sdir, {"group": ctx.group["id"], "step": rs["id"], "router": router, "pass": k,
+                                    "label": ctx.label, "node": ctx.node, "status": "NOT_RUN", "reason": rs["why"],
+                                    "ci": rs.get("ci"), "start": iso(), "end": iso(), "duration_s": 0, "rc": None})
+            say(f"{rs['id']}: NOT RUN ({rs['why']})")
+            continue
         why = check_needs(ctx, rs)
         timeout_s, capped = int(rs["timeout_min"] * 60), False
+        cap_min = getattr(ctx.args, "max_timeout_min", None)
+        if cap_min and timeout_s > cap_min * 60:  # an A/B's stall timeout (shorter than CI's)
+            timeout_s = int(cap_min * 60)
         if not why and ctx.budget_s:
             left = ctx.budget_s - (time.time() - ctx.t0) - 20
             if timeout_s > left:
                 est = estimate_s(ctx, rs, router)
-                if ran and est > left * 0.8:
+                # start only if the estimate fits well inside what is left: a budget kill mid-test can leave the
+                # fabric faulted (job 604); the first step of a job runs capped anyway (progress)
+                if est > left * 0.6 and (ran or left < 300):
                     stop = f"budget: {int(left)} s left, {rs['id']} needs ~{int(est)} s (timeout {timeout_s} s)"
-                    break
-                if left < 120:
-                    stop = f"budget: {int(left)} s left"
                     break
                 timeout_s, capped = int(left), True
         prepare_step_dir(sdir)
         env = build_env(ctx, rs, router, sdir)
         st = {"group": ctx.group["id"], "step": rs["id"], "router": router, "pass": k, "label": ctx.label,
               "node": ctx.node, "mode": ctx.mode, "tree": ctx.tree, "tree_name": ctx.tree_name, "tree_sha": ctx.tree_sha,
+              "tree_patches": ctx.tree_patches,
               "ci": rs.get("ci"), "timeout_s": timeout_s, "ci_timeout_s": int(rs["timeout_min"] * 60),
-              "capped": capped, "slurm_job": os.environ.get("SLURM_JOB_ID")}
+              "capped": capped, "slurm_job": os.environ.get("SLURM_JOB_ID"), "path_map": rs.get("path_map"),
+              "missing_paths": [p for p in mnt_paths(rs["cmd"]) if not os.path.exists(p)] or None,
+              "telemetry": ctx.group.get("telemetry", "CI default"), "rerun_of": rs.get("rerun_of"),
+              "jit_cache": ctx.cache(router), "timeout_note": rs.get("timeout_note"), "deviation": rs.get("deviation"),
+              "note": rs.get("note"), "step_env": rs.get("env") or None,
+              "data_inodes_at_submit": os.environ.get("REGRESS_DATA_INODES_AT_SUBMIT"),
+              "data_inodes_free": data_inodes_free() if ctx.mode == "slurm" else None}
         with open(os.path.join(sdir, "cmd.txt"), "w") as f:
             f.write(rs["cmd"])
         with open(os.path.join(sdir, "env.txt"), "w") as f:
             f.write("".join(f"{a}={b}\n" for a, b in sorted(env.items())
                             if a.startswith(("TT_", "ARCH", "PYTHON", "LD_", "GTEST", "PYTEST", "HF_", "REGRESS_",
-                                             "LOGURU", "TTNN", "TRACY", "MESH", "VIRTUAL"))))
+                                             "LOGURU", "TTNN", "TRACY", "MESH", "VIRTUAL", "TMPDIR", "OMPI_"))))
         if why:
             st.update(status="SKIP", reason=why, start=iso(), end=iso(), duration_s=0, rc=None)
             write_status(sdir, st)
@@ -581,8 +751,8 @@ def run_steps(ctx, router, k, steps, resume=True, stop_on_fail=False, reset_cb=N
                 continue
             stop = f"{status} in {rs['id']}"
             break
-        if status == "FAIL" and reset_cb:
-            if not reset_cb(f"after FAIL in {rs['id']}"):
+        if reset_cb and (status == "FAIL" or (ctx.group.get("reset_between_steps") and i < len(steps) - 1)):
+            if not reset_cb(f"after {status} in {rs['id']}"):  # A/B groups reset between arms whatever the result
                 stop = f"reset failed after {rs['id']}"
                 break
     remaining = sum(1 for rs in steps
@@ -590,8 +760,52 @@ def run_steps(ctx, router, k, steps, resume=True, stop_on_fail=False, reset_cb=N
     return out, remaining, stop
 
 
+def nodeid_of(key, tree):
+    """pytest node id from a junit key 'dotted.module[.Class]::name' (the module part is the longest existing file)."""
+    cls, _, name = key.partition("::")
+    name = re.sub(r"#\d+$", "", name)
+    parts = cls.split(".")
+    for i in range(len(parts), 0, -1):
+        rel = os.path.join(*parts[:i]) + ".py"
+        if os.path.exists(os.path.join(tree, rel)):
+            return "::".join([rel] + parts[i:] + [name])
+    return None
+
+
+def rerun_step(ctx, rs, router, k):
+    """A derived step that reruns the FAIL cases of `rs` (pass k) one pytest process per case, with the step's exports."""
+    sdir = ctx.step_dir(router, k, rs["id"])
+    try:
+        with open(os.path.join(sdir, "tests.json")) as f:
+            tests = json.load(f)["tests"]
+    except (OSError, ValueError, KeyError):
+        raise RegressError(f"{rs['id']}: no tests.json in {sdir}")
+    fails = sorted(n for n, t in tests.items() if t["status"] == "FAIL")
+    if not fails:
+        raise RegressError(f"{rs['id']}: no failing cases in pass {k}")
+    exports = [l for l in rs["cmd"].splitlines() if re.match(r"\s*export\s", l)]
+    timeout = "--timeout=600" if "--timeout=600" in rs["cmd"] else ""
+    lines = ["# rerun of each FAIL case of %s pass %d on its own (one process per case)" % (rs["id"], k)] + exports
+    for n in fails:
+        nid = nodeid_of(n, ctx.tree)
+        if not nid:
+            raise RegressError(f"{rs['id']}: cannot map {n} to a pytest node id")
+        lines.append(f"pytest {timeout} {shlex.quote(nid)}".replace("  ", " "))
+    return dict(rs, id=rs["id"] + ".rerun", cmd="\n".join(lines) + "\n", result=["pytest"],
+                timeout_min=min(rs["timeout_min"], 23), rerun_of={"step": rs["id"], "pass": k, "cases": len(fails)},
+                est_min=min(rs["timeout_min"], 2 + 1.5 * len(fails)))
+
+
 def group_steps(man, g, tree, only=None):
-    steps = [resolve_step(man, s, tree) for s in g.get("steps", []) if s.get("status", "ready") == "ready"]
+    """Ready steps resolved for `tree`, plus not_run steps (recorded as NOT_RUN, never executed)."""
+    steps = []
+    for s in g.get("steps", []):
+        st = s.get("status", "ready")
+        if st == "ready":
+            steps.append(resolve_step(man, s, tree))
+        elif st == "not_run":
+            steps.append({"id": s["id"], "status": "not_run", "why": s.get("why", ""), "timeout_min": 0, "needs": [],
+                          "result": [], "cmd": "", "env": {}, "ci": s.get("from_ci") or s.get("ci_ref")})
     if only:
         want = only.split(",")
         unknown = set(want) - {s["id"] for s in steps}
@@ -605,6 +819,8 @@ def write_summary(ctx):
     gdir = os.path.join(ctx.out_root, ctx.label, ctx.group["id"])
     rows = []
     for p in sorted(glob.glob(os.path.join(gdir, "*", "pass*", "*", "status.json"))):
+        if ".attempt" in p.split(os.sep)[-2]:
+            continue
         try:
             with open(p) as f:
                 st = json.load(f)
@@ -622,6 +838,9 @@ def preflight(ctx, routers):
         raise RegressError(f"group {g['id']} is {g.get('status')}: {g.get('why', '')} (--force overrides)")
     for r in routers:
         router_env(ctx.man, r)
+        allowed = (ctx.man.get("router_trees") or {}).get(r)
+        if allowed and not any(ctx.tree_name == a or (a.endswith("_") and ctx.tree_name.startswith(a)) for a in allowed):
+            raise RegressError(f"router {r!r} runs on trees {allowed}, not {ctx.tree_name!r} (router_trees)")
     for p in ("build/lib/libtt_metal.so", "python_env/bin/python"):
         if not os.path.exists(os.path.join(ctx.tree, p)):
             raise RegressError(f"tree {ctx.tree}: no {p}")
@@ -630,7 +849,8 @@ def preflight(ctx, routers):
     sysname = g["system"]
     sl = ctx.system.get("slurm") or {}
     if ctx.mode == "slurm":
-        ok = (sl.get("node_regex") and re.match(sl["node_regex"], ctx.node)) or ctx.node in (sl.get("nodes") or {})
+        ok = (sl.get("node_regex") and re.match(galaxy_node_regex(sl), ctx.node)) or ctx.node in (sl.get("nodes") or {}) or \
+            (sl.get("overflow_node_regex") and re.match(sl["overflow_node_regex"], ctx.node))
         if not ok and not ctx.args.any_node:
             raise RegressError(f"node {ctx.node} is not allowed for {sysname}")
     if ctx.mode == "local" and not ctx.args.any_node:
@@ -643,6 +863,9 @@ def cmd_run(args):
     ctx = Ctx(man, g, args)
     preflight(ctx, [args.router])
     steps = group_steps(man, g, ctx.tree, args.steps)
+    if args.rerun_failed:
+        want = args.rerun_failed.split(",")
+        steps = [rerun_step(ctx, rs, args.router, args.pass_) for rs in group_steps(man, g, ctx.tree, ",".join(want))]
     say(f"run {g['id']} on {ctx.node} ({ctx.mode}), tree {ctx.tree_name} {ctx.tree} @ {(ctx.tree_sha or '?')[:12]}, "
         f"router {args.router}, pass {args.pass_}, label {ctx.label}, {len(steps)} steps"
         f"{f', budget {ctx.budget_s} s' if ctx.budget_s else ''}")
@@ -650,6 +873,10 @@ def cmd_run(args):
     if dropped:
         say(f"inherited TT_* variables dropped: {' '.join(dropped)}")
     if args.dry_run:
+        pm = active_path_map(man)
+        steps = [dict(rs, cmd=map_paths(rs["cmd"], pm)) for rs in steps]
+        if pm:
+            say(f"path_map active here: {pm}")
         for rs in steps:
             print(f"--- {rs['id']} (timeout {rs['timeout_min']} min, needs {rs['needs'] or '-'})"
                   f"{' SKIP: ' + check_needs(ctx, rs) if check_needs(ctx, rs) else ''}")
@@ -667,7 +894,7 @@ def cmd_run(args):
         say("REGRESS: not finished; run the same command again (--resume skips finished steps)")
     else:
         say("REGRESS: ALL STEPS DONE")
-    if any(st["status"] in ("HANG", "CAPPED", "BUSY") for st in res):
+    if any(st["status"] in ("HANG", "TIMEOUT", "CAPPED", "BUSY") for st in res):
         say("note: a step was killed; the device may need tt_device_reset before the next job")
         return 3
     return 1 if counts.get("FAIL") else 0
@@ -709,6 +936,48 @@ def make_farm(tree, farm):
     os.makedirs(os.path.join(farm, "generated"), exist_ok=True)
 
 
+ENV_REPORT = r"""
+echo "host $(hostname) kernel $(uname -r) cpus $(nproc) mem $(free -g | awk '/Mem:/ {print $2}') GB"
+df -h /tmp /data /home 2>/dev/null; df -i /data 2>/dev/null | tail -1
+for d in /mnt/MLPerf /mnt/MLPerf/huggingface /mnt/MLPerf/tt_dnn-models /mnt/models /mnt/models/huggingface /mnt/weka /mnt/weka/model-weights; do
+  if [ -e $d ]; then echo "mount $d: present ($(ls $d 2>/dev/null | head -8 | tr '\n' ' '))"; else echo "mount $d: MISSING"; fi
+done
+for t in tt-smi mpirun mpirun-ulfm python3 git; do echo "tool $t: $(command -v $t || echo MISSING)"; done
+tt-smi --version 2>&1 | head -1
+ls /dev/tenstorrent 2>/dev/null | wc -l | sed 's/^/devices: /'
+"""
+
+
+def galaxy_node_regex(sl):
+    """The system's node_regex; REGRESS_GLX_SC36_2=1 (one-time per-invocation exception, coordinator 2026-11-04) also
+    accepts the bh_sc36_2 single Galaxies (bh-glx-120-c*). The manifest default stays 110-a only."""
+    rx = sl.get("node_regex") or "."
+    if os.environ.get("REGRESS_GLX_SC36_2") == "1" and rx == "^bh-glx-110-a":
+        return "^bh-glx-(110-a|120-c)"
+    return rx
+
+
+def data_inodes_free(path="/data"):
+    try:
+        return os.statvfs(path).f_favail
+    except OSError:
+        return -1
+
+
+def env_report(ctx, on_broker_host=False):
+    script = ENV_REPORT
+    if on_broker_host:  # no tt-smi and no device listing on a broker host, even version-only (coordinator 2026-11-04)
+        script = "\n".join(l for l in ENV_REPORT.splitlines() if "tt-smi" not in l and "/dev/tenstorrent" not in l)
+        script = script.replace("for t in tt-smi mpirun", "for t in mpirun")
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=300)
+    path = os.path.join(ctx.job_dir, "env_report.txt")
+    with open(path, "w") as f:
+        f.write(r.stdout + r.stderr)
+    for l in r.stdout.splitlines():
+        print("   ", l)
+    return path
+
+
 def device_reset(ctx, why, env):
     sl = ctx.system.get("slurm") or {}
     cmd = sl.get("reset", "tt-smi -r")
@@ -724,14 +993,56 @@ def device_reset(ctx, why, env):
         if r.returncode != 0 or n < chips:
             time.sleep(10)
             continue
+        mode = sl.get("health", "required")  # required (CI's ensure-bh-links-online on boxes) | advisory | off
+        if mode == "off":
+            return True
         h = subprocess.run([health], cwd=ctx.home, env=env, capture_output=True, text=True, timeout=600)
-        say(f"   test_system_health rc={h.returncode}")
+        say(f"   test_system_health rc={h.returncode} ({mode})")
         if h.returncode == 0:
             return True
         with open(os.path.join(ctx.job_dir, f"health_fail_{int(time.time())}.log"), "w") as f:
             f.write(h.stdout + h.stderr)
+        if mode == "advisory":
+            return True
         time.sleep(5)
     return False
+
+
+def node_check(ctx, nc, env):
+    """First job on a node: run the system's check row once; record ok / noring / fail under results/_nodes/."""
+    d = os.path.join(ctx.man["results"]["data"], "_nodes")
+    os.makedirs(d, exist_ok=True)
+    for st in ("ok", "noring", "fail"):
+        if os.path.exists(os.path.join(d, f"{ctx.node}.{st}")):
+            say(f"node check: {ctx.node} is '{st}' from an earlier job")
+            if st == "ok":
+                return 0
+            say(f"!!! {ctx.node} failed its node check before: stopping (add it to the excludes)")
+            return 76
+    log = os.path.join(ctx.job_dir, "node_check.log")
+    say(f"node check on {ctx.node} (first job here): {nc['cmd'][:120]}")
+    with open(log, "wb") as f:
+        try:
+            r = subprocess.run(["bash", "-c", nc["cmd"]], cwd=ctx.home, env=env, stdout=f, stderr=subprocess.STDOUT,
+                               timeout=int(nc.get("timeout_min", 15)) * 60)
+            rc = r.returncode
+        except subprocess.TimeoutExpired:
+            rc = 124
+    text = open(log, errors="replace").read()
+    if rc == 0 and re.search(nc["pass_rx"], text):
+        st = "ok"
+    elif nc.get("noring_rx") and re.search(nc["noring_rx"], text):
+        st = "noring"
+    else:
+        st = "fail"
+    with open(os.path.join(d, f"{ctx.node}.{st}"), "w") as f:
+        f.write(f"{iso()} job {os.environ.get('SLURM_JOB_ID')} rc={rc}\n")
+    shutil.copy2(log, os.path.join(d, f"{ctx.node}.{st}.log"))
+    say(f"node check on {ctx.node}: {st} (rc={rc}); log {log}")
+    if st != "ok":
+        say(f"!!! node check {st}: stopping; exclude {ctx.node} from Galaxy submits")
+        return 76
+    return 0
 
 
 def cmd_job(args):
@@ -742,24 +1053,50 @@ def cmd_job(args):
     routers = args.routers.split(",") if args.routers else g.get("routers", ["main"])
     preflight(ctx, routers)
     job = os.environ.get("SLURM_JOB_ID", "manual")
+    brokers = {(sd.get("broker") or {}).get("node") for sd in man["systems"].values()} - {None}
+    if ctx.node in brokers and not args.no_reset:  # never touch a broker host's device outside its broker (2026-11-04)
+        raise RegressError(f"{ctx.node} is a tt-device broker host: `job` may only run there with --no-reset "
+                           "(a no-device test of the harness); device work goes through the broker")
     say(f"job {job}: {g['id']} on {ctx.node}, tree {ctx.tree} @ {(ctx.tree_sha or '?')[:12]}, routers {routers}, "
         f"label {ctx.label}")
     busy = other_users_busy()
+    mcp = "/usr/local/bin/tt-device-mcp"  # LoudBoxes run their own tt-device broker (lb2.sbatch's check)
+    if os.path.exists(mcp):
+        try:
+            st = subprocess.run([mcp, "status", "5"], capture_output=True, text=True, timeout=30).stdout
+            run = st.split("RUNNING", 1)[1].split("\n\n", 1)[0] if "RUNNING" in st else ""
+            if re.search(r"^\s+\d{3,}\s", run, re.M):
+                busy.append("the node's tt-device broker is running a job")
+        except Exception as e:
+            say(f"tt-device-mcp status failed: {e}")
     if busy and not args.ignore_busy:
         say("other users' processes that may hold the device; stopping:")
         for l in busy:
             print("   ", l)
         return 75
-    scratch = args.scratch or f"/tmp/{os.environ.get('USER', 'regress')}-regress/{job}"
-    free = shutil.disk_usage(os.path.dirname(scratch.rstrip("/")) if os.path.exists(os.path.dirname(scratch.rstrip("/"))) else "/tmp").free / 1e9
-    if free < 20:
-        scratch = os.path.join(man["results"]["data"], "_jobs", job)
-        say(f"/tmp has {free:.0f} GB free: scratch on {scratch}")
+    # per-job TT_METAL_HOME farm and JIT cache on /data (coordinator rule 2026-11-03: nothing on the nodes outside
+    # /data/aagarwal), removed at the end unless --keep-scratch
+    scratch = args.scratch or os.path.join(man["results"]["data"], "_scratch", job)
     ctx.job_dir = os.path.join(man["results"]["data"], "_jobs", job)
     os.makedirs(ctx.job_dir, exist_ok=True)
+    env_report(ctx, on_broker_host=ctx.node in brokers)
+    # Open MPI / PRRTE put their session dir (and PMIx sockets: short paths needed) under TMPDIR; a full /tmp kills
+    # mpirun at init (bh-glx-110-a01u14, job 171630). Use the job's own short dir there, and stop early if /tmp is full.
+    tmp_free = shutil.disk_usage("/tmp").free / 1e9
+    if tmp_free < 2:
+        say(f"!!! /tmp on {ctx.node} has {tmp_free:.1f} GB free: stopping (resubmit with --exclude={ctx.node})")
+        return 75
+    ctx.tmpdir = f"/tmp/{os.environ.get('USER', 'regress')}-regress/{job}/tmp"
+    os.makedirs(ctx.tmpdir, exist_ok=True)
     ctx.home = os.path.join(scratch, "home")
     make_farm(ctx.tree, ctx.home)
     ctx.cache_root = os.path.join(scratch, "cache")
+    local_cache = None
+    if args.local_cache:  # JIT cache on the node's own /tmp (coordinator OK 2026-11-03: the job's /tmp, removed at the end)
+        local_cache = f"/tmp/{os.environ.get('USER', 'regress')}-regress/{job}"
+        os.makedirs(local_cache, exist_ok=True)
+        ctx.cache_root = os.path.join(local_cache, "cache")
+        say(f"JIT cache on node-local {ctx.cache_root} ({shutil.disk_usage('/tmp').free / 1e9:.0f} GB free on /tmp)")
     steps = group_steps(man, g, ctx.tree, args.steps)
     passes = g.get("passes") if g.get("kind") == "perf" else None
     if passes:  # A/B orders of the manifest, restricted to the routers of this job, repeated to --passes
@@ -773,6 +1110,11 @@ def cmd_job(args):
     if reset and not reset("job start"):
         say("!!! reset / health check failed at the start: stopping")
         return 2
+    nc = (ctx.system.get("slurm") or {}).get("node_check")
+    if nc and not args.no_reset and ctx.node not in brokers:
+        r = node_check(ctx, nc, base_env)
+        if r:
+            return r
     rc = 0
     for k, prs in enumerate(order, start=1):
         for r in prs:
@@ -787,16 +1129,21 @@ def cmd_job(args):
                 rc = 3
                 if "BUSY" in stop or "reset failed" in stop:
                     break
-    if not args.keep_scratch and scratch.startswith("/tmp/"):
+    if not args.keep_scratch and "/_scratch/" in scratch:
         shutil.rmtree(scratch, ignore_errors=True)
+    if not args.keep_scratch:
+        shutil.rmtree(f"/tmp/{os.environ.get('USER', 'regress')}-regress/{job}", ignore_errors=True)
     say(f"job done rc={rc}")
     return rc
 
 
 # ------------------------------------------------------------------------------------------------- stage
 
+# build intermediates only: runtime/hw/lib/*/*.o and the sfpi toolchain's crt*.o are linked by the kernel JIT (a global
+# "*.o" exclude broke every kernel build on Galaxy, jobs 171351 / 171352)
 STAGE_EXCLUDES = ["/.git", "/.cpmcache", "/generated", "/.pytest_cache", "/.regress_build.log", "/build_Release/CMakeFiles",
-                  "/build_Release/_deps/*-build", "/build_Release/_deps/*-subbuild", "*.o", "*.o.d", "/build_Release/Testing",
+                  "/build_Release/_deps/*-build", "/build_Release/_deps/*-subbuild", "/build_Release/**/*.o",
+                  "/build_Release/**/*.o.d", "/build_Release/Testing",
                   "/build_Release/.ninja_*", "/build_Release/build.ninja", "/build_Release/compile_commands.json",
                   "/build_Release/**/CMakeFiles", "/build_Release/**/*.a"]
 
@@ -818,6 +1165,17 @@ def rewrite_text_files(root, old, new):
     return changed
 
 
+def honours_no_bw_telemetry(tree):
+    """Whether the tree's test_tt_fabric reads TT_FABRIC_NO_BW_TELEMETRY (every job here sets it to 1). From
+    ce2dee3cd6e on, the port leaves it out; the switch is the local patch port_tune/local_patches/
+    test_tt_fabric_no_bw_telemetry.patch, without which a benchmark row silently runs telemetry-on."""
+    f = os.path.join(tree, "tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp")
+    try:
+        return "TT_FABRIC_NO_BW_TELEMETRY" in open(f, errors="replace").read()
+    except OSError:
+        return False
+
+
 def cmd_stage(args):
     man = load_manifest(args.manifest)
     t = man["trees"][args.tree]
@@ -830,6 +1188,10 @@ def cmd_stage(args):
     uv_dst = os.path.join(os.path.dirname(dst), "..", "uv", os.path.basename(uv_src))
     uv_dst = os.path.normpath(uv_dst)
     say(f"stage {args.tree}: {src} @ {sha} -> {dst}; venv python {venv_py} -> {uv_dst}")
+    if not honours_no_bw_telemetry(src):
+        say(f"WARNING: {src}'s test_tt_fabric does not read TT_FABRIC_NO_BW_TELEMETRY (the switch left the PR at "
+            "ce2dee3cd6e): its benchmark rows run telemetry-on. Apply fabric_exp/port_tune/local_patches/"
+            "test_tt_fabric_no_bw_telemetry.patch before staging it for perf or telemetry-off runs.")
     ex = sum((["--exclude", e] for e in STAGE_EXCLUDES), [])
     if args.dry_run:
         r = subprocess.run(["rsync", "-a", "-n", "--stats", "--delete"] + ex + [src + "/", dst + "/"],
@@ -866,7 +1228,8 @@ def cmd_stage(args):
                             break
         say(f"venv rewrite: {len(changed)} text files, {n} symlinks re-pointed")
         with open(os.path.join(dst, ".regress_tree.json"), "w") as f:
-            json.dump({"sha": sha, "source": src, "staged": iso(), "uv_python": uv_dst}, f, indent=1)
+            json.dump({"sha": sha, "source": src, "staged": iso(), "uv_python": uv_dst,
+                       "patches": tree_patches(src)}, f, indent=1)
     return verify_stage(dst, src)
 
 
@@ -917,13 +1280,26 @@ def verify_stage(dst, src):
 # ------------------------------------------------------------------------------------------------- submit / collect
 
 def slurm_count_galaxy():
-    out = subprocess.run(["squeue", "-u", os.environ.get("USER", "aagarwal"), "-h", "-o", "%i|%P|%j|%T"],
+    """Study Galaxy jobs that count toward the cap: running AND pending, except multi-Galaxy pod jobs (the quad,
+    e.g. 171264 on the bh_sc36_6_110a_pod* partitions), which may stay queued (user rule via coordinator 2026-11-04).
+    A Galaxy pair group (glxq_run.sh --pair: sibling jobs glxp-<group>-<pair>) counts as ONE, whatever its siblings'
+    states (user rule via coordinator 2026-11-05)."""
+    out = subprocess.run(["squeue", "-u", os.environ.get("USER", "aagarwal"), "-h", "-o", "%i|%P|%j|%T|%D"],
                          capture_output=True, text=True).stdout
-    jobs = []
+    jobs, groups = [], set()
     for l in out.splitlines():
-        i, p, j, s = (l.split("|") + ["", "", "", ""])[:4]
-        if re.match(r"bh_sc36|bh_110a", p) and j != "interactive":
-            jobs.append((i, p, j, s))
+        i, p, j, s, n = (l.split("|") + ["", "", "", "", ""])[:5]
+        if not re.match(r"bh_sc36|bh_110a", p) or j == "interactive":
+            continue
+        if j.startswith("glxp-"):
+            g = j.split("-")[1]
+            if g not in groups:
+                groups.add(g)
+                jobs.append((i, p, f"glxp-{g} (pair group)", s))
+            continue
+        if re.search(r"_pod\d", p) or (n.isdigit() and int(n) > 1):
+            continue  # multi-Galaxy quad: excepted
+        jobs.append((i, p, j, s))
     return jobs
 
 
@@ -932,8 +1308,8 @@ def fmt_time(minutes):
     return f"{m // 60:02d}:{m % 60:02d}:00"
 
 
-def group_minutes(man, g, tree, routers, passes):
-    steps = group_steps(man, g, tree)
+def group_minutes(man, g, tree, routers, passes, only=None):
+    steps = group_steps(man, g, tree, only)
     per = sum(s["timeout_min"] for s in steps)
     if g.get("kind") == "perf" and g.get("passes"):
         n = passes or len(g["passes"])
@@ -963,14 +1339,30 @@ def cmd_submit(args):
     routers = args.routers.split(",") if args.routers else g.get("routers", ["main"])
     for r in routers:
         router_env(man, r)
-    steps, per, total = group_minutes(man, g, t["data_path"], routers, args.passes)
+    steps, per, total = group_minutes(man, g, t["data_path"], routers, args.passes, args.steps)
     minutes = args.time_min or (total + 20)
     if minutes > 240 and not args.force:
         raise RegressError(f"{g['id']}: {minutes} min > 4 h; split it (--steps / --routers)")
+    if sl.get("max_time_min") and minutes > sl["max_time_min"]:
+        raise RegressError(f"{g['id']}: {minutes} min > the partition limit {sl['max_time_min']} min")
     sb = ["sbatch", "--nodes=1", "--exclusive", f"--time={fmt_time(minutes)}",
           f"--job-name=regress-{args.label}-{g['id']}", "--output=/data/aagarwal/regress/logs/%x-%j.log",
           "--chdir=/data/aagarwal/regress"]
-    if sl.get("nodes"):
+    if sl.get("nodes") and args.overflow:
+        sb += [f"--partition={sl['overflow_partition']}"]
+    elif sl.get("nodes") and args.node == "any":  # lb2_run.sh -n any: approved nodes' partitions, all others excluded
+        parts = sorted(set(sl["nodes"].values()))
+        alln = subprocess.run(["sinfo", "-h", "-p", ",".join(parts), "-o", "%N"], capture_output=True, text=True).stdout
+        hosts = set()
+        for expr in alln.split():
+            hosts |= set(subprocess.run(["scontrol", "show", "hostnames", expr], capture_output=True,
+                                        text=True).stdout.split())
+        excl = sorted(h for h in hosts if h not in sl["nodes"])
+        if any("a09u32" in h for h in sl["nodes"]):
+            raise RegressError("a09u32 must never be an extra-LB target")
+        sb += [f"--partition={','.join(parts)}"] + ([f"--exclude={','.join(excl)}"] if excl else [])
+        say(f"any of {sorted(sl['nodes'])}; excluded {len(excl)} other node(s) in {parts}: {excl}")
+    elif sl.get("nodes"):
         if not args.node:
             raise RegressError(f"{g['system']}: pick a node with --node ({', '.join(sl['nodes'])})")
         node = args.node if args.node in sl["nodes"] else next((n for n in sl["nodes"] if n.endswith(args.node)), None)
@@ -978,22 +1370,39 @@ def cmd_submit(args):
             raise RegressError(f"node {args.node} not in {list(sl['nodes'])}")
         sb += [f"--partition={sl['nodes'][node]}", f"--nodelist={node}"]
     else:
-        sb += [f"--partition={sl['partition']}"]
+        part = sl["partition"]
+        if os.environ.get("REGRESS_GLX_SC36_2") == "1" and galaxy_node_regex(sl) != sl.get("node_regex"):
+            part = "bh_sc36_2," + part  # the 120-c single Galaxies (same exception as galaxy_node_regex); listed first:
+            # with it last, Slurm's estimate placed the job on a busy 110-a node an hour out while 120-c nodes were idle
+        sb += [f"--partition={part}"]
+        if args.node:  # pin a Galaxy node (still checked against node_regex here and in the job)
+            node = args.node if args.node.startswith("bh-") else f"bh-glx-110-{args.node}"
+            if not re.match(galaxy_node_regex(sl), node):
+                raise RegressError(f"node {node} does not match {galaxy_node_regex(sl)}")
+            sb += [f"--nodelist={node}"]
         excl = list(args.exclude.split(",")) if args.exclude else []
+        excl += sl.get("exclude") or []  # standing excludes (full /tmp, coordinator notes)
         if any("ring_mapping" in s["needs"] for s in steps):
             excl += sl.get("exclude_for_ring") or []
         if excl:
             sb += [f"--exclude={','.join(sorted(set(excl)))}"]
+    inodes = None
+    if sl.get("min_data_inodes_free"):  # /data is shared; a job that cannot create files dies mid-run (job 172554)
+        inodes = data_inodes_free()
+        say(f"/data free inodes now: {inodes:,} (a submit needs >= {sl['min_data_inodes_free']:,})")
+        if inodes < sl["min_data_inodes_free"] and args.go:
+            raise RegressError("/data is short of free inodes: leave the steps NOT_RUN, do not retry in a loop")
     if sl.get("max_concurrent"):
         jobs = slurm_count_galaxy()
-        say(f"study Galaxy allocations now ({len(jobs)}/{sl['max_concurrent']}): {jobs}")
-        if len(jobs) >= sl["max_concurrent"] and args.go:
+        cap = int(os.environ.get("REGRESS_GALAXY_CAP", sl["max_concurrent"]))  # raised only for a window the user names
+        say(f"study Galaxy jobs now, running + pending, quad excepted ({len(jobs)}/{cap}): {jobs}")
+        if len(jobs) >= cap and args.go:
             raise RegressError("at the Galaxy allocation cap: wait")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     stage = os.path.join("/data/aagarwal/regress/stage", f"{stamp}-{g['id']}")
     os.makedirs(stage, exist_ok=True)
     os.makedirs("/data/aagarwal/regress/logs", exist_ok=True)
-    for f in ("run_group.py", "manifest.yaml", "regress_junit_plugin.py", "regress.sbatch"):
+    for f in ("run_group.py", "manifest.yaml", "regress_junit_plugin.py", "regress.sbatch", "dit_ring_joint_perf.py"):
         shutil.copy2(os.path.join(HERE, f), stage)
     if args.manifest != DEFAULT_MANIFEST:
         shutil.copy2(args.manifest, os.path.join(stage, "manifest.yaml"))
@@ -1004,8 +1413,12 @@ def cmd_submit(args):
         extra += ["--passes", str(args.passes)]
     if args.steps:
         extra += ["--steps", args.steps]
+    if args.local_cache:
+        extra += ["--local-cache"]
     exports = {"REGRESS_STAGE": stage, "REGRESS_GROUP": g["id"], "REGRESS_TREE": args.tree,
                "REGRESS_TREE_PATH": t["data_path"], "REGRESS_LABEL": args.label, "REGRESS_ARGS": " ".join(extra)}
+    if inodes is not None:
+        exports["REGRESS_DATA_INODES_AT_SUBMIT"] = str(inodes)
     sb.append("--export=ALL," + ",".join(f"{k}={v}" for k, v in exports.items() if "," not in v))
     if "," in exports["REGRESS_ARGS"]:
         with open(os.path.join(stage, "args.txt"), "w") as f:
@@ -1015,7 +1428,12 @@ def cmd_submit(args):
     print(" ".join(shlex.quote(x) for x in sb))
     if not args.go:
         r = subprocess.run(sb[:1] + ["--test-only"] + sb[1:], capture_output=True, text=True)
-        say(f"dry run (sbatch --test-only) rc={r.returncode}: {(r.stdout + r.stderr).strip()}")
+        out = (r.stdout + r.stderr).strip()
+        say(f"dry run (sbatch --test-only) rc={r.returncode}: {out}")
+        if r.returncode and "allocation failure" in out and any(a.startswith("--nodelist=") for a in sb):
+            say("   (expected while the pinned node is allocated: --test-only only answers for a placeable node, "
+                "as lb2_run.sh notes; the options themselves are accepted)")
+            return 0
         return r.returncode
     r = subprocess.run(sb, capture_output=True, text=True)
     say(f"sbatch rc={r.returncode}: {(r.stdout + r.stderr).strip()}")
@@ -1036,7 +1454,10 @@ def cmd_collect(args):
 
 
 def iter_status(root, label):
+    """status.json of every step result in a label (earlier attempts, <step>.attemptN/, and _-prefixed dirs excluded)."""
     for p in sorted(glob.glob(os.path.join(root, label, "*", "*", "pass*", "*", "status.json"))):
+        if ".attempt" in p.split(os.sep)[-2] or os.path.relpath(p, os.path.join(root, label)).startswith("_"):
+            continue
         try:
             with open(p) as f:
                 st = json.load(f)
@@ -1068,6 +1489,74 @@ def cmd_status(args):
     return 0
 
 
+def cmd_rescore(args):
+    """Recompute PASS / FAIL of finished steps from their logs and XML under the current manifest (no device)."""
+    man = load_manifest(args.manifest)
+    root = man["results"]["data"] if args.data else man["results"]["local"]
+    n = 0
+    for st in iter_status(root, args.label):
+        if args.group and st["group"] != args.group:
+            continue
+        if st.get("status") == "HANG" and not st.get("capped"):  # was the log still advancing when it was killed?
+            log = os.path.join(st["_dir"], "log.txt")
+            try:
+                end = datetime.datetime.fromisoformat(st["end"]).timestamp()
+                age = end - os.path.getmtime(log) - 25  # the kill takes up to ~25 s after the timeout
+            except (OSError, ValueError, KeyError):
+                age = None
+            if age is not None and age < 120:
+                sdir = st.pop("_dir")
+                say(f"{st['group']}/{st['router']}/pass{st['pass']}/{st['step']}: HANG -> TIMEOUT (log written "
+                    f"{max(0, int(age))} s before the timeout)")
+                st.setdefault("rescored", []).append({"from": "HANG", "to": "TIMEOUT", "at": iso()})
+                st["status"] = "TIMEOUT"
+                write_status(sdir, st)
+                n += 1
+            continue
+        if st.get("status") == "TIMEOUT":  # keep the verdict, refresh the case counts (from the log if no junit)
+            g = get_group(man, st["group"])
+            step = next((x for x in g.get("steps", []) if x["id"] == st["step"]), None)
+            if step is not None:
+                tree = st.get("tree") if st.get("tree") and os.path.isdir(st["tree"]) else tree_info(man, args.tree, "local")[1]
+                sdir = st.pop("_dir")
+                st.update(collect(resolve_step(man, step, tree), argparse.Namespace(home=tree), sdir, 0, copy=False))
+                write_status(sdir, st)
+            continue
+        if st.get("status") not in ("PASS", "FAIL"):
+            continue
+        g = get_group(man, st["group"])
+        step = next((x for x in g.get("steps", []) if x["id"] == st["step"]), None)
+        if step is None:
+            continue
+        tree = st.get("tree") if st.get("tree") and os.path.isdir(st["tree"]) else tree_info(man, args.tree, "local")[1]
+        rs = resolve_step(man, step, tree)
+        sdir = st.pop("_dir")
+        ctx = argparse.Namespace(home=tree)
+        res = collect(rs, ctx, sdir, 0, copy=False)
+        new = verdict_status(st.get("rc"), "", st.get("capped"), res, rs)
+        if new != st["status"]:
+            say(f"{st['group']}/{st['router']}/pass{st['pass']}/{st['step']}: {st['status']} -> {new}")
+            st.setdefault("rescored", []).append({"from": st["status"], "to": new, "at": iso()})
+            n += 1
+        st.update(res, status=new)
+        write_status(sdir, st)
+    for st in iter_status(root, args.label):  # a known failure that also hangs or times out (known_fail_statuses)
+        if (args.group and st["group"] != args.group) or st.get("status") not in ("HANG", "TIMEOUT"):
+            continue
+        g = get_group(man, st["group"])
+        step = next((x for x in g.get("steps", []) if x["id"] == st["step"]), None)
+        if step is None or not step.get("known_fail") or st["status"] not in (step.get("known_fail_statuses") or ["FAIL"]):
+            continue
+        sdir = st.pop("_dir")
+        say(f"{st['group']}/{st['router']}/pass{st['pass']}/{st['step']}: {st['status']} -> KNOWN_FAIL")
+        st.setdefault("rescored", []).append({"from": st["status"], "to": "KNOWN_FAIL", "at": iso()})
+        st.update(status="KNOWN_FAIL", known_fail=step["known_fail"])
+        write_status(sdir, st)
+        n += 1
+    say(f"rescore: {n} step(s) changed")
+    return 0
+
+
 # ------------------------------------------------------------------------------------------------- compare
 
 def load_side(root, spec):
@@ -1093,10 +1582,15 @@ def metrics_of(st):
     p = os.path.join(st["_dir"], "metrics.csv")
     rows = {}
     if os.path.exists(p):
+        seen = {}
         with open(p) as f:
             for r in csv.DictReader(f):
                 v = float(r.pop("value"))
-                rows.setdefault(tuple(sorted(r.items())), []).append(v)
+                key = tuple(sorted(r.items()))
+                seen[key] = seen.get(key, 0) + 1
+                if seen[key] > 1:  # the same key twice in one run: keep them apart (occurrence index)
+                    key += (("_n", str(seen[key])),)
+                rows.setdefault(key, []).append(v)
     return rows
 
 
@@ -1159,12 +1653,13 @@ def cmd_compare(args):
         note = ""
         if b and t:
             bt, tt = {}, {}
+            cov = lambda x: "PASS" if x == "PERF_WINDOW" else x  # perf windows are judged on the metric values
             for s in b:
                 for n, c in tests_of(s).items():
-                    bt[n] = "PASS" if bt.get(n) == "PASS" else c["status"]
+                    bt[n] = "PASS" if bt.get(n) == "PASS" else cov(c["status"])
             for s in t:
                 for n, c in tests_of(s).items():
-                    tt[n] = "FAIL" if tt.get(n) == "FAIL" else c["status"]
+                    tt[n] = "FAIL" if tt.get(n) == "FAIL" else cov(c["status"])
             reg = [n for n in tt if tt[n] == "FAIL" and bt.get(n) == "PASS"]
             fix = [n for n in tt if tt[n] == "PASS" and bt.get(n) == "FAIL"]
             only_b = [n for n in bt if n not in tt]
@@ -1178,7 +1673,13 @@ def cmd_compare(args):
                 parts.append(f"{len(fix)} FAIL->PASS")
             if only_b or only_t:
                 parts.append(f"cases only in base {len(only_b)}, only in test {len(only_t)}")
-            if any(s["status"] == "PASS" for s in b) and all(s["status"] != "PASS" for s in t):
+            ok = ("PASS", "PERF_WINDOW")
+            if any(s["status"] in ("KNOWN_FAIL", "ENV") for s in b) or any(s["status"] == "ENV" for s in t):
+                parts.insert(0, "known-fail on base: not scored")
+                reg_known = [n for n in reg]
+                regress_cases[:] = [x for x in regress_cases if x[0] != k]
+                parts = [p for p in parts if "PASS->FAIL" not in p] + ([f"({len(reg_known)} case changes ignored)"] if reg_known else [])
+            elif any(s["status"] in ok for s in b) and all(s["status"] not in ok for s in t):
                 parts.insert(0, "**step regressed**")
             note = "; ".join(parts)
         lines.append(f"| {k[0]} | {k[1]} | {bs} | {tss} | {note} |")
@@ -1231,6 +1732,41 @@ def cmd_compare(args):
     print(text)
     say(f"wrote {out}.md and .csv")
     return 1 if regress_cases else 0
+
+
+def cmd_noise(args):
+    """Pass-to-pass spread of one router's perf rows (metrics, fabric BW / latency, benchmark data) within a label."""
+    man = load_manifest(args.manifest)
+    root = man["results"]["data"] if args.data else man["results"]["local"]
+    side = load_side(root, f"{args.label}:{args.router}")
+    rows = []
+    for (g, s_), sts in sorted(side.items()):
+        if args.group and g != args.group:
+            continue
+        sts = sorted((x for x in sts if x.get("status") in ("PASS", "FAIL")), key=lambda x: x["pass"])
+        for getter, kind in ((metrics_of, "metric"), (fabric_rows, "fabric"), (benchmark_rows, "benchmark")):
+            per = {}
+            for st in sts:
+                for kk, v in getter(st).items():
+                    per.setdefault(kk, {})[st["pass"]] = sum(v) / len(v)
+            for kk, d in per.items():
+                vals = [d[k] for k in sorted(d)]
+                rows.append((g, s_, kind, kk, vals, spread(vals)))
+    lines = [f"# Pass-to-pass noise: {args.label}, router {args.router}", "",
+             "| group/step | kind | key | per pass | spread |", "| --- | --- | --- | --- | ---: |"]
+    for g, s_, kind, kk, vals, sp in sorted(rows, key=lambda r: -r[5]):
+        ks = " ".join(f"{a}={b}" for a, b in kk) if kind == "metric" else " ".join(str(x) for x in kk)
+        lines.append(f"| {g}/{s_} | {kind} | {ks} | {' / '.join(f'{v:.4g}' for v in vals)} | {sp:.2%} |")
+    if rows:
+        sps = sorted(r[5] for r in rows if len(r[4]) > 1)
+        if sps:
+            lines += ["", f"{len(sps)} rows with >= 2 passes: median spread {sps[len(sps) // 2]:.2%}, max {sps[-1]:.2%}"]
+    text = "\n".join(lines) + "\n"
+    print(text)
+    if args.out:
+        with open(args.out, "w") as f:
+            f.write(text)
+    return 0
 
 
 # ------------------------------------------------------------------------------------------------- plan / resolve
@@ -1333,6 +1869,7 @@ def main(argv=None):
             p.add_argument("--pass", dest="pass_", type=int, default=1)
             p.add_argument("--resume", action="store_true")
             p.add_argument("--dry-run", action="store_true")
+            p.add_argument("--rerun-failed", help="STEP[,STEP]: rerun each FAIL case of these steps (this --pass) on its own, as STEP.rerun")
             p.add_argument("--mode", choices=["broker", "slurm", "local"])
         else:
             p.add_argument("--routers")
@@ -1341,6 +1878,8 @@ def main(argv=None):
             p.add_argument("--keep-scratch", action="store_true")
             p.add_argument("--ignore-busy", action="store_true")
             p.add_argument("--no-reset", action="store_true")
+            p.add_argument("--local-cache", action="store_true", help="JIT cache on node-local /tmp (removed at the end)")
+            p.add_argument("--max-timeout-min", type=float, help="cap every step's timeout (an A/B's stall timeout)")
 
     p = sub.add_parser("stage")
     p.add_argument("--tree", required=True)
@@ -1355,6 +1894,8 @@ def main(argv=None):
     p.add_argument("--passes", type=int)
     p.add_argument("--steps")
     p.add_argument("--node")
+    p.add_argument("--overflow", action="store_true", help="LoudBox groups: the overflow partition (bh_lb_single)")
+    p.add_argument("--local-cache", action="store_true", help="the job's JIT cache on node-local /tmp")
     p.add_argument("--exclude")
     p.add_argument("--time-min", type=int)
     p.add_argument("--go", action="store_true")
@@ -1368,6 +1909,19 @@ def main(argv=None):
     p.add_argument("--group")
     p.add_argument("--data", action="store_true")
 
+    p = sub.add_parser("rescore")
+    p.add_argument("--label", required=True)
+    p.add_argument("--group")
+    p.add_argument("--tree", default="main")
+    p.add_argument("--data", action="store_true")
+
+    p = sub.add_parser("noise")
+    p.add_argument("--label", required=True)
+    p.add_argument("--router", default="main")
+    p.add_argument("--group")
+    p.add_argument("--data", action="store_true")
+    p.add_argument("--out")
+
     p = sub.add_parser("compare")
     p.add_argument("--base", required=True, help="LABEL[:ROUTER]")
     p.add_argument("--test", required=True, help="LABEL[:ROUTER]")
@@ -1378,7 +1932,8 @@ def main(argv=None):
 
     args = ap.parse_args(argv)
     fn = {"plan": cmd_plan, "resolve": cmd_resolve, "run": cmd_run, "job": cmd_job, "stage": cmd_stage,
-          "submit": cmd_submit, "collect": cmd_collect, "status": cmd_status, "compare": cmd_compare}[args.cmd]
+          "submit": cmd_submit, "collect": cmd_collect, "status": cmd_status, "compare": cmd_compare,
+          "rescore": cmd_rescore, "noise": cmd_noise}[args.cmd]
     try:
         return fn(args)
     except RegressError as e:

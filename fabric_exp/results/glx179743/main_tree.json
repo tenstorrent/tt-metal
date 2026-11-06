@@ -1,0 +1,10 @@
+{
+ "sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+ "source": "/home/aagarwal/tt-metal-main",
+ "staged": "2026-11-03T22:02:48+00:00",
+ "uv_python": "/data/aagarwal/regress/uv/cpython-3.10.19-linux-x86_64-gnu",
+ "patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "patched_files_synced": "2026-11-03T22:04 test_tt_fabric binary + test_tt_fabric.cpp copied from the rebuilt a09u32 tree"
+}

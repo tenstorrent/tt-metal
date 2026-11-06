@@ -1,0 +1,932 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 131,
+  "PERF_WINDOW": 0,
+  "SKIP": 22
+ },
+ "files": [
+  "pytest_431262_1793742479567451708.xml"
+ ],
+ "tests": {
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_broadcast_2d_fabric::test_all_broadcast_2d_fabric[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_2D}-num_iters=1-mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-num_links=1-output_shape=[1, 1, 1, 32, 1024]-layout=Layout.TILE-input_dtype=DataType.BFLOAT16]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.569
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_2d_fabric::test_all_gather_2d_fabric[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_2D, 'trace_region_size': 90112}-num_iters=10-enable_trace=False-mem_config_input=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-mem_config_ag=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-ag_input_dtype=DataType.BFLOAT16-layout=Layout.TILE-dim=3-ag_output_shape=[1, 1, 128, 256]]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.741
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_2d_fabric::test_all_gather_async_fabric_2d_folded_line[silicon_arch_name=blackhole-device_params={'fabric_config': FabricConfig.FABRIC_2D, 'trace_region_size': 90112, 'require_exact_physical_num_devices': True}-mesh_device=(1, 4)]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Test requires exact match of requested num devices (4) to available physical num devices (8).",
+   "status": "SKIP",
+   "time": 0.002
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.429
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.433
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.516
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.667
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.514
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.577
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.53
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.42
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.653
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.618
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.584
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_2D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.574
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_4D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fabric_1d_linear-non-trace-l1_only-float_16-num_devices=4-ag_output_shape=[1, 1, 128, 2048]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.678
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_4D_line[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fabric_1d_linear-trace-l1_only-float_16-num_devices=4-ag_output_shape=[1, 1, 128, 2048]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.288
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_8D_vertical[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.68
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-bfloat_8-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Row-major layout with block-float datatype is an invalid combination",
+   "status": "SKIP",
+   "time": 0.525
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-bfloat_8-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 22.825
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-bfloat_8-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.553
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-float_16-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 22.961
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-float_16-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.522
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-float_16-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.552
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-uint_32-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 33.58
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-uint_32-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 27.437
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-non-trace-dram_only-uint_32-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.579
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-bfloat_8-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Row-major layout with block-float datatype is an invalid combination",
+   "status": "SKIP",
+   "time": 0.416
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-bfloat_8-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 27.427
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-bfloat_8-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.305
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-float_16-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 15.743
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-float_16-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.12
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-float_16-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.479
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-uint_32-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 28.025
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-uint_32-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 25.204
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_linear-trace-dram_only-uint_32-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.607
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-bfloat_8-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Row-major layout with block-float datatype is an invalid combination",
+   "status": "SKIP",
+   "time": 0.415
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-bfloat_8-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.484
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-bfloat_8-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.098
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-float_16-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.889
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-float_16-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.199
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-float_16-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.479
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-uint_32-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 13.052
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-uint_32-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 14.321
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-non-trace-dram_only-uint_32-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.46
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-bfloat_8-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Row-major layout with block-float datatype is an invalid combination",
+   "status": "SKIP",
+   "time": 0.4
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-bfloat_8-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 15.39
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-bfloat_8-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.058
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-float_16-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 25.577
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-float_16-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.567
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-float_16-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.674
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-uint_32-gemma_dim3-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 26.573
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-uint_32-large-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 28.21
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_experimental[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-fabric_ring-trace-dram_only-uint_32-small-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.927
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_failing_shapes[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fabric_linear-non-trace-dram_only-float_16-row major-gemma dim 1]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 15.049
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_failing_shapes[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fabric_linear-non-trace-dram_only-float_16-row major-gemma dim 3]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.102
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_failing_shapes[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fabric_linear-non-trace-dram_only-float_16-tile-gemma dim 1]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.442
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_failing_shapes[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fabric_linear-non-trace-dram_only-float_16-tile-gemma dim 3]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.679
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-non-trace-l1_only-float_16-ag_output_shape=[1, 1, 128, 2048]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.953
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-trace-l1_only-float_16-ag_output_shape=[1, 1, 128, 2048]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.271
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.531
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.547
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-dram_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.477
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.503
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.539
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-non-trace-l1_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.484
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.632
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.001
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-dram_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.933
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-bfloat_8-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.265
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-float_16-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.504
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_gather_apc::test_all_gather_subcore_grid[silicon_arch_name=blackhole-silicon_arch_blackhole=True-sub_core_grids={[1-0 - 3-6], [5-0 - 6-6]}-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-trace-l1_only-uint_32-num_devices=2-ag_output_shape=[1, 1, 128, 128]-dim=3-layout=Layout.TILE]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.108
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_reduce_2d_fabric::test_all_reduce_2d_fabric[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'trace_region_size': 23887872, 'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_2D}-trace_mode=True-num_iters=100-warmup_iters=10-input_dtype=DataType.BFLOAT16-output_shape=[1, 1, 32, 1280]-cluster_axis=0-num_links=2-input_num_cores=24-input_core_range_set={[6-6 - 6-6], [6-7 - 6-7], [6-9 - 6-9], [6-0 - 6-0], [6-1 - 6-1], [6-2 - 6-2], [6-4 - 6-4], [6-5 - 6-5], [5-5 - 5-5], [5-6 - 5-6], [5-7 - 5-7], [5-9 - 5-9], [5-0 - 5-0], [5-1 - 5-1], [5-2 - 5-2], [5-4 - 5-4], [1-4 - 1-4], [1-5 - 1-5], [1-9 - 1-9], [1-0 - 1-0], [2-0 - 2-0], [2-4 - 2-4], [2-5 - 2-5], [2-9 - 2-9]}-output_num_cores=10-output_core_range_set={[1-0 - 3-2], [1-3 - 1-3]}]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.593
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_reduce_2d_fabric_turning::test_all_reduce_2d_fabric_turning[silicon_arch_name=blackhole-silicon_arch_blackhole=True-axis_0_row-device_params={'trace_region_size': 23887872, 'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_2D}-trace_mode=True-num_iters=20-warmup_iters=5-input_dtype=DataType.BFLOAT16-output_core_range_set={[1-0 - 3-2], [1-3 - 1-3]}-output_num_cores=10-input_core_range_set={[6-6 - 6-6], [6-7 - 6-7], [6-9 - 6-9], [6-0 - 6-0], [6-1 - 6-1], [6-2 - 6-2], [6-4 - 6-4], [6-5 - 6-5], [5-5 - 5-5], [5-6 - 5-6], [5-7 - 5-7], [5-9 - 5-9], [5-0 - 5-0], [5-1 - 5-1], [5-2 - 5-2], [5-4 - 5-4], [1-4 - 1-4], [1-5 - 1-5], [1-9 - 1-9], [1-0 - 1-0], [2-0 - 2-0], [2-4 - 2-4], [2-5 - 2-5], [2-9 - 2-9]}-input_num_cores=24-num_links=1-output_shape=[1, 1, 32, 1280]]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.61
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_reduce_2d_fabric_turning::test_all_reduce_2d_fabric_turning[silicon_arch_name=blackhole-silicon_arch_blackhole=True-axis_1_col-device_params={'trace_region_size': 23887872, 'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_2D}-trace_mode=True-num_iters=20-warmup_iters=5-input_dtype=DataType.BFLOAT16-output_core_range_set={[1-0 - 3-2], [1-3 - 1-3]}-output_num_cores=10-input_core_range_set={[6-6 - 6-6], [6-7 - 6-7], [6-9 - 6-9], [6-0 - 6-0], [6-1 - 6-1], [6-2 - 6-2], [6-4 - 6-4], [6-5 - 6-5], [5-5 - 5-5], [5-6 - 5-6], [5-7 - 5-7], [5-9 - 5-9], [5-0 - 5-0], [5-1 - 5-1], [5-2 - 5-2], [5-4 - 5-4], [1-4 - 1-4], [1-5 - 1-5], [1-9 - 1-9], [1-0 - 1-0], [2-0 - 2-0], [2-4 - 2-4], [2-5 - 2-5], [2-9 - 2-9]}-input_num_cores=24-num_links=1-output_shape=[1, 1, 32, 1280]]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.424
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_to_all::test_all_to_all[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'trace_region_size': 100000, 'fabric_config': FabricConfig.FABRIC_1D_RING}-no_trace-check-mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-input_dtype=DataType.BFLOAT16-pre-attn]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.035
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_to_all::test_all_to_all[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'trace_region_size': 100000, 'fabric_config': FabricConfig.FABRIC_1D_RING}-use_trace-check-mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-input_dtype=DataType.BFLOAT16-pre-attn]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.212
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_to_all_combine_bh::test_all_to_all_combine_no_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-dtype=DataType.BFLOAT16-l1-l1-num_iters=2-scheme=random-local_reduce=True-seq=2-hidden_size=7000-select_experts_k=8-experts_per_device=8-batches_per_device=8-num_devices=4-mesh_shape=(4, 1)-fabric_1d_ring_axis_0]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Ring configuration requires the entire row or column so it loops around",
+   "status": "SKIP",
+   "time": 0.412
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_to_all_dispatch_bh::test_all_to_all_dispatch_no_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-l1-l1-dtype=DataType.BFLOAT16-num_links=MAX_LINKS-b16s2-hidden_size=7168-select_experts_k=4-experts_per_device=8-cluster_row-num_devices=4-mesh_shape=(4, 1)-trace_mode=False-device_params={'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D}]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.47
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_to_all_dispatch_bh::test_all_to_all_dispatch_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-dtype=DataType.BFLOAT16-num_links=MAX_LINKS-dram-dram-s128-hidden_size=7168-select_experts_k=4-experts_per_device=8-batches_per_device=8-cluster_axis=0-num_devices=4-mesh_shape=(4, 1)-trace_mode=False-device_params={'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 500000}]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.943
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_all_to_all_dispatch_bh::test_all_to_all_dispatch_trace[silicon_arch_name=blackhole-silicon_arch_blackhole=True-dtype=DataType.BFLOAT16-num_links=MAX_LINKS-dram-dram-s128-hidden_size=7168-select_experts_k=4-experts_per_device=8-batches_per_device=8-cluster_axis=0-num_devices=4-mesh_shape=(4, 1)-trace_mode=True-device_params={'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 500000}]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.708
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_deepseek_ccl_ops::test_ccl_all_reduce[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fuse_residual_add=True-device_params={'fabric_config': FabricConfig.FABRIC_2D, 'fabric_router_config': <ttnn._ttnn.fabric.FabricRouterConfig object>, 'trace_region_size': 573440}-num_iter=30-num_warmup_iter=15-num_links=2-cluster_axis=0-input_dtype=DataType.BFLOAT16-layout=Layout.TILE-num_devices=2-output_shape=[1, 2048]-input_shard_shape=(1, 2048)-tensor_mem_layout=TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.681
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_deepseek_ccl_ops::test_ccl_broadcast[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_2D, 'fabric_router_config': <ttnn._ttnn.fabric.FabricRouterConfig object>, 'trace_region_size': 573440}-num_links=1-num_iters=30-num_warmup_iter=15-input_dtype=DataType.BFLOAT16-layout=Layout.TILE-mesh_rows=4-mesh_cols=2-sender_row=1-sender_col=0-output_shape=[1, 7168]-input_shard_shape=(1, 7168)-tensor_mem_layout=TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.193
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_deepseek_ccl_ops::test_reduce_to_one_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-fabric_2d]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.284
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_new_all_broadcast::test_all_broadcast[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D}-num_iters=3-mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)-num_devices=2-num_links=1-output_shape=[1, 1, 1, 32, 1024]-layout=Layout.TILE-input_dtype=DataType.BFLOAT16]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.47
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_new_all_reduce::test_all_reduce[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'trace_region_size': 23887872, 'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D}-trace_mode=True-num_iters=100-warmup_iters=10-input_dtype=DataType.BFLOAT16-output_shape=[1, 1, 32, 1280]-cluster_axis=0-num_links=2-input_num_cores=24-input_core_range_set={[6-6 - 6-6], [6-7 - 6-7], [6-9 - 6-9], [6-0 - 6-0], [6-1 - 6-1], [6-2 - 6-2], [6-4 - 6-4], [6-5 - 6-5], [5-5 - 5-5], [5-6 - 5-6], [5-7 - 5-7], [5-9 - 5-9], [5-0 - 5-0], [5-1 - 5-1], [5-2 - 5-2], [5-4 - 5-4], [1-4 - 1-4], [1-5 - 1-5], [1-9 - 1-9], [1-0 - 1-0], [2-0 - 2-0], [2-4 - 2-4], [2-5 - 2-5], [2-9 - 2-9]}-output_num_cores=10-output_core_range_set={[1-0 - 3-2], [1-3 - 1-3]}]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.429
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_new_all_reduce::test_all_reduce_loopback[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'trace_region_size': 23887872, 'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D}-trace_mode=True-num_iters=100-warmup_iters=10-input_dtype=DataType.BFLOAT8_B-output_shape=[1, 1, 32, 3584]-cluster_axis=0-num_links=1-input_num_cores=24-input_core_range_set={[6-6 - 6-6], [6-7 - 6-7], [6-9 - 6-9], [6-0 - 6-0], [6-1 - 6-1], [6-2 - 6-2], [6-4 - 6-4], [6-5 - 6-5], [5-5 - 5-5], [5-6 - 5-6], [5-7 - 5-7], [5-9 - 5-9], [5-0 - 5-0], [5-1 - 5-1], [5-2 - 5-2], [5-4 - 5-4], [1-4 - 1-4], [1-5 - 1-5], [1-9 - 1-9], [1-0 - 1-0], [2-0 - 2-0], [2-4 - 2-4], [2-5 - 2-5], [2-9 - 2-9]}-output_num_cores=28-output_core_range_set={[1-0 - 3-8], [1-9 - 1-9]}]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.038
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-dram_only-bfloat_8-num_devices=2-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.651
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-dram_only-float_16-num_devices=2-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-l1_only-bfloat_8-num_devices=2-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.647
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-l1_only-float_16-num_devices=2-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.009
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-trace-dram_only-bfloat_8-num_devices=2-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.741
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-trace-dram_only-float_16-num_devices=2-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.448
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-trace-l1_only-bfloat_8-num_devices=2-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.952
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-trace-l1_only-float_16-num_devices=2-rs_input_shape=[1, 1, 64, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.199
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-non-trace-dram_only-bfloat_8-2_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-non-trace-dram_only-bfloat_8-4_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-non-trace-dram_only-float_16-2_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-non-trace-dram_only-float_16-4_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-non-trace-l1_only-bfloat_8-2_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-non-trace-l1_only-bfloat_8-4_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-non-trace-l1_only-float_16-2_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-non-trace-l1_only-float_16-4_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-trace-dram_only-bfloat_8-2_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-trace-dram_only-bfloat_8-4_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-trace-dram_only-float_16-2_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-trace-dram_only-float_16-4_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-trace-l1_only-bfloat_8-2_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-trace-l1_only-bfloat_8-4_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-trace-l1_only-float_16-2_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_2d[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-fabric_linear-trace-l1_only-float_16-4_device-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "Skipping unsupported case: Test is not meant for this number of devices",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-dram_only-bfloat_8-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.664
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-dram_only-float_16-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.936
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-l1_only-bfloat_8-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.187
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-non-trace-l1_only-float_16-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.996
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-trace-dram_only-bfloat_8-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.245
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-trace-dram_only-float_16-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.341
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-trace-l1_only-bfloat_8-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.66
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_4D_nightly_linear[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'trace_region_size': 90112}-rs_topology=Topology.Linear-trace-l1_only-float_16-num_devices=4-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.321
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-non-trace-dram_only-bfloat_8-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.903
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-non-trace-dram_only-bfloat_8-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 7.368
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-non-trace-dram_only-float_16-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.998
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-non-trace-dram_only-float_16-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.322
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-non-trace-l1_only-bfloat_8-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.003
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-non-trace-l1_only-bfloat_8-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 8.385
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-non-trace-l1_only-float_16-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.447
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-non-trace-l1_only-float_16-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.429
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-trace-dram_only-bfloat_8-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.454
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-trace-dram_only-bfloat_8-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.331
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-trace-dram_only-float_16-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.207
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-trace-dram_only-float_16-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.317
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-trace-l1_only-bfloat_8-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.894
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-trace-l1_only-bfloat_8-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.641
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-trace-l1_only-float_16-rs_input_shape=[1, 1, 128, 256]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.708
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring[silicon_arch_name=blackhole-silicon_arch_blackhole=True-num_buffers_per_channel=8-num_workers_per_link=2-chunks_per_sync=2-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-trace-l1_only-float_16-rs_input_shape=[1, 1, 128, 512]-dim=3-layout=Layout.TILE-2_links]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.414
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-no_persistent_interm-bfloat_8-batch2_dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.593
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-no_persistent_interm-bfloat_8-dim2-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.871
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-no_persistent_interm-bfloat_8-dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.443
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-no_persistent_interm-float_16-batch2_dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.72
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-no_persistent_interm-float_16-dim2-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.781
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-no_persistent_interm-float_16-dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.063
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_contiguous_interm-bfloat_8-batch2_dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.55
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_contiguous_interm-bfloat_8-dim2-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.356
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_contiguous_interm-bfloat_8-dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.329
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_contiguous_interm-float_16-batch2_dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.5
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_contiguous_interm-float_16-dim2-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.73
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_contiguous_interm-float_16-dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.666
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_tiled_interm-bfloat_8-batch2_dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.472
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_tiled_interm-bfloat_8-dim2-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.959
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_tiled_interm-bfloat_8-dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.096
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_tiled_interm-float_16-batch2_dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.726
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_tiled_interm-float_16-dim2-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.68
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_reduce_scatter_apc::test_rs_row_nightly_ring_intermediate_staging[silicon_arch_name=blackhole-silicon_arch_blackhole=True-device_params={'fabric_config': FabricConfig.FABRIC_1D_RING, 'trace_region_size': 90112}-rs_topology=Topology.Ring-dram_only-persistent_tiled_interm-float_16-dim3-1_link]": {
+   "file": "pytest_431262_1793742479567451708.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.558
+  }
+ }
+}

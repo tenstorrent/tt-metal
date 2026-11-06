@@ -1,0 +1,26 @@
+# Report refresh 2 (2026-11-06, fabric_exp/report/refresh/mk_rf2_yamls.py): fused write + atomic (fused_atomic_inc, the stock test infra's default flush), benchmark mode only, at 1,024 / 4,096 / 4,352 B; 200G row as the matrix's 1-hop write cell: GlxNeighborExchange (pr_glx_nx_sweep.yaml).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxNeighborExchange
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - fused_atomic_inc
+    size:
+    - 1024
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1

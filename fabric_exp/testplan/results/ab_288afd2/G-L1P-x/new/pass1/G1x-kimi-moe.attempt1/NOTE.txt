@@ -1,0 +1,1 @@
+both cases skipped (conftest TorusXY guard: no TT_MESH_GRAPH_DESC_PATH / PREFILL_TORUS_XY_CERTIFIED), job 172972 on bh-glx-120-c08u14; rerun with the env

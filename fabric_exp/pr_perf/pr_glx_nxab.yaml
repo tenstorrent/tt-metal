@@ -1,0 +1,26 @@
+# 200G NeighborExchange A/B (mk_pr_gap_yamls.py): pr_glx_nx_sweep.yaml's row at 1 link, 3072 / 4096 / 4352 B.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxNeighborExchange
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1

@@ -1,0 +1,154 @@
+
+== A_on (baseline: off arm); low-rate routers per write iteration:
+   slow    28 iterations: 1 low: 1, 2 low: 1, 3 low: 1, 4 low: 2, 5 low: 1, 6 low: 1, 7 low: 4, 8 low: 2, 9 low: 2, 10 low: 1, 11 low: 1, 12 low: 2, 14 low: 2, 15 low: 1, 16 low: 1, 18 low: 1, 20 low: 1, 21 low: 1, 22 low: 1, 23 low: 1
+   normal  68 iterations: 0 low: 61, 1 low: 2, 2 low: 1, 4 low: 1, 5 low: 2, 6 low: 1
+   CSV row (chip 7 W, includes the end sync with chips 3 and 6) against the low routers' source chips:
+      slow  : a low router on chip 7/3/6: 28; low routers only elsewhere: 0; none: 0
+      normal: a low router on chip 7/3/6: 0; low routers only elsewhere: 7; none: 61
+   e.g. slow it 21 R02_size_4096_ntype_unicast_write_num_links_2: c0/e4->W c1/e7 P1 T +4.7%; c0/e5->E c2/e6 P1 T +4.7%; c0/e6->W c1/e5 P0 T +4.7%; c0/e7->E c2/e4 P0 T +4.7%; c0/e8->S c4/e11 P0 T +4.7%; c1/e7->E c0/e4 P1 R +4.7%; c1/e8->S c5/e11 P0 T +4.7%; c1/e10->S c5/e9 P1 T +4.7%; c2/e4->W c0/e7 P0 R +4.7%; c2/e5->E c3/e6 P0 T +4.7%; c3/e4->W c2/e7 P1 R +4.7%; c3/e6->W c2/e5 P0 R +4.7%; c3/e8->S c7/e11 P0 T +4.7%; c4/e4->W c5/e7 P0 T +4.7%; c4/e7->E c6/e4 P1 T +4.7%; c4/e9->N c0/e10 P1 R +4.7%; c6/e5->E c7/e6 P1 T +4.7%; c6/e6->W c4/e5 P0 R +4.7%; c6/e7->E c7/e4 P0 T +4.7%; c6/e11->N c2/e8 P0 R +4.7%; c7/e6->W c6/e5 P1 R +4.7%; c7/e9->N c3/e10 P1 R +4.7%
+   e.g. slow it 22 R02_size_4096_ntype_unicast_write_num_links_2: c0/e6->W c1/e5 P0 T +4.7%; c0/e8->S c4/e11 P0 T +4.7%; c1/e10->S c5/e9 P1 T +4.7%; c2/e4->W c0/e7 P0 R +4.7%; c2/e5->E c3/e6 P0 T +4.7%; c2/e6->W c0/e5 P1 R +4.7%; c3/e4->W c2/e7 P1 R +4.7%; c4/e11->N c0/e8 P0 R +4.7%; c5/e5->E c4/e6 P1 R +4.7%; c6/e4->W c4/e7 P1 R +4.7%; c7/e6->W c6/e5 P1 R +4.7%; c7/e11->N c3/e8 P0 R +4.7%
+   e.g. slow it 26 R03_size_2048_ntype_unicast_write_num_links_1: c0/e7->E c2/e4 P0 T +4.9%; c4/e4->W c5/e7 P0 T +4.9%; c4/e5->E c6/e6 P0 T +4.8%; c6/e7->E c7/e4 P0 T +4.9%; c6/e11->N c2/e8 P0 R +4.9%
+   e.g. slow it 27 R03_size_2048_ntype_unicast_write_num_links_2: c0/e5->E c2/e6 P1 T +4.7%; c0/e7->E c2/e4 P0 T +4.7%; c1/e5->E c0/e6 P0 R +4.7%; c1/e10->S c5/e9 P1 T +4.7%; c2/e5->E c3/e6 P0 T +4.7%; c2/e7->E c3/e4 P1 T +4.7%; c2/e10->S c6/e9 P1 T +4.7%; c4/e5->E c6/e6 P0 T +4.7%; c4/e6->W c5/e5 P1 T +4.7%; c5/e7->E c4/e4 P0 R +4.7%; c6/e4->W c4/e7 P1 R +4.7%; c6/e11->N c2/e8 P0 R +4.7%; c7/e6->W c6/e5 P1 R +4.7%; c7/e9->N c3/e10 P1 R +4.7%
+   e.g. slow it 28 R03_size_2048_ntype_unicast_write_num_links_2: c0/e5->E c2/e6 P1 T +4.7%; c0/e7->E c2/e4 P0 T +4.7%; c1/e7->E c0/e4 P1 R +4.7%; c3/e6->W c2/e5 P0 R +4.7%; c3/e8->S c7/e11 P0 T +4.7%; c4/e6->W c5/e5 P1 T +4.7%; c6/e9->N c2/e10 P1 R +4.7%; c7/e4->W c6/e7 P0 R +4.7%; c7/e9->N c3/e10 P1 R +4.7%
+   e.g. slow it 31 R03_size_4096_ntype_unicast_write_num_links_1: c0/e7->E c2/e4 P0 T +4.9%; c4/e4->W c5/e7 P0 T +4.9%; c6/e7->E c7/e4 P0 T +4.9%; c6/e11->N c2/e8 P0 R +4.9%
+   routers by share of slow iterations at low rate (low in slow / slow; low in normal / normal):
+      c1/e7->E c0/e4 P1 R                 12/ 18     0/ 30
+      c7/e9->N c3/e10 P1 R                10/ 18     0/ 30
+      c4/e4->W c5/e7 P0 T                 14/ 28     2/ 68
+      c0/e7->E c2/e4 P0 T                 14/ 28     3/ 68
+      c4/e6->W c5/e5 P1 T                  9/ 18     1/ 30
+      c7/e6->W c6/e5 P1 R                  9/ 18     0/ 30
+      c5/e9->N c1/e10 P1 R                 8/ 18     1/ 30
+      c3/e4->W c2/e7 P1 R                  8/ 18     0/ 30
+      c0/e5->E c2/e6 P1 T                  8/ 18     0/ 30
+      c1/e10->S c5/e9 P1 T                 8/ 18     0/ 30
+
+== A_off (baseline: own iterations); low-rate routers per write iteration:
+   normal  96 iterations: 0 low: 96
+   CSV row (chip 7 W, includes the end sync with chips 3 and 6) against the low routers' source chips:
+      slow  : a low router on chip 7/3/6: 0; low routers only elsewhere: 0; none: 0
+      normal: a low router on chip 7/3/6: 0; low routers only elsewhere: 0; none: 96
+   routers by share of slow iterations at low rate (low in slow / slow; low in normal / normal):
+      c6/e11->N c2/e8 P0 R                 0/  0     0/ 96
+      c6/e7->E c7/e4 P0 T                  0/  0     0/ 96
+      c6/e6->W c4/e5 P0 R                  0/  0     0/ 96
+      c4/e11->N c0/e8 P0 R                 0/  0     0/ 96
+      c4/e5->E c6/e6 P0 T                  0/  0     0/ 96
+      c4/e4->W c5/e7 P0 T                  0/  0     0/ 96
+      c7/e11->N c3/e8 P0 R                 0/  0     0/ 96
+      c7/e4->W c6/e7 P0 R                  0/  0     0/ 96
+      c5/e11->N c1/e8 P0 R                 0/  0     0/ 96
+      c5/e7->E c4/e4 P0 R                  0/  0     0/ 96
+
+== X1_on (baseline: off arm); low-rate routers per write iteration:
+   slow    80 iterations: 1 low: 80
+   normal 560 iterations: 0 low: 560
+   CSV row (chip 7 W, includes the end sync with chips 3 and 6) against the low routers' source chips:
+      slow  : a low router on chip 7/3/6: 18; low routers only elsewhere: 62; none: 0
+      normal: a low router on chip 7/3/6: 0; low routers only elsewhere: 0; none: 560
+   e.g. slow it 20 SeqNeighborExchangeR01_size_2048_ntype_unicast_write_num_links_2: c1/e8->S c5/e11 P0 T +4.9%
+   e.g. slow it 26 SeqNeighborExchangeR01_size_2048_ntype_unicast_write_num_links_2: c2/e5->E c3/e6 P0 T +4.3%
+   e.g. slow it 30 SeqNeighborExchangeR01_size_2048_ntype_unicast_write_num_links_2: c5/e11->N c1/e8 P0 R +4.9%
+   e.g. slow it 31 SeqNeighborExchangeR01_size_2048_ntype_unicast_write_num_links_2: c5/e7->E c4/e4 P0 R +4.3%
+   e.g. slow it 35 SeqNeighborExchangeR01_size_2048_ntype_unicast_write_num_links_2: c6/e11->N c2/e8 P0 R +4.9%
+   e.g. slow it 36 SeqNeighborExchangeR01_size_2048_ntype_unicast_write_num_links_2: c6/e7->E c7/e4 P0 T +4.3%
+   routers by share of slow iterations at low rate (low in slow / slow; low in normal / normal):
+      c1/e8->S c5/e11 P0 T                 9/  9     0/ 23
+      c1/e5->E c0/e6 P0 R                 11/ 11     0/ 21
+      c2/e8->S c6/e11 P0 T                 6/  6     0/ 26
+      c2/e5->E c3/e6 P0 T                 14/ 14     0/ 18
+      c5/e11->N c1/e8 P0 R                 8/  8     0/ 24
+      c5/e7->E c4/e4 P0 R                 14/ 14     0/ 18
+      c6/e11->N c2/e8 P0 R                 7/  7     0/ 25
+      c6/e7->E c7/e4 P0 T                 11/ 11     0/ 21
+      c0/e8->S c4/e11 P0 T                 0/  0     0/ 32
+      c0/e7->E c2/e4 P0 T                  0/  0     0/ 32
+
+== X1_off (baseline: own iterations); low-rate routers per write iteration:
+   slow    10 iterations: 1 low: 10
+   normal 630 iterations: 0 low: 630
+   CSV row (chip 7 W, includes the end sync with chips 3 and 6) against the low routers' source chips:
+      slow  : a low router on chip 7/3/6: 3; low routers only elsewhere: 7; none: 0
+      normal: a low router on chip 7/3/6: 0; low routers only elsewhere: 0; none: 630
+   e.g. slow it 61 SeqNeighborExchangeR01_size_4096_ntype_unicast_write_num_links_2: c1/e5->E c0/e6 P0 R +4.7%
+   e.g. slow it 109 SeqNeighborExchangeR02_size_2048_ntype_unicast_write_num_links_2: c3/e6->W c2/e5 P0 R +4.8%
+   e.g. slow it 235 SeqNeighborExchangeR03_size_4096_ntype_unicast_write_num_links_2: c6/e11->N c2/e8 P0 R +4.7%
+   e.g. slow it 271 SeqNeighborExchangeR04_size_2048_ntype_unicast_write_num_links_2: c5/e7->E c4/e4 P0 R +4.8%
+   e.g. slow it 385 SeqNeighborExchangeR05_size_4096_ntype_unicast_write_num_links_2: c2/e8->S c6/e11 P0 T +4.7%
+   e.g. slow it 391 SeqNeighborExchangeR05_size_4096_ntype_unicast_write_num_links_2: c5/e7->E c4/e4 P0 R +4.7%
+   routers by share of slow iterations at low rate (low in slow / slow; low in normal / normal):
+      c1/e5->E c0/e6 P0 R                  1/  1     0/ 31
+      c2/e8->S c6/e11 P0 T                 2/  2     0/ 30
+      c2/e4->W c0/e7 P0 R                  2/  2     0/ 30
+      c3/e6->W c2/e5 P0 R                  1/  1     0/ 31
+      c5/e7->E c4/e4 P0 R                  2/  2     0/ 30
+      c6/e11->N c2/e8 P0 R                 2/  2     0/ 30
+      c1/e8->S c5/e11 P0 T                 0/  0     0/ 32
+      c0/e8->S c4/e11 P0 T                 0/  0     0/ 32
+      c0/e7->E c2/e4 P0 T                  0/  0     0/ 32
+      c0/e6->W c1/e5 P0 T                  0/  0     0/ 32
+
+== grouping of low routers within an iteration (all runs, write iterations):
+   dst chip: all inbound low: 6
+   dst chip: some inbound low: 264
+   iterations with low routers: 125
+   iterations: all active routers low: 0
+   iterations: low routers within 0.3% of each other: 125
+   link: reverse also low: 98
+   link: reverse not low: 311
+   src chip: all low: 5
+   src chip: some low: 256
+
+== router delta levels (% above baseline, write iterations, all runs): per size / num_links
+   size 2048 L1: +0%:1246, +5%:34
+   size 2048 L2: +0%:2413, +4%:27, +5%:120
+   size 4096 L1: +0%:1242, +5%:38
+   size 4096 L2: +0%:2370, +4%:23, +5%:167
+
+== pooled census (all runs): router, low in slow / slow, low in normal / normal, runs where low in >= half the slow
+   c6/e7->E c7/e4 P0 T                  22/  39 ( 56.4%)      0/ 217 ( 0.0%)   1/2
+   c7/e9->N c3/e10 P1 R                 10/  18 ( 55.6%)      0/ 110 ( 0.0%)   1/1
+   c2/e5->E c3/e6 P0 T                  23/  42 ( 54.8%)      1/ 214 ( 0.5%)   1/2
+   c6/e11->N c2/e8 P0 R                 19/  37 ( 51.4%)      0/ 219 ( 0.0%)   2/3
+   c4/e4->W c5/e7 P0 T                  14/  28 ( 50.0%)      2/ 228 ( 0.9%)   1/1
+   c5/e7->E c4/e4 P0 R                  22/  44 ( 50.0%)      0/ 212 ( 0.0%)   2/3
+   c0/e7->E c2/e4 P0 T                  14/  28 ( 50.0%)      3/ 228 ( 1.3%)   1/1
+   c4/e6->W c5/e5 P1 T                   9/  18 ( 50.0%)      1/ 110 ( 0.9%)   1/1
+   c7/e6->W c6/e5 P1 R                   9/  18 ( 50.0%)      0/ 110 ( 0.0%)   1/1
+   c2/e4->W c0/e7 P0 R                  14/  30 ( 46.7%)      2/ 226 ( 0.9%)   1/2
+   c2/e8->S c6/e11 P0 T                 16/  36 ( 44.4%)      1/ 220 ( 0.5%)   2/3
+   c0/e5->E c2/e6 P1 T                   8/  18 ( 44.4%)      0/ 110 ( 0.0%)   0/1
+   c1/e8->S c5/e11 P0 T                 16/  37 ( 43.2%)      1/ 219 ( 0.5%)   1/2
+   c6/e6->W c4/e5 P0 R                  12/  28 ( 42.9%)      0/ 228 ( 0.0%)   0/1
+   c3/e4->W c2/e7 P1 R                   8/  19 ( 42.1%)      0/ 109 ( 0.0%)   0/2
+   c1/e5->E c0/e6 P0 R                  16/  40 ( 40.0%)      2/ 216 ( 0.9%)   2/3
+   c1/e7->E c0/e4 P1 R                  12/  30 ( 40.0%)      0/  98 ( 0.0%)   1/3
+   c0/e6->W c1/e5 P0 T                  11/  28 ( 39.3%)      1/ 228 ( 0.4%)   0/1
+   c3/e10->S c7/e9 P1 T                  7/  18 ( 38.9%)      0/ 110 ( 0.0%)   0/1
+   c0/e4->W c1/e7 P1 T                   7/  18 ( 38.9%)      1/ 110 ( 0.9%)   0/1
+   c5/e11->N c1/e8 P0 R                 12/  36 ( 33.3%)      0/ 220 ( 0.0%)   1/2
+   c6/e4->W c4/e7 P1 R                   6/  18 ( 33.3%)      0/ 110 ( 0.0%)   0/1
+   c4/e9->N c0/e10 P1 R                  6/  18 ( 33.3%)      0/ 110 ( 0.0%)   0/1
+   c5/e9->N c1/e10 P1 R                  8/  26 ( 30.8%)      1/ 102 ( 1.0%)   0/2
+   c1/e10->S c5/e9 P1 T                  8/  27 ( 29.6%)      0/ 101 ( 0.0%)   0/2
+   c4/e11->N c0/e8 P0 R                  8/  28 ( 28.6%)      2/ 228 ( 0.9%)   0/1
+   c0/e8->S c4/e11 P0 T                  8/  28 ( 28.6%)      1/ 228 ( 0.4%)   0/1
+   c3/e6->W c2/e5 P0 R                   8/  29 ( 27.6%)      0/ 227 ( 0.0%)   1/2
+   c4/e5->E c6/e6 P0 T                   7/  28 ( 25.0%)      2/ 228 ( 0.9%)   0/1
+   c2/e6->W c0/e5 P1 R                   5/  20 ( 25.0%)      0/ 108 ( 0.0%)   0/2
+   c4/e7->E c6/e4 P1 T                   4/  18 ( 22.2%)      1/ 110 ( 0.9%)   0/1
+   c2/e7->E c3/e4 P1 T                   7/  32 ( 21.9%)      1/  96 ( 1.0%)   0/2
+   c3/e8->S c7/e11 P0 T                  5/  28 ( 17.9%)      0/ 228 ( 0.0%)   0/1
+   c5/e5->E c4/e6 P1 R                   6/  34 ( 17.6%)      0/  94 ( 0.0%)   0/3
+   c6/e5->E c7/e6 P1 T                   5/  29 ( 17.2%)      0/  99 ( 0.0%)   0/2
+   c2/e10->S c6/e9 P1 T                  3/  26 ( 11.5%)      0/ 102 ( 0.0%)   0/3
+   c6/e9->N c2/e10 P1 R                  3/  27 ( 11.1%)      0/ 101 ( 0.0%)   0/3
+   c0/e10->S c4/e9 P1 T                  2/  18 ( 11.1%)      1/ 110 ( 0.9%)   0/1
+   c7/e4->W c6/e7 P0 R                   3/  28 ( 10.7%)      0/ 228 ( 0.0%)   0/1
+   c7/e11->N c3/e8 P0 R                  2/  28 (  7.1%)      0/ 228 ( 0.0%)   0/1
+
+== overlap of each run's majority set (routers low in >= half its slow iterations): size, Jaccard vs the first
+   A_on            6  J=1.00  c0/e7->E c1/e7->E c4/e4->W c4/e6->W c7/e6->W c7/e9->N
+   A_off           0  J=0.00  
+   X1_on           8  J=0.00  c1/e5->E c1/e8->S c2/e5->E c2/e8->S c5/e11->N c5/e7->E c6/e11->N c6/e7->E
+   X1_off          6  J=0.00  c1/e5->E c2/e4->W c2/e8->S c3/e6->W c5/e7->E c6/e11->N

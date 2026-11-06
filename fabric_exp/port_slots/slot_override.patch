@@ -1,0 +1,163 @@
+diff --git a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+index 515a5482378..23cd1be49b4 100644
+--- a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
++++ b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+@@ -12,7 +12,11 @@
+ #include <tt_stl/assert.hpp>
+ #include <tt_stl/fmt.hpp>
+ #include <algorithm>
++#include <cstdio>
++#include <cstdlib>
+ #include <numeric>
++#include <optional>
++#include <string_view>
+ 
+ namespace tt::tt_fabric {
+ 
+@@ -129,6 +133,20 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
+         total_slot_count += vc_sender_slots + vc_receiver_slots;
+ 
+         log_trace(tt::LogFabric, "VC{} num_sender_buffer_slots: {}", vc, num_sender_buffer_slots_per_vc[vc]);
++        // LOCAL (fabric_exp/port_slots, never committed): the study's slot log.
++        if (std::getenv("TT_FABRIC_EXP_LOG_SLOTS") != nullptr && num_used_sender_channels_per_vc[vc] > 0) {
++            log_info(
++                tt::LogFabric,
++                "VC{} sender slots {} receiver slots {} (channel buffer {} B)",
++                vc,
++                std::vector<size_t>(
++                    num_sender_buffer_slots_per_vc[vc].begin(),
++                    num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc]),
++                std::vector<size_t>(
++                    num_receiver_buffer_slots_per_vc[vc].begin(),
++                    num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc]),
++                channel_buffer_size_bytes);
++        }
+         log_trace(
+             tt::LogFabric, "VC{} num_remote_sender_buffer_slots: {}", vc, num_remote_sender_buffer_slots_per_vc[vc]);
+         log_trace(tt::LogFabric, "VC{} num_receiver_buffer_slots: {}", vc, num_receiver_buffer_slots_per_vc[vc]);
+@@ -728,6 +746,125 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
+         num_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
+         num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
+     }
++
++    // LOCAL (fabric_exp/port_slots, never committed or pushed): the study's explicit slot rows, same semantics as
++    // the study tree's allocator. TT_FABRIC_EXP_SLOTS[_1D|_2D]=worker,forwarding,receiver on VC0-only fabrics;
++    // TT_FABRIC_EXP_SLOTS_VC1=worker,forwarding0,receiver0,forwarding1,receiver1[,worker2,receiver2] and
++    // TT_FABRIC_EXP_SLOTS_VC2=worker,forwarding0,receiver0,worker2,receiver2. No default rows: unset, the tier table.
++    // Study switch (fabric_exp, slot allocation): TT_FABRIC_EXP_SLOTS=worker,forwarding,receiver sets VC0's depths on
++    // VC0-only fabrics: the worker channel, every forwarding channel, the receiver channel. A worker of 0 takes every
++    // slot the others leave, up to MAX_CHANNEL_BUFFER_SLOTS. Every router gets the same depths, so the receiver depth
++    // matches at both ends of a link. TT_FABRIC_EXP_SLOTS_1D (Linear, Ring) and TT_FABRIC_EXP_SLOTS_2D (Mesh, Torus)
++    // set one topology family and take precedence, so a suite with both (the sanity yamls) can give each its own.
++    const bool exp_slots_2d = topology == Topology::Mesh || topology == Topology::Torus;
++    const char* exp_slots = std::getenv(exp_slots_2d ? "TT_FABRIC_EXP_SLOTS_2D" : "TT_FABRIC_EXP_SLOTS_1D");
++    if (exp_slots == nullptr) {
++        exp_slots = std::getenv("TT_FABRIC_EXP_SLOTS");
++    }
++    if (exp_slots != nullptr && options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
++        size_t worker = 0, forwarding = 0, receiver = 0;
++        TT_FATAL(
++            std::sscanf(exp_slots, "%zu,%zu,%zu", &worker, &forwarding, &receiver) == 3,
++            "TT_FABRIC_EXP_SLOTS={}: expected worker,forwarding,receiver",
++            exp_slots);
++        TT_FATAL(!vc1_present && !vc2_present, "TT_FABRIC_EXP_SLOTS is for VC0-only fabrics");
++        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
++        const size_t others = (num_used_sender_channels_per_vc[0] - 1) * forwarding +
++                              num_used_receiver_channels_per_vc[0] * receiver;
++        TT_FATAL(others < slot_capacity, "TT_FABRIC_EXP_SLOTS={}: no slots left for the worker", exp_slots);
++        if (worker == 0) {
++            worker = std::min(slot_capacity - others, MAX_CHANNEL_BUFFER_SLOTS);
++        }
++        TT_FATAL(
++            worker > 0 && forwarding > 0 && receiver > 0 && worker <= MAX_CHANNEL_BUFFER_SLOTS &&
++                forwarding <= MAX_CHANNEL_BUFFER_SLOTS && receiver <= MAX_CHANNEL_BUFFER_SLOTS &&
++                worker + others <= slot_capacity,
++            "TT_FABRIC_EXP_SLOTS={}: {} worker + {} other slots, capacity {}, at most {} per channel",
++            exp_slots,
++            worker,
++            others,
++            slot_capacity,
++            MAX_CHANNEL_BUFFER_SLOTS);
++        const uint32_t worker_channel = get_worker_connected_sender_channel();
++        num_sender_buffer_slots_per_vc[0].fill(forwarding);
++        num_remote_sender_buffer_slots_per_vc[0].fill(forwarding);
++        num_sender_buffer_slots_per_vc[0][worker_channel] = worker;
++        num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker;
++        num_receiver_buffer_slots_per_vc[0].fill(receiver);
++        num_remote_receiver_buffer_slots_per_vc[0].fill(receiver);
++    }
++
++    using StudyRow = std::array<size_t, 7>;
++    const auto parse_row = [](const char* name, const char* text, size_t fields, bool vc1) {
++        size_t v[7] = {};
++        TT_FATAL(
++            std::sscanf(text, "%zu,%zu,%zu,%zu,%zu,%zu,%zu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]) ==
++                static_cast<int>(fields),
++            "{}={}: expected {} depths",
++            name,
++            text,
++            fields);
++        // TT_FABRIC_EXP_SLOTS_VC2 has no VC1 fields: worker, forwarding0, receiver0, worker2, receiver2.
++        return vc1 ? StudyRow{v[0], v[1], v[2], v[3], v[4], v[5], v[6]} : StudyRow{v[0], v[1], v[2], 0, 0, v[3], v[4]};
++    };
++    const char* const row_switch = vc1_present ? "TT_FABRIC_EXP_SLOTS_VC1" : "TT_FABRIC_EXP_SLOTS_VC2";
++    const char* const row_text = std::getenv(row_switch);
++    std::optional<StudyRow> row;
++    if ((vc1_present || vc2_present) && options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
++        if (row_text != nullptr) {
++            row = parse_row(row_switch, row_text, vc1_present && vc2_present ? 7 : 5, vc1_present);
++        }
++    }
++    if (row.has_value()) {
++        const auto [worker_in, forwarding0, receiver0, forwarding1, receiver1, worker2, receiver2] = *row;
++        const char* const name = row_text != nullptr ? row_switch : "study slot row";
++        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
++        const size_t others = (num_used_sender_channels_per_vc[0] - 1) * forwarding0 +
++                              num_used_receiver_channels_per_vc[0] * receiver0 +
++                              num_used_sender_channels_per_vc[1] * forwarding1 +
++                              num_used_receiver_channels_per_vc[1] * receiver1 +
++                              num_used_sender_channels_per_vc[2] * worker2 +
++                              num_used_receiver_channels_per_vc[2] * receiver2;
++        TT_FATAL(others < slot_capacity, "{}: no slots left for the worker", name);
++        const size_t worker = worker_in != 0 ? worker_in : std::min(slot_capacity - others, MAX_CHANNEL_BUFFER_SLOTS);
++        const size_t present[7] = {
++            1, 1, 1, vc1_present ? 1u : 0u, vc1_present ? 1u : 0u, vc2_present ? 1u : 0u, vc2_present ? 1u : 0u};
++        const size_t depths[7] = {worker, forwarding0, receiver0, forwarding1, receiver1, worker2, receiver2};
++        for (size_t i = 0; i < 7; ++i) {
++            TT_FATAL(
++                present[i] == 0 || (depths[i] > 0 && depths[i] <= MAX_CHANNEL_BUFFER_SLOTS),
++                "{}: every depth of a present VC must be 1 to {}",
++                name,
++                MAX_CHANNEL_BUFFER_SLOTS);
++        }
++        TT_FATAL(
++            worker + others <= slot_capacity,
++            "{}: {} worker + {} other slots, capacity {}",
++            name,
++            worker,
++            others,
++            slot_capacity);
++        const uint32_t worker_channel = get_worker_connected_sender_channel();
++        num_sender_buffer_slots_per_vc[0].fill(forwarding0);
++        num_remote_sender_buffer_slots_per_vc[0].fill(forwarding0);
++        num_sender_buffer_slots_per_vc[0][worker_channel] = worker;
++        num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker;
++        num_receiver_buffer_slots_per_vc[0].fill(receiver0);
++        num_remote_receiver_buffer_slots_per_vc[0].fill(receiver0);
++        if (vc1_present) {
++            num_sender_buffer_slots_per_vc[1].fill(forwarding1);
++            num_remote_sender_buffer_slots_per_vc[1].fill(forwarding1);
++            num_receiver_buffer_slots_per_vc[1].fill(receiver1);
++            num_remote_receiver_buffer_slots_per_vc[1].fill(receiver1);
++        }
++        if (vc2_present) {
++            num_sender_buffer_slots_per_vc[2].fill(worker2);
++            num_remote_sender_buffer_slots_per_vc[2].fill(worker2);
++            num_receiver_buffer_slots_per_vc[2].fill(receiver2);
++            num_remote_receiver_buffer_slots_per_vc[2].fill(receiver2);
++        }
++    }
++
+ }
+ 
+ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {

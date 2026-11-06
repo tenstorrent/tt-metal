@@ -1,0 +1,10 @@
+case,check,value
+wan2_2_1xGLX-q288-k512,Ring joint SDPA perf check,17.169
+mla_100k-q160-k320,Ring joint SDPA perf check,9.045
+gemma4_global-q64-k256-chunk2048-ksplit3-unseg,Gemma 4 chunked perf check,5.591
+gemma4_global-q128-k256-chunk4096-ksplit3-unseg,Gemma 4 chunked perf check,7.345
+gemma4_global-q96-k256-chunk8192-ksplit1-seg,Gemma 4 chunked perf check,16.156
+kimi50k-q32-k640-chunk5120-fresh_kv,ring_mla chunked 50k+5k perf check,5.504
+kimi_k3-q32-k640-chunk5120-fresh_kv,ring_mla chunked 50k+5k perf check,8.449
+kimi50k,split-KV,71.08
+kimi_k3,split-KV,69.38

@@ -1,0 +1,8 @@
+case,name,part,value
+dense/warm,,,10.027
+dense/cold,,,49.053
+dense/long,,,78.407
+,ATTN_RES_PERF,boundary,1757.2534270584583
+,ATTN_RES_PERF,boundary,2802.4459024891257
+,ATTN_RES_PERF,ordinary,141.93363313097507
+,ATTN_RES_PERF,ordinary,132.14089267421514

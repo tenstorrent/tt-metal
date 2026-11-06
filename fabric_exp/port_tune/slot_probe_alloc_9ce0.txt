@@ -1,0 +1,15 @@
+== bh_vc1: 96 router builds
+   active_erisc               x 48  TX 15, 11, 11, 11, 7, 7, 7      RX 8, 4
+   subordinate_active_erisc   x 48  TX 15, 11, 11, 11, 7, 7, 7      RX 8, 4
+== bh_2d: 80 router builds
+   active_erisc               x 40  TX 17, 16, 16, 16               RX 16
+   subordinate_active_erisc   x 40  TX 17, 16, 16, 16               RX 16
+== bh_1d: 72 router builds
+   active_erisc               x 36  TX 26, 25                       RX 32
+   subordinate_active_erisc   x 36  TX 26, 25                       RX 32
+== bh_ring: 72 router builds
+   active_erisc               x 36  TX 26, 25                       RX 32
+   subordinate_active_erisc   x 36  TX 26, 25                       RX 32
+== bh_torus: 96 router builds
+   active_erisc               x 48  TX 17, 16, 16, 16               RX 16
+   subordinate_active_erisc   x 48  TX 17, 16, 16, 16               RX 16

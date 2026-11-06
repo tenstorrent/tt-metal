@@ -1,0 +1,374 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 44,
+  "PERF_WINDOW": 0,
+  "SKIP": 16
+ },
+ "files": [
+  "unit_tests_ttnn_udm.xml"
+ ],
+ "tests": {
+  "MeshDevice1x4Fabric2DUDMFixture::TestMeshWidthShardedAdd2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestMeshWidthShardedAdd2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestMeshWidthShardedAdd3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestMeshWidthShardedAdd4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestMeshWidthShardedCopy2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestMeshWidthShardedCopy2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.888
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestMeshWidthShardedCopy3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestMeshWidthShardedCopy4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestWidthReduction2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestWidthReduction2D_Medium": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestWidthReduction2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestWidthReductionInterleaved2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestWidthReductionInterleaved2D_Medium": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestWidthReductionInterleaved2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestWidthReductionInterleaved3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice1x4Fabric2DUDMFixture::TestWidthReductionInterleaved4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:336\nSkipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: System has 8 independent Blackhole devices but test o",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedAdd2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.256
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedAdd2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.342
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedAdd3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.373
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedAdd4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.261
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedCopy2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.599
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedCopy2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.261
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedCopy3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.202
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedCopy4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.387
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedSwappedAdd2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.0
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedSwappedAdd2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.28
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedSwappedAdd3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.388
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedSwappedAdd4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.663
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedSwappedCopy2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.477
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedSwappedCopy2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.183
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedSwappedCopy3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.186
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshBlockShardedSwappedCopy4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.398
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshHeightShardedAdd2D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.626
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshHeightShardedAdd3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.741
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshHeightShardedCopy2D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.19
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshHeightShardedCopy3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.238
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshHeightShardedSwappedAdd2D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.391
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshHeightShardedSwappedAdd3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.711
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshHeightShardedSwappedCopy2D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.19
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshHeightShardedSwappedCopy3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.243
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshWidthSharded2DAdd2D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.359
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshWidthSharded2DAdd3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.715
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshWidthSharded2DCopy2D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.504
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshWidthSharded2DCopy3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.22
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshWidthShardedSwappedAdd2D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.313
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshWidthShardedSwappedAdd3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.709
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshWidthShardedSwappedCopy2D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.551
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestMeshWidthShardedSwappedCopy3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.562
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReduction2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.816
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReduction2D_Medium": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.314
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReduction2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.742
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleaved2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.432
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleaved2D_Medium": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.791
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleaved2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.277
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleaved3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.391
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleaved4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.93
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleavedSwapped2D_Large": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.22
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleavedSwapped2D_Small": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.372
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleavedSwapped3D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.36
+  },
+  "MeshDevice2x4Fabric2DUDMFixture::TestWidthReductionInterleavedSwapped4D": {
+   "file": "unit_tests_ttnn_udm.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.948
+  }
+ }
+}

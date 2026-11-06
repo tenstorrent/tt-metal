@@ -1,0 +1,1 @@
+for s in 2048 4096 4352 8192 15232; do python models/demos/deepseek_v3_b1/scripts/ccl_trace_perf_matrix.py --ccl all_gather --max-payload-sizes $s --output-dir $REGRESS_STEP_DIR/ccl; done

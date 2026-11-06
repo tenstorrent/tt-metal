@@ -1,0 +1,96 @@
+# QB2 torus regression A/B (alab_runs.sh; local, never committed): one 2x2 of the P150x8 (TT_VISIBLE_DEVICES=0,1,2,3,
+# MGD p300_x2_mesh_graph_descriptor.textproto: 2x2, 2 channels), 14400 B payload (the CI test's 14 * 1024 + 64; slots of
+# 14,496 B), 1 link. Device ids row-major: [0, 0] [0, 1] top row, [0, 2] [0, 3] bottom row.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  # Torus XY (deadlock avoidance on): two flows, one hop east-west, in both directions
+  - name: "Torus1HopEWBidir"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      max_packet_size: 14400
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [14400]
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+
+  # Torus XY: every chip sends to both its neighbors on the 4-chip ring 0-1-3-2-0 at once (eight flows, one hop each),
+  # the closest pattern to a ring reduce-scatter here
+  - name: "TorusRingNeighbors"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      max_packet_size: 14400
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [14400]
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 3]
+      - device: [0, 3]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 0]
+
+  # Control: FABRIC_2D mesh (no deadlock avoidance), the same two-flow bidirectional one-hop write
+  - name: "Mesh1HopEWBidir"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 14400
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [14400]
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 0]

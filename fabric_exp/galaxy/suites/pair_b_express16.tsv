@@ -1,0 +1,3 @@
+# config	label	form	timeout_s	env	yaml
+express16	ex_mesh_sanity	express16	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+express16	ex_express	express16	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml

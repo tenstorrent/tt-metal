@@ -1,0 +1,51 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "blaze_models_prefill_tests.yaml",
+  "mirrored": true,
+  "name": "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism",
+  "sku": "bh_sc1_high_power"
+ },
+ "ci_timeout_s": 1800,
+ "data_inodes_at_submit": "5627132",
+ "data_inodes_free": 6931869,
+ "deviation": "the CI entry's perf lines only (its accuracy / determinism lines dropped), no mpirun wrapper (one host), LOGURU_LEVEL left at INFO (CI sets ERROR, which hides the measured values). The checks skip on hosts below 130 W TDP (no override): all-SKIP = NOT measurable here",
+ "duration_s": 766.5,
+ "end": "2026-11-04T09:56:37+00:00",
+ "failed_lines": [],
+ "group": "G-L1P-x",
+ "jit_cache": "/tmp/aagarwal-regress/172962/cache/new_288afd2-new",
+ "junit_files": 4,
+ "label": "ab_288afd2",
+ "metrics": 9,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u08",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172962",
+ "start": "2026-11-04T09:43:50+00:00",
+ "status": "PASS",
+ "step": "G1x-rj-sdpa",
+ "step_env": null,
+ "telemetry": "off (prod default)",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 9,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "timeout_note": null,
+ "timeout_s": 1800,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

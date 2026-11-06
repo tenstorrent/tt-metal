@@ -1,0 +1,44 @@
+--- a/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp
++++ b/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_speedy_path.hpp
+@@ -168,6 +168,7 @@
+                 busy = SenderLinkTransport::is_busy();
+             };
+             SenderLinkTransport::remote_update_ptr_val<to_receiver_pkts_sent_id>(1U);
++            slack_study::spin<slack_study::tx_spin_cycles>();  // LOCAL slack study: E0, per packet sent
+         }
+         sender_state.sender_amort_counter++;
+         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+@@ -290,6 +291,7 @@
+         wr_sent_counter.increment();
+         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+         receiver_state.unacked_sends++;
++        slack_study::spin<slack_study::rx_spin_cycles>();  // LOCAL slack study: E1, per packet received and handled
+     }
+ 
+     // --- Ping-pong TRID flush ---
+--- a/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
++++ b/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
+@@ -36,6 +36,7 @@
+ #include "api/alignment.h"
+ #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
+ #include "hostdevcommon/fabric_telemetry_msgs.h"
++#include "tt_metal/fabric/hw/inc/edm_fabric/slack_study_spin.hpp"  // LOCAL slack study, never committed
+ #ifdef FABRIC_2D
+ // The router re-encodes an intermesh packet's route when it lands, via
+ // fabric_set_2d_intermesh_landing_route(). Include its declaration directly and only for the 2D call site.
+@@ -479,6 +480,7 @@
+     while (SenderLinkTransport::is_busy()) {
+     };
+     SenderLinkTransport::remote_update_ptr_val<to_receiver_pkts_sent_id>(1U);
++    slack_study::spin<slack_study::tx_spin_cycles>();  // LOCAL slack study: E0, per packet sent
+ }
+ 
+ /////////////////////////////////////////////
+@@ -1516,6 +1518,7 @@
+             if constexpr (!enable_first_level_ack) {
+                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+             }
++            slack_study::spin<slack_study::rx_spin_cycles>();  // LOCAL slack study: E1, per packet received and handled
+         }
+     }
+ 

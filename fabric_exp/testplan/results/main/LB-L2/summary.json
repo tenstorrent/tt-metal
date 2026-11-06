@@ -1,0 +1,81 @@
+{
+ "group": "LB-L2",
+ "label": "main",
+ "updated": "2026-11-04T05:47:07+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B2-dp-k3",
+   "status": "PASS",
+   "duration_s": 95.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 5,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": 7,
+   "reason": null,
+   "start": "2026-11-04T05:45:32+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B2-dp-perf-ds",
+   "status": "NOT_RUN",
+   "duration_s": 0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": null,
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": "NOT RUN: needs /mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528 (absent on a09u32 and in /mnt/models/huggingface); run it in CI (blackhole-e2e-tests, model disaggregated_prefill)",
+   "start": "2026-11-03T23:03:19+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B2-dp-perf-kda",
+   "status": "PERF_WINDOW",
+   "duration_s": 65.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 1,
+    "PERF_WINDOW": 2,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": 3,
+   "reason": null,
+   "start": "2026-11-04T05:42:42+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B2-dp-perf-m4",
+   "status": "PERF_WINDOW",
+   "duration_s": 105.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 3,
+    "PERF_WINDOW": 1,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": 2,
+   "reason": null,
+   "start": "2026-11-04T05:43:47+00:00"
+  }
+ ]
+}

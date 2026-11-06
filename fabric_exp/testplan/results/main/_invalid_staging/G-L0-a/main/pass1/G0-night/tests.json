@@ -1,0 +1,1128 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "PASS": 0,
+  "SKIP": 186
+ },
+ "files": [
+  "fabric_unit_tests.xml"
+ ],
+ "tests": {
+  "NightlyFabric1DFixture::TestEDMConnectionStressTestQuick": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:2061\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3837\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3840\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3846\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3888\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3892\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3898\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedScatterWriteAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3906\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedScatterWriteAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3910\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocFusedScatterWriteAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3916\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3871\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3874\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3880\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3854\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3857\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3863\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3820\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3823\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricMulticastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3829\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricSparseMulticastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3942\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricSparseMulticastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3950\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricSparseMulticastNocUnicastWriteSingleHop": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3946\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3558\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3561\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3567\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3612\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3615\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3621\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedScatterWriteAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3630\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedScatterWriteAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3634\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocFusedScatterWriteAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3640\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3594\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3597\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3603\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3576\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3579\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3585\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3540\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3543\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DFixture::TestLinearFabricUnicastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_1d_fabric.cpp:3549\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric1DTensixFixture::TestLinearFabricMulticastNocMux": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/common/fabric_fixture.hpp:222\nTensix fixture tests are not supported on Galaxy systems",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::Test2DMCast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:498\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1803\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN1HopE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1830\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN1HopW7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1878\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN2HopE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1842\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN2HopsE3HopsW4Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1973\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN2HopsE4HopsW3Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1966\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN3HopsE3HopsW4Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1987\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastN3HopsE4HopsW3Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1980\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS1HopE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1854\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS1HopW7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1890\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS2HopE7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1866\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS2HopsE3HopsW4Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1945\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS3HopsE3HopsW4Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1959\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastS3HopsE4HopsW3Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1952\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLineMcastW7Hops": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1818\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1699\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1708\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1717\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1729\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1738\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1747\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1639\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1648\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1657\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1669\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1678\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1687\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1609\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1618\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricMulticastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1627\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1556\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1561\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1570\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1583\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1588\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1597\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1502\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1507\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1516\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1529\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1534\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1543\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1476\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1481\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestLinearFabricUnicastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1490\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:599\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:610\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:621\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:632\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocFusedScatterWriteAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:643\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocFusedScatterWriteAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:654\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocInlineUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:555\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocInlineUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:566\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocScatterUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:577\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocScatterUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:588\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:543\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricMulticastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:532\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1386\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1392\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1402\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1415\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1421\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1431\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedScatterWriteAtomicInc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1444\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedScatterWriteAtomicIncMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1453\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocFusedScatterWriteAtomicIncWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1463\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocInlineWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:665\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocInlineWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:671\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocInlineWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:681\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocScatterWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1357\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocScatterWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1363\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocScatterWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1373\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocUnicastWrite": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:506\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocUnicastWriteMultiDir": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:511\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DFixture::TestMeshFabricUnicastNocUnicastWriteWithState": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:521\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DTensixFixture::TestMeshFabricMulticastNocMux": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/common/fabric_fixture.hpp:222\nTensix fixture tests are not supported on Galaxy systems",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode0ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1098\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode0ForwardSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1111\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1125\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1149\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode1ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1138\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1163\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1187\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode2ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1174\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode3ForwardSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1214\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode3ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1201\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode4ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1228\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode4ForwardNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1241\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1255\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1279\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode5ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1268\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1293\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1317\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode6ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1304\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode7ForwardNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1344\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricMuxToMuxNode7ForwardWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1331\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:827\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:869\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:875\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:878\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricReadWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:872\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncAllToAll": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1055\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncAllToAllDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1077\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:815\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:855\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:861\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:864\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastAtomicIncWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:858\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteAllToAll": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1051\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteAllToAllDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1070\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:803\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:841\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:847\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:850\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastInlineWriteWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:844\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllToAll": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1059\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllToAllDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1084\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllWorkerCoords": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1005\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadAllWorkerCoordsDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1030\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode0": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:940\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:945\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode2": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:950\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode3": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:955\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode4": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:960\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode5": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:965\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode6": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:970\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastReadFromNode7": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:975\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllToAll": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1047\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllToAllDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1063\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllWorkerCoords": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:994\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteAllWorkerCoordsDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:1016\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteDualRisc": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:791\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteEast": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:777\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode0": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:883\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:890\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode2": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:897\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode3": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:904\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode4": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:911\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode5": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:918\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode6": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:925\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteFromNode7": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:932\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteNorth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:783\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteSouth": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:786\n",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "NightlyFabric2DUDMModeFixture::TestUDMFabricUnicastWriteWest": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_data_movement/test_basic_fabric_apis.cpp:780\n",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

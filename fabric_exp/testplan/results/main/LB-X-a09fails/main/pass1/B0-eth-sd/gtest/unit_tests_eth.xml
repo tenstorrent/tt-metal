@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="2" failures="2" disabled="0" errors="0" time="2.178" timestamp="2026-11-04T00:20:39.003" name="AllTests">
+  <testsuite name="MeshDeviceFixture" tests="2" failures="2" disabled="0" skipped="0" errors="0" time="2.178" timestamp="2026-11-04T00:20:39.003">
+    <testcase name="ActiveEthKernelsSendInterleavedBufferAllConnectedChips" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_buffer_movement_kernels.cpp" line="563" status="run" result="completed" time="1.704" timestamp="2026-11-04T00:20:39.003" classname="MeshDeviceFixture">
+      <failure message="unknown file&#x0A;C++ exception with description &quot;TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/llrt/tt_cluster.cpp:1569: ethernet_connections_within_cluster.contains(std::get&lt;0&gt;(eth_core)) and ethernet_connections_within_cluster.at(std::get&lt;0&gt;(eth_core)).contains(eth_chan)&#x0A;info:&#x0A;Chip 0 logical eth core 0-9 connects to a remote mmio device&#x0A;backtrace:&#x0A; --- /data/aagarwal/regress/trees/main_d2bd12f/build/lib/libtt_metal.so(+0xe1f5d8) [0x7baf082665d8]&#x0A; --- tt::Cluster::get_connected_ethernet_core(std::tuple&lt;int, tt::xy_pair&gt;) const&#x0A; --- tt::tt_metal::Device::get_connected_ethernet_core(tt::xy_pair) const&#x0A; --- tt::tt_metal::MeshDeviceFixture_ActiveEthKernelsSendInterleavedBufferAllConnectedChips_Test::TestBody()&#x0A; --- void testing::internal::HandleExceptionsInMethodIfSupported&lt;testing::Test, void&gt;(testing::Test*, void (testing::Test::*)(), char const*)&#x0A; --- testing::Test::Run()&#x0A; --- testing::TestInfo::Run()&#x0A; --- testing::TestSuite::Run()&#x0A; --- testing::internal::UnitTestImpl::RunAllTests()&#x0A; --- bool testing::internal::HandleExceptionsInMethodIfSupported&lt;testing::internal::UnitTestImpl, bool&gt;(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*)&#x0A; --- testing::UnitTest::Run()&#x0A; --- ./build/test/tt_metal/unit_tests_eth(main+0x3d) [0x64ee3957379d]&#x0A; --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7baf06429d90]&#x0A; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7baf06429e40]&#x0A; --- ./build/test/tt_metal/unit_tests_eth(_start+0x25) [0x64ee395137f5]&#x0A;&quot; thrown in the test body." type=""><![CDATA[unknown file
+C++ exception with description "TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/llrt/tt_cluster.cpp:1569: ethernet_connections_within_cluster.contains(std::get<0>(eth_core)) and ethernet_connections_within_cluster.at(std::get<0>(eth_core)).contains(eth_chan)
+info:
+Chip 0 logical eth core 0-9 connects to a remote mmio device
+backtrace:
+ --- /data/aagarwal/regress/trees/main_d2bd12f/build/lib/libtt_metal.so(+0xe1f5d8) [0x7baf082665d8]
+ --- tt::Cluster::get_connected_ethernet_core(std::tuple<int, tt::xy_pair>) const
+ --- tt::tt_metal::Device::get_connected_ethernet_core(tt::xy_pair) const
+ --- tt::tt_metal::MeshDeviceFixture_ActiveEthKernelsSendInterleavedBufferAllConnectedChips_Test::TestBody()
+ --- void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*)
+ --- testing::Test::Run()
+ --- testing::TestInfo::Run()
+ --- testing::TestSuite::Run()
+ --- testing::internal::UnitTestImpl::RunAllTests()
+ --- bool testing::internal::HandleExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*)
+ --- testing::UnitTest::Run()
+ --- ./build/test/tt_metal/unit_tests_eth(main+0x3d) [0x64ee3957379d]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7baf06429d90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7baf06429e40]
+ --- ./build/test/tt_metal/unit_tests_eth(_start+0x25) [0x64ee395137f5]
+" thrown in the test body.]]></failure>
+    </testcase>
+    <testcase name="ActiveEthKernelsDirectSendAllConnectedChips" file="/home/aagarwal/tt-metal-main/tests/tt_metal/tt_metal/eth/test_erisc_app_direct_send.cpp" line="612" status="run" result="completed" time="0.473" timestamp="2026-11-04T00:20:40.708" classname="MeshDeviceFixture">
+      <failure message="unknown file&#x0A;C++ exception with description &quot;TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/llrt/tt_cluster.cpp:1569: ethernet_connections_within_cluster.contains(std::get&lt;0&gt;(eth_core)) and ethernet_connections_within_cluster.at(std::get&lt;0&gt;(eth_core)).contains(eth_chan)&#x0A;info:&#x0A;Chip 0 logical eth core 0-9 connects to a remote mmio device&#x0A;backtrace:&#x0A; --- /data/aagarwal/regress/trees/main_d2bd12f/build/lib/libtt_metal.so(+0xe1f5d8) [0x7baf082665d8]&#x0A; --- tt::Cluster::get_connected_ethernet_core(std::tuple&lt;int, tt::xy_pair&gt;) const&#x0A; --- tt::tt_metal::Device::get_connected_ethernet_core(tt::xy_pair) const&#x0A; --- tt::tt_metal::MeshDeviceFixture_ActiveEthKernelsDirectSendAllConnectedChips_Test::TestBody()&#x0A; --- void testing::internal::HandleExceptionsInMethodIfSupported&lt;testing::Test, void&gt;(testing::Test*, void (testing::Test::*)(), char const*)&#x0A; --- testing::Test::Run()&#x0A; --- testing::TestInfo::Run()&#x0A; --- testing::TestSuite::Run()&#x0A; --- testing::internal::UnitTestImpl::RunAllTests()&#x0A; --- bool testing::internal::HandleExceptionsInMethodIfSupported&lt;testing::internal::UnitTestImpl, bool&gt;(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*)&#x0A; --- testing::UnitTest::Run()&#x0A; --- ./build/test/tt_metal/unit_tests_eth(main+0x3d) [0x64ee3957379d]&#x0A; --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7baf06429d90]&#x0A; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7baf06429e40]&#x0A; --- ./build/test/tt_metal/unit_tests_eth(_start+0x25) [0x64ee395137f5]&#x0A;&quot; thrown in the test body." type=""><![CDATA[unknown file
+C++ exception with description "TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/llrt/tt_cluster.cpp:1569: ethernet_connections_within_cluster.contains(std::get<0>(eth_core)) and ethernet_connections_within_cluster.at(std::get<0>(eth_core)).contains(eth_chan)
+info:
+Chip 0 logical eth core 0-9 connects to a remote mmio device
+backtrace:
+ --- /data/aagarwal/regress/trees/main_d2bd12f/build/lib/libtt_metal.so(+0xe1f5d8) [0x7baf082665d8]
+ --- tt::Cluster::get_connected_ethernet_core(std::tuple<int, tt::xy_pair>) const
+ --- tt::tt_metal::Device::get_connected_ethernet_core(tt::xy_pair) const
+ --- tt::tt_metal::MeshDeviceFixture_ActiveEthKernelsDirectSendAllConnectedChips_Test::TestBody()
+ --- void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*)
+ --- testing::Test::Run()
+ --- testing::TestInfo::Run()
+ --- testing::TestSuite::Run()
+ --- testing::internal::UnitTestImpl::RunAllTests()
+ --- bool testing::internal::HandleExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*)
+ --- testing::UnitTest::Run()
+ --- ./build/test/tt_metal/unit_tests_eth(main+0x3d) [0x64ee3957379d]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7baf06429d90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7baf06429e40]
+ --- ./build/test/tt_metal/unit_tests_eth(_start+0x25) [0x64ee395137f5]
+" thrown in the test body.]]></failure>
+    </testcase>
+  </testsuite>
+</testsuites>

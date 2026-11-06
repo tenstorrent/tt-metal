@@ -1,0 +1,13 @@
+PASS arch: "the router supports Blackhole only" (2 TT_FATAL lines)
+PASS muxvc1: "VC1 with the Tensix mux extension is not supported" (2 TT_FATAL lines)
+PASS vc2: "VC2 is supported as neighbour exchange on 2D routers" (2 TT_FATAL lines)
+PASS flavc1: "first-level acks on VC1 / VC2 are not supported" (2 TT_FATAL lines)
+PASS vc2x: "VC2's crossover onto VC1 is not supported" (2 TT_FATAL lines)
+PASS udm: "UDM is supported on one-ERISC 2D meshes with one relay" (2 TT_FATAL lines)
+PASS speedy: "the speedy path needs VC0 without bubble flow control" (2 TT_FATAL lines)
+PASS cache: "the CPU data cache is not supported" (2 TT_FATAL lines)
+PASS spin: "the TX queue's spin-wait send is not supported" (2 TT_FATAL lines)
+PASS perf: "the perf recorder supports low-resolution bandwidth only" (2 TT_FATAL lines)
+PASS mux2e: "Tensix mux mode is supported on one ERISC" (2 TT_FATAL lines)
+PASS tensix: "local Tensix connections are supported in mux mode and UDM only" (2 TT_FATAL lines)
+FORCED_MOCKS_DONE

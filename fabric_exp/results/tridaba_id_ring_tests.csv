@@ -1,0 +1,17 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+Ring1HopEW_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,3072,7042273,29.445039,9584973.488
+Ring1HopEW_size_3072_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Ring,8,0,1,E,1,50000,3072,8984785,23.079016,7512700.638
+Ring1HopEW_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,8,0,1,E,1,50000,4352,7050910,41.662707,9573232.391
+Ring1HopEW_size_4352_ntype_unicast_scatter_write,CHIP_UNICAST,NOC_UNICAST_SCATTER_WRITE,Ring,8,0,1,E,1,50000,4352,9000540,32.638042,7499550.027
+UnidirRingMulticast_size_3072_ntype_unicast_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,8,7,1,W,1,20000,3072,7952254,10.430250,3395263.783
+UnidirRingMulticast_size_3072_ntype_unicast_scatter_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Ring,8,7,1,W,1,20000,3072,9586400,8.652257,2816490.028
+UnidirRingMulticast_size_4352_ntype_unicast_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,8,7,1,W,1,20000,4352,8774035,13.392242,3077261.488
+UnidirRingMulticast_size_4352_ntype_unicast_scatter_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Ring,8,7,1,W,1,20000,4352,10601802,11.083399,2546736.866
+HalfRingMulticast_size_3072_ntype_unicast_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,8,7,1,W,4,50000,3072,34370804,24.132109,7855504.340
+HalfRingMulticast_size_3072_ntype_unicast_scatter_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Ring,8,7,1,W,4,50000,3072,42483639,19.523751,6355387.776
+HalfRingMulticast_size_4352_ntype_unicast_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,8,7,1,W,4,50000,4352,34587996,33.972480,7806176.455
+HalfRingMulticast_size_4352_ntype_unicast_scatter_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Ring,8,7,1,W,4,50000,4352,45058605,26.078038,5992196.163
+RingMulticast_size_3072_ntype_unicast_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,8,7,1,W,1,20000,3072,8516255,9.739492,3170407.650
+RingMulticast_size_3072_ntype_unicast_scatter_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Ring,8,7,1,W,1,20000,3072,10805753,7.675911,2498668.996
+RingMulticast_size_4352_ntype_unicast_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,8,7,1,W,1,20000,4352,9053911,12.978259,2982136.670
+RingMulticast_size_4352_ntype_unicast_scatter_write_num_links_1,CHIP_MULTICAST,NOC_UNICAST_SCATTER_WRITE,Ring,8,7,1,W,1,20000,4352,10828430,10.851435,2493436.260

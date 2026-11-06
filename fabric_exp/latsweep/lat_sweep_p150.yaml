@@ -1,0 +1,78 @@
+# Latency size sweep on the 2x4 P150x8 mesh (latency_test_mode, round trip of one packet at a time to a responder):
+# east-west 1/2/3 hops, north-south 1 hop, and a 4-hop route with a corner turn, unicast writes, 1000 samples per
+# case. Chip ids row-major: [0, 0..3] top row, [0, 4..7] bottom row.
+Tests:
+  - name: "Lat1HopEW"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 64, 256, 1024, 2048, 3072, 4096, 4352]
+      ntype: [unicast_write]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 1000
+            destination:
+              device: [0, 1]
+
+  - name: "Lat2HopEW"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 64, 256, 1024, 2048, 3072, 4096, 4352]
+      ntype: [unicast_write]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 1000
+            destination:
+              device: [0, 2]
+
+  - name: "Lat3HopEW"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 64, 256, 1024, 2048, 3072, 4096, 4352]
+      ntype: [unicast_write]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 1000
+            destination:
+              device: [0, 3]
+
+  - name: "Lat1HopNS"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 64, 256, 1024, 2048, 3072, 4096, 4352]
+      ntype: [unicast_write]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 1000
+            destination:
+              device: [0, 4]
+
+  - name: "Lat4HopCorner"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 64, 256, 1024, 2048, 3072, 4096, 4352]
+      ntype: [unicast_write]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 1000
+            destination:
+              device: [0, 7]

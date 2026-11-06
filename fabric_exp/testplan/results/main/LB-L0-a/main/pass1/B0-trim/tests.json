@@ -1,0 +1,807 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 126,
+  "PERF_WINDOW": 0,
+  "SKIP": 6
+ },
+ "files": [
+  "fabric_unit_tests.xml",
+  "fabric_unit_tests_1.xml"
+ ],
+ "tests": {
+  "ChannelTrimming1DCaptureAndOverrideFixture::BothOverridesLoaded": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DCaptureAndOverrideFixture::BothOverridesLoaded#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DCaptureAndOverrideFixture::UnicastTrafficWithCaptureAndOverride": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.007
+  },
+  "ChannelTrimming1DCaptureAndOverrideFixture::UnicastTrafficWithCaptureAndOverride#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.01
+  },
+  "ChannelTrimming1DFixture::ChannelTrimmingCapture_RuntimeOptionGetterSetter": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::ChannelTrimmingCapture_RuntimeOptionGetterSetter#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::ConfigAllocatesL1Buffer": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::ConfigAllocatesL1Buffer#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::DiagnosticBufferMapRegionsNonOverlapping": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::DiagnosticBufferMapRegionsNonOverlapping#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::DiagnosticBufferMapViaBuilderContext": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::DiagnosticBufferMapViaBuilderContext#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::L1AllocationOrdering": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::L1AllocationOrdering#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::RuntimeOptionEnabled": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::RuntimeOptionEnabled#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DFixture::UnicastMultiHopForwarding": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.027
+  },
+  "ChannelTrimming1DFixture::UnicastMultiHopForwarding#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.039
+  },
+  "ChannelTrimming1DFixture::UnicastPacketSizeTracking": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.018
+  },
+  "ChannelTrimming1DFixture::UnicastPacketSizeTracking#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.029
+  },
+  "ChannelTrimming1DFixture::UnicastSenderAndReceiverChannelUsed": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.04
+  },
+  "ChannelTrimming1DFixture::UnicastSenderAndReceiverChannelUsed#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.047
+  },
+  "ChannelTrimming1DOverrideChannel0OnlyFixture::OverrideLoaded": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DOverrideChannel0OnlyFixture::OverrideLoaded#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DOverrideChannel0OnlyFixture::UnicastTrafficWithChannel0Only": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.008
+  },
+  "ChannelTrimming1DOverrideChannel0OnlyFixture::UnicastTrafficWithChannel0Only#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.009
+  },
+  "ChannelTrimming1DOverrideFixture::GlobalOverridesLoaded": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DOverrideFixture::GlobalOverridesLoaded#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DOverrideFixture::RuntimeOptionOverridePath": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DOverrideFixture::RuntimeOptionOverridePath#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming1DOverrideFixture::UnicastTrafficWithOverride": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.007
+  },
+  "ChannelTrimming1DOverrideFixture::UnicastTrafficWithOverride#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.008
+  },
+  "ChannelTrimming2DFixture::DirectionalChannelForwardedTo": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.027
+  },
+  "ChannelTrimming2DFixture::DirectionalChannelForwardedTo#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.036
+  },
+  "ChannelTrimming2DFixture::DirectionalChannelLiveness": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.105
+  },
+  "ChannelTrimming2DFixture::DirectionalChannelLiveness#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.427
+  },
+  "ChannelTrimming2DOverrideVC0S0S1VC1AllFixture::ChannelCountsConsistentWith2DMesh": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming2DOverrideVC0S0S1VC1AllFixture::ChannelCountsConsistentWith2DMesh#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming2DOverrideVC0S0S1VC1AllFixture::OverrideLoadedCorrectly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming2DOverrideVC0S0S1VC1AllFixture::OverrideLoadedCorrectly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming2DOverrideVC0S0S1VC1AllFixture::StandaloneOverrideCreatesFullyEnabledBaseline": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimming2DOverrideVC0S0S1VC1AllFixture::StandaloneOverrideCreatesFullyEnabledBaseline#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::BoundsPacketSizeScanToCaptureStorage": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::BoundsPacketSizeScanToCaptureStorage#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::CreditAmortizationPreservesReferenceByteBudget": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::CreditAmortizationPreservesReferenceByteBudget#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::DerivesPacketSizeOnlyFromUsedVC0Senders": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::DerivesPacketSizeOnlyFromUsedVC0Senders#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::EnablesTerminalSpeedyRxOnlyForMatching2DPeer": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::EnablesTerminalSpeedyRxOnlyForMatching2DPeer#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::LeavesPacketSizeUnknownWhenVC0HasNoSenderTraffic": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::LeavesPacketSizeUnknownWhenVC0HasNoSenderTraffic#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::LinkSymmetryAllowsSpeedyReceiverOnlyAgainstWorkerOnlyPeer": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::LinkSymmetryAllowsSpeedyReceiverOnlyAgainstWorkerOnlyPeer#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::LinkSymmetryKeepsDeadlockAvoidanceDropOnlyWhenBothEndsAgree": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::LinkSymmetryKeepsDeadlockAvoidanceDropOnlyWhenBothEndsAgree#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::PacketSizeDoesNotBypassVC0GlobalOverride": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::PacketSizeDoesNotBypassVC0GlobalOverride#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::PropagatesPeerPacketSizeIndependentlyOfTerminalSpeedyRx": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::PropagatesPeerPacketSizeIndependentlyOfTerminalSpeedyRx#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::UsesSharedSpeedyEligibilityPredicate": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingFastPath::UsesSharedSpeedyEligibilityPredicate#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingForwardedMask::MapsMulticastSlotsToDestinationSenderChannels": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingForwardedMask::MapsMulticastSlotsToDestinationSenderChannels#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplyEmptyOverrideNoEffect": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplyEmptyOverrideNoEffect#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplyForceEnableAllVC1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplyForceEnableAllVC1#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplySpecificChannelsReplacesCapture": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplySpecificChannelsReplacesCapture#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplyVC0S0S1AndVC1All": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplyVC0S0S1AndVC1All#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplyVC0S0S1AndVC1AllToEmptyBaseline": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ApplyVC0S0S1AndVC1AllToEmptyBaseline#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::HasAnyOverrideEmpty": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::HasAnyOverrideEmpty#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ParseForceEnableAllVC1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ParseForceEnableAllVC1#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ParseMixedVC0AndVC1": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::ParseMixedVC0AndVC1#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::SenderOnlyOverridePreservesReceiverBits": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingGlobalOverride::SenderOnlyOverridePreservesReceiverBits#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/01_Mesh_Worker_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.727
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/01_Mesh_Worker_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.864
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/02_Mesh_Fwd_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.618
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/02_Mesh_Fwd_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.891
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/03_Mesh_WorkerAndFwd_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.959
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/03_Mesh_WorkerAndFwd_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.654
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/04_Mesh_WorkerAndFwd_DstSendsBack": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.045
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/04_Mesh_WorkerAndFwd_DstSendsBack#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.751
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/05_Mesh_Worker_DstSendsBack": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.175
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/05_Mesh_Worker_DstSendsBack#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.878
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/06_TorusX_Worker_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 28.343
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/06_TorusX_Worker_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 18.575
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/07_TorusX_Fwd_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.988
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/07_TorusX_Fwd_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.268
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/08_TorusX_WorkerAndFwd_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.395
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/08_TorusX_WorkerAndFwd_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.492
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/09_TorusX_WorkerAndFwd_DstSendsBack": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.225
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/09_TorusX_WorkerAndFwd_DstSendsBack#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.154
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/10_TorusX_Worker_DstSendsBack": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.399
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/10_TorusX_Worker_DstSendsBack#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.78
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/11_TorusX_Worker_DstForwardsOnward": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.822
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingReplayTest::CaptureThenReplay/11_TorusX_Worker_DstForwardsOnward#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.289
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/01_Mesh_Worker_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/01_Mesh_Worker_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/02_Mesh_Fwd_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/02_Mesh_Fwd_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/03_Mesh_WorkerAndFwd_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/03_Mesh_WorkerAndFwd_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/04_Mesh_WorkerAndFwd_DstSendsBack": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/04_Mesh_WorkerAndFwd_DstSendsBack#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/05_Mesh_Worker_DstSendsBack": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/05_Mesh_Worker_DstSendsBack#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/06_TorusX_Worker_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/06_TorusX_Worker_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/07_TorusX_Fwd_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/07_TorusX_Fwd_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/08_TorusX_WorkerAndFwd_DstReceiveOnly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/08_TorusX_WorkerAndFwd_DstReceiveOnly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/09_TorusX_WorkerAndFwd_DstSendsBack": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/09_TorusX_WorkerAndFwd_DstSendsBack#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/10_TorusX_Worker_DstSendsBack": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/10_TorusX_Worker_DstSendsBack#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/11_TorusX_Worker_DstForwardsOnward": {
+   "file": "fabric_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest::ResolvesExpectedLinkSettings/11_TorusX_Worker_DstForwardsOnward#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture::IntermeshVC1ChannelCountsNonZero": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_router/test_channel_trimming_capture.cpp:1852\nIntermesh channel trimming override tests require a T3K cluster",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture::IntermeshVC1ChannelCountsNonZero#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_router/test_channel_trimming_capture.cpp:1852\nIntermesh channel trimming override tests require a T3K cluster",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture::OverrideLoadedCorrectly": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_router/test_channel_trimming_capture.cpp:1852\nIntermesh channel trimming override tests require a T3K cluster",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture::OverrideLoadedCorrectly#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_router/test_channel_trimming_capture.cpp:1852\nIntermesh channel trimming override tests require a T3K cluster",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture::StandaloneOverrideNoProfile": {
+   "file": "fabric_unit_tests.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_router/test_channel_trimming_capture.cpp:1852\nIntermesh channel trimming override tests require a T3K cluster",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture::StandaloneOverrideNoProfile#2": {
+   "file": "fabric_unit_tests_1.xml",
+   "message": "/home/aagarwal/tt-metal-main/tests/tt_metal/tt_fabric/fabric_router/test_channel_trimming_capture.cpp:1852\nIntermesh channel trimming override tests require a T3K cluster",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

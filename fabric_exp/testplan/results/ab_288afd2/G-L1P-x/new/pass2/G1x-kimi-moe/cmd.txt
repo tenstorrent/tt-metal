@@ -1,0 +1,4 @@
+export OMP_NUM_THREADS=$(nproc) TT_METAL_SHM_TRACKING_DISABLED=1 KIMI_MOE_PERF_REPLAYS=5 KIMI_MOE_PERF_IGNORE_POWER=1
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+export PREFILL_TORUS_XY_CERTIFIED=1
+python -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k galaxy -vvv --tb=short

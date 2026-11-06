@@ -1,0 +1,855 @@
+[
+ {
+  "key": [
+   "active_erisc",
+   0,
+   4,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__14750525919105284437/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__12692350516212663847__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   4,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__15821689503272558399/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__4063816182830052173__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   5,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__9835994671411073843/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__4250478611089391961__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   5,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__133133207111468173__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   6,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__2044160537419471260/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__8620391696999289484__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   6,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__12744615701197838552__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   7,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__6479957956460390535/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__5736157939791046885__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   7,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__10091719283576334747__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   8,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__1231919463778499736/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__14152476942524481353__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__11295939145356461511__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   0,
+   10,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__4331292596957292451/active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__11629230771107254122/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__3363158872469128962__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__7922034684074188474__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   4,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__4256334596728300217/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__13929173278995640395__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   4,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__18444951747488657620__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   5,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__14234181637611867168/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__16129868542585168867__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   5,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__11598761790692955527/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__18151320400319484794__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   6,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__10580962028631296656/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__395421315938413373__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   6,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__1015631657213667946/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__7780831074186883278__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   7,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__14788979884386172683/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__14001384924780579058__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   7,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__9772873046529126685__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   9,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__4258181418831060436/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__14962102391982774729__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__11759978797004867266__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   1,
+   11,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__10043895322277694146/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__5242121425216086272__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__17959364209852429942__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   2,
+   4,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__3586153850620664130/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__10997296509323498003__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__7674001122307020264__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   2,
+   5,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__6489675864452277454/active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__1121438015175258957/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__14399091424875596525__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__3880989231747564099__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   2,
+   6,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__3631562725844585963/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__7561244601352704153__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__4383667439152803062__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   2,
+   7,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__6064538520040876898/active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__6030885290442547773/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__12829364463166866319__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__10688742257291555000__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   3,
+   4,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__8299351427172991464/active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__6121809340761182001/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__3431696503194710672__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__5124865417713592585__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   3,
+   5,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__16997008373213032932/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__2491284072394370141__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__197449997501784585__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   3,
+   6,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__8293404209875194312/active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__10219848046396326874/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__5431085407970691267__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__4775296806957718595__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "active_erisc",
+   3,
+   7,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__3656813917193034524/active_erisc/active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__12481700279839843503__active_erisc/active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__8597309946211022503__active_erisc/active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   4,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__9113746027361572178/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__16206236251667903163__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   4,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__10229924487725718948/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__11440319780096444921__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   5,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__1974893561357350168/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__18028653558909446843__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   5,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__10277754828256762008__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   6,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__3600473431856508845/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__3490858212472620729__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   6,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__11660148679966767161/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__14875791276083899209__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   7,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__9385634899218476589/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__13442875825026916664__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   7,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__15568112377219572116/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__9568265223372789036__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   8,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__2749074973602362856__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__4516428911549049314__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   0,
+   10,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__11637908802779522069/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__5461058583995800351__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__11864934829201372635__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   4,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__10697509619777523756/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__7929320555425173017__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   4,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__10629130248902525390__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   5,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__17527521829486980796/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__14983623317503735999__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   5,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__11486141820739918183__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   6,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__4506580340507463438/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__4725234321227351627__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   6,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__7388458506375849526__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   7,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__10704913830194341139/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__14579898115254473688__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   7,
+   2,
+   0
+  ],
+  "study": [],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__7169656144477337432__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   9,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__4231842157237622605/subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__15112097005661338/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__1929129586162298031__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__8580864502162747202__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   1,
+   11,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__15188445179684008456/subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__17689055769058793898/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__1032541869514783337__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__14864109760393707721__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   2,
+   4,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__4338045327969131522/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__168746185504632068__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__13289425225533645109__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   2,
+   5,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__17764531352640089777/subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__9724914797274631410/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__4553648621651236082__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__18357295191550764530__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   2,
+   6,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__4837949914138770387/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__2662263560986173266__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__18432957878349582802__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   2,
+   7,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__3350086724855746032/subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__10465832971564139790/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__1225945274586257842__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__15628438805136932630__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   3,
+   4,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__5644309932980480112/subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__2586450563413941222/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__2026835249895890863__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__5705544363930128106__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   3,
+   5,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__4689755091304480639/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__10677397711837208494__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__9803755428367487130__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   3,
+   6,
+   1,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__2769012262972655444/subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__2002749385377306524/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__3253399662464020377__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__13573839772943324286__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ },
+ {
+  "key": [
+   "subordinate_active_erisc",
+   3,
+   7,
+   2,
+   0
+  ],
+  "study": [
+   "/home/aagarwal/.tt-metal-v3r-builds/cov_m/builds/v4txa11_O3/bh_2d__1754057734862275905/subordinate_active_erisc/subordinate_active_erisc.elf"
+  ],
+  "port": [
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__4386120303564625039__subordinate_active_erisc/subordinate_active_erisc.elf",
+   "/home/aagarwal/.tt-metal-port-gap-cov/builds/gap/bh_2d__kernels__fabric_erisc_router__6436489534351515492__subordinate_active_erisc/subordinate_active_erisc.elf"
+  ]
+ }
+]

@@ -1,0 +1,1594 @@
+<title>Ring Jam Analysis</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a lab report printout. One reading column with wide figure bands; the wire (line rate) is the
+   reference mark every bandwidth figure is drawn against. v4 is the accent, main is the gray context. */
+:root {
+  --bd-checks: #a3a8ae;
+  --jam-3072: #9cc0ec;
+  --jam-3584: #4f8fdd;
+  --jam-4352: #1f5fb4;
+  --bd-decode: #1baf7a;
+  --bd-noc: #eb6834;
+  --bd-eth_send: #6250d6;
+  --bd-credits: #008300;
+  --bd-loop: #e87ba4;
+  --bd-other: #eda100;
+  --bg: #f3f4f5;
+  --surface: #fcfcfb;
+  --ink: #15181b;
+  --ink-2: #4b5158;
+  --muted: #7d838a;
+  --rule: #dfe2e5;
+  --axis: #c4c8cc;
+  --hover: rgba(42, 120, 214, 0.06);
+  --v4: #2a78d6;
+  --v4-soft: rgba(42, 120, 214, 0.12);
+  --vc0: #1baf7a;
+  --vc1: #6250d6;
+  --vc2: #eb6834;
+  --main: #7f858c;
+  --main-soft: rgba(127, 133, 140, 0.18);
+  --wire: #15181b;
+  --good: #0f7a0f;
+  --warn-bg: #fdf3dc;
+  --warn-ink: #6b4a00;
+  --crit: #b3302f;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.125rem;
+  --step-2: 1.5rem;
+  --step-3: 2.25rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bd-checks: #686e74;
+    --jam-3072: #3a5d88;
+    --jam-3584: #4a86d4;
+    --jam-4352: #8ec1ff;
+    --bd-decode: #199e70;
+    --bd-noc: #d95926;
+    --bd-eth_send: #9085e9;
+    --bd-credits: #008300;
+    --bd-loop: #d55181;
+    --bd-other: #c98500;
+    --bg: #0f1113;
+    --surface: #1a1a19;
+    --ink: #eceef0;
+    --ink-2: #b6bbc1;
+    --muted: #8a9097;
+    --rule: #2c2f33;
+    --axis: #3d4146;
+    --hover: rgba(57, 135, 229, 0.10);
+    --v4: #3987e5;
+    --v4-soft: rgba(57, 135, 229, 0.16);
+    --vc0: #199e70;
+    --vc1: #9085e9;
+    --vc2: #d95926;
+    --main: #8a9097;
+    --main-soft: rgba(138, 144, 151, 0.22);
+    --wire: #eceef0;
+    --good: #3cbf3c;
+    --warn-bg: #3a2e12;
+    --warn-ink: #f2d38a;
+    --crit: #e66767;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bd-checks: #686e74;
+  --jam-3072: #3a5d88;
+  --jam-3584: #4a86d4;
+  --jam-4352: #8ec1ff;
+  --bd-decode: #199e70;
+  --bd-noc: #d95926;
+  --bd-eth_send: #9085e9;
+  --bd-credits: #008300;
+  --bd-loop: #d55181;
+  --bd-other: #c98500;
+  --bg: #0f1113;
+  --surface: #1a1a19;
+  --ink: #eceef0;
+  --ink-2: #b6bbc1;
+  --muted: #8a9097;
+  --rule: #2c2f33;
+  --axis: #3d4146;
+  --hover: rgba(57, 135, 229, 0.10);
+  --v4: #3987e5;
+  --v4-soft: rgba(57, 135, 229, 0.16);
+  --vc0: #199e70;
+  --vc1: #9085e9;
+  --vc2: #d95926;
+  --main: #8a9097;
+  --main-soft: rgba(138, 144, 151, 0.22);
+  --wire: #eceef0;
+  --good: #3cbf3c;
+  --warn-bg: #3a2e12;
+  --warn-ink: #f2d38a;
+  --crit: #e66767;
+  color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: var(--step-0); line-height: 1.55; }
+.page {
+  max-width: 1120px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+  display: flex; flex-direction: column; gap: 56px;
+}
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: var(--step-3); font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: var(--step-2); font-weight: 600; display: flex; gap: 12px; align-items: baseline; }
+h2 .num { font-family: var(--font-data); font-size: var(--step-0); color: var(--muted); font-weight: 400; }
+h3 { font-size: var(--step-1); font-weight: 600; }
+p { margin: 0; max-width: 70ch; }
+.prose { display: flex; flex-direction: column; gap: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: var(--step--1); }
+code, .mono { font-family: var(--font-data); font-size: 0.92em; }
+a { color: var(--v4); }
+
+.masthead { display: flex; flex-direction: column; gap: 14px; }
+.eyebrow { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.08em; font-size: var(--step--1); color: var(--muted); }
+.lede { font-size: var(--step-1); color: var(--ink-2); max-width: 62ch; }
+.status { display: flex; gap: 10px; align-items: flex-start; font-size: var(--step--1); color: var(--ink-2); max-width: 90ch; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-data); font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink-2); white-space: nowrap; }
+.chip-draft { background: var(--warn-bg); color: var(--warn-ink); border-color: transparent; }
+.chip-cross { color: var(--warn-ink); background: var(--warn-bg); border-color: transparent; }
+.chip-same { color: var(--ink-2); }
+
+section { display: flex; flex-direction: column; gap: 22px; }
+.sub { display: flex; flex-direction: column; gap: 14px; }
+
+/* KPI row */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.kpi { background: var(--surface); padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.kpi .label { font-size: var(--step--1); color: var(--ink-2); }
+.kpi .value { font-size: 1.9rem; font-weight: 600; line-height: 1.1; }
+.kpi .value .unit { font-size: var(--step-0); font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+.kpi .foot { font-size: 0.78rem; color: var(--muted); }
+
+
+/* Tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: var(--step--1); }
+th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { font-weight: 500; color: var(--ink-2); font-size: 0.78rem; background: var(--surface); position: sticky; top: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-data); font-size: 0.8rem; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--hover); }
+tr.clickable { cursor: pointer; }
+tr.group-link th { font-family: var(--font-display); font-size: var(--step-0); font-weight: 600; color: var(--ink); background: var(--bg); padding-top: 12px; position: static; }
+tr.group-link th .group-meta { font-family: var(--font-data); font-size: 0.75rem; font-weight: 400; color: var(--muted); }
+tr.group-size th { font-family: var(--font-data); font-size: 0.75rem; font-weight: 500; color: var(--ink-2); background: var(--surface); text-transform: none; position: static; }
+tbody tr.group-link:hover th, tbody tr.group-size:hover th { background: inherit; }
+tr.clickable:focus-visible { outline: 2px solid var(--v4); outline-offset: -2px; }
+.cell-sub { font-family: var(--font-body); font-size: 0.72rem; color: var(--muted); white-space: normal; max-width: 210px; margin-left: auto; line-height: 1.25; }
+.better { color: var(--good); }
+.worse { color: var(--crit); }
+
+/* Filters */
+.filters { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-start; }
+.fgroup { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fgroup .flabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-family: var(--font-display); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fchip { font: inherit; font-size: var(--step--1); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.fchip:hover { border-color: var(--axis); color: var(--ink); }
+.fchip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.fchip:focus-visible, .db-row:focus-visible, button:focus-visible { outline: 2px solid var(--v4); outline-offset: 2px; }
+
+/* Legend */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: var(--step--1); color: var(--ink-2); align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.key-v4 { width: 10px; height: 10px; border-radius: 50%; background: var(--v4); display: inline-block; }
+.key-main { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--main); background: var(--surface); display: inline-block; box-sizing: border-box; }
+.key-wire { width: 2px; height: 14px; background: var(--wire); display: inline-block; }
+.key-vc0 { width: 12px; height: 10px; border-radius: 2px; background: var(--vc0); display: inline-block; }
+.key-vc1 { width: 12px; height: 10px; border-radius: 2px; background: var(--vc1); display: inline-block; }
+.key-vc2 { width: 12px; height: 10px; border-radius: 2px; background: var(--vc2); display: inline-block; }
+.seg { position: absolute; top: 9px; height: 12px; }
+.seg.vc0 { background: var(--vc0); left: 0; border-radius: 0; }
+.seg.vc2 { background: var(--vc2); border-radius: 0 4px 4px 0; border-left: 2px solid var(--surface); }
+.seg.s { border-radius: 0; }
+.seg.s.vc0 { background: var(--vc0); }
+.seg.s.vc1 { background: var(--vc1); }
+.seg.s.vc2 { background: var(--vc2); }
+.seg.s.gap { border-left: 2px solid var(--surface); }
+.seg.s.end { border-radius: 0 4px 4px 0; }
+.alloc { display: flex; flex-direction: column; gap: 2px; font-family: var(--font-data); font-size: 0.74rem; color: var(--ink-2); margin: -2px 0 4px; }
+.alloc b { font-weight: 600; color: var(--ink); }
+.seg-val { position: absolute; top: 8px; font-family: var(--font-data); font-size: 0.7rem; color: var(--ink-2); white-space: nowrap; }
+
+/* Dumbbell panels */
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 18px; }
+@media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.panel-head h4 { margin: 0; font-family: var(--font-display); font-size: var(--step-0); font-weight: 600; }
+.panel-head .meta { font-size: 0.78rem; color: var(--muted); font-family: var(--font-data); }
+.db-row { display: grid; grid-template-columns: minmax(130px, 210px) minmax(0, 1fr); gap: 12px; align-items: center; min-height: 30px; border-radius: 3px; }
+.db-row:hover { background: var(--hover); }
+.db-label { font-size: var(--step--1); line-height: 1.25; min-width: 0; overflow-wrap: anywhere; padding-left: 4px; }
+.db-label .tags { color: var(--muted); font-size: 0.75rem; }
+.db-label .grp { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--font-display); }
+.track { position: relative; height: 30px; }
+.gl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--rule); }
+.wl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--wire); opacity: 0.8; }
+.conn { position: absolute; top: 14px; height: 2px; background: var(--axis); }
+.dot { position: absolute; top: 15px; width: 10px; height: 10px; border-radius: 50%; transform: translate(-50%, -50%); box-sizing: border-box; }
+.dot.v4 { background: var(--v4); box-shadow: 0 0 0 2px var(--surface); z-index: 2; }
+.dot.main { background: var(--surface); border: 2px solid var(--main); box-shadow: 0 0 0 2px var(--surface); z-index: 1; }
+.axis-row .track { height: 22px; }
+.tick { position: absolute; bottom: 2px; transform: translateX(-50%); font-family: var(--font-data); font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
+.tick.wire-label { color: var(--ink); bottom: auto; top: -2px; }
+.empty { padding: 18px 4px; font-size: var(--step--1); color: var(--muted); }
+@media (max-width: 560px) {
+  .db-row { grid-template-columns: 1fr; gap: 0; padding-top: 4px; }
+  .axis-row .db-label { display: none; }
+}
+.row-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.btn { font: inherit; font-size: var(--step--1); padding: 5px 12px; border-radius: 4px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); cursor: pointer; }
+.btn:hover { border-color: var(--axis); }
+
+/* Tooltip */
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 6px 22px rgba(0,0,0,0.14); padding: 10px 12px; font-size: var(--step--1); max-width: 320px; }
+.tip[hidden] { display: none; }
+.tip .t-title { font-weight: 600; margin-bottom: 6px; }
+.tip .t-row { display: grid; grid-template-columns: 14px 1fr; gap: 8px; align-items: baseline; margin-top: 4px; }
+.tip .t-key { width: 12px; height: 2px; margin-top: 8px; }
+.tip .t-val { font-weight: 600; }
+.tip .t-sub { color: var(--ink-2); }
+.tip .t-foot { margin-top: 8px; color: var(--muted); font-size: 0.74rem; }
+
+/* Bars (size) */
+.bars { display: flex; flex-direction: column; gap: 10px; padding-top: 22px; }
+.bar-row { display: grid; grid-template-columns: minmax(130px, 200px) minmax(0, 1fr); gap: 12px; align-items: center; }
+.bar-track { position: relative; height: 30px; }
+.bar { position: absolute; left: 0; height: 10px; border-radius: 0 4px 4px 0; }
+.bar.main { top: 3px; background: var(--main); }
+.bar.v4 { top: 17px; background: var(--v4); }
+.bar-val { position: absolute; font-family: var(--font-data); font-size: 0.7rem; color: var(--ink-2); transform: translateY(-2px); white-space: nowrap; }
+.limit { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--crit); }
+.limit-label { position: absolute; top: -18px; transform: translateX(-100%); font-family: var(--font-data); font-size: 0.7rem; color: var(--crit); white-space: nowrap; padding-right: 4px; }
+@media (max-width: 560px) { .bar-row { grid-template-columns: 1fr; gap: 2px; } }
+
+/* Cards (section 4) */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.card h4 { margin: 0; font-family: var(--font-display); font-size: var(--step-1); font-weight: 600; }
+.card p { font-size: var(--step--1); color: var(--ink-2); }
+.card ul { margin: 0; padding-left: 18px; font-size: var(--step--1); color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+.card .src { font-size: 0.74rem; color: var(--muted); font-family: var(--font-data); overflow-wrap: anywhere; }
+.st { align-self: flex-start; }
+.st-measured { color: var(--good); }
+.st-designed { color: var(--v4); }
+.st-proposed { color: var(--ink-2); }
+
+.callout { background: var(--warn-bg); color: var(--warn-ink); border-radius: 6px; padding: 10px 14px; font-size: var(--step--1); max-width: 90ch; }
+details summary { cursor: pointer; font-size: var(--step--1); color: var(--ink-2); }
+details[open] summary { margin-bottom: 10px; }
+footer { border-top: 1px solid var(--rule); padding-top: 18px; font-size: var(--step--1); color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+/* Tabs */
+.tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 2px; overflow-x: auto; background: var(--bg); border-bottom: 1px solid var(--rule); margin-bottom: 22px; scrollbar-width: thin; }
+.tabs button { font: inherit; font-size: var(--step--1); padding: 10px 12px 9px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.tabs button:hover { color: var(--ink); }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--v4); font-weight: 600; }
+.tabs button:focus-visible { outline: 2px solid var(--v4); outline-offset: -2px; }
+.tabpanel > section + section { margin-top: 34px; }
+/* Breakdown */
+.seg.bd { border-radius: 0; }
+.seg.bd.gap { border-left: 2px solid var(--surface); }
+.seg.bd.end { border-radius: 0 4px 4px 0; }
+.key-bd { width: 12px; height: 10px; border-radius: 2px; display: inline-block; }
+.bd-erisc { font-family: var(--font-data); font-size: 0.74rem; color: var(--muted); margin: 6px 0 0; }
+.bd-note { font-size: 0.78rem; color: var(--ink-2); margin: 4px 0 0; }
+/* Ring jam */
+.hop { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--step--1); }
+.hop .box { font-family: var(--font-data); font-size: 0.78rem; padding: 4px 9px; border-radius: 4px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink-2); white-space: nowrap; }
+.hop .box.seen { border: 2px solid var(--v4); color: var(--ink); }
+.hop .box.blind { background: var(--warn-bg); color: var(--warn-ink); border-color: transparent; }
+.hop .arrow { color: var(--muted); font-family: var(--font-data); font-size: 0.78rem; white-space: nowrap; }
+#rj-chart { overflow-x: auto; }
+.rj-svg { width: 100%; min-width: 560px; height: auto; display: block; }
+.rj-svg text { font-family: var(--font-data); font-size: 11px; fill: var(--muted); }
+.rj-svg .lab { fill: var(--ink-2); }
+.rj-svg .grid { stroke: var(--rule); stroke-width: 1; }
+.rj-svg .wire { stroke: var(--wire); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.55; }
+.rj-svg .cross { stroke: var(--axis); stroke-width: 1; }
+.key-line { width: 16px; height: 2px; display: inline-block; }
+.tabs .tab-sep { align-self: center; padding: 0 6px 0 14px; margin-left: 6px; border-left: 1px solid var(--rule); font-family: var(--font-display); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); white-space: nowrap; }
+
+/* Summary */
+.sum-intro { display: flex; flex-direction: column; gap: 10px; }
+.terms { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px 24px; margin: 0; padding: 12px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.terms div { min-width: 0; font-size: var(--step--1); color: var(--ink-2); line-height: 1.4; }
+.terms dt { display: inline; font-weight: 600; color: var(--ink); }
+.terms dd { display: inline; margin: 0; }
+.prov { font-family: var(--font-data); font-size: 0.74rem; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+.kpi .value.text { font-size: 1.45rem; }
+.kpi .chip { align-self: flex-start; }
+.sm-rows { display: flex; flex-direction: column; gap: 18px; }
+.sm-row { display: flex; flex-direction: column; gap: 8px; }
+.sm-row > h4 { margin: 0; font-family: var(--font-display); font-size: var(--step-0); font-weight: 600; }
+.sm-row > h4 .sm-def { font-family: var(--font-body); font-weight: 400; font-size: var(--step--1); color: var(--muted); margin-left: 8px; }
+.sm-cells { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 760px) { .sm-cells { grid-template-columns: 1fr; } }
+.sm-cell { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px 6px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sm-cell .cell-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: var(--step--1); }
+.sm-cell .cell-head b { font-family: var(--font-display); font-weight: 600; }
+.sm-cell .cell-val { font-family: var(--font-data); font-size: 0.74rem; color: var(--ink-2); }
+.lc-box { min-height: 176px; }
+.lc { display: block; max-width: 100%; }
+.lc text { font-family: var(--font-data); font-size: 11px; fill: var(--muted); }
+.lc .grid { stroke: var(--rule); stroke-width: 1; }
+.lc .base { stroke: var(--axis); stroke-width: 1; }
+.lc .lim { stroke: var(--wire); stroke-width: 1; opacity: 0.7; }
+.lc .lim-lab { fill: var(--ink-2); }
+.lc .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.lc .xh { stroke: var(--axis); stroke-width: 1; }
+.lc:focus-visible { outline: 2px solid var(--v4); outline-offset: 2px; }
+.cell-empty { min-height: 140px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: var(--step--1); color: var(--muted); border: 1px dashed var(--rule); border-radius: 4px; margin: 6px 0; padding: 12px; }
+.note-line { font-size: var(--step--1); color: var(--ink-2); max-width: 90ch; }
+.fallback { color: var(--warn-ink); background: var(--warn-bg); border-radius: 3px; padding: 0 5px; font-family: var(--font-data); font-size: 0.72rem; white-space: nowrap; }
+.track .na { position: absolute; left: 4px; top: 7px; font-size: 0.74rem; color: var(--muted); white-space: nowrap; }
+.zero { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink-2); opacity: 0.6; }
+.dbar { position: absolute; top: 9px; height: 12px; background: var(--v4); }
+.dbar.neg { border-radius: 4px 0 0 4px; }
+.dbar.pos { border-radius: 0 4px 4px 0; }
+.dbar-val { position: absolute; top: 8px; font-family: var(--font-data); font-size: 0.7rem; color: var(--ink-2); white-space: nowrap; }
+/* Headroom */
+.slack { display: grid; grid-template-columns: minmax(150px, 230px) minmax(0, 1fr) minmax(90px, 160px); gap: 4px 14px; align-items: center; font-size: var(--step--1); }
+.slack .sh { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-family: var(--font-display); }
+.slack .sl-label { line-height: 1.25; min-width: 0; }
+.slack .sl-label .grp { display: block; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--font-display); }
+.slack .sl-track { position: relative; height: 26px; min-width: 0; }
+.slack .sl-bar { position: absolute; left: 0; height: 10px; border-radius: 0 4px 4px 0; }
+.slack .sl-bar.v4 { top: 3px; background: var(--v4); }
+.slack .sl-bar.main { top: 3px; background: var(--main); }
+.slack .sl-val { position: absolute; top: 0; font-family: var(--font-data); font-size: 0.7rem; color: var(--ink-2); white-space: nowrap; }
+.slack .sl-bound { font-size: 0.78rem; color: var(--ink-2); }
+.slack .sl-row { display: contents; }
+.slack .sl-axis { position: relative; height: 16px; }
+.slack .sl-axis span { position: absolute; transform: translateX(-50%); font-family: var(--font-data); font-size: 0.68rem; color: var(--muted); }
+.slack .sl-mob, .slack .sl-mob-in { display: none; }
+.slack .tags { display: block; color: var(--muted); font-size: 0.75rem; }
+.slack .kn { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 6px; align-items: center; min-height: 14px; }
+.slack .kv { font-family: var(--font-data); font-size: 0.72rem; color: var(--ink-2); text-align: right; white-space: nowrap; }
+.slack .kn .sl-track { height: 14px; }
+.slack .kn .sl-bar { top: 2px; }
+.slack .sl-soft { position: absolute; top: 2px; height: 10px; border-radius: 0 4px 4px 0; }
+.slack .sl-soft.v4 { background: var(--v4-soft); box-shadow: inset 0 0 0 1px var(--v4); }
+.slack .sl-soft.main { background: var(--main-soft); box-shadow: inset 0 0 0 1px var(--main); }
+.slack .sl-soft.open { border-radius: 0; -webkit-mask-image: linear-gradient(90deg, #000 40%, transparent); mask-image: linear-gradient(90deg, #000 40%, transparent); }
+.key-soft { width: 12px; height: 10px; border-radius: 2px; display: inline-block; background: var(--v4-soft); box-shadow: inset 0 0 0 1px var(--v4); }
+@media (max-width: 640px) {
+  .slack { grid-template-columns: 1fr; gap: 2px; }
+  .slack .sh, .slack .sl-axis { display: none; }
+  .slack .sl-label { padding-top: 10px; border-top: 1px solid var(--rule); }
+  .slack .sl-mob { display: block; font-size: 0.7rem; color: var(--muted); }
+  .slack .sl-mob-in { display: inline; color: var(--muted); }
+}
+/* What changed */
+.sm-subhead { margin: 10px 0 0; font-family: var(--font-display); font-size: var(--step-0); font-weight: 600; }
+.chg-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.chg-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.chg-groups { display: flex; flex-direction: column; gap: 26px; }
+.chg-group { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 56px; }
+.chg-group > h3 { display: flex; gap: 10px; align-items: baseline; }
+.chg-group > h3 .cnt { font-family: var(--font-data); font-size: 0.78rem; color: var(--muted); font-weight: 400; }
+#chg-theme p:first-child { font-size: var(--step-1); color: var(--ink-2); max-width: 70ch; }
+#chg-theme p, #chg-theme ul, .chg-intro p, .chg-intro ul { max-width: 90ch; }
+#chg-theme ul, .chg-intro ul { padding-left: 20px; display: flex; flex-direction: column; gap: 3px; }
+#chg-theme ul ul, .chg-intro ul ul { margin-top: 3px; }
+.chg-intro { color: var(--ink-2); font-size: var(--step--1); }
+.chg { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.chg-title { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.chg-title .n { font-family: var(--font-data); font-size: 0.78rem; color: var(--muted); }
+.chg-title h3 { font-size: var(--step-1); }
+.chg dd ul { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.chg dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: var(--step--1); }
+.chg dt { color: var(--muted); font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; padding-top: 2px; }
+.chg dd { margin: 0; color: var(--ink-2); min-width: 0; overflow-wrap: anywhere; max-width: 92ch; }
+.chg dd ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+@media (max-width: 560px) { .chg dl { grid-template-columns: 1fr; gap: 2px; } .chg dd { margin-bottom: 6px; } }
+.tag { display: inline-block; font-family: var(--font-data); font-size: 0.7rem; padding: 0 6px; border-radius: 3px; border: 1px solid var(--rule); color: var(--ink-2); margin-right: 6px; white-space: nowrap; }
+.tag.ab { border-color: var(--v4); color: var(--ink); }
+.tag.hyp { background: var(--warn-bg); color: var(--warn-ink); border-color: transparent; }
+.chg-legend ul { margin: 0; padding-left: 18px; font-size: var(--step--1); color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; max-width: 90ch; }
+.mx th, .mx td { vertical-align: top; }
+.mx td.mx-cell { min-width: 132px; white-space: normal; }
+.mx .mx-vals { font-family: var(--font-data); font-size: 0.78rem; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.mx .mx-vals .n { color: var(--ink); font-weight: 600; }
+.mx .mx-vals .m { color: var(--muted); }
+.mx .mx-vals .x { margin-left: auto; }
+.mx .mx-track { position: relative; height: 12px; margin-top: 5px; border-radius: 2px; background: linear-gradient(to right, var(--rule) 0 100%) center / 100% 2px no-repeat; }
+.mx .mx-track .dot { top: 6px; width: 9px; height: 9px; }
+.mx .mx-tags { font-size: 0.7rem; color: var(--muted); margin-top: 3px; }
+.mx .mx-na { color: var(--muted); font-size: 0.78rem; }
+#chg-dropped td { white-space: normal; min-width: 180px; vertical-align: top; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <p class="eyebrow">Ethernet fabric router · internal analysis</p>
+    <h1>Ring Jam Analysis</h1>
+    <p class="lede">Why full-ring multicast slowed down at 200G on an earlier build of the new router, how the cause was found, and the fixes tried.</p>
+    <p class="callout">What shipped is a different fix: bubble flow control sized to the ring. An injecting channel on a ring or torus sends only while the far receiver has max(2, R − 16) free slots, where main uses 2. On the Galaxy that takes the jam rows down 23–28%, and full-ring multicast at 4,352 B now runs about 5% faster than main. The analysis below is the investigation that led there.</p>
+  </header>
+
+  <div class="tabpanel" role="tabpanel" id="panel-ringjam" >
+  <section id="ringjam">
+    <h2>A ring jam at 200G</h2>
+    <div class="prose">
+      <p>On Galaxy's 200G rings the new router runs full-ring multicast about 29% faster than the old router up to 3,072 B, then about 41% slower at 4,352 B. The slowdown appears only when the new router's receiving ERISC handles a packet faster than the link delivers one. The old router's receiving ERISC is slower than a 200G link, so the old router never gets there.</p>
+    </div>
+    <div class="table-wrap"><table id="rj-gap"></table></div>
+    <p class="small muted">Galaxy full-ring multicast (the 8-chip rings set its rate), write, cycles per packet; mean of two passes in reversed router order, the old router and the new router in the same jobs. Line time: the packet's time on a 200G link.</p>
+  </section>
+
+  <section>
+    <h3>How we know the receiver's speed causes it</h3>
+    <div class="prose"><p>We slowed only the receiving ERISC, by a fixed number of cycles per packet. If it were the bottleneck, every row would get slower. Instead the large-packet rows got faster, until the receiver's own time per packet passed the line time; from there on all three sizes run on one line, set by the receiver.</p></div>
+    <div class="panel">
+      <div class="legend" id="rj-legend"></div>
+      <div id="rj-chart"></div>
+    </div>
+    <div class="table-wrap"><table id="rj-sweep"></table></div>
+    <p class="small muted">Galaxy: the new router with a delay on the receiving ERISC only (the build is byte-identical to the new router at delay 0), two passes in reversed order. Cycles per packet.</p>
+    <div class="prose"><p>The reverse holds too: skipping the receiver's local write makes it faster, and pushes rows into the slow mode. Giving the receiver more slots (32 to 48) did not help.</p></div>
+    <div class="table-wrap"><table id="rj-skip"></table></div>
+    <p class="small muted">Galaxy: the local write of data-only packets dropped on the receiving ERISC (the build is byte-identical to the new router with the switch off). Cycles per packet.</p>
+  </section>
+
+  <section>
+    <h3>Why it happens (hypothesis)</h3>
+    <div class="hop" aria-label="One ring hop">
+      <span class="box">worker</span><span class="box blind">forwarding channel</span><span class="arrow">→ link →</span><span class="box seen">receiver ring</span><span class="arrow">→ forward →</span><span class="box blind">next forwarding channel</span><span class="arrow">→ …</span>
+    </div>
+    <ul class="small" style="margin:0;padding-left:18px;color:var(--ink-2);display:flex;flex-direction:column;gap:6px;max-width:90ch">
+      <li>Rings avoid deadlock with bubble flow control: a worker may send only if the next chip's receiver ring has 2 free slots; a forwarded packet needs 1.</li>
+      <li>In the new router one ring hop has two buffers in series: the receiver ring and the next sending ERISC's forwarding channel. The check reads only the receiver ring (outlined).</li>
+      <li>When the receiver outruns the link, the queue moves into the forwarding channels (shaded), which the check cannot see. Workers keep sending until the whole ring is full; it then advances one free slot at a time, each move waiting a full credit round trip.</li>
+      <li>Past saturation this is known behavior of bubble flow control: <a href="https://web.engr.oregonstate.edu/~chenliz/publications/2011_IPDPS_Critical%20Bubble%20Scheme_Lizhong%20Chen.pdf">Chen, Wang and Pinkston, IPDPS 2011</a>, sections II.C and V.C.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h3>Fix tried on the Galaxy: hold back injection</h3>
+    <div class="prose"><p>A worker (or, on a torus, a turn from the other axis) may send only if the straight forwarding channel holds fewer than T packets, or K forwarded packets have gone out since the last injection. K = 6 matches an 8-chip ring, where each link carries 7 flows. Holding back injection removes the jam: the 8-chip ring at 4,352 B drops from 371 to 254 cycles, below the old router's <span id="rj-main"></span> on the full-ring row.</p></div>
+    <div class="table-wrap"><table id="rj-glx"></table></div>
+    <p class="small muted">Galaxy, two passes in reversed order, every arm validated with data checks and flow control on. Cycles per packet; green or red where an arm moves by more than 1 cycle from the throttle off.</p>
+  </section>
+
+  <section>
+    <h3>The same throttle at 400G</h3>
+    <div class="prose"><p>A P150 has no jam to remove (every router there is slower than its 400G link), so the throttle only costs. A fixed K holds the worker below its share where each link carries fewer flows (both-way ring and 2x4 torus multicast, up to +21.5 cycles), and the torus version costs 4 to 7 cycles on 1-hop writes even where it never engages. It is not a general fix yet. Next is a trigger that tells a jam (the link idle for lack of credits) from an ordinary queue; that too is a hypothesis to test.</p></div>
+    <div class="table-wrap"><table id="rj-p150"></table></div>
+    <p class="small muted">P150x8, two passes in reversed order, every arm validated. Cycles per packet; colors as above.</p>
+  </section>
+  </div>
+
+
+</div>
+<div class="tip" id="tip" role="status" hidden></div>
+<script>
+const D = {"ringjam":{"gap":[{"size":256,"wire":24.0,"main":274.46,"new":191.51},{"size":1024,"wire":65.4,"main":270.29,"new":191.74},{"size":2048,"wire":120.7,"main":271.06,"new":191.96},{"size":3072,"wire":176.0,"main":269.97,"new":192.08},{"size":4352,"wire":248.2,"main":263.75,"new":372.19}],"sweep":{"delays":[0,16,32,48,64,96],"series":[{"label":"8-chip ring, 3,072 B","size":3072,"wire":176.0,"vals":[192.0,218.9,237.5,255.4,267.8,303.3]},{"label":"8-chip ring, 3,584 B","size":3584,"wire":203.7,"vals":[300.7,219.0,237.5,255.4,267.8,303.3]},{"label":"8-chip ring, 4,352 B","size":4352,"wire":248.2,"vals":[373.5,333.7,331.6,256.3,268.8,303.6]}],"torus":[{"label":"torus full ring, 3,072 B","size":3072,"wire":178.6,"vals":[246.4,272.1,290.0,307.7,320.4,355.4]},{"label":"torus full ring, 4,352 B","size":4352,"wire":250.8,"vals":[269.9,273.5,290.8,308.3,320.8,355.6]}]},"writeskip":[{"row":"8-chip ring","size":3072,"base":191.9,"skip":278.5,"wire":176.0},{"row":"8-chip ring","size":4352,"base":372.3,"skip":374.2,"wire":248.2},{"row":"torus full ring","size":3072,"base":246.4,"skip":216.1,"wire":178.6},{"row":"torus full ring","size":4352,"base":270.0,"skip":342.2,"wire":250.8}],"glx":[{"row":"8-chip ring, full-ring multicast","size":3072,"base":191.9,"A":191.9,"B":191.8,"C":191.8},{"row":"8-chip ring, full-ring multicast","size":3584,"base":301.3,"A":247.7,"B":225.7,"C":228.7},{"row":"8-chip ring, full-ring multicast","size":4352,"base":371.4,"A":334.7,"B":254.4,"C":254.4},{"row":"4-chip ring, full-ring multicast","size":4352,"base":339.3,"A":255.0,"B":255.0,"C":255.0},{"row":"Half-ring multicast","size":3072,"base":186.2,"A":186.6,"B":186.5,"C":186.3},{"row":"Half-ring multicast","size":4352,"base":332.2,"A":274.9,"B":253.7,"C":253.7},{"row":"Ring, 1-hop unicast","size":3072,"base":177.0,"A":177.0,"B":177.0,"C":177.0},{"row":"Ring, 1-hop unicast","size":4352,"base":249.5,"A":249.5,"B":249.5,"C":249.5},{"row":"Torus, full-ring multicast","size":3072,"base":246.4,"A":246.4,"B":246.3,"C":246.5},{"row":"Torus, full-ring multicast","size":4352,"base":269.9,"A":262.8,"B":259.6,"C":271.5}],"p150":[{"row":"Ring multicast (both directions)","size":3072,"base":141.1,"A":143.5,"B":162.6,"C":156.2},{"row":"Ring multicast (both directions)","size":4352,"base":147.6,"A":154.0,"B":167.7,"C":155.4},{"row":"Half-ring multicast","size":3072,"base":171.9,"A":175.2,"B":177.3,"C":171.9},{"row":"Half-ring multicast","size":4352,"base":173.0,"A":176.3,"B":177.5,"C":172.7},{"row":"One-way full-ring multicast","size":4352,"base":219.4,"A":219.3,"B":219.3,"C":219.3},{"row":"Ring, 1-hop unicast","size":4352,"base":140.9,"A":140.9,"B":140.9,"C":140.9},{"row":"XY torus 2x4, multicast","size":4352,"base":126.1,"A":141.1,"B":147.5,"C":126.6},{"row":"XY torus 2x4, 1-hop unicast","size":1024,"base":146.6,"A":152.4,"B":152.4,"C":153.3},{"row":"XY torus 2x4, 1-hop unicast","size":4352,"base":146.9,"A":151.0,"B":151.0,"C":151.9},{"row":"XY torus 4x2, multicast","size":4352,"base":189.6,"A":191.5,"B":191.0,"C":189.2},{"row":"XY torus 4x2, 1-hop unicast","size":4352,"base":146.9,"A":151.0,"B":151.0,"C":151.9}],"arms":{"A":{"T":1,"K":2},"B":{"T":1,"K":6},"C":{"T":4,"K":6}},"main_fullring_4352":263.75,"sources":"gap, GlxFullRingMulticast write sweep :, receiver delay 0..96 cycles/packet writeskip :, local write of data-only packets skipped glx : injection throttle, arms off / A / B / C p150 : the same arms on a P150x8"},"summary":{"system":{"400G":"Blackhole P150x8","200G":"Blackhole Galaxy","100G":"Wormhole T3K"},"labels":{},"roles":{}}};
+
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const f1 = (x) => (x == null ? "–" : Number(x).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
+const f2 = (x) => (x == null ? "–" : Number(x).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const fint = (x) => (x == null ? "–" : Math.round(x).toLocaleString("en-US"));
+// The router clock in GHz by link: Blackhole 1.35, Wormhole 1.0. Points from Wormhole carry their own (clk).
+const CLK = { "400G": 1.35, "200G": 1.35, "100G": 1.0 };
+const gbps = (size, cycles, clk) => size * (clk || 1.35) / cycles;
+const bwc = (size, cycles, clk) => `${f1(gbps(size, cycles, clk))} GB/s (${f1(cycles)} cycles)`;
+const cyc = (size, gb) => size * 1.35 / gb;  // cycles per packet from GB/s (Blackhole rows only)
+const B = (n) => n.toLocaleString("en-US") + " B";
+const MODE = { two: "two ERISCs", one: "one ERISC", mux: "mux mode" };
+const MODE_S = { two: "two cores", one: "one core", mux: "mux mode" };  // summary wording
+
+/* ---------- tooltip ---------- */
+const tip = $("#tip");
+function showTip(node, ev) { tip.replaceChildren(node); tip.hidden = false; placeTip(ev); }
+function placeTip(ev) {
+  const r = tip.getBoundingClientRect();
+  let x, y;
+  if (ev && ev.clientX != null) { x = ev.clientX + 14; y = ev.clientY + 14; }
+  else if (ev && ev.target) { const b = ev.target.getBoundingClientRect(); x = b.left + 24; y = b.bottom + 6; }
+  else { x = 20; y = 20; }
+  if (x + r.width > window.innerWidth - 8) x = Math.max(8, window.innerWidth - r.width - 8);
+  if (y + r.height > window.innerHeight - 8) y = Math.max(8, y - r.height - 28);
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.hidden = true; }
+function tipRow(color, value, sub, hollow) {
+  const row = el("div", "t-row");
+  const key = el("i", "t-key"); key.style.background = color;
+  if (hollow) { key.style.background = "transparent"; key.style.borderTop = "2px solid " + color; key.style.height = "0"; }
+  const box = el("div"); box.append(el("span", "t-val", value), document.createTextNode(" "), el("span", "t-sub", sub));
+  row.append(key, box); return row;
+}
+function hover(row, make) {
+  row.addEventListener("pointermove", (ev) => showTip(make(), ev));
+  row.addEventListener("pointerleave", hideTip);
+  row.addEventListener("focus", (ev) => showTip(make(), ev));
+  row.addEventListener("blur", hideTip);
+}
+
+/* ---------- summary ---------- */
+function simpleTable(id, cols, rows) {
+  const t = $(id); t.replaceChildren(); const th = el("thead"); const hr = el("tr");
+  for (const [txt, num] of cols) hr.append(el("th", num ? "num" : "", txt));
+  th.append(hr); t.append(th);
+  const tb = el("tbody");
+  for (const r of rows) { const tr = el("tr"); for (const [v, num, cls] of r) { const td = el("td", num ? "num" : "", v); if (cls) td.classList.add(cls); tr.append(td); } tb.append(tr); }
+  t.append(tb);
+}
+function ratioCls(q) { return q >= 1.005 ? "better" : q <= 0.995 ? "worse" : ""; }
+const PK = { link: "400G", size: 4352 };
+function pkChips(label, options, key) {
+  const g = el("div", "fgroup"); g.append(el("div", "flabel", label));
+  const chips = el("div", "chips");
+  for (const [val, text] of options) {
+    const b = el("button", "fchip", text); b.type = "button";
+    b.setAttribute("aria-pressed", String(PK[key] === val));
+    b.addEventListener("click", () => {
+      PK[key] = val;
+      if (key === "link") {
+        const sizes = D.peaks.filter(x => x.link === PK.link).map(x => x.size);
+        if (!sizes.includes(PK.size)) PK.size = Math.max(...sizes);
+      }
+      renderPeakTable();
+    });
+    chips.append(b);
+  }
+  g.append(chips); return g;
+}
+function renderPeakTable() {
+  const systems = { "400G": "Blackhole P150x8", "200G": "Blackhole Galaxy", "100G": "Wormhole T3K" };
+  const links = [...new Set(D.peaks.map(x => x.link))];
+  const sizes = [...new Set(D.peaks.filter(x => x.link === PK.link).map(x => x.size))].sort((a, b) => a - b);
+  const f = $("#pk-filters"); f.replaceChildren(
+    pkChips("Link", links.map(l => [l, `${l} links · ${systems[l]}`]), "link"),
+    pkChips("Packet size", sizes.map(s => [s, B(s)]), "size"));
+  const t = $("#peaks"); t.replaceChildren();
+  const cols = [["Topology", 0], ["Traffic", 0], ["Tests", 1], ["Line rate", 1], ["Old router peak", 1], ["New router peak", 1], ["Old router range", 1], ["New router range", 1]];
+  const th = el("thead"); const hr = el("tr");
+  for (const [txt, num] of cols) hr.append(el("th", num ? "num" : "", txt));
+  th.append(hr); t.append(th);
+  const tb = el("tbody"); t.append(tb);
+  const pct = (x, c) => 100 * x.wire / c;
+  for (const x of D.peaks.filter(x => x.link === PK.link && x.size === PK.size)) {
+    const tr = el("tr"); tr.className = "clickable"; tr.tabIndex = 0;
+    tr.setAttribute("aria-label", `Show the ${x.topo} ${x.traffic} tests at ${x.size} bytes, ${x.link}, in the chart`);
+    const peakCell = (c, label, better) => {
+      const td = el("td", "num");
+      const v = el("div", null, `${f1(gbps(x.size, c, CLK[x.link]))} GB/s · ${pct(x, c).toFixed(0)}%`);
+      if (better === true) v.classList.add("better");
+      if (better === false) v.classList.add("worse");
+      td.append(v, el("div", "cell-sub", label));
+      return td;
+    };
+    const nb = x.new_peak < x.main_peak * 0.995 ? true : x.new_peak > x.main_peak * 1.005 ? false : null;
+    tr.append(el("td", null, x.topo), el("td", null, x.traffic),
+      el("td", "num", String(x.tests)), el("td", "num", `${f1(x.line_gbps)} GB/s`),
+      peakCell(x.main_peak, x.main_peak_label, null), peakCell(x.new_peak, x.new_peak_label, nb),
+      el("td", "num", `${pct(x, x.main_low).toFixed(0)}–${pct(x, x.main_peak).toFixed(0)}%`),
+      el("td", "num", `${pct(x, x.new_low).toFixed(0)}–${pct(x, x.new_peak).toFixed(0)}%`));
+    const go = () => {
+      BW.size = x.size; BW.topo = x.topo; BW.traffic = x.traffic; BW.mode = "two";
+      $("#bw-filters").replaceChildren(); renderFilters(); renderBW();
+      $("#bw-filters").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    };
+    tr.addEventListener("click", go);
+    tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    tb.append(tr);
+  }
+}
+function renderPeaks() {
+  $("#bw-intro").textContent = D.intro;
+  renderPeakTable();
+}
+
+/* ---------- line-rate dumbbells ---------- */
+const BW = { size: 4352, topo: "2D mesh", traffic: "All", mode: "two" };
+const LINKS = [["400G", "400G links", "Blackhole P150x8"], ["200G", "200G links", "Blackhole Galaxy"], ["100G", "100G links", "Wormhole T3K, one core per router"]];
+
+function chipGroup(label, options, key) {
+  const g = el("div", "fgroup"); g.append(el("div", "flabel", label));
+  const chips = el("div", "chips");
+  for (const [val, text] of options) {
+    const b = el("button", "fchip", text); b.type = "button";
+    b.setAttribute("aria-pressed", String(BW[key] === val));
+    b.addEventListener("click", () => {
+      BW[key] = val;
+      for (const c of chips.children) c.setAttribute("aria-pressed", "false");
+      b.setAttribute("aria-pressed", "true");
+      renderBW();
+    });
+    chips.append(b);
+  }
+  g.append(chips); return g;
+}
+function renderFilters() {
+  const sizes = [...new Set(D.bw.map(r => r.size))].sort((a, b) => a - b);
+  $("#bw-filters").append(
+    chipGroup("Packet size", sizes.map(s => [s, B(s)]), "size"),
+    chipGroup("Topology", [["All", "All"], ...D.topos.map(t => [t, t])], "topo"),
+    chipGroup("Traffic", [["All", "All"], ...D.traffic.map(t => [t, t])], "traffic"),
+    chipGroup("Router", [["two", "Two ERISCs"], ["one", "One ERISC"], ["mux", "Mux mode"]], "mode"),
+  );
+}
+function visibleRows(link) {
+  return D.bw.filter(r => r.link === link && r.size === BW.size && (BW.topo === "All" || r.topo === BW.topo)
+    && (BW.traffic === "All" || r.traffic === BW.traffic) && (r.mode === BW.mode || r.link === "100G"));
+}
+function niceDomain(maxPct) {
+  if (maxPct > 60) return Math.max(100, Math.ceil(maxPct / 5) * 5);
+  const raw = maxPct * 1.2;
+  return [2, 4, 5, 8, 10, 15, 20, 25, 30, 40, 50, 60].find(s => s >= raw) || 60;
+}
+function bwTip(r) {
+  const n = el("div");
+  n.append(el("div", "t-title", r.label));
+  n.append(el("div", "t-sub", `${r.link} · ${B(r.size)} · ${r.topo} · ${r.traffic.toLowerCase()} · ${MODE[r.mode]}`));
+  n.append(tipRow("var(--v4)", `${(100 * r.wire / r.new).toFixed(1)}%`, `new router · ${bwc(r.size, r.new, CLK[r.link])}`));
+  n.append(tipRow("var(--main)", `${(100 * r.wire / r.main).toFixed(1)}%`, `old router · ${bwc(r.size, r.main, CLK[r.link])}`, true));
+  n.append(el("div", "t-foot", `New ÷ old router ${f2(r.main / r.new)}× · wire ${f1(r.wire)} cycles · ${r.same_job ? "same job" : "separate jobs"}${r.router === "earlier" ? " · an earlier build of the new router" : ""}`));
+  return n;
+}
+function renderBW() {
+  const panels = $("#bw-panels"); panels.replaceChildren();
+  const all = LINKS.flatMap(([l]) => visibleRows(l));
+  let maxPct = 0;
+  for (const r of all) maxPct = Math.max(maxPct, 100 * r.wire / r.main, 100 * r.wire / r.new);
+  const dom = niceDomain(maxPct || 100);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => t * dom);
+  const x = (pct) => Math.min(100, Math.max(0, 100 * pct / dom));
+  let count = 0;
+  for (const [link, title, system] of LINKS) {
+    const rows = visibleRows(link);
+    const p = el("div", "panel");
+    const ph = el("div", "panel-head");
+    ph.append(el("h4", null, title), el("span", "meta", `${system} · ${rows.length} tests`));
+    p.append(ph);
+    if (!rows.length) {
+      let msg = "No tests for this selection.";
+      if (link === "200G" && BW.mode !== "two") msg = "The 200G runs are two-ERISC only.";
+      else if (link === "200G" && BW.topo !== "All" && !["1D line", "Ring", "2D mesh"].includes(BW.topo)) msg = `No ${BW.topo.toLowerCase()} tests at 200G yet.`;
+      else if (BW.topo === "Neighbor exchange" && BW.traffic === "Multicast") msg = "Neighbor exchange has no multicast tests.";
+      p.append(el("div", "empty", msg)); panels.append(p); continue;
+    }
+    const ax = el("div", "db-row axis-row"); ax.append(el("div", "db-label"));
+    const at = el("div", "track");
+    for (const t of ticks) { const g = el("div", "tick", t === 100 ? "" : (Number.isInteger(t) ? t : t.toFixed(1)) + "%"); g.style.left = x(t) + "%"; at.append(g); }
+    if (dom >= 100) { const wl = el("div", "tick wire-label", "line rate"); wl.style.left = x(100) + "%"; wl.style.transform = "translateX(-100%)"; at.append(wl); }
+    ax.append(at); p.append(ax);
+    let lastGroup = null;
+    for (const r of rows) {
+      const pv = 100 * r.wire / r.new, pm = 100 * r.wire / r.main;
+      const row = el("div", "db-row"); row.tabIndex = 0;
+      row.setAttribute("aria-label", `${r.label}: new router ${pv.toFixed(1)} percent, old router ${pm.toFixed(1)} percent of line rate`);
+      const lab = el("div", "db-label");
+      const grp = (BW.topo === "All" ? r.topo : "") + (BW.topo === "All" && BW.traffic === "All" ? " · " : "") + (BW.traffic === "All" ? r.traffic : "");
+      if (grp && grp !== lastGroup) { lab.append(el("div", "grp", grp)); lastGroup = grp; }
+      lab.append(document.createTextNode(r.label));
+      const tr = el("div", "track");
+      for (const t of ticks) { const g = el("div", "gl"); g.style.left = x(t) + "%"; tr.append(g); }
+      if (dom >= 100) { const w = el("div", "wl"); w.style.left = x(100) + "%"; tr.append(w); }
+      const a = Math.min(x(pv), x(pm)), b = Math.max(x(pv), x(pm));
+      const c = el("div", "conn"); c.style.left = a + "%"; c.style.width = (b - a) + "%"; tr.append(c);
+      const dm = el("div", "dot main"); dm.style.left = x(pm) + "%"; tr.append(dm);
+      const dv = el("div", "dot v4"); dv.style.left = x(pv) + "%"; tr.append(dv);
+      row.append(lab, tr);
+      hover(row, () => bwTip(r));
+      p.append(row); count++;
+    }
+    panels.append(p);
+  }
+  $("#bw-count").textContent = `${count} tests at ${B(BW.size)}`;
+  if (!$("#bw-table").hidden) renderBWTable();
+}
+function renderBWTable() {
+  const wrap = $("#bw-table"); wrap.replaceChildren();
+  const t = el("table"); t.id = "bw-tab"; wrap.append(t);
+  const rows = LINKS.flatMap(([l]) => visibleRows(l));
+  simpleTable("#bw-tab", [["Link", 0], ["Topology", 0], ["Traffic", 0], ["Case", 0], ["Packet", 1], ["Wire (cycles)", 1], ["Old router", 1], ["% of line rate", 1], ["New router", 1], ["% of line rate", 1], ["New ÷ old router", 1]],
+    rows.map(r => { const q = r.main / r.new; return [[r.link, 0], [r.topo, 0], [r.traffic, 0], [r.label, 0], [B(r.size), 1], [f1(r.wire), 1], [bwc(r.size, r.main, CLK[r.link]), 1], [(100 * r.wire / r.main).toFixed(1), 1], [bwc(r.size, r.new, CLK[r.link]), 1], [(100 * r.wire / r.new).toFixed(1), 1], [f2(q) + "×", 1, ratioCls(q)]]; }));
+}
+
+/* ---------- slot allocations ---------- */
+// Each VC's sender channels as logged: VC0 and VC2 list the worker channel (the local sender's) first, then the
+// forwarding channels (traffic passing through from the router's other links); VC1 has forwarding channels only. The
+// receiver is the far router's buffer for that VC.
+function allocText(alloc, vcs) {
+  if (!alloc) return "";
+  return vcs.filter(v => alloc[`VC${v}`]).map(v => {
+    const a = alloc[`VC${v}`];
+    const ch = String(a.sender).split(",").map(t => Number(t.trim())).filter(n => n > 0);
+    const worker = v === 1 ? null : ch.shift();
+    const parts = [];
+    if (worker != null) parts.push(`worker ${worker}`);
+    if (ch.length) parts.push(ch.every(n => n === ch[0]) ? `forwarding ${ch[0]} ×${ch.length}` : `forwarding ${ch.join("/")}`);
+    parts.push(`receiver ${a.receiver}`);
+    return `VC${v}: ${parts.join(", ")}`;
+  }).join(" · ");
+}
+function allocBlock(entries, vcs) {
+  const box = el("div", "alloc");
+  for (const [who, alloc] of entries) {
+    const t = allocText(alloc, vcs);
+    if (!t) continue;
+    const line = el("div");
+    line.append(el("b", null, who + " "), document.createTextNode(t));
+    box.append(line);
+  }
+  return box;
+}
+
+/* ---------- two VCs on one link ---------- */
+const LINK_TITLE = { "400G": "400G, P150x8", "200G": "200G, BH Galaxy" };
+function renderMultiVC() {
+  const rows = [...(D.multivc || []), ...(D.multivc_glx || [])];
+  if (!rows.length) { $("#mvc-sub").hidden = true; return; }
+  const panels = $("#mvc-panels");
+  const groups = [["default", "each router's default allocation"], ["v8", "same allocation for both routers"]];
+  const hasAlloc = rows.some(r => r.alloc);
+  for (const link of ["400G", "200G"]) {
+  const lr = rows.filter(r => (r.link || "400G") === link);
+  if (!lr.length) continue;
+  const top = Math.max(...lr.map(r => Math.max(r.combined_gbps ?? (r.vc0_gbps + r.vc2_gbps), r.line_gbps))) * 1.18;
+  const x = (v) => 100 * v / top;
+  for (const [slots, gtitle] of groups) {
+    const rs = lr.filter(r => r.slots === slots);
+    if (!rs.length) continue;  // no runs at this allocation
+    const title = `${LINK_TITLE[link] || link}: ${gtitle}`;
+    const p = el("div", "panel");
+    const ph = el("div", "panel-head"); ph.append(el("h4", null, title));
+    const a = rs.find(r => r.router === "main"), b = rs.find(r => r.router !== "main");
+    if (hasAlloc) {
+      ph.append(el("span", "meta", "slots per channel"));
+    }
+    p.append(ph);
+    if (hasAlloc) {
+      p.append(slots === "default" ? allocBlock([["old router", a && a.alloc], ["new router", b && b.alloc]], [0, 2])
+                                   : allocBlock([["both routers", b && b.alloc]], [0, 2]));
+    }
+    let lastSize = null;
+    for (const r of rs) {
+      const row = el("div", "db-row"); row.tabIndex = 0;
+      const lab = el("div", "db-label");
+      if (r.size !== lastSize) { lab.append(el("div", "grp", B(r.size))); lastSize = r.size; }
+      lab.append(document.createTextNode(r.router === "main" ? "old router" : "new router"));
+      const tr = el("div", "track");
+      const w = el("div", "wl"); w.style.left = x(r.line_gbps) + "%"; tr.append(w);
+      const s0 = el("div", "seg vc0"); s0.style.width = x(r.vc0_gbps) + "%"; tr.append(s0);
+      const s2 = el("div", "seg vc2"); s2.style.left = x(r.vc0_gbps) + "%"; s2.style.width = x(r.vc2_gbps) + "%"; tr.append(s2);
+      const tot = r.combined_gbps ?? (r.vc0_gbps + r.vc2_gbps);
+      const v = el("div", "seg-val", `${f1(tot)} GB/s · ${(100 * tot / r.line_gbps).toFixed(0)}%`);
+      v.style.left = `calc(${x(tot)}% + 6px)`; tr.append(v);
+      row.append(lab, tr);
+      hover(row, () => {
+        const n = el("div");
+        n.append(el("div", "t-title", `${r.router === "main" ? "Old router" : "New router"} · ${B(r.size)} · ${title}`));
+        n.append(tipRow("var(--vc0)", `${f1(r.vc0_gbps)} GB/s`, `VC0 (${f1(cyc(r.size, r.vc0_gbps))} cycles/packet)`));
+        n.append(tipRow("var(--vc2)", `${f1(r.vc2_gbps)} GB/s`, `VC2 (${f1(cyc(r.size, r.vc2_gbps))} cycles/packet)`));
+        const extra = [];
+        if (r.combined_gbps != null) extra.push(`combined ${f1(r.combined_gbps)} GB/s in one run; two-run check ${f1(r.two_run_gbps)} GB/s`);
+        if (r.vc2_alone) extra.push(`VC2 alone ${f1(gbps(r.size, r.vc2_alone))} GB/s (${f1(r.vc2_alone)} cycles)`);
+        if (r.vc0_alone) extra.push(`VC0 alone with VC2 built in ${f1(gbps(r.size, r.vc0_alone))} GB/s (${f1(r.vc0_alone)} cycles)`);
+        extra.push(`line rate ${f1(r.line_gbps)} GB/s`);
+        n.append(el("div", "t-foot", extra.join(" · ")));
+        return n;
+      });
+      p.append(row);
+    }
+    panels.append(p);
+  }
+  }
+  const cols = [["Link", 0], ["Slots", 0], ...(hasAlloc ? [["Slots per channel", 0]] : []), ["Packet", 1], ["Router", 0], ["VC0", 1], ["VC2", 1], ["Combined (one run)", 1], ["Two-run check", 1], ["VC2 alone", 1], ["Share of line rate", 1]];
+  simpleTable("#mvc-table", cols,
+    rows.map(r => [[r.link || "400G", 0], [r.slots === "default" ? "default" : "same for both", 0], ...(hasAlloc ? [[allocText(r.alloc, [0, 2]), 0]] : []), [B(r.size), 1], [r.router === "main" ? "old router" : "new router", 0],
+      [bwc(r.size, cyc(r.size, r.vc0_gbps)), 1], [bwc(r.size, cyc(r.size, r.vc2_gbps)), 1],
+      [r.combined_gbps != null ? `${f1(r.combined_gbps)} GB/s` : "–", 1], [`${f1(r.two_run_gbps)} GB/s`, 1],
+      [r.vc2_alone ? bwc(r.size, r.vc2_alone) : "–", 1],
+      [`${(100 * (r.combined_gbps ?? (r.vc0_gbps + r.vc2_gbps)) / r.line_gbps).toFixed(0)}%`, 1]]));
+}
+
+/* ---------- multi-VC on the two-mesh split ---------- */
+function stackPanel(title, meta, rows, vcs, top, labelOf, extraTip, allocEntries) {
+  const x = (v) => 100 * v / top;
+  const p = el("div", "panel");
+  const ph = el("div", "panel-head"); ph.append(el("h4", null, title));
+  if (meta) ph.append(el("span", "meta", meta));
+  p.append(ph);
+  if (allocEntries) p.append(allocBlock(allocEntries, vcs));
+  let lastSize = null;
+  for (const r of rows) {
+    const row = el("div", "db-row"); row.tabIndex = 0;
+    const lab = el("div", "db-label");
+    if (r.size !== lastSize) { lab.append(el("div", "grp", B(r.size))); lastSize = r.size; }
+    lab.append(document.createTextNode(labelOf(r)));
+    const tr = el("div", "track");
+    const w = el("div", "wl"); w.style.left = x(r.line_gbps) + "%"; tr.append(w);
+    let left = 0;
+    const segs = r.segs.filter(sg => sg.gbps > 0);
+    segs.forEach((sg, i) => {
+      const s = el("div", `seg s vc${sg.vc}${i > 0 ? " gap" : ""}${i === segs.length - 1 ? " end" : ""}`);
+      s.style.left = x(left) + "%"; s.style.width = x(sg.gbps) + "%"; tr.append(s);
+      left += sg.gbps;
+    });
+    const v = el("div", "seg-val", `${f1(r.total)} GB/s · ${(100 * r.total / r.line_gbps).toFixed(0)}%`);
+    v.style.left = `calc(${x(r.total)}% + 6px)`; tr.append(v);
+    row.append(lab, tr);
+    hover(row, () => {
+      const n = el("div");
+      n.append(el("div", "t-title", `${labelOf(r)} · ${B(r.size)}`));
+      for (const sg of segs) n.append(tipRow(`var(--vc${sg.vc})`, `${f1(sg.gbps)} GB/s`, `VC${sg.vc} (${f1(cyc(r.size, sg.gbps))} cycles/packet)`));
+      const foot = extraTip(r);
+      foot.push(`line rate ${f1(r.line_gbps)} GB/s`);
+      n.append(el("div", "t-foot", foot.join(" · ")));
+      return n;
+    });
+    p.append(row);
+  }
+  return p;
+}
+
+function renderTwoMesh() {
+  const r01 = [...(D.multivc01 || []), ...(D.multivc01_glx || [])], r3 = D.multivc3 || [];
+  if (!r01.length) $("#mvc01-sub").hidden = true;
+  if (!r3.length) $("#mvc3-sub").hidden = true;
+  if (!r01.length && !r3.length) return;
+  const topOf = (rs) => Math.max(...rs.map(r => Math.max(r.combined_gbps, r.line_gbps, r.vc0_alone_gbps || 0))) * 1.18;
+  const aloneTips = (r, vcs) => vcs.filter(v => r[`vc${v}_alone_gbps`]).map(v => `VC${v} alone ${f1(r[`vc${v}_alone_gbps`])} GB/s`);
+  const hasAlloc01 = r01.some(r => r.alloc);
+  for (const link of ["400G", "200G"]) {
+    const lr = r01.filter(r => (r.link || "400G") === link);
+    if (!lr.length) continue;
+    const rows = lr.map(r => ({ ...r, total: r.combined_gbps, segs: [{ vc: 0, gbps: r.vc0_gbps }, { vc: 1, gbps: r.vc1_gbps }] }));
+    const am = lr.find(r => r.router === "main"), an = lr.find(r => r.router !== "main");
+    $("#mvc01-panels").append(stackPanel(`${LINK_TITLE[link] || link}: the old router and the new router`, hasAlloc01 ? "default allocation; slots per channel" : "default allocation", rows, [0, 1], topOf(lr),
+      r => (r.router === "main" ? "old router" : "new router"),
+      r => [...aloneTips(r, [0, 1]), `sum of the per-VC rates ${f1(r.summed_gbps)} GB/s`,
+            ...(r.finish_gap_pct > 1 ? [`the VCs finished ${f1(r.finish_gap_pct)}% apart (mean of runs), so the tail is one VC alone`] : [])],
+      hasAlloc01 ? [["old router", am && am.alloc], ["new router", an && an.alloc]] : null));
+  }
+  if (r01.length) {
+    simpleTable("#mvc01-table", [["Link", 0], ["Packet", 1], ["Router", 0], ...(hasAlloc01 ? [["Slots per channel", 0]] : []), ["VC0", 1], ["VC1", 1], ["Combined (one run)", 1], ["Sum of per-VC rates", 1], ["VC0 alone", 1], ["VC1 alone", 1], ["Share of line rate", 1]],
+      r01.map(r => [[r.link || "400G", 0], [B(r.size), 1], [r.router === "main" ? "old router" : "new router", 0], ...(hasAlloc01 ? [[allocText(r.alloc, [0, 1]), 0]] : []), [`${f1(r.vc0_gbps)} GB/s`, 1], [`${f1(r.vc1_gbps)} GB/s`, 1],
+        [`${f1(r.combined_gbps)} GB/s`, 1], [`${f1(r.summed_gbps)} GB/s`, 1], [`${f1(r.vc0_alone_gbps)} GB/s`, 1], [`${f1(r.vc1_alone_gbps)} GB/s`, 1],
+        [`${(100 * r.combined_gbps / r.line_gbps).toFixed(0)}%`, 1]]));
+  }
+  const top = r3.length ? topOf(r3) : 1;
+  if (r3.length) {
+    const rows = [];
+    for (const r of r3) {
+      rows.push({ ...r, alone: true, total: r.vc0_alone_gbps, segs: [{ vc: 0, gbps: r.vc0_alone_gbps }] });
+      rows.push({ ...r, total: r.combined_gbps, segs: [0, 1, 2].map(v => ({ vc: v, gbps: r[`vc${v}_gbps`] })) });
+    }
+    $("#mvc3-panels").append(stackPanel("400G, P150x8: new router", r3.some(r => r.alloc) ? "default allocation; slots per channel" : "default allocation", rows, [0, 1, 2], top,
+      r => (r.alone ? "VC0 alone" : "all three"),
+      r => (r.alone ? ["same build, VC1 and VC2 idle"] : [...aloneTips(r, [1, 2]), `sum of the per-VC rates ${f1(r.summed_gbps)} GB/s`]),
+      r3[0].alloc ? [["new router", r3[0].alloc]] : null));
+    simpleTable("#mvc3-table", [["Packet", 1], ["VC0", 1], ["VC1", 1], ["VC2", 1], ["All three (one run)", 1], ["Sum of per-VC rates", 1], ["VC0 alone", 1], ["VC1 alone", 1], ["VC2 alone", 1], ["Share of line rate", 1]],
+      r3.map(r => [[B(r.size), 1], [`${f1(r.vc0_gbps)} GB/s`, 1], [`${f1(r.vc1_gbps)} GB/s`, 1], [`${f1(r.vc2_gbps)} GB/s`, 1],
+        [`${f1(r.combined_gbps)} GB/s`, 1], [`${f1(r.summed_gbps)} GB/s`, 1], [`${f1(r.vc0_alone_gbps)} GB/s`, 1], [`${f1(r.vc1_alone_gbps)} GB/s`, 1],
+        [`${f1(r.vc2_alone_gbps)} GB/s`, 1], [`${(100 * r.combined_gbps / r.line_gbps).toFixed(0)}%`, 1]]));
+  }
+}
+
+/* ---------- cycle breakdown ---------- */
+function renderBreakdown() {
+  const B0 = D.breakdown;
+  if (!B0 || !B0.rows || !B0.rows.length) { $("#panel-breakdown").querySelector("section").append(el("p", "small muted", "No breakdown data yet.")); return; }
+  const cats = B0.cats, labels = B0.labels, rows = B0.rows;
+  const leg = $("#bd-legend");
+  for (const c of cats) {
+    const sp = el("span"); const k = el("i", "key-bd"); k.style.background = `var(--bd-${c})`;
+    sp.append(k, document.createTextNode(labels[c])); leg.append(sp);
+  }
+  const top = Math.max(...rows.map(r => r.rate)) * 1.2;
+  const x = (v) => 100 * v / top;
+  const points = [...new Set(rows.map(r => r.point))];
+  const box = $("#bd-panels");
+  for (const pt of points) {
+    const rs = rows.filter(r => r.point === pt);
+    const p = el("div", "panel");
+    const ph = el("div", "panel-head"); ph.append(el("h4", null, `${rs[0].label}`));
+    const main = rs.find(r => r.router === "main"), neu = rs.find(r => r.router !== "main");
+    ph.append(el("span", "meta", `${rs[0].link} · old router ${f1(main && main.rate)}, new ${f1(neu && neu.rate)} cycles/packet`));
+    p.append(ph);
+    for (const erisc of ["E0", "E1"]) {
+      const er = rs.filter(r => r.erisc === erisc);
+      if (!er.length) continue;
+      p.append(el("div", "bd-erisc", erisc === "E0" ? "sending ERISC" : "receiving ERISC"));
+      for (const r of er) {
+        const row = el("div", "db-row"); row.tabIndex = 0;
+        const lab = el("div", "db-label"); lab.append(document.createTextNode(r.router === "main" ? "old router" : "new router"));
+        const tr = el("div", "track");
+        let left = 0;
+        const segs = cats.filter(c => (r.cats[c] || 0) > 0.05);
+        segs.forEach((c, i) => {
+          const sg = el("div", `seg bd${i > 0 ? " gap" : ""}${i === segs.length - 1 ? " end" : ""}`);
+          sg.style.background = `var(--bd-${c})`; sg.style.left = x(left) + "%"; sg.style.width = x(r.cats[c]) + "%";
+          tr.append(sg); left += r.cats[c];
+        });
+        const v = el("div", "seg-val", f1(r.rate)); v.style.left = `calc(${x(left)}% + 6px)`; tr.append(v);
+        row.append(lab, tr);
+        hover(row, () => {
+          const n = el("div");
+          n.append(el("div", "t-title", `${r.router === "main" ? "Old router" : "New router"} · ${erisc === "E0" ? "sending" : "receiving"} ERISC · ${r.label}`));
+          for (const c of segs) n.append(tipRow(`var(--bd-${c})`, `${f1(r.cats[c])}`, `${labels[c]} (${(100 * r.cats[c] / r.rate).toFixed(0)}%)`));
+          n.append(el("div", "t-foot", `${f1(r.rate)} cycles/packet measured · ${r.router_name || ""} · ${(r.samples || 0).toLocaleString("en-US")} samples`));
+          return n;
+        });
+        p.append(row);
+      }
+    }
+    if (rs[0].note) p.append(el("p", "bd-note", rs[0].note));
+    box.append(p);
+  }
+  simpleTable("#bd-table", [["Point", 0], ["Link", 0], ["Router", 0], ["ERISC", 0], ["Cycles/packet", 1], ...cats.map(c => [labels[c], 1])],
+    rows.map(r => [[r.label, 0], [r.link, 0], [r.router === "main" ? "old router" : "new router", 0], [r.erisc === "E0" ? "sending" : "receiving", 0],
+      [f1(r.rate), 1], ...cats.map(c => [f1(r.cats[c] || 0), 1])]));
+}
+
+/* ---------- tabs ---------- */
+function setupTabs() {
+  const tabs = [...document.querySelectorAll('.tabs [role="tab"]')];
+  const ids = tabs.map(t => t.dataset.tab);
+  const show = (id, focus) => {
+    for (const t of tabs) {
+      const on = t.dataset.tab === id;
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById("panel-" + t.dataset.tab).hidden = !on;
+      if (on && focus) t.focus();
+    }
+    if (id === "summary") drawCharts();
+    try { history.replaceState(null, "", "#" + id); } catch (e) {}
+    try { localStorage.setItem("router-report-tab", id); } catch (e) {}
+  };
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => show(t.dataset.tab));
+    t.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      const j = (i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      show(ids[j], true); e.preventDefault();
+    });
+  });
+  let start = (location.hash || "").slice(1);
+  if (!ids.includes(start)) { try { start = localStorage.getItem("router-report-tab") || ""; } catch (e) { start = ""; } }
+  if (!ids.includes(start)) start = ids[0];
+  show(start);
+}
+
+function renderKeepalive() {
+  simpleTable("#ka", [["Topology", 0], ["Case", 0], ["Traffic", 0], ["Old router as shipped", 1], ["Old router, keepalive 1,000", 1], ["New router", 1]],
+    D.keepalive.map(k => [[k.topo, 0], [k.label, 0], [k.traffic, 0], [bwc(k.size, k.main), 1], [bwc(k.size, k.main_ka), 1], [bwc(k.size, k.new), 1]]));
+}
+
+/* ---------- latency ---------- */
+function renderLatency() {
+  const rows = D.latency;
+  const ns = (v) => String(Math.round(v));
+  const rng = (vs) => (ns(Math.min(...vs)) === ns(Math.max(...vs)) ? ns(vs[0]) : `${ns(Math.min(...vs))} to ${ns(Math.max(...vs))}`);
+  const per = [];
+  for (const link of LINKS2) {
+    const lr = rows.filter(r => r.link === link);
+    if (!lr.length) continue;
+    const hops = [...new Set(lr.map(r => r.hops))].sort((a, b) => a - b);
+    const parts = hops.map(h => `${rng(lr.filter(r => r.hops === h).map(r => r.main - r.new))} ns at ${h} hop${h > 1 ? "s" : ""}`);
+    const far = hops[hops.length - 1], fd = lr.filter(r => r.hops === far).map(r => (r.main - r.new) / far);
+    per.push(`${link} (${S.system[link]}): ${parts.join(", ")}; about ${rng(fd)} ns per hop`);
+  }
+  const ka = rows.filter(r => r.main_ka != null).map(r => Math.abs(r.main_ka - r.main));
+  $("#lat-intro").textContent = `The new router shortens one packet's round trip in every case measured. ${per.join(". ")}.` +
+    (ka.length ? ` The keepalive setting does not change latency: the old router at either setting is within ${Math.ceil(Math.max(...ka))} ns on every case.` : "");
+  const links = LINKS2.filter(l => rows.some(r => r.link === l));
+  const draw = (link) => {
+    const lr = rows.filter(r => r.link === link);
+    $("#lat-foot").textContent = `${link}, ${S.system[link]}: median net round trip of 1,000 one-packet samples per pass (round trip minus the responder's own time), mean of two passes in reversed router order. Both routers in the same job. Each pass's value is in parentheses.`;
+    simpleTable("#lat", [["Hops", 0], ["Direction", 0], ["Packet", 0], ["Size", 1], ["Old router (ns)", 1], ["New router (ns)", 1], ["Difference (ns)", 1], ["Difference", 1]],
+      lr.map(r => { const d = r.new - r.main; const cls = d < 0 ? "better" : d > 0 ? "worse" : "";
+        return [[String(r.hops), 0], [r.dir, 0], [r.type, 0], [B(r.size), 1],
+          [`${f1(r.main)} (${r.main_passes.map(v => v.toFixed(0)).join(" / ")})`, 1], [`${f1(r.new)} (${r.new_passes.map(v => v.toFixed(0)).join(" / ")})`, 1],
+          [(d > 0 ? "+" : "") + f1(d), 1, cls], [(d > 0 ? "+" : "") + (100 * d / r.main).toFixed(1) + "%", 1, cls]]; }));
+  };
+  linkChips("#lat-links", links, links[0], draw);
+  draw(links[0]);
+}
+
+/* ---------- size ---------- */
+function renderSize() {
+  const box = $("#sizebars");
+  const top = 32000;
+  const x = (v) => 100 * v / top;
+  let first = true;
+  for (const s of D.sizes) {
+    if (s.main == null || s.new == null) continue;
+    const row = el("div", "bar-row");
+    const lab = el("div", "db-label"); lab.append(document.createTextNode(s.label));
+    lab.append(el("div", "tags", `old router ${fint(s.main)} · new ${fint(s.new)} B` + (s.main_os ? ` · old router ships at -Os: ${fint(s.main_os)}` : "")));
+    const tr = el("div", "bar-track");
+    const lim = el("div", "limit"); lim.style.left = x(D.buffer) + "%"; tr.append(lim);
+    if (first) { const ll = el("div", "limit-label", `buffer ${fint(D.buffer)} B`); ll.style.left = x(D.buffer) + "%"; tr.append(ll); first = false; }
+    const bm = el("div", "bar main"); bm.style.width = x(s.main) + "%"; tr.append(bm);
+    const bv = el("div", "bar v4"); bv.style.width = x(s.new) + "%"; tr.append(bv);
+    row.append(lab, tr); box.append(row);
+  }
+  simpleTable("#stack", [["Configuration", 0], ["Least free stack, sending ERISC: old router", 1], ["New router", 1]],
+    D.sizes.filter(s => s.main_stack != null && s.new_stack != null).map(s => [[s.label, 0], [fint(s.main_stack) + " B" + (s.main_stack_os ? ` (-Os ${fint(s.main_stack_os)} B)` : ""), 1], [fint(s.new_stack) + " B", 1]]));
+}
+
+/* ---------- ring jam ---------- */
+function renderRingJam() {
+  const J = D.ringjam;
+  if (!J) return;
+  $("#rj-main").textContent = `${f1(J.main_fullring_4352)}`;
+  const pct = (a, b) => `${a < b ? "−" : "+"}${Math.abs(100 * (a / b - 1)).toFixed(0)}%`;
+  simpleTable("#rj-gap", [["Packet", 1], ["Line time", 1], ["Old router", 1], ["New router", 1], ["New against the old router", 1]],
+    J.gap.map(r => [[B(r.size), 1], [f1(r.wire), 1], [f1(r.main), 1], [f1(r.new), 1],
+      [pct(r.new, r.main) + " time", 1, r.new < r.main * 0.995 ? "better" : r.new > r.main * 1.005 ? "worse" : ""]]));
+
+  // Receiver-delay sweep: one line per packet size on the 8-chip ring; dashed lines mark each size's line time.
+  const S = J.sweep, dl = S.delays, series = S.series;
+  const color = (s) => `var(--jam-${s.size})`;
+  const leg = $("#rj-legend");
+  for (const s of series) { const sp = el("span"); const k = el("i", "key-line"); k.style.background = color(s); sp.append(k, document.createTextNode(s.label)); leg.append(sp); }
+  const sw = el("span"); const wk = el("i", "key-line"); wk.style.background = "var(--wire)"; wk.style.opacity = "0.55"; sw.append(wk, document.createTextNode("line time of each size (dashed)")); leg.append(sw);
+  leg.append(el("span", "muted", "y: cycles per packet, fewer is faster · x: cycles added on the receiving ERISC"));
+  const W = 740, H = 300, ml = 44, mr = 175, mt = 14, mb = 34;
+  const x0 = 0, x1 = 96, y0 = 150, y1 = 400;
+  const X = (v) => ml + (W - ml - mr) * (v - x0) / (x1 - x0);
+  const Y = (v) => mt + (H - mt - mb) * (1 - (v - y0) / (y1 - y0));
+  const NS = "http://www.w3.org/2000/svg";
+  const sv = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, class: "rj-svg", role: "img", "aria-label": "Cycles per packet against the delay added on the receiving ERISC, 8-chip ring, three packet sizes" });
+  for (let v = y0; v <= y1; v += 50) { svg.append(sv("line", { x1: ml, x2: W - mr, y1: Y(v), y2: Y(v), class: "grid" })); svg.append(sv("text", { x: ml - 8, y: Y(v) + 4, "text-anchor": "end" }, String(v))); }
+  for (const d of dl) svg.append(sv("text", { x: X(d), y: H - mb + 18, "text-anchor": "middle" }, String(d)));
+  for (const s of series) {
+    svg.append(sv("line", { x1: ml, x2: W - mr, y1: Y(s.wire), y2: Y(s.wire), class: "wire" }));
+    svg.append(sv("text", { x: W - mr + 8, y: Y(s.wire) + 4, class: "lab" }, `line time ${B(s.size)}: ${f1(s.wire)}`));
+  }
+  const cross = sv("line", { y1: mt, y2: H - mb, class: "cross", visibility: "hidden" }); svg.append(cross);
+  for (const s of series) {
+    svg.append(sv("polyline", { points: dl.map((d, i) => `${X(d)},${Y(s.vals[i])}`).join(" "), style: `fill:none;stroke:${color(s)};stroke-width:2;stroke-linejoin:round` }));
+    s.vals.forEach((v, i) => svg.append(sv("circle", { cx: X(dl[i]), cy: Y(v), r: 4, style: `fill:${color(s)};stroke:var(--surface);stroke-width:2` })));
+    svg.append(sv("text", { x: X(0) + 10, y: Y(s.vals[0]) - 8, class: "lab" }, B(s.size)));
+  }
+  // Hover: one band per delay, a crosshair and every series' value there.
+  dl.forEach((d, i) => {
+    const half = (X(dl[Math.min(i + 1, dl.length - 1)]) - X(dl[Math.max(i - 1, 0)])) / (i === 0 || i === dl.length - 1 ? 2 : 4);
+    const band = sv("rect", { x: X(d) - Math.max(half, 12), y: mt, width: 2 * Math.max(half, 12), height: H - mt - mb, fill: "transparent", tabindex: 0 });
+    const make = () => {
+      const n = el("div");
+      n.append(el("div", "t-title", `${d} cycles added on the receiving ERISC`));
+      for (const s of series) n.append(tipRow(color(s), f1(s.vals[i]), `${s.label} (line time ${f1(s.wire)})`));
+      for (const t of S.torus) n.append(tipRow("var(--muted)", f1(t.vals[i]), `${t.label} (line time ${f1(t.wire)})`, true));
+      return n;
+    };
+    band.addEventListener("pointermove", (ev) => { cross.setAttribute("x1", X(d)); cross.setAttribute("x2", X(d)); cross.setAttribute("visibility", "visible"); showTip(make(), ev); });
+    band.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+    band.addEventListener("focus", (ev) => showTip(make(), ev));
+    band.addEventListener("blur", hideTip);
+    svg.append(band);
+  });
+  $("#rj-chart").append(svg);
+  simpleTable("#rj-sweep", [["Row", 0], ["Line time", 1], ...dl.map(d => [`+${d}`, 1])],
+    [...series, ...S.torus].map(s => [[s.label, 0], [f1(s.wire), 1], ...s.vals.map((v, i) => [f1(v), 1, i > 0 && v < s.vals[0] - 1 ? "better" : i > 0 && v > s.vals[0] + 1 ? "worse" : ""])]));
+  simpleTable("#rj-skip", [["Row", 0], ["Packet", 1], ["Line time", 1], ["New router", 1], ["Local write skipped", 1]],
+    J.writeskip.map(r => [[r.row, 0], [B(r.size), 1], [f1(r.wire), 1], [f1(r.base), 1], [f1(r.skip), 1, r.skip < r.base - 1 ? "better" : r.skip > r.base + 1 ? "worse" : ""]]));
+
+  const arms = ["A", "B", "C"];
+  const armHead = arms.map(a => [`${a}: T ${J.arms[a].T}, K ${J.arms[a].K}`, 1]);
+  const armCells = (r) => arms.map(a => {
+    const dlt = r[a] - r.base;
+    return [`${f1(r[a])} (${dlt >= 0 ? "+" : "−"}${f1(Math.abs(dlt))})`, 1, dlt < -1 ? "better" : dlt > 1 ? "worse" : ""];
+  });
+  simpleTable("#rj-glx", [["Row", 0], ["Packet", 1], ["Throttle off", 1], ...armHead], J.glx.map(r => [[r.row, 0], [B(r.size), 1], [f1(r.base), 1], ...armCells(r)]));
+  simpleTable("#rj-p150", [["Row", 0], ["Packet", 1], ["Throttle off", 1], ...armHead], J.p150.map(r => [[r.row, 0], [B(r.size), 1], [f1(r.base), 1], ...armCells(r)]));
+}
+
+/* ---------- summary ---------- */
+const S = D.summary;
+const SVGNS = "http://www.w3.org/2000/svg";
+const svgEl = (tag, attrs, text) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+const pctOf = (p, who) => 100 * p.wire / p[who];
+const signed = (x, d = 1) => (x < 0 ? "−" : x > 0 ? "+" : "") + Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+const ROLE = (r) => (S.roles || {})[r] || null;
+const rname = (r) => (S.labels || {})[r] || (r === "main" ? "the old router" : "the new router");
+const LINKS2 = ["400G", "200G", "100G"];
+const SIDE = { "E0": "sending core", "E1": "receiving core", "E0 and E1": "both cores", "neither ERISC": "neither core" };
+const CHARTS = [];
+function drawCharts() { if ($("#panel-summary").hidden) return; hideTip(); for (const f of CHARTS) f(); }
+function cmpText(p) { return p.same_job ? "same job as the old router" : "separate jobs (cross-run)"; }
+function provFrom(list) {
+  const seen = new Map();
+  for (const [link, p] of list) {
+    const k = [link, p.router, p.date_new, p.date_main, p.same_job].join("|");
+    if (!seen.has(k)) seen.set(k, `${link}: the old router against ${rname(p.router)}, ${p.same_job ? "in the same jobs" : "in separate jobs (cross-run)"}`);
+  }
+  return [...seen.entries()].sort((a, b) => LINKS2.indexOf(a[0].split("|")[0]) - LINKS2.indexOf(b[0].split("|")[0])).map(e => e[1]);
+}
+function usualRouter(pts) {
+  const c = {}; for (const p of pts) c[p.router] = (c[p.router] || 0) + 1;
+  return Object.keys(c).sort((a, b) => c[b] - c[a])[0];
+}
+function setProv(id, list) { $(id).replaceChildren(...provFrom(list).map(t => el("span", null, t))); }
+function tableToggle(btnId, wrapId, build) {
+  const b = $(btnId), w = $(wrapId);
+  b.addEventListener("click", () => {
+    w.hidden = !w.hidden; b.setAttribute("aria-expanded", String(!w.hidden));
+    b.textContent = w.hidden ? "Show as table" : "Hide table";
+    if (!w.hidden && !w.firstChild) { const t = el("table"); t.id = wrapId.slice(1) + "-t"; w.append(t); build("#" + t.id); }
+  });
+}
+function satTip(p, link, label) {
+  const n = el("div");
+  n.append(el("div", "t-title", `${label} · ${link} · ${B(p.size)}`));
+  n.append(tipRow("var(--v4)", `${pctOf(p, "new").toFixed(1)}% of link`, `new router · ${f1(gbps(p.size, p.new, p.clk))} GB/s · ${f1(p.new)} cycles/packet`));
+  n.append(tipRow("var(--main)", `${pctOf(p, "main").toFixed(1)}% of link`, `old router · ${f1(gbps(p.size, p.main, p.clk))} GB/s · ${f1(p.main)} cycles/packet`, true));
+  if (p.main_ka != null) n.append(tipRow("var(--main)", `${(100 * p.wire / p.main_ka).toFixed(1)}%`, "the old router at the new router's 1,000-cycle Ethernet keepalive", true));
+  n.append(el("div", "t-foot", `Link limit ${f1(gbps(p.size, p.wire, p.clk))} GB/s · ${cmpText(p)}${p.router === "earlier" ? " · an earlier build of the new router" : ""}`));
+  return n;
+}
+function lineChart(box, pts, o) {
+  box.replaceChildren();
+  if (!pts.length) { box.append(el("div", "cell-empty", o.empty)); return; }
+  const W = Math.max(240, Math.floor(box.getBoundingClientRect().width || 420)), H = 176;
+  const ml = 40, mr = 14, mt = 10, mb = 24, xmax = 4608;
+  const top = Math.max(100, ...pts.flatMap(p => [pctOf(p, "new"), pctOf(p, "main")]).map(v => Math.ceil(v + 2)));
+  const X = (s) => ml + (W - ml - mr) * s / xmax, Y = (v) => mt + (H - mt - mb) * (1 - v / top);
+  const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, class: "lc", role: "img", tabindex: 0,
+    "aria-label": `${o.label}, ${o.link}, share of the link by packet size: ` + pts.map(p => `${p.size} bytes, new ${pctOf(p, "new").toFixed(1)}%, old router ${pctOf(p, "main").toFixed(1)}%`).join("; ") });
+  for (const t of [0, 25, 50, 75, 100]) {
+    svg.append(svgEl("line", { x1: ml, x2: W - mr, y1: Y(t), y2: Y(t), class: t === 100 ? "lim" : t === 0 ? "base" : "grid" }));
+    svg.append(svgEl("text", { x: ml - 6, y: Y(t) + 4, "text-anchor": "end", class: t === 100 ? "lim-lab" : "" }, `${t}%`));
+  }
+  for (const s of [0, 1024, 2048, 3072, 4096]) svg.append(svgEl("text", { x: X(s), y: H - 6, "text-anchor": "middle" }, s.toLocaleString("en-US") + (s === 4096 ? " B" : "")));
+  const xh = svgEl("line", { y1: mt, y2: H - mb, class: "xh", visibility: "hidden" }); svg.append(xh);
+  const SER = [["main", "var(--main)"], ["new", "var(--v4)"]];
+  if (pts.length > 1) for (const [who, c] of SER) svg.append(svgEl("polyline", { points: pts.map(p => `${X(p.size).toFixed(1)},${Y(pctOf(p, who)).toFixed(1)}`).join(" "), class: "ln", style: `stroke:${c}` }));
+  for (const [who, c] of SER) for (const p of pts) svg.append(svgEl("circle", { cx: X(p.size).toFixed(1), cy: Y(pctOf(p, who)).toFixed(1), r: 4,
+    style: who === "main" ? `fill:var(--surface);stroke:${c};stroke-width:2` : `fill:${c};stroke:var(--surface);stroke-width:2` }));
+  let cur = pts.length - 1;
+  const show = (i, ev) => { cur = i; const x = X(pts[i].size); xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("visibility", "visible"); showTip(satTip(pts[i], o.link, o.label), ev); };
+  const off = () => { xh.setAttribute("visibility", "hidden"); hideTip(); };
+  const nearest = (ev) => {
+    const r = svg.getBoundingClientRect(), mx = (ev.clientX - r.left) * W / (r.width || W);
+    let bi = 0; pts.forEach((p, i) => { if (Math.abs(X(p.size) - mx) < Math.abs(X(pts[bi].size) - mx)) bi = i; }); return bi;
+  };
+  const hit = svgEl("rect", { x: ml, y: 0, width: W - ml - mr, height: H, fill: "transparent" });
+  hit.addEventListener("pointermove", (ev) => show(nearest(ev), ev));
+  hit.addEventListener("pointerdown", (ev) => show(nearest(ev), ev));
+  hit.addEventListener("pointerleave", off);
+  svg.addEventListener("focus", () => show(cur, { target: svg }));
+  svg.addEventListener("blur", off);
+  svg.addEventListener("keydown", (ev) => {
+    if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") return;
+    ev.preventDefault(); show(Math.max(0, Math.min(pts.length - 1, cur + (ev.key === "ArrowRight" ? 1 : -1))), { target: svg });
+  });
+  svg.append(hit);
+  box.append(svg);
+}
+function smRows(boxId, cases, defs) {
+  const box = $(boxId);
+  const usual = {}; for (const l of LINKS2) usual[l] = usualRouter(cases.flatMap(c => c.cells[l] || []));
+  for (const c of cases) {
+    const row = el("div", "sm-row");
+    const h = el("h4", null, c.label);
+    if (defs && defs[c.id]) h.append(el("span", "sm-def", defs[c.id]));
+    const cells = el("div", "sm-cells");
+    for (const link of LINKS2) {
+      const pts = c.cells[link] || [];
+      const cell = el("div", "sm-cell");
+      const head = el("div", "cell-head");
+      head.append(el("b", null, `${link} · ${S.system[link]}`));
+      if (pts.length) {
+        const last = pts[pts.length - 1];
+        head.append(el("span", "cell-val", `${pts.length <= 2 ? "only " + pts.map(p => p.size.toLocaleString("en-US")).join(" and ") + " B measured; " : ""}${B(last.size)}: new ${pctOf(last, "new").toFixed(1)}% · old router ${pctOf(last, "main").toFixed(1)}%`));
+        if (pts.some(p => !p.same_job)) head.append(el("span", "chip chip-cross", "cross-run"));
+        if (last.router !== usual[link]) head.append(el("span", "fallback", rname(last.router)));
+      }
+      const chart = el("div", "lc-box");
+      cell.append(head, chart);
+      CHARTS.push(() => lineChart(chart, pts, { link, label: c.label, empty: `Not measured at ${link} yet.` }));
+      cells.append(cell);
+    }
+    row.append(h, cells); box.append(row);
+  }
+}
+function satTable(id, cases) {
+  const rows = [];
+  for (const c of cases) for (const link of LINKS2) for (const p of c.cells[link] || [])
+    rows.push([[c.label, 0], [link, 0], [B(p.size), 1], [`${f1(gbps(p.size, p.wire, p.clk))} GB/s`, 1], [`${f1(gbps(p.size, p.main, p.clk))} GB/s`, 1], [pctOf(p, "main").toFixed(1) + "%", 1],
+      [`${f1(gbps(p.size, p.new, p.clk))} GB/s`, 1], [pctOf(p, "new").toFixed(1) + "%", 1], [`${rname(p.router)}, ${cmpText(p)}`, 0]]);
+  simpleTable(id, [["Case", 0], ["Link", 0], ["Packet", 1], ["Link limit", 1], ["Old router", 1], ["% of link", 1], ["New router", 1], ["% of link", 1], ["Comparison", 0]], rows);
+}
+function renderSumHead() {
+  const rs = [...new Set(S.prov.map(v => v.router))];
+  const pr = rs.filter(r => ROLE(r) === "PR"), other = rs.filter(r => ROLE(r) !== "PR");
+  let t = `Every chart compares the new router with the old router in the same job, unless marked.` + (other.length ? ` Rows not yet rerun on the final build show an earlier build of the new router, and are tagged.` : "");
+  $("#sum-who").textContent = t;
+  const box = $("#sum-tiles");
+  for (const tl of S.tiles) {
+    let value, unit = "", foot, text = false;
+    if (tl.kind === "pct") {
+      const p = tl.point;
+      value = pctOf(p, "new").toFixed(1); unit = "% of link";
+      foot = `old router ${pctOf(p, "main").toFixed(1)}% · new ${f1(gbps(p.size, p.new, p.clk))} GB/s, old router ${f1(gbps(p.size, p.main, p.clk))} GB/s · ${p.same_job ? "same job" : "cross-run"}`;
+    } else if (tl.kind === "reach") {
+      value = tl.new ? B(tl.new) : "not reached"; text = true;
+      foot = `smallest measured size at ${Math.round(100 * tl.at)}% of link or more · old router: ${tl.main ? B(tl.main) : "not reached"} · measured at ${tl.sizes.map(s => s.toLocaleString("en-US")).join(", ")} B; sizes in between were not run${tl.same_job ? " · same jobs" : ""}`;
+    } else if (tl.kind === "latency") {
+      const d = tl.rows.map(r => r.new - r.main).sort((a, b) => a - b), pc = tl.rows.map(r => 100 * (r.new - r.main) / r.main).sort((a, b) => a - b);
+      const span = (a, b, dg) => (Math.abs(a).toFixed(dg) === Math.abs(b).toFixed(dg) ? Math.abs(a).toFixed(dg) : `${Math.min(Math.abs(a), Math.abs(b)).toFixed(dg)}–${Math.max(Math.abs(a), Math.abs(b)).toFixed(dg)}`);
+      if (d.every(v => v < 0)) { value = span(d[0], d[d.length - 1], 0); unit = "ns less"; }
+      else if (d.every(v => v > 0)) { value = span(d[0], d[d.length - 1], 0); unit = "ns more"; }
+      else { value = `${signed(d[0], 0)} to ${signed(d[d.length - 1], 0)}`; unit = "ns"; }
+      foot = `${signed(pc[0])}% to ${signed(pc[pc.length - 1])}% · writes of ${tl.rows.map(r => B(r.size)).join(" and ")} · ${tl.rows.every(r => r.same_job) ? "same job" : "cross-run"}, ${rname(tl.rows[0].router)}`;
+    } else if (tl.kind === "ops") {
+      const c = tl.ccl, ch = c.rows.map(r => 100 * (r.new / r.main - 1)).sort((a, b) => a - b);
+      const med = ch.length % 2 ? ch[(ch.length - 1) / 2] : (ch[ch.length / 2 - 1] + ch[ch.length / 2]) / 2;
+      value = signed(med); unit = "% median op time";
+      foot = `range ${signed(ch[0])}% to ${signed(ch[ch.length - 1])}% over ${ch.length} op settings · ${rname(c.router)}, an earlier build · ${c.rows.every(r => r.same_job) ? "same job" : "cross-run"}`;
+    } else continue;
+    const k = el("div", "kpi");
+    k.append(el("div", "label", tl.label));
+    const v = el("div", "value" + (text ? " text" : ""), value);
+    if (unit) v.append(el("span", "unit", " " + unit));
+    k.append(v, el("div", "foot", foot));
+    box.append(k);
+  }
+}
+// The topology x packet-type matrix: one link and one packet size at a time.
+function renderMatrix() {
+  const M = S.matrix;
+  if (!M) return;
+  const st = { link: "400G", size: M.sizes[0] };
+  const colLabel = Object.fromEntries(M.cols.map(c => [c.id, c.label]));
+  const draw = () => {
+    const cells = M.cells[st.link][st.size];
+    $("#mx-cap").textContent = `Each cell: the share of the link each router delivers (payload ÷ what the link can carry at that packet size, after framing and header) and how many times the old router's rate the new router reaches, one flow over one link. ${B(st.size)} packets: ${st.size <= 1024 ? "the router's own cost per packet sets the pace on most rows, so this is where the routers differ most" : "the wire sets the pace on many rows, so both routers sit near the link limit there"}. "n/a": does not apply to that topology; "—": the suites do not run that combination; "not measured": not run yet on this link.`;
+    const t = $("#mx"); t.replaceChildren();
+    const thead = el("thead"), hr = el("tr");
+    hr.append(el("th", null, ""));
+    for (const c of M.cols) hr.append(el("th", null, c.label));
+    thead.append(hr); t.append(thead);
+    const tb = el("tbody"); t.append(tb);
+    for (const r of M.rows) {
+      const tr = el("tr");
+      tr.append(el("th", null, r.label));
+      for (const c of M.cols) {
+        const v = cells[r.id][c.id];
+        const td = el("td", "mx-cell");
+        if (v === "na") { td.append(el("span", "mx-na", "n/a")); tr.append(td); continue; }
+        if (v === "none") { td.append(el("span", "mx-na", "—")); tr.append(td); continue; }
+        if (!v) { td.append(el("span", "mx-na", "not measured")); tr.append(td); continue; }
+        const pn = pctOf(v, "new"), pm = pctOf(v, "main"), q = v.main / v.new;
+        const vals = el("div", "mx-vals");
+        vals.append(el("span", "n", `${pn.toFixed(0)}%`), el("span", "m", `${pm.toFixed(0)}%`),
+          el("span", "x " + (q >= 1.005 ? "better" : q <= 0.995 ? "worse" : ""), `${f2(q)}×`));
+        const track = el("div", "mx-track");
+        const dm = el("div", "dot main"); dm.style.left = Math.min(100, pm) + "%";
+        const dn = el("div", "dot v4"); dn.style.left = Math.min(100, pn) + "%";
+        track.append(dm, dn);
+        const tags = [];
+        if (v.fallback) tags.push(`${B(v.size)} (${B(st.size)} not measured)`);
+        if (v.router === "earlier") tags.push("earlier build");
+        td.append(vals, track);
+        if (tags.length) td.append(el("div", "mx-tags", tags.join(" · ")));
+        td.tabIndex = 0;
+        td.setAttribute("aria-label", `${r.label}, ${colLabel[c.id]}, ${B(v.size)}: new router ${pn.toFixed(0)}% of link, old router ${pm.toFixed(0)}%`);
+        hover(td, () => {
+          const n = el("div");
+          n.append(el("div", "t-title", `${r.label} · ${colLabel[c.id]} · ${st.link} · ${B(v.size)}`));
+          n.append(tipRow("var(--v4)", `${pn.toFixed(1)}% of link`, `new router · ${f1(gbps(v.size, v.new, v.clk))} GB/s · ${f1(v.new)} cycles/packet`));
+          n.append(tipRow("var(--main)", `${pm.toFixed(1)}% of link`, `old router · ${f1(gbps(v.size, v.main, v.clk))} GB/s · ${f1(v.main)} cycles/packet`, true));
+          n.append(el("div", "t-foot", `Link limit ${f1(gbps(v.size, v.wire, v.clk))} GB/s · ${cmpText(v)}${v.router === "earlier" ? " · an earlier build of the new router" : ""}`));
+          return n;
+        });
+        tr.append(td);
+      }
+      tb.append(tr);
+    }
+  };
+  const chips = (sel, opts, key) => {
+    const box = $(sel); box.replaceChildren();
+    for (const [val, text] of opts) {
+      const b = el("button", "fchip", text); b.type = "button";
+      b.setAttribute("aria-pressed", String(st[key] === val));
+      b.addEventListener("click", () => { st[key] = val; for (const x of box.children) x.setAttribute("aria-pressed", "false"); b.setAttribute("aria-pressed", "true"); draw(); });
+      box.append(b);
+    }
+  };
+  chips("#mx-links", LINKS2.filter(l => M.cells[l]).map(l => [l, `${l} · ${S.system[l]}`]), "link");
+  chips("#mx-sizes", M.sizes.map(z => [z, B(z)]), "size");
+  draw();
+  $("#topo-note").textContent = S.note;
+}
+function renderAtomics() {
+  const box = $("#atomic-bars");
+  const leg = el("div", "legend");
+  leg.innerHTML = '<span><i class="key-v4" style="border-radius:2px"></i>new router</span><span><i class="key-main" style="border-radius:2px;background:var(--main);border:0"></i>old router</span><span class="muted">million packets per second</span>';
+  box.append(leg);
+  const mp = (c) => 1350 / c;  // million packets per second at the 1.35 GHz router clock
+  const rows = S.atomics.map(a => ({ ...a, m: mean(a.points.map(p => p.main)), n: mean(a.points.map(p => p.new)) }));
+  const top = Math.max(...rows.flatMap(r => [mp(r.m), mp(r.n)])) * 1.3;
+  const x = (v) => 100 * v / top;
+  const usualA = usualRouter(rows.map(r => r.points[0]));
+  for (const r of rows) {
+    const row = el("div", "bar-row"); row.tabIndex = 0;
+    const lab = el("div", "db-label");
+    lab.append(el("div", "grp", r.link), document.createTextNode(r.label));
+    if (r.points[0].router !== usualA) lab.append(el("div", "tags", rname(r.points[0].router)));
+    const tr = el("div", "bar-track");
+    for (const [who, v, top0] of [["main", r.m, 3], ["v4", r.n, 17]]) {
+      const b = el("div", "bar " + who); b.style.width = x(mp(v)) + "%"; tr.append(b);
+      const t = el("div", "bar-val", `${f2(mp(v))} M/s`); t.style.left = `calc(${x(mp(v))}% + 6px)`; t.style.top = (top0 - 2) + "px"; tr.append(t);
+    }
+    row.append(lab, tr);
+    row.setAttribute("aria-label", `Atomics, ${r.link}, ${r.label}: new router ${f2(mp(r.n))} million packets per second, old router ${f2(mp(r.m))}`);
+    hover(row, () => {
+      const n = el("div");
+      n.append(el("div", "t-title", `${r.label} · ${r.link}`));
+      n.append(tipRow("var(--v4)", `${f2(mp(r.n))} M packets/s`, "new router"));
+      n.append(tipRow("var(--main)", `${f2(mp(r.m))} M packets/s`, "old router", true));
+      n.append(el("div", "t-foot", `${f2(r.m / r.n)}× old router`));
+      return n;
+    });
+    box.append(row);
+  }
+}
+// A row of link-speed buttons (one pressed): `onPick(link)` redraws.
+function linkChips(sel, links, cur, onPick) {
+  const box = $(sel); box.replaceChildren();
+  for (const l of links) {
+    const b = el("button", "fchip", `${l} · ${S.system[l]}`); b.type = "button";
+    b.setAttribute("aria-pressed", String(l === cur));
+    b.addEventListener("click", () => { for (const c of box.children) c.setAttribute("aria-pressed", "false"); b.setAttribute("aria-pressed", "true"); onPick(l); });
+    box.append(b);
+  }
+}
+function renderLatSum() {
+  const all = D.latency.filter(r => r.type === "write");
+  if (!all.length) { $("#lat-cap").textContent = "No same-job latency data."; return; }
+  const links = LINKS2.filter(l => all.some(r => r.link === l));
+  const draw = (link) => {
+    const rows = all.filter(r => r.link === link);
+    const r0 = rows[0];
+    $("#lat-cap").textContent = `Round trip of one packet: there and back, minus the far side's own work. Median of 1,000 samples per pass, mean of two passes, writes, 2D mesh. The old router and the new router ${rows.every(r => r.same_job) ? "in the same job" : "in separate jobs (cross-run)"}. Bars show the change; left of the line is faster.`;
+    const ds = rows.map(r => r.new - r.main);
+    const lo = Math.min(0, ...ds), hi = Math.max(0, ...ds), span = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
+    const d0 = lo * 1.05, d1 = hi + 0.45 * span;
+    const x = (v) => 100 * (v - d0) / (d1 - d0);
+    const box = $("#lat-sum"); box.replaceChildren();
+    for (const r of rows) {
+      const d = r.new - r.main;
+      const row = el("div", "db-row"); row.tabIndex = 0;
+      const lab = el("div", "db-label");
+      lab.append(document.createTextNode(`${r.hops} hop${r.hops > 1 ? "s" : ""}, ${r.dir}, ${B(r.size)}`));
+      lab.append(el("div", "tags", `old router ${fint(r.main)} → new ${fint(r.new)} ns`));
+      const tr = el("div", "track");
+      const z = el("div", "zero"); z.style.left = x(0) + "%"; tr.append(z);
+      const bar = el("div", "dbar " + (d < 0 ? "neg" : "pos"));
+      bar.style.left = Math.min(x(0), x(d)) + "%"; bar.style.width = Math.abs(x(d) - x(0)) + "%"; tr.append(bar);
+      const t = el("div", "dbar-val", `${signed(d, 0)} ns (${signed(100 * d / r.main)}%)`);
+      t.style.left = `calc(${Math.max(x(0), x(d))}% + 6px)`; tr.append(t);
+      row.append(lab, tr);
+      row.setAttribute("aria-label", `${r.link}, ${r.hops} hops ${r.dir}, ${r.size} bytes: old router ${fint(r.main)} ns, new router ${fint(r.new)} ns`);
+      hover(row, () => {
+        const n = el("div");
+        n.append(el("div", "t-title", `${r.link} · ${r.hops} hop${r.hops > 1 ? "s" : ""}, ${r.dir}, ${r.type}, ${B(r.size)}`));
+        n.append(tipRow("var(--v4)", `${f1(r.new)} ns`, `new router (passes ${r.new_passes.map(v => v.toFixed(0)).join(" / ")})`));
+        n.append(tipRow("var(--main)", `${f1(r.main)} ns`, `old router (passes ${r.main_passes.map(v => v.toFixed(0)).join(" / ")})`, true));
+        n.append(el("div", "t-foot", `${signed(d)} ns · ${r.same_job ? "same job" : "cross-run"}`));
+        return n;
+      });
+      box.append(row);
+    }
+  };
+  linkChips("#lat-sum-links", links, links[0], draw);
+  draw(links[0]);
+  tableToggle("#lat-tt", "#lat-table", (id) => simpleTable(id, [["Link", 0], ["Hops", 0], ["Direction", 0], ["Packet", 0], ["Size", 1], ["Old router (ns)", 1], ["New router (ns)", 1], ["Change (ns)", 1], ["Change", 1]],
+    D.latency.map(r => { const d = r.new - r.main; return [[r.link, 0], [String(r.hops), 0], [r.dir, 0], [r.type, 0], [B(r.size), 1], [f1(r.main), 1], [f1(r.new), 1], [signed(d), 1, d < 0 ? "better" : d > 0 ? "worse" : ""], [signed(100 * d / r.main) + "%", 1]]; })));
+}
+function renderSlack() {
+  const H = S.headroom;
+  if (!H || !H.rows.length) { $("#slack-cap").textContent = "No delay data."; return; }
+  const rows = H.rows, maxD = H.max_d;
+  const sizes = [...new Set(rows.map(r => r.size))].sort((a, b) => a - b).map(B).join(", ");
+  $("#slack-cap").textContent = `How much extra work per packet each router absorbs before its rate drops. A fixed delay was added per packet to one router core at a time; a router's headroom is its tighter core's: the core that sets the rate. It is shown as the range between the largest delay before the drop and the next delay tried, in core clock cycles; 0 means even a 1-cycle delay slows the row. 400G, ${sizes}.`;
+  const routers = [...new Set(rows.flatMap(r => ["new", "main"].filter(k => r[k]).map(k => r[k].router)))];
+  $("#slack-prov").replaceChildren(el("span", null, `400G: the old router and the new router${rows.every(r => !r.new || r.new.same_job) ? ", same job" : ""}`));
+  $("#slack-legend").innerHTML = '<span><i class="key-v4" style="border-radius:2px"></i>new router</span><span><i class="key-main" style="border-radius:2px;background:var(--main);border:0"></i>old router</span><span><i class="key-soft"></i>the drop happens within this range</span>';
+  const pos = (d) => (d <= 0 ? 0 : Math.log2(d) + 1), span = pos(maxD) + 1;
+  const x = (d) => 100 * pos(d) / span;
+  const ticks = [0]; for (let d = 1; d <= maxD; d *= 2) ticks.push(d);
+  const g = $("#slack"); g.replaceChildren();
+  const bracket = (sd) => (sd.knee <= 0 ? "0" : sd.upper != null ? `${sd.knee}–${sd.upper}` : `≥ ${sd.knee}`);
+  g.append(el("div", "sh", ""), el("div", "sh", "Headroom (cycles)"), el("div", "sh", "Sets the rate"));
+  const axis = () => { const a = el("div", "kn"); a.append(el("span")); const t = el("div", "sl-axis"); for (const d of ticks) { const s0 = el("span", null, String(d)); s0.style.left = x(d) + "%"; t.append(s0); } a.append(t); return a; };
+  g.append(el("div", "sl-axis"), axis(), el("div", "sl-axis"));
+  const ladderText = (sd) => sd.ladder.map(([d, c]) => `+${d}: ${signed(c)}`).join(", ");
+  // A router's headroom: its tighter core's (the smaller knee; on a tie, the smaller top of the bracket).
+  const tighter = (v) => {
+    const top = (sd) => (sd.upper != null ? sd.upper : Infinity);
+    return v.e0.knee < v.e1.knee || (v.e0.knee === v.e1.knee && top(v.e0) <= top(v.e1)) ? v.e0 : v.e1;
+  };
+  let lastTopo = null;
+  for (const r of rows) {
+    const lab = el("div", "sl-label");
+    if (r.topo !== lastTopo) { lab.append(el("span", "grp", r.topo)); lastTopo = r.topo; }
+    lab.append(document.createTextNode(`${r.label}, ${B(r.size)}${r.links > 1 ? `, ${r.links} links` : ""}`));
+    const ref = r.new || r.main;
+    lab.append(el("div", "tags", ["new", "main"].filter(k => r[k]).map(k => `${k === "new" ? "new" : "old"} ${(100 * r.wire / r[k].rate).toFixed(0)}% of link`).join(" · ")));
+    const cell = (name) => {
+      const wrap = el("div");
+      wrap.append(el("div", "sl-mob", name));
+      for (const [k, cls] of [["new", "v4"], ["main", "main"]]) {
+        if (!r[k]) continue;
+        const v = tighter(r[k]);
+        const line = el("div", "kn");
+        line.append(el("span", "kv", bracket(v)));
+        const tr = el("div", "sl-track");
+        if (v.knee > 0) { const b = el("div", "sl-bar " + cls); b.style.width = x(v.knee) + "%"; tr.append(b); }
+        const hi = v.upper != null ? v.upper : v.knee * 2;
+        const soft = el("div", "sl-soft " + cls + (v.upper == null ? " open" : ""));
+        soft.style.left = x(v.knee) + "%"; soft.style.width = (x(hi) - x(v.knee)) + "%"; tr.append(soft);
+        line.append(tr); wrap.append(line);
+      }
+      wrap.tabIndex = 0;
+      hover(wrap, () => {
+        const t = el("div");
+        t.append(el("div", "t-title", `${r.label}, ${B(r.size)}${r.links > 1 ? `, ${r.links} links` : ""}`));
+        for (const [k, color] of [["new", "var(--v4)"], ["main", "var(--main)"]]) {
+          if (!r[k]) continue;
+          const v = r[k];
+          t.append(tipRow(color, `${bracket(tighter(v))} cycles`, `${k === "new" ? "new router" : "old router"}: sending core ${bracket(v.e0)}, receiving core ${bracket(v.e1)} cycles`, k === "main"));
+        }
+        t.append(el("div", "t-foot", `Noise band ${["new", "main"].filter(k => r[k]).map(k => `${k === "main" ? "old" : k} ${f2(r[k].noise)}`).join(", ")} cycles/packet`));
+        return t;
+      });
+      return wrap;
+    };
+    const bd = el("div", "sl-bound");
+    for (const k of ["new", "main"]) {
+      if (!r[k]) continue;
+      const line = el("div");
+      line.append(el("span", "sl-mob-in", "Sets the rate: "), document.createTextNode(`${k === "new" ? "new" : "old"}: ${SIDE[r[k].bound] || r[k].bound}`));
+      bd.append(line);
+    }
+    g.append(lab, cell("Headroom (cycles)"), bd);
+  }
+  const notes = [];
+  const small = rows.filter(r => r.new && r.new.e0.knee > 0).flatMap(r => ["e0", "e1"].map(sd => r.new[sd]).filter(v => v.knee > 0 && v.ladder.length && v.ladder[0][0] === 1 && v.ladder[0][1] > (r.new.noise || 0)).map(v => v.ladder[0][1]));
+  if (small.length) notes.push(`Before the drop the cost is small but not zero: on the new router's rows marked this way, a 1-cycle delay already adds ${f1(Math.min(...small))} to ${f1(Math.max(...small))} cycles per packet.`);
+  const mainE0 = rows.filter(r => r.main && r.main.e0.knee <= 0 && r.main.e0.ladder.length);
+  if (mainE0.length) {
+    const c1 = mainE0.map(r => r.main.e0.ladder[0][1]);
+    notes.push(`The old router's sending core sets the rate on every row measured: a ${mainE0[0].main.e0.ladder[0][0]}-cycle delay there already adds ${f1(Math.min(...c1))} to ${f1(Math.max(...c1))} cycles per packet.`);
+  }
+  $("#slack-main").textContent = notes.join(" ");
+  $("#slack-ctx-box").hidden = true;
+  tableToggle("#slack-tt", "#slack-table", (id) => simpleTable(id, [["Case", 0], ["Packet", 1], ["Links", 1], ["Router", 0], ["Measured (cycles)", 1], ["% of link", 1], ["Sending core headroom", 1], ["Receiving core headroom", 1], ["Sets the rate", 0], ["Cost per packet at each delay (sending / receiving)", 0]],
+    rows.flatMap(r => ["new", "main"].filter(k => r[k]).map(k => { const v = r[k]; return [[`${r.topo}: ${r.label}`, 0], [B(r.size), 1], [String(r.links), 1], [k === "new" ? "new router" : "old router", 0], [f2(v.rate), 1], [(100 * r.wire / v.rate).toFixed(1) + "%", 1], [bracket(v.e0), 1], [bracket(v.e1), 1], [`${SIDE[v.bound] || v.bound} (${v.bound_status})`, 0], [`${ladderText(v.e0)} / ${ladderText(v.e1)}`, 0]]; }))));
+}
+function renderSummary() {
+  if (!S) return;
+  renderSumHead();
+  const sizes = (link) => S.measured[link].map(s => s.toLocaleString("en-US")).join(", ");
+  const missing = (link) => S.expected.filter(s => !S.measured[link].includes(s));
+  const satPts = [], typePts = [];
+  for (const c of S.sat) for (const l of LINKS2) for (const p of c.cells[l]) satPts.push([l, p]);
+  for (const a of S.atomics) for (const p of a.points) typePts.push([a.link, p]);
+  setProv("#sat-prov", satPts);
+  const sz = (l) => `sizes measured: ${sizes(l)} B` + (missing(l).length ? `; not measured yet: ${missing(l).map(s => s.toLocaleString("en-US")).join(", ")} B` : "");
+  if (sz("400G") === sz("200G")) $("#sat-prov").append(el("span", null, "Both links, " + sz("400G")));
+  else $("#sat-prov").append(...LINKS2.map(l => el("span", null, `${l} ${sz(l)}`)));
+  setProv("#type-prov", typePts);
+  smRows("#sat-rows", S.sat, { mesh1: "a write to the next chip", line1: "a write to the next chip, 1D fabric", ring1: "a write to the next chip on a ring", torus: "a write over the torus's wrap-around link", nx: "each chip writes to its neighbors" });
+  tableToggle("#sat-tt", "#sat-table", (id) => satTable(id, S.sat));
+  renderMatrix();
+  renderAtomics();
+  renderLatSum();
+  renderSlack();
+  const K = S.ka_note;
+  if (K) $("#ka-note").textContent = `The old router ships with the firmware's Ethernet keepalive, which slows one-way 1D traffic at large packets: on the 400G 1D line at ${B(K.size)}, the old router ran ${f1(K.fw)} cycles per packet as shipped and ${f1(K.ka)} at the new router's keepalive setting (${(100 * K.wire / K.fw).toFixed(0)}% and ${(100 * K.wire / K.ka).toFixed(0)}% of link; ${K.same_job ? "same job" : "cross-run"}). The old router is shown as shipped.`;
+}
+
+/* ---------- what changed ---------- */
+function inline(parent, text) {
+  for (const s of String(text).split(/(`[^`]+`|\*\*[^*]+\*\*)/)) {
+    if (!s) continue;
+    if (s.length > 1 && s.startsWith("`") && s.endsWith("`")) parent.append(el("code", null, s.slice(1, -1)));
+    else if (s.length > 3 && s.startsWith("**") && s.endsWith("**")) parent.append(el("strong", null, s.slice(2, -2)));
+    else parent.append(document.createTextNode(s));
+  }
+  return parent;
+}
+function tagEl(t) { return el("span", "tag" + (/A\/B/.test(t) ? " ab" : t === "hypothesis" ? " hyp" : ""), t); }
+// CHANGES.md blocks: {p: text} paragraphs and {ul: [{text, sub}]} lists, inline markup kept.
+function blocksTo(parent, blocks) {
+  const list = (items) => {
+    const ul = el("ul");
+    for (const it of items) { const li = inline(el("li"), it.text); if (it.sub && it.sub.length) li.append(list(it.sub)); ul.append(li); }
+    return ul;
+  };
+  for (const b of blocks || []) parent.append(b.p != null ? inline(el("p"), b.p) : list(b.ul));
+  return parent;
+}
+function renderChanges() {
+  const C = D.changes;
+  if (!C) { $("#chg-intro").textContent = "The change list was not found when the page was built."; return; }
+  const m = C.title.match(/\(([^)]*)\)\s*$/);
+  const th = $("#chg-theme");
+  blocksTo(th, C.theme);
+  $("#chg-intro").textContent = `Each entry: what the new router does, against the old router, and why it is faster.`;
+  for (const l of C.legend) $("#chg-legend").append(inline(el("li"), l));
+  inline($("#chg-port"), C.port_note);
+  $("#chg-legend").closest("details").hidden = !C.legend.length && !C.port_note;
+  const list = $("#chg-list"), nav = $("#chg-nav");
+  C.groups.forEach((g, gi) => {
+    const sec = el("section", "chg-group"); sec.id = "chg-g" + gi;
+    const h = el("h3", null, g.name); h.append(el("span", "cnt", `${g.entries.length} ${g.entries.length === 1 ? "entry" : "entries"}`));
+    const ol = el("ol", "chg-list");
+    sec.append(h);
+    if (g.intro && g.intro.length) sec.append(blocksTo(el("div", "prose chg-intro"), g.intro));
+    sec.append(ol);
+    const b = el("button", "fchip", g.name); b.type = "button";
+    b.addEventListener("click", () => sec.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" }));
+    nav.append(b);
+    for (const e of g.entries) {
+      const li = el("li", "chg");
+      const t = el("div", "chg-title");
+      t.append(el("span", "n", "#" + e.n), el("h3", null, e.title));
+      if (e.status) t.append(el("span", "chip chip-draft", e.status.replace(/\.$/, "")));
+      const tags = el("span"); for (const tg of e.tags) tags.append(tagEl(tg));
+      t.append(tags);
+      const dl = el("dl");
+      const row = (name, node) => { dl.append(el("dt", null, name)); const dd = el("dd"); dd.append(node); dl.append(dd); };
+      const withList = (node, items) => { if (items && items.length) { const ul = el("ul"); for (const it of items) ul.append(inline(el("li"), it)); node.append(ul); } return node; };
+      const cap = (t) => (t ? t[0].toUpperCase() + t.slice(1) : "");
+      const capList = (l) => (l || []).map(cap);
+      if (e.what || e.what_list) row("Changed", withList(inline(el("div"), cap(e.what)), capList(e.what_list)));
+      if (e.why || e.why_list) { const sp = el("div"); if (e.why_hypothesis && !/^hypothesis/i.test(e.why)) sp.append(tagEl("hypothesis")); inline(sp, cap(e.why)); row("Why", withList(sp, capList(e.why_list))); }
+      if (e.evidence_items.length) {
+        const ul = el("ul");
+        for (const it of e.evidence_items) {
+          const li2 = el("li");
+          if (it.tag && !it.text.toLowerCase().startsWith(it.tag.toLowerCase())) li2.append(tagEl(it.tag));
+          inline(li2, it.text); ul.append(li2);
+        }
+        row("Measured", ul);
+      }
+      if (e.port_items.length) {
+        const ul = el("ul"); for (const it of e.port_items) ul.append(inline(el("li"), it));
+        row("In the port", ul);
+      }
+      li.append(t, dl); ol.append(li);
+    }
+    list.append(sec);
+  });
+  const withResult = C.dropped.some(d => d.result);
+  simpleTable("#chg-dropped", withResult ? [["What", 0], ["Result", 0], ["Why it lost", 0]] : [["Tried", 0], ["What it taught", 0]], []);
+  const body = $("#chg-dropped").querySelector("tbody");
+  for (const d of C.dropped) { const tr = el("tr"); for (const v of (withResult ? [d.what, d.result, d.why] : [d.what, d.why])) tr.append(inline(el("td"), v)); body.append(tr); }
+}
+
+/* ---------- boot ---------- */
+renderRingJam();
+window.addEventListener("scroll", hideTip, { passive: true });
+</script>

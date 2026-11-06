@@ -1,0 +1,6 @@
+# a09u32 broker job 843 (2026-11-05 23:20-23:21 UTC), LOCAL=1 alab_runs.sh, one pass A then B; 2x2 of the cube (chip ids 0-3), p300_x2 MGD, 1 link, 14400 B, TT_FABRIC_NO_BW_TELEMETRY=1
+# cycles/packet = 1.35e9 / avg_packets_per_s (results/alab_<arm>.csv); 3 / 3 tests executed, 0 failed per arm; no hang; post-job health gate OK
+Mesh1HopEWBidir        write  14400  A 57c55f98118  458.6  B 07322400fd6  470.0  B-A  +11.4 (+2.48%)
+Torus1HopEWBidir       write  14400  A 57c55f98118  426.0  B 07322400fd6  619.2  B-A +193.3 (+45.37%)
+TorusRingNeighbors     write  14400  A 57c55f98118  427.6  B 07322400fd6  620.0  B-A +192.5 (+45.02%)
+# both arms log 'mesh 0 shape 2x2: axis topologies derived as Y=LINE X=LINE' under FABRIC_2D_TORUS_XY; the offline mock of the same config built every router with ENABLE_DEADLOCK_AVOIDANCE=1 and bubble threshold 2 (offline_slots.txt)

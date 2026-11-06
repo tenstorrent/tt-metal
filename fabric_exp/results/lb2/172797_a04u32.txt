@@ -1,0 +1,20 @@
+job 172797 on bh-lb-120-a04u32
+command: n=0; for f in fabric_exp/results/kn[ab]_E_*; do [ -e "$f" ] && touch "$f" && n=$((n+1)); done; echo "touched $n E result files"
+summary: rc=0 hung=0 node=bh-lb-120-a04u32 job=172797 post=none start=2026-11-04 07:53:28 end=2026-11-04T07:53:38Z
+[lb2 07:53:02 +0s] node=bh-lb-120-a04u32 job=172797 mode=run start=2026-11-04T07:53:02Z timeout=600s
+[lb2 07:53:02 +0s] command: n=0; for f in fabric_exp/results/kn[ab]_E_*; do [ -e "$f" ] && touch "$f" && n=$((n+1)); done; echo "touched $n E result files"
+[lb2 07:53:02 +0s] stage src-20261104-061644 (full full-20261104-020334), staged 2026-11-04T06:20:48Z
+[lb2 07:53:02 +0s] busy check: clear
+[lb2 07:53:02 +0s] space: 1237 GB free on /home
+[lb2 07:53:10 +8s] verify: 30391 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:12 +10s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:21 +19s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:22 +20s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:22 +20s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T06:20:48Z)
+[lb2 07:53:28 +26s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 07:53:28 +26s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 07:53:28 +26s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 635 GB available
+[lb2 07:53:29 +27s] run: n=0; for f in fabric_exp/results/kn[ab]_E_*; do [ -e "$f" ] && touch "$f" && n=$((n+1)); done; echo "touched $n E result files"
+[lb2 07:53:34 +32s] command exit 0
+[lb2 07:53:38 +36s] copied back: 132 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/172797 (MANIFEST.tsv)
+[lb2 07:53:38 +36s] done: rc 0, hung 0; 1237 GB free on /home

@@ -1,0 +1,104 @@
+{
+ "1d_3072": {
+  "staged": [
+   "VC0 sender slots {32, 0} receiver slots {32} (channel buffer 3120 B)",
+   "VC0 sender slots {43, 42} receiver slots {32} (channel buffer 3120 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {32, 0} receiver slots {32} (channel buffer 3120 B)",
+   "VC0 sender slots {32, 32} receiver slots {32} (channel buffer 3120 B)"
+  ]
+ },
+ "1d_4352": {
+  "staged": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {26, 25} receiver slots {32} (channel buffer 4400 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {16, 16} receiver slots {32} (channel buffer 4400 B)"
+  ]
+ },
+ "2d_3072": {
+  "staged": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {32} (channel buffer 3168 B)",
+   "VC0 sender slots {20, 21, 21, 21} receiver slots {32} (channel buffer 3168 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {32} (channel buffer 3168 B)",
+   "VC0 sender slots {35, 16, 16, 16} receiver slots {32} (channel buffer 3168 B)"
+  ]
+ },
+ "2d_4352": {
+  "staged": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {17, 16, 16, 16} receiver slots {16} (channel buffer 4448 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {17, 16, 16, 16} receiver slots {16} (channel buffer 4448 B)"
+  ]
+ },
+ "ne_3072": {
+  "staged": [
+   "VC0 sender slots {32} receiver slots {32} (channel buffer 3120 B)",
+   "VC0 sender slots {85} receiver slots {32} (channel buffer 3120 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {32} receiver slots {32} (channel buffer 3120 B)"
+  ]
+ },
+ "ring_3072": {
+  "staged": [
+   "VC0 sender slots {32, 0} receiver slots {32} (channel buffer 3120 B)",
+   "VC0 sender slots {43, 42} receiver slots {32} (channel buffer 3120 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {32, 0} receiver slots {32} (channel buffer 3120 B)",
+   "VC0 sender slots {32, 32} receiver slots {32} (channel buffer 3120 B)"
+  ]
+ },
+ "vc2_3072": {
+  "staged": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {32} (channel buffer 3168 B)",
+   "VC0 sender slots {18, 19, 19, 19} receiver slots {32} (channel buffer 3168 B)",
+   "VC2 sender slots {4} receiver slots {4} (channel buffer 3168 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {32} (channel buffer 3168 B)",
+   "VC0 sender slots {77, 7, 7, 7} receiver slots {11} (channel buffer 3168 B)",
+   "VC2 sender slots {2} receiver slots {4} (channel buffer 3168 B)"
+  ]
+ },
+ "vc2_4352": {
+  "staged": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {16, 14, 14, 14} receiver slots {16} (channel buffer 4448 B)",
+   "VC2 sender slots {3} receiver slots {4} (channel buffer 4448 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0, 0, 0} receiver slots {16} (channel buffer 4448 B)",
+   "VC0 sender slots {43, 7, 7, 7} receiver slots {11} (channel buffer 4448 B)",
+   "VC2 sender slots {2} receiver slots {4} (channel buffer 4448 B)"
+  ]
+ },
+ "ne_4352": {
+  "staged": [
+   "VC0 sender slots {32} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {51} receiver slots {32} (channel buffer 4400 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {32} receiver slots {32} (channel buffer 4400 B)"
+  ]
+ },
+ "ring_4352": {
+  "staged": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {26, 25} receiver slots {32} (channel buffer 4400 B)"
+  ],
+  "tier": [
+   "VC0 sender slots {16, 0} receiver slots {32} (channel buffer 4400 B)",
+   "VC0 sender slots {16, 16} receiver slots {32} (channel buffer 4400 B)"
+  ]
+ }
+}

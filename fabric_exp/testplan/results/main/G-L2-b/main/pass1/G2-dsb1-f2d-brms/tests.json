@@ -1,0 +1,38 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 4
+ },
+ "files": [
+  "pytest_442196_1793779606250581515_20261104_080646.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_broadcast_rms::test_broadcast_rms_fused[blackhole-True-device_params0-False-1-10-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_442196_1793779606250581515_20261104_080646.xml",
+   "message": "Hang or error when tested on 4x2. Issue: #42713",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_broadcast_rms::test_broadcast_rms_fused[blackhole-True-device_params0-False-2-10-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_442196_1793779606250581515_20261104_080646.xml",
+   "message": "Hang or error when tested on 4x2. Issue: #42713",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_broadcast_rms::test_broadcast_rms_fused[blackhole-True-device_params0-True-1-10-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_442196_1793779606250581515_20261104_080646.xml",
+   "message": "Hang or error when tested on 4x2. Issue: #42713",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_broadcast_rms::test_broadcast_rms_fused[blackhole-True-device_params0-True-2-10-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_442196_1793779606250581515_20261104_080646.xml",
+   "message": "Hang or error when tested on 4x2. Issue: #42713",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

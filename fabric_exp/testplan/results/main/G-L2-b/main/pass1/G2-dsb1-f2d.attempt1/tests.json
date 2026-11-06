@@ -1,0 +1,450 @@
+{
+ "counts": {
+  "FAIL": 6,
+  "KNOWN_FAIL": 0,
+  "PASS": 30,
+  "PERF_WINDOW": 0,
+  "SKIP": 37
+ },
+ "files": [],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather[blackhole-True-device_params0-30-15-1-output_shape0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_chunk_matrix[blackhole-True-device_params0-2048-1-output_shape0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_chunk_matrix[blackhole-True-device_params0-2048-1-output_shape1]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_chunk_matrix[blackhole-True-device_params0-None-1-output_shape0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_chunk_matrix[blackhole-True-device_params0-None-1-output_shape1]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_gather::test_ccl_all_gather_deterministic_fill[blackhole-True-device_params0-1-output_shape0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce[blackhole-True-True-device_params0-30-15-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-1-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-1-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-10-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-10-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-2-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-2-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-1-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-1-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-10-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-10-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-2-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-2-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast[blackhole-True-device_params0-1-30-15-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_auto_chunk[blackhole-True-1-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_host_iter_stamped_chunks[blackhole-True-device_params0-2-1024-8-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_loop[blackhole-True-device_params0-1-100-DataType.BFLOAT16-Layout.TILE-4-2-0-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_loop[blackhole-True-device_params0-2-100-DataType.BFLOAT16-Layout.TILE-4-2-0-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_remainder_chunk[blackhole-True-4352-2-DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d[blackhole-True-0-0-mesh_device0-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d[blackhole-True-0-2-mesh_device0-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d[blackhole-True-4-2-mesh_device0-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d[blackhole-True-7-3-mesh_device0-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-1-131072-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-1-32768-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-1-65536-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-32-131072-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-32-32768-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-32-65536-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-64-131072-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-64-32768-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-128-64-65536-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-1-131072-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-1-32768-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-1-65536-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-32-131072-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-32-32768-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-32-65536-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-64-131072-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-64-32768-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill[blackhole-True-256-64-65536-device_params0]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill_row_major_formats[blackhole-True-bf16_row_major]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_zero_fill::test_dram_zero_fill_row_major_formats[blackhole-True-fp8_e4m3_row_major]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_d2d_to_d2h_pipeline[blackhole-True-device_params0-5449-final_mesh_coord0-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_d2d_to_d2h_pipeline[blackhole-True-device_params0-5449-final_mesh_coord1-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_d2d_to_d2h_pipeline[blackhole-True-device_params0-5449-final_mesh_coord2-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_d2d_to_d2h_pipeline[blackhole-True-device_params0-5449-final_mesh_coord3-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_d2d_to_d2h_pipeline[blackhole-True-device_params0-5449-final_mesh_coord4-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_d2h[blackhole-True-device_params0-5449-final_mesh_coord0-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_multidevice[blackhole-True-sender_coord0-final_mesh_coord0-7-device_params0-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_multidevice[blackhole-True-sender_coord1-final_mesh_coord1-1337-device_params0-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_multidevice[blackhole-True-sender_coord2-final_mesh_coord2-4242-device_params0-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_perf[blackhole-True-device_params0-False-20-6-final_mesh_coord0-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_perf[blackhole-True-device_params0-False-20-6-final_mesh_coord1-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_perf[blackhole-True-device_params0-False-20-6-final_mesh_coord2-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_perf[blackhole-True-device_params0-False-20-6-final_mesh_coord3-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_perf[blackhole-True-device_params0-True-20-6-final_mesh_coord0-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_perf[blackhole-True-device_params0-True-20-6-final_mesh_coord1-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_perf[blackhole-True-device_params0-True-20-6-final_mesh_coord2-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_perf[blackhole-True-device_params0-True-20-6-final_mesh_coord3-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_persistent_mode_spec_decode[blackhole-device_params0-mesh_device0-1-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_persistent_mode_spec_decode[blackhole-device_params0-mesh_device0-2-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_persistent_mode_spec_decode[blackhole-device_params0-mesh_device0-3-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_persistent_mode_spec_decode[blackhole-device_params0-mesh_device0-4-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_lm_head_sampling::test_single_device_d2h[blackhole-True-1337-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp::test_mlp_with_reduce[blackhole-True-all-dram-NOC_MODE.DM_DYNAMIC_NOC-True-mlp-fabric_2d]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp::test_moe_fused_with_reduce[blackhole-True-no_sram-NOC_MODE.DM_DYNAMIC_NOC-True-rigged_groups1-fabric_2d]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  }
+ }
+}

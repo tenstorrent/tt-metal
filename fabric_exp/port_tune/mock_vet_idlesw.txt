@@ -1,0 +1,11 @@
+val       ok
+val1d     ok
+2d        ok
+1d        ok
+burst     ok
+mix       ok
+vc1       ok
+nx4096    ok
+ring      ok
+lat       NO LAUNCH (2026-11-05 20:32:45.360 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:130))
+TUNE_VET: 1 not ok

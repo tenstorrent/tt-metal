@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="0" disabled="0" errors="0" time="0.609" timestamp="2026-11-04T08:15:50.530" name="AllTests">
+  <testsuite name="Cluster" tests="3" failures="0" disabled="0" skipped="0" errors="0" time="0.609" timestamp="2026-11-04T08:15:50.530">
+    <testcase name="ReportIntermeshLinks" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/system_health/test_system_health.cpp" line="212" status="run" result="completed" time="0.609" timestamp="2026-11-04T08:15:50.530" classname="Cluster" />
+    <testcase name="ReportSystemHealth" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/system_health/test_system_health.cpp" line="257" status="run" result="completed" time="0" timestamp="2026-11-04T08:15:51.139" classname="Cluster" />
+    <testcase name="TestMeshFullConnectivity" file="/home/aagarwal/tt-metal-new/tests/tt_metal/tt_fabric/system_health/test_system_health.cpp" line="365" status="run" result="completed" time="0" timestamp="2026-11-04T08:15:51.140" classname="Cluster" />
+  </testsuite>
+</testsuites>

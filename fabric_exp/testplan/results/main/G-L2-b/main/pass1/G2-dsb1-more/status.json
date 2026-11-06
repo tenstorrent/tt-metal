@@ -1,0 +1,49 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": true,
+  "list": "demo_sp_release_tests.yaml",
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_MoreFabric",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 900,
+ "deviation": "run_isolated_unit_tests.py --no-reset (deviation for main and new): its reset/validation/smoke preflight validates the single-Galaxy XY-torus cabling and fails on every quad-cabled 110-a node (job 172241, ENV like G0-health-cv); the job still resets at start and after any failing step",
+ "duration_s": 145.1,
+ "end": "2026-11-04T05:20:18+00:00",
+ "failed_lines": [],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172397/cache/main-main",
+ "junit_files": 4,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a08u02",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "172397",
+ "start": "2026-11-04T05:17:53+00:00",
+ "status": "PASS",
+ "step": "G2-dsb1-more",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 5,
+  "PERF_WINDOW": 0,
+  "SKIP": 101
+ },
+ "timeout_note": null,
+ "timeout_s": 900,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

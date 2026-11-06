@@ -1,0 +1,22 @@
+job 172863 on bh-lb-120-a07u28
+command: bash fabric_exp/consolidation/slotalloc/knee/knee_p150_runs.sh C2
+summary: rc=0 hung=0 node=bh-lb-120-a07u28 job=172863 post=none start=2026-11-04 08:26:57 end=2026-11-04T08:40:50Z
+[lb2 08:25:23 +0s] node=bh-lb-120-a07u28 job=172863 mode=run start=2026-11-04T08:25:23Z timeout=4200s
+[lb2 08:25:23 +0s] command: bash fabric_exp/consolidation/slotalloc/knee/knee_p150_runs.sh C2
+[lb2 08:25:23 +0s] stage src-20261104-082505 (full full-20261104-020334), staged 2026-11-04T08:25:20Z
+[lb2 08:25:23 +0s] busy check: clear
+[lb2 08:25:23 +0s] space: 916 GB free on /home
+[lb2 08:25:31 +8s] verify: 30688 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T08:25:20Z)
+[lb2 08:25:33 +10s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T08:25:20Z)
+[lb2 08:25:42 +19s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T08:25:20Z)
+[lb2 08:25:43 +20s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T08:25:20Z)
+[lb2 08:25:43 +20s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T08:25:20Z)
+[lb2 08:25:49 +26s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 08:25:49 +26s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 08:25:49 +26s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 580 GB available
+[lb2 08:25:49 +26s] reset (start): tt-smi -r
+[lb2 08:26:57 +94s] link check (start, poll 1, +0 s): all baseline links UP/PASS/400
+[lb2 08:26:58 +95s] run: bash fabric_exp/consolidation/slotalloc/knee/knee_p150_runs.sh C2
+[lb2 08:31:48 +385s] command exit 0
+[lb2 08:40:50 +927s] copied back: 32 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 16 caches -> /data/aagarwal/lb2/jobs/172863 (MANIFEST.tsv)
+[lb2 08:40:50 +927s] done: rc 0, hung 0; 907 GB free on /home

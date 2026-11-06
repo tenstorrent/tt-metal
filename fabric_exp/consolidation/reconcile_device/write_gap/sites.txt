@@ -1,0 +1,44 @@
+== ['active_erisc', 0, 4, 1, 0]: run() study 574 / port 573 insns
+   forwarding send ch1          study  61 i, 10 ld, 1 sp-ld, 9 st, 1 sp-st, 0 cmd  | port  61 i, 10 ld, 1 sp-ld, 9 st, 1 sp-st, 0 cmd
+   forwarding send ch2          study  61 i, 10 ld, 1 sp-ld, 9 st, 1 sp-st, 0 cmd  | port  61 i, 10 ld, 1 sp-ld, 9 st, 1 sp-st, 0 cmd
+   forwarding send ch3          study  62 i, 10 ld, 1 sp-ld, 9 st, 1 sp-st, 0 cmd  | port  62 i, 10 ld, 1 sp-ld, 9 st, 1 sp-st, 0 cmd
+   forwarding visit (other)     study 142 i, 9 ld, 21 sp-ld, 24 st, 9 sp-st, 26 cmd  | port 142 i, 9 ld, 21 sp-ld, 24 st, 9 sp-st, 26 cmd
+   pass-start reads             study  28 i, 5 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd  | port  28 i, 5 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd
+   worker send (send<0u>)       study  66 i, 10 ld, 2 sp-ld, 9 st, 3 sp-st, 0 cmd  | port  65 i, 10 ld, 2 sp-ld, 9 st, 3 sp-st, 0 cmd   <-- differs
+   worker visit (other)         study  15 i, 1 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd  | port  15 i, 1 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd
+== ['subordinate_active_erisc', 1, 4, 1, 0]: run() study 571 / port 571 insns
+   admission                    study   6 i, 2 ld, 0 sp-ld, 1 st, 0 sp-st, 0 cmd  | port   6 i, 2 ld, 0 sp-ld, 1 st, 0 sp-st, 0 cmd
+   atomic                       study  89 i, 11 ld, 0 sp-ld, 19 st, 0 sp-st, 26 cmd  | port  89 i, 11 ld, 0 sp-ld, 19 st, 0 sp-st, 26 cmd
+   completion proof / due       study  30 i, 2 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd  | port  30 i, 2 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd
+   credit accumulate            study  65 i, 6 ld, 0 sp-ld, 10 st, 0 sp-st, 0 cmd  | port  65 i, 6 ld, 0 sp-ld, 10 st, 0 sp-st, 0 cmd
+   credit frame                 study  15 i, 2 ld, 0 sp-ld, 4 st, 0 sp-st, 0 cmd  | port  15 i, 2 ld, 0 sp-ld, 4 st, 0 sp-st, 0 cmd
+   deliver (dispatch)           study  90 i, 30 ld, 1 sp-ld, 4 st, 1 sp-st, 0 cmd  | port  90 i, 30 ld, 1 sp-ld, 4 st, 1 sp-st, 0 cmd
+   forward                      study  52 i, 11 ld, 0 sp-ld, 11 st, 0 sp-st, 10 cmd  | port  52 i, 11 ld, 0 sp-ld, 11 st, 0 sp-st, 10 cmd
+   local write (preset)         study  42 i, 6 ld, 0 sp-ld, 16 st, 0 sp-st, 14 cmd  | port  42 i, 6 ld, 0 sp-ld, 16 st, 0 sp-st, 14 cmd
+   local write (whole)          study  49 i, 4 ld, 0 sp-ld, 24 st, 0 sp-st, 28 cmd  | port  49 i, 4 ld, 0 sp-ld, 24 st, 0 sp-st, 28 cmd
+   retire                       study  19 i, 0 ld, 0 sp-ld, 2 st, 0 sp-st, 0 cmd  | port  19 i, 0 ld, 0 sp-ld, 2 st, 0 sp-st, 0 cmd
+   route decode                 study   3 i, 1 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd  | port   3 i, 1 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd
+== ['subordinate_active_erisc', 2, 4, 2, 0]: run() study 626 / port 626 insns
+   admission                    study  23 i, 4 ld, 0 sp-ld, 2 st, 0 sp-st, 0 cmd  | port  23 i, 4 ld, 0 sp-ld, 2 st, 0 sp-st, 0 cmd
+   atomic                       study  75 i, 11 ld, 0 sp-ld, 16 st, 0 sp-st, 20 cmd  | port  75 i, 11 ld, 0 sp-ld, 16 st, 0 sp-st, 20 cmd
+   completion proof / due       study  28 i, 2 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd  | port  28 i, 2 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd
+   credit accumulate            study  65 i, 6 ld, 0 sp-ld, 10 st, 0 sp-st, 0 cmd  | port  65 i, 6 ld, 0 sp-ld, 10 st, 0 sp-st, 0 cmd
+   credit frame                 study  15 i, 2 ld, 0 sp-ld, 4 st, 0 sp-st, 0 cmd  | port  15 i, 2 ld, 0 sp-ld, 4 st, 0 sp-st, 0 cmd
+   deliver (dispatch)           study  92 i, 30 ld, 1 sp-ld, 4 st, 1 sp-st, 0 cmd  | port  92 i, 30 ld, 1 sp-ld, 4 st, 1 sp-st, 0 cmd
+   forward                      study  96 i, 18 ld, 0 sp-ld, 26 st, 0 sp-st, 26 cmd  | port  96 i, 18 ld, 0 sp-ld, 26 st, 0 sp-st, 26 cmd
+   local write (preset)         study  42 i, 6 ld, 0 sp-ld, 16 st, 0 sp-st, 14 cmd  | port  42 i, 6 ld, 0 sp-ld, 16 st, 0 sp-st, 14 cmd
+   local write (whole)          study  53 i, 4 ld, 2 sp-ld, 24 st, 2 sp-st, 30 cmd  | port  53 i, 4 ld, 2 sp-ld, 24 st, 2 sp-st, 30 cmd
+   retire                       study  19 i, 0 ld, 0 sp-ld, 2 st, 0 sp-st, 0 cmd  | port  19 i, 0 ld, 0 sp-ld, 2 st, 0 sp-st, 0 cmd
+   route decode                 study   7 i, 2 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd  | port   7 i, 2 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd
+== ['subordinate_active_erisc', 1, 9, 2, 0]: run() study 571 / port 571 insns
+   admission                    study   6 i, 2 ld, 0 sp-ld, 1 st, 0 sp-st, 0 cmd  | port   6 i, 2 ld, 0 sp-ld, 1 st, 0 sp-st, 0 cmd
+   atomic                       study  89 i, 11 ld, 0 sp-ld, 19 st, 0 sp-st, 26 cmd  | port  89 i, 11 ld, 0 sp-ld, 19 st, 0 sp-st, 26 cmd
+   completion proof / due       study  30 i, 2 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd  | port  30 i, 2 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd
+   credit accumulate            study  65 i, 6 ld, 0 sp-ld, 10 st, 0 sp-st, 0 cmd  | port  65 i, 6 ld, 0 sp-ld, 10 st, 0 sp-st, 0 cmd
+   credit frame                 study  15 i, 2 ld, 0 sp-ld, 4 st, 0 sp-st, 0 cmd  | port  15 i, 2 ld, 0 sp-ld, 4 st, 0 sp-st, 0 cmd
+   deliver (dispatch)           study  90 i, 30 ld, 1 sp-ld, 4 st, 1 sp-st, 0 cmd  | port  90 i, 30 ld, 1 sp-ld, 4 st, 1 sp-st, 0 cmd
+   forward                      study  52 i, 11 ld, 0 sp-ld, 11 st, 0 sp-st, 10 cmd  | port  52 i, 11 ld, 0 sp-ld, 11 st, 0 sp-st, 10 cmd
+   local write (preset)         study  42 i, 6 ld, 0 sp-ld, 16 st, 0 sp-st, 14 cmd  | port  42 i, 6 ld, 0 sp-ld, 16 st, 0 sp-st, 14 cmd
+   local write (whole)          study  49 i, 4 ld, 0 sp-ld, 24 st, 0 sp-st, 28 cmd  | port  49 i, 4 ld, 0 sp-ld, 24 st, 0 sp-st, 28 cmd
+   retire                       study  19 i, 0 ld, 0 sp-ld, 2 st, 0 sp-st, 0 cmd  | port  19 i, 0 ld, 0 sp-ld, 2 st, 0 sp-st, 0 cmd
+   route decode                 study   3 i, 1 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd  | port   3 i, 1 ld, 0 sp-ld, 0 st, 0 sp-st, 0 cmd

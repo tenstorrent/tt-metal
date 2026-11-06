@@ -1,0 +1,26 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 2,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_3324052_1793786870619816743_20261104_100750.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.test_d2d_socket_sync::test_d2d_socket_sync_shared_links[blackhole-fabric2d-8x4-direct]": {
+   "file": "pytest_3324052_1793786870619816743_20261104_100750.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.509
+  },
+  "models.demos.deepseek_v3_d_p.tests.test_d2d_socket_sync::test_d2d_socket_sync_shared_links[blackhole-fabric2d-8x4-relay]": {
+   "file": "pytest_3324052_1793786870619816743_20261104_100750.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.582
+  }
+ }
+}

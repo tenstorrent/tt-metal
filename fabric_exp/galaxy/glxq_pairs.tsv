@@ -1,0 +1,122 @@
+# Cabled BH Galaxy pairs on the 110-a nodes (bh-glx-110-a* only, study rule): every host pair with Ethernet connections
+# between them in the published aggregated FSD (/data/scaleout_configs/tt-cluster-config-sources/exabox-latest-main/
+# factory_system_descriptor.textproto, read 2026-11-05; pairs/fsd_pairs.py). Two kinds:
+#   ring   ring neighbours of a quad (glxq_quads.tsv): 16 connections (8 ASICs x 2 channels per side); hosts in ring order
+#   cable  one cable between hosts of two quads: 2 connections
+# slurm: partition:nodelist (one job takes the pair: -N 2 --exclusive). No pair crosses partitions.
+# hosts: rank order (rank 0 first), as mocked.
+# mgds: the pair forms each pair supports, as existing descriptors (control-plane mock on the pair's FSD slice; router
+# build and program size by a test_tt_fabric mock):
+#   16x4       tt_metal/fabric/mesh_graph_descriptors/16x4_dual_bh_galaxy_2d_mesh_graph_descriptor.textproto: one 16x4
+#              LINE x LINE mesh over both hosts (ranks 0,1 on mesh 0)
+#   mm_exp     tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto:
+#              two 4x8 meshes (rank k on mesh k), 4 STRICT inter-mesh channels over Z (assign_z_direction)
+#   mm_zfb     tests/.../custom_mesh_descriptors/dual_4x8_z_fallback_mesh_graph_descriptor.textproto: two 4x8 meshes,
+#              4 inter-mesh channels, no assign_z (on these pairs they land on N, cardinal)
+#   mm_exp8, mm_zfb8  mgd/dual_bh_galaxy_experimental_8ch_derived / dual_4x8_z_fallback_8ch_derived: DERIVED copies with
+#              only the inter-mesh channel count 4 -> 8 (no existing 2-Galaxy two-mesh descriptor asks for 8). On these
+#              pairs mm_exp8 places all 8 on Z (M0 D0, D1, D8, D9 ch8/9), mm_zfb8 on N (D0, D1) and W (D8, D16)
+#   express16  tests/.../custom_mesh_descriptors/express_links_16x4_mesh_graph_descriptor.textproto: one 16x4 LINE x RING
+#              mesh (torus X) with dim-0 express chords on Z
+#   torusx16   mgd/torusx_16x4_derived_graph_descriptor.textproto: express16 without its express_links (no existing
+#              2-host 2D torus descriptor other than 8x8, which is not supported)
+#   Cable pairs (2 connections): no existing descriptor fits (mm_exp asks for 4 STRICT channels).
+#   SUPERSEDED (kept in mgd/ as history, not used): pair_2x8x4_{mesh_z,mesh_noz,torus_z,torus_noz,torus_z_express,
+#   torus_z_express_linering}, pair_2x8x4_torus_{z,noz}_strict2, pair_4x16_line. torus_noz was never valid (a torus
+#   axis keeps its edge ports for the wraparound, so its links spilled onto Z: the same placement as torus_z), and tori
+#   over Z with express did not map (an express chord and an inter-mesh link on one chip's Z port).
+# state: standing excludes (testplan manifest) and Slurm drained/down nodes as read 2026-11-05 03:25; the submit re-reads
+#   sinfo and skips pairs with a drained, down or excluded node.
+# 120-c ring pairs (c120_pod*, bh_sc36_2): bh-glx-120-c is outside the study's 110-a rule; usable only in a window the
+#   user names (glxq_run.sh: GLXQ_C120_EXCEPTION=1 and GLXQ_C120_UNTIL). Forms: the one-mesh ones, control-plane mocked on
+#   one pair per pod (c01u02-c01u08, c02u02-c02u08, c07u08-c07u14, c08u08-c08u14, c09u08-c09u14), 2026-11-05. mm_exp mocked (control plane + the override test to program launch) on c07u08-c07u14,
+#   c08u08-c08u14 and c09u08-c09u14 only, 2026-11-05 08:25: those three rows list it.
+# name	slurm	hosts	leaf	connections	mgds	state
+a07_a07u02_a07u08	bh_110a_sc16:bh-glx-110-a07u02,bh-glx-110-a07u08	bh-glx-110-a07u02,bh-glx-110-a07u08	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+a07_a07u08_a07u14	bh_110a_sc16:bh-glx-110-a07u08,bh-glx-110-a07u14	bh-glx-110-a07u08,bh-glx-110-a07u14	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+a07_a07u14_a07u20	bh_110a_sc16:bh-glx-110-a07u14,bh-glx-110-a07u20	bh-glx-110-a07u14,bh-glx-110-a07u20	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a07u20:drained
+a07_a07u20_a07u02	bh_110a_sc16:bh-glx-110-a07u20,bh-glx-110-a07u02	bh-glx-110-a07u20,bh-glx-110-a07u02	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a07u20:drained
+a08_a08u02_a08u08	bh_110a_sc16:bh-glx-110-a08u02,bh-glx-110-a08u08	bh-glx-110-a08u02,bh-glx-110-a08u08	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+a08_a08u08_a08u14	bh_110a_sc16:bh-glx-110-a08u08,bh-glx-110-a08u14	bh-glx-110-a08u08,bh-glx-110-a08u14	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+a08_a08u14_a08u20	bh_110a_sc16:bh-glx-110-a08u14,bh-glx-110-a08u20	bh-glx-110-a08u14,bh-glx-110-a08u20	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a08u20
+a08_a08u20_a08u02	bh_110a_sc16:bh-glx-110-a08u20,bh-glx-110-a08u02	bh-glx-110-a08u20,bh-glx-110-a08u02	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a08u20
+a09_a09u02_a09u08	bh_110a_sc16:bh-glx-110-a09u02,bh-glx-110-a09u08	bh-glx-110-a09u02,bh-glx-110-a09u08	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a09u02
+a09_a09u08_a09u14	bh_110a_sc16:bh-glx-110-a09u08,bh-glx-110-a09u14	bh-glx-110-a09u08,bh-glx-110-a09u14	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a09u14:down*
+a09_a09u14_a09u20	bh_110a_sc16:bh-glx-110-a09u14,bh-glx-110-a09u20	bh-glx-110-a09u14,bh-glx-110-a09u20	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a09u14:down*
+a09_a09u20_a09u02	bh_110a_sc16:bh-glx-110-a09u20,bh-glx-110-a09u02	bh-glx-110-a09u20,bh-glx-110-a09u02	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a09u02
+a10_a10u02_a10u08	bh_110a_sc16:bh-glx-110-a10u02,bh-glx-110-a10u08	bh-glx-110-a10u02,bh-glx-110-a10u08	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a10u02
+a10_a10u08_a10u14	bh_110a_sc16:bh-glx-110-a10u08,bh-glx-110-a10u14	bh-glx-110-a10u08,bh-glx-110-a10u14	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+a10_a10u14_a10u20	bh_110a_sc16:bh-glx-110-a10u14,bh-glx-110-a10u20	bh-glx-110-a10u14,bh-glx-110-a10u20	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+a10_a10u20_a10u02	bh_110a_sc16:bh-glx-110-a10u20,bh-glx-110-a10u02	bh-glx-110-a10u20,bh-glx-110-a10u02	110-SC16_4x4_A7-10	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a10u02
+pod3_a06u02_a06u08	bh_sc36_6:bh-glx-110-a06u02,bh-glx-110-a06u08	bh-glx-110-a06u02,bh-glx-110-a06u08	110-SC4_A06	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+pod3_a06u08_a06u14	bh_sc36_6:bh-glx-110-a06u08,bh-glx-110-a06u14	bh-glx-110-a06u08,bh-glx-110-a06u14	110-SC4_A06	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+pod3_a06u14_a06u20	bh_sc36_6:bh-glx-110-a06u14,bh-glx-110-a06u20	bh-glx-110-a06u14,bh-glx-110-a06u20	110-SC4_A06	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+pod3_a06u20_a06u02	bh_sc36_6:bh-glx-110-a06u20,bh-glx-110-a06u02	bh-glx-110-a06u20,bh-glx-110-a06u02	110-SC4_A06	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+pod6_a04u02_a04u08	bh_sc36_6:bh-glx-110-a04u02,bh-glx-110-a04u08	bh-glx-110-a04u02,bh-glx-110-a04u08	110-SC4_A04-05_u02-08	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a04u02:drained;a04u08:drained
+pod6_a04u08_a05u08	bh_sc36_6:bh-glx-110-a04u08,bh-glx-110-a05u08	bh-glx-110-a04u08,bh-glx-110-a05u08	110-SC4_A04-05_u02-08	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a04u08:drained;a05u08:drained
+pod6_a05u02_a04u02	bh_sc36_6:bh-glx-110-a05u02,bh-glx-110-a04u02	bh-glx-110-a05u02,bh-glx-110-a04u02	110-SC4_A04-05_u02-08	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a04u02:drained;a05u02:drained
+pod6_a05u08_a05u02	bh_sc36_6:bh-glx-110-a05u08,bh-glx-110-a05u02	bh-glx-110-a05u08,bh-glx-110-a05u02	110-SC4_A04-05_u02-08	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a05u02:drained;a05u08:drained
+pod7_a01u02_a01u08	bh_sc36_6:bh-glx-110-a01u02,bh-glx-110-a01u08	bh-glx-110-a01u02,bh-glx-110-a01u08	110-SC4_A01	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+pod7_a01u08_a01u14	bh_sc36_6:bh-glx-110-a01u08,bh-glx-110-a01u14	bh-glx-110-a01u08,bh-glx-110-a01u14	110-SC4_A01	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a01u14
+pod7_a01u14_a01u20	bh_sc36_6:bh-glx-110-a01u14,bh-glx-110-a01u20	bh-glx-110-a01u14,bh-glx-110-a01u20	110-SC4_A01	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a01u14
+pod7_a01u20_a01u02	bh_sc36_6:bh-glx-110-a01u20,bh-glx-110-a01u02	bh-glx-110-a01u20,bh-glx-110-a01u02	110-SC4_A01	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+pod8_a02u02_a02u08	bh_sc36_6:bh-glx-110-a02u02,bh-glx-110-a02u08	bh-glx-110-a02u02,bh-glx-110-a02u08	110-SC4_A02-03_u02-08	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a02u02,a02u08;a02u02:down
+pod8_a02u08_a03u08	bh_sc36_6:bh-glx-110-a02u08,bh-glx-110-a03u08	bh-glx-110-a02u08,bh-glx-110-a03u08	110-SC4_A02-03_u02-08	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a02u08
+pod8_a03u02_a02u02	bh_sc36_6:bh-glx-110-a03u02,bh-glx-110-a02u02	bh-glx-110-a03u02,bh-glx-110-a02u02	110-SC4_A02-03_u02-08	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a02u02;a02u02:down
+pod8_a03u08_a03u02	bh_sc36_6:bh-glx-110-a03u08,bh-glx-110-a03u02	bh-glx-110-a03u08,bh-glx-110-a03u02	110-SC4_A02-03_u02-08	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	ok
+pod9_a02u14_a03u14	bh_sc36_6:bh-glx-110-a02u14,bh-glx-110-a03u14	bh-glx-110-a02u14,bh-glx-110-a03u14	110-SC4_A02-05_u14	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a02u14,a03u14
+pod9_a03u14_a04u14	bh_sc36_6:bh-glx-110-a03u14,bh-glx-110-a04u14	bh-glx-110-a03u14,bh-glx-110-a04u14	110-SC4_A02-05_u14	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a03u14
+pod9_a04u14_a05u14	bh_sc36_6:bh-glx-110-a04u14,bh-glx-110-a05u14	bh-glx-110-a04u14,bh-glx-110-a05u14	110-SC4_A02-05_u14	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	a05u14:drained
+pod9_a05u14_a02u14	bh_sc36_6:bh-glx-110-a05u14,bh-glx-110-a02u14	bh-glx-110-a05u14,bh-glx-110-a02u14	110-SC4_A02-05_u14	16	16x4,mm_exp,mm_exp8,mm_zfb,mm_zfb8,express16,torusx16	exclude:a02u14;a05u14:drained
+x_a01u02_a02u02	bh_sc36_6:bh-glx-110-a01u02,bh-glx-110-a02u02	bh-glx-110-a01u02,bh-glx-110-a02u02	110-SC4_A01|110-SC4_A02-03_u02-08	2	-	exclude:a02u02;a02u02:down
+x_a01u02_a06u08	bh_sc36_6:bh-glx-110-a01u02,bh-glx-110-a06u08	bh-glx-110-a01u02,bh-glx-110-a06u08	110-SC4_A01|110-SC4_A06	2	-	ok
+x_a01u08_a02u14	bh_sc36_6:bh-glx-110-a01u08,bh-glx-110-a02u14	bh-glx-110-a01u08,bh-glx-110-a02u14	110-SC4_A01|110-SC4_A02-05_u14	2	-	exclude:a02u14
+x_a01u08_a04u08	bh_sc36_6:bh-glx-110-a01u08,bh-glx-110-a04u08	bh-glx-110-a01u08,bh-glx-110-a04u08	110-SC4_A01|110-SC4_A04-05_u02-08	2	-	a04u08:drained
+x_a01u14_a03u02	bh_sc36_6:bh-glx-110-a01u14,bh-glx-110-a03u02	bh-glx-110-a01u14,bh-glx-110-a03u02	110-SC4_A01|110-SC4_A02-03_u02-08	2	-	exclude:a01u14
+x_a01u14_a04u14	bh_sc36_6:bh-glx-110-a01u14,bh-glx-110-a04u14	bh-glx-110-a01u14,bh-glx-110-a04u14	110-SC4_A01|110-SC4_A02-05_u14	2	-	exclude:a01u14
+x_a01u20_a05u08	bh_sc36_6:bh-glx-110-a01u20,bh-glx-110-a05u08	bh-glx-110-a01u20,bh-glx-110-a05u08	110-SC4_A01|110-SC4_A04-05_u02-08	2	-	a05u08:drained
+x_a01u20_a06u20	bh_sc36_6:bh-glx-110-a01u20,bh-glx-110-a06u20	bh-glx-110-a01u20,bh-glx-110-a06u20	110-SC4_A01|110-SC4_A06	2	-	ok
+x_a02u08_a03u14	bh_sc36_6:bh-glx-110-a02u08,bh-glx-110-a03u14	bh-glx-110-a02u08,bh-glx-110-a03u14	110-SC4_A02-03_u02-08|110-SC4_A02-05_u14	2	-	exclude:a02u08,a03u14
+x_a02u08_a04u02	bh_sc36_6:bh-glx-110-a02u08,bh-glx-110-a04u02	bh-glx-110-a02u08,bh-glx-110-a04u02	110-SC4_A02-03_u02-08|110-SC4_A04-05_u02-08	2	-	exclude:a02u08;a04u02:drained
+x_a02u08_a06u08	bh_sc36_6:bh-glx-110-a02u08,bh-glx-110-a06u08	bh-glx-110-a02u08,bh-glx-110-a06u08	110-SC4_A02-03_u02-08|110-SC4_A06	2	-	exclude:a02u08
+x_a03u02_a05u02	bh_sc36_6:bh-glx-110-a03u02,bh-glx-110-a05u02	bh-glx-110-a03u02,bh-glx-110-a05u02	110-SC4_A02-03_u02-08|110-SC4_A04-05_u02-08	2	-	a05u02:drained
+x_a03u02_a06u14	bh_sc36_6:bh-glx-110-a03u02,bh-glx-110-a06u14	bh-glx-110-a03u02,bh-glx-110-a06u14	110-SC4_A02-03_u02-08|110-SC4_A06	2	-	ok
+x_a03u08_a05u14	bh_sc36_6:bh-glx-110-a03u08,bh-glx-110-a05u14	bh-glx-110-a03u08,bh-glx-110-a05u14	110-SC4_A02-03_u02-08|110-SC4_A02-05_u14	2	-	a05u14:drained
+x_a03u14_a04u08	bh_sc36_6:bh-glx-110-a03u14,bh-glx-110-a04u08	bh-glx-110-a03u14,bh-glx-110-a04u08	110-SC4_A02-05_u14|110-SC4_A04-05_u02-08	2	-	exclude:a03u14;a04u08:drained
+x_a03u14_a06u02	bh_sc36_6:bh-glx-110-a03u14,bh-glx-110-a06u02	bh-glx-110-a03u14,bh-glx-110-a06u02	110-SC4_A02-05_u14|110-SC4_A06	2	-	exclude:a03u14
+x_a04u08_a06u08	bh_sc36_6:bh-glx-110-a04u08,bh-glx-110-a06u08	bh-glx-110-a04u08,bh-glx-110-a06u08	110-SC4_A04-05_u02-08|110-SC4_A06	2	-	a04u08:drained
+x_a04u14_a05u02	bh_sc36_6:bh-glx-110-a04u14,bh-glx-110-a05u02	bh-glx-110-a04u14,bh-glx-110-a05u02	110-SC4_A02-05_u14|110-SC4_A04-05_u02-08	2	-	a05u02:drained
+x_a04u14_a06u14	bh_sc36_6:bh-glx-110-a04u14,bh-glx-110-a06u14	bh-glx-110-a04u14,bh-glx-110-a06u14	110-SC4_A02-05_u14|110-SC4_A06	2	-	ok
+x_a05u02_a06u14	bh_sc36_6:bh-glx-110-a05u02,bh-glx-110-a06u14	bh-glx-110-a05u02,bh-glx-110-a06u14	110-SC4_A04-05_u02-08|110-SC4_A06	2	-	a05u02:drained
+x_a07u02_a08u08	bh_110a_sc16:bh-glx-110-a07u02,bh-glx-110-a08u08	bh-glx-110-a07u02,bh-glx-110-a08u08	110-SC16_4x4_A7-10	2	-	ok
+x_a07u08_a09u02	bh_110a_sc16:bh-glx-110-a07u08,bh-glx-110-a09u02	bh-glx-110-a07u08,bh-glx-110-a09u02	110-SC16_4x4_A7-10	2	-	exclude:a09u02
+x_a07u08_a10u02	bh_110a_sc16:bh-glx-110-a07u08,bh-glx-110-a10u02	bh-glx-110-a07u08,bh-glx-110-a10u02	110-SC16_4x4_A7-10	2	-	exclude:a10u02
+x_a07u14_a08u14	bh_110a_sc16:bh-glx-110-a07u14,bh-glx-110-a08u14	bh-glx-110-a07u14,bh-glx-110-a08u14	110-SC16_4x4_A7-10	2	-	ok
+x_a07u14_a10u14	bh_110a_sc16:bh-glx-110-a07u14,bh-glx-110-a10u14	bh-glx-110-a07u14,bh-glx-110-a10u14	110-SC16_4x4_A7-10	2	-	ok
+x_a07u20_a09u20	bh_110a_sc16:bh-glx-110-a07u20,bh-glx-110-a09u20	bh-glx-110-a07u20,bh-glx-110-a09u20	110-SC16_4x4_A7-10	2	-	a07u20:drained
+x_a08u02_a09u08	bh_110a_sc16:bh-glx-110-a08u02,bh-glx-110-a09u08	bh-glx-110-a08u02,bh-glx-110-a09u08	110-SC16_4x4_A7-10	2	-	ok
+x_a08u02_a10u08	bh_110a_sc16:bh-glx-110-a08u02,bh-glx-110-a10u08	bh-glx-110-a08u02,bh-glx-110-a10u08	110-SC16_4x4_A7-10	2	-	ok
+x_a08u14_a09u14	bh_110a_sc16:bh-glx-110-a08u14,bh-glx-110-a09u14	bh-glx-110-a08u14,bh-glx-110-a09u14	110-SC16_4x4_A7-10	2	-	a09u14:down*
+x_a08u20_a10u20	bh_110a_sc16:bh-glx-110-a08u20,bh-glx-110-a10u20	bh-glx-110-a08u20,bh-glx-110-a10u20	110-SC16_4x4_A7-10	2	-	exclude:a08u20
+x_a09u02_a10u08	bh_110a_sc16:bh-glx-110-a09u02,bh-glx-110-a10u08	bh-glx-110-a09u02,bh-glx-110-a10u08	110-SC16_4x4_A7-10	2	-	exclude:a09u02
+x_a09u14_a10u14	bh_110a_sc16:bh-glx-110-a09u14,bh-glx-110-a10u14	bh-glx-110-a09u14,bh-glx-110-a10u14	110-SC16_4x4_A7-10	2	-	a09u14:down*
+c120_pod1_c01u02_c01u08	bh_sc36_2:bh-glx-120-c01u02,bh-glx-120-c01u08	bh-glx-120-c01u02,bh-glx-120-c01u08	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod1_c01u08_c01u14	bh_sc36_2:bh-glx-120-c01u08,bh-glx-120-c01u14	bh-glx-120-c01u08,bh-glx-120-c01u14	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod1_c01u14_c01u20	bh_sc36_2:bh-glx-120-c01u14,bh-glx-120-c01u20	bh-glx-120-c01u14,bh-glx-120-c01u20	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod1_c01u20_c01u02	bh_sc36_2:bh-glx-120-c01u20,bh-glx-120-c01u02	bh-glx-120-c01u20,bh-glx-120-c01u02	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod2_c02u02_c02u08	bh_sc36_2:bh-glx-120-c02u02,bh-glx-120-c02u08	bh-glx-120-c02u02,bh-glx-120-c02u08	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod2_c02u08_c03u08	bh_sc36_2:bh-glx-120-c02u08,bh-glx-120-c03u08	bh-glx-120-c02u08,bh-glx-120-c03u08	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod2_c03u02_c02u02	bh_sc36_2:bh-glx-120-c03u02,bh-glx-120-c02u02	bh-glx-120-c03u02,bh-glx-120-c02u02	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod2_c03u08_c03u02	bh_sc36_2:bh-glx-120-c03u08,bh-glx-120-c03u02	bh-glx-120-c03u08,bh-glx-120-c03u02	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod6_c07u02_c07u08	bh_sc36_2:bh-glx-120-c07u02,bh-glx-120-c07u08	bh-glx-120-c07u02,bh-glx-120-c07u08	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	c07u02:draining
+c120_pod6_c07u08_c07u14	bh_sc36_2:bh-glx-120-c07u08,bh-glx-120-c07u14	bh-glx-120-c07u08,bh-glx-120-c07u14	120-SC36_4x4_C1-10	16	16x4,mm_exp,express16,torusx16	ok
+c120_pod6_c07u14_c07u20	bh_sc36_2:bh-glx-120-c07u14,bh-glx-120-c07u20	bh-glx-120-c07u14,bh-glx-120-c07u20	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod6_c07u20_c07u02	bh_sc36_2:bh-glx-120-c07u20,bh-glx-120-c07u02	bh-glx-120-c07u20,bh-glx-120-c07u02	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	c07u02:draining
+c120_pod7_c08u02_c08u08	bh_sc36_2:bh-glx-120-c08u02,bh-glx-120-c08u08	bh-glx-120-c08u02,bh-glx-120-c08u08	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	c08u02:drained
+c120_pod7_c08u08_c08u14	bh_sc36_2:bh-glx-120-c08u08,bh-glx-120-c08u14	bh-glx-120-c08u08,bh-glx-120-c08u14	120-SC36_4x4_C1-10	16	16x4,mm_exp,express16,torusx16	ok
+c120_pod7_c08u14_c08u20	bh_sc36_2:bh-glx-120-c08u14,bh-glx-120-c08u20	bh-glx-120-c08u14,bh-glx-120-c08u20	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod7_c08u20_c08u02	bh_sc36_2:bh-glx-120-c08u20,bh-glx-120-c08u02	bh-glx-120-c08u20,bh-glx-120-c08u02	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	c08u02:drained
+c120_pod8_c09u02_c09u08	bh_sc36_2:bh-glx-120-c09u02,bh-glx-120-c09u08	bh-glx-120-c09u02,bh-glx-120-c09u08	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	c09u02:drained
+c120_pod8_c09u08_c09u14	bh_sc36_2:bh-glx-120-c09u08,bh-glx-120-c09u14	bh-glx-120-c09u08,bh-glx-120-c09u14	120-SC36_4x4_C1-10	16	16x4,mm_exp,express16,torusx16	ok
+c120_pod8_c09u14_c09u20	bh_sc36_2:bh-glx-120-c09u14,bh-glx-120-c09u20	bh-glx-120-c09u14,bh-glx-120-c09u20	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	ok
+c120_pod8_c09u20_c09u02	bh_sc36_2:bh-glx-120-c09u20,bh-glx-120-c09u02	bh-glx-120-c09u20,bh-glx-120-c09u02	120-SC36_4x4_C1-10	16	16x4,express16,torusx16	c09u02:drained

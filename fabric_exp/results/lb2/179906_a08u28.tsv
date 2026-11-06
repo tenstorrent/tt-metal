@@ -1,0 +1,8 @@
+cenpr1a_main_lat.log	441589	a0d32ee084f86121	bh-lb-120-a08u28	179906	copied
+cenpr1a_main_lat_latency.csv	2764743	afcb0b3d9102bc27	bh-lb-120-a08u28	179906	copied
+cenpr1a_port_lat.log	489841	5ebf0c49d22d4775	bh-lb-120-a08u28	179906	copied
+cenpr1a_port_lat_latency.csv	2764743	afebb1df2ab98837	bh-lb-120-a08u28	179906	copied
+cenpr1b_main_lat.log	441270	9e1febcb13168eca	bh-lb-120-a08u28	179906	copied
+cenpr1b_main_lat_latency.csv	2764743	d48a9d94e9bfefe1	bh-lb-120-a08u28	179906	copied
+cenpr1b_port_lat.log	490204	24daba06b3b3335f	bh-lb-120-a08u28	179906	copied
+cenpr1b_port_lat_latency.csv	2764743	5b0f3d6ef49e2f33	bh-lb-120-a08u28	179906	copied

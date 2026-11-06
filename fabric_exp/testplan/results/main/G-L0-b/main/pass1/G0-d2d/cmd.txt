@@ -1,0 +1,1 @@
+pytest models/demos/deepseek_v3_d_p/tests/test_d2d_socket_sync.py -k "fabric2d-8x4" -vvv --tb=short

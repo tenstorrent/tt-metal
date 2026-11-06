@@ -1,0 +1,53 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "blaze_models_prefill_tests.yaml",
+  "mirrored": true,
+  "name": "(Kimi-K2.7-1T, Kimi-K3-2.8T) MoE perf 5k",
+  "sku": "bh_sc1_high_power"
+ },
+ "ci_timeout_s": 1920,
+ "data_inodes_at_submit": "8050091",
+ "data_inodes_free": 8123309,
+ "deviation": "no mpirun wrapper (one host); KIMI_MOE_PERF_IGNORE_POWER=1 (the 110-a hosts' TDP class is unknown; both arms run on one node), KIMI_MOE_PERF_REPLAYS=5 (metric stays the first replay); torus-XY certification env as Y1 (TT_MESH_GRAPH_DESC_PATH single_bh_galaxy_torus_xy, PREFILL_TORUS_XY_CERTIFIED=1), added 2026-11-04 after job 172972 skipped both cases without it (conftest TorusXY guard under CI=true)",
+ "duration_s": 180.2,
+ "end": "2026-11-04T16:55:38+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): python -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k galaxy -vvv --tb=short"
+ ],
+ "group": "G-L1P-x",
+ "jit_cache": "/tmp/aagarwal-regress/174668/cache/new_288afd2-new",
+ "junit_files": 1,
+ "label": "ab_288afd2",
+ "metrics": 2,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a10u20",
+ "note": null,
+ "pass": 2,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "174668",
+ "start": "2026-11-04T16:52:38+00:00",
+ "status": "FAIL",
+ "step": "G1x-kimi-moe",
+ "step_env": null,
+ "telemetry": "off (prod default)",
+ "tests": {
+  "FAIL": 1,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "timeout_note": null,
+ "timeout_s": 1920,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

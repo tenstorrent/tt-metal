@@ -1,0 +1,168 @@
+# Completion-group merge rows (SLOT_ALLOCATOR.md section 12.10): k far sender channels into one receiver, on
+# the link chip 13 -> chip 14 (channels: worker from chip 13, straight from chip 12, turnN from chip 9, turnS from chip 17); k1f = one
+# forwarding channel alone. 3072 B slots. Benchmark.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Merge_g8x4_k1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: &id001
+    - 256
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 13
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+- name: Merge_g8x4_k1f
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: *id001
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 12
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+- name: Merge_g8x4_k2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: *id001
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 13
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+  - device:
+    - 0
+    - 12
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+- name: Merge_g8x4_k3
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: *id001
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 13
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+  - device:
+    - 0
+    - 12
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+  - device:
+    - 0
+    - 9
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+- name: Merge_g8x4_k4
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: *id001
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 13
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+  - device:
+    - 0
+    - 12
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+  - device:
+    - 0
+    - 9
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14
+  - device:
+    - 0
+    - 17
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 14

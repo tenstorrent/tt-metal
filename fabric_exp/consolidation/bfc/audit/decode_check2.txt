@@ -1,0 +1,26 @@
+616 router builds over 7 configs
+   glx_torus_4352         active_erisc               identical 60
+   glx_torus_4352         subordinate_active_erisc   differ    20
+   glx_torus_4352         subordinate_active_erisc   identical 40
+   glx_vc1split_4352      active_erisc               identical 40
+   glx_vc1split_4352      subordinate_active_erisc   differ    28
+   glx_vc1split_4352      subordinate_active_erisc   identical 12
+   p150_line_4352         active_erisc               identical 36
+   p150_line_4352         subordinate_active_erisc   identical 36
+   p150_mesh_4352         active_erisc               identical 40
+   p150_mesh_4352         subordinate_active_erisc   differ    12
+   p150_mesh_4352         subordinate_active_erisc   identical 28
+   p150_ring_4352         active_erisc               identical 36
+   p150_ring_4352         subordinate_active_erisc   identical 36
+   p150_torus2x4_4352     active_erisc               identical 48
+   p150_torus2x4_4352     subordinate_active_erisc   differ    16
+   p150_torus2x4_4352     subordinate_active_erisc   identical 32
+   p150_torus4x2_4352     active_erisc               identical 48
+   p150_torus4x2_4352     subordinate_active_erisc   differ    32
+   p150_torus4x2_4352     subordinate_active_erisc   identical 16
+   differ glx_torus_4352: x20: 
+   differ glx_vc1split_4352: x20: 
+   differ glx_vc1split_4352: x8: _start; fabric_router::PartialPresetForwards<0u>::preset; fabric_router::PartialPresetForwards<0u>::preset_cmd_bufs; fabric_router::PartialPresetForwards<1u>::preset; fabric_router::PartialPresetForwards<1u>::preset_cmd_bufs; fabric_router::receiver::run; kernel_main; void fabric_router::init_downstreams<0u>
+   differ p150_mesh_4352: x12: 
+   differ p150_torus2x4_4352: x16: 
+   differ p150_torus4x2_4352: x32: 

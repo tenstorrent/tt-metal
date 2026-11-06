@@ -1,0 +1,92 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 12,
+  "PERF_WINDOW": 0,
+  "SKIP": 1
+ },
+ "files": [
+  "pytest_1867644_1793781619183637345_20261104_084019.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce[blackhole-True-True-device_params0-30-15-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "CCL all-reduce trace test needs fast dispatch",
+   "status": "SKIP",
+   "time": 19.478
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-1-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 10.982
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-1-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.772
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-10-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.912
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-10-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.297
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-2-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.545
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-False-2-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.3
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-1-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 27.538
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-1-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.004
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-10-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.976
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-10-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.581
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-2-1-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.709
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_all_reduce::test_ccl_all_reduce_chunk_and_link_matrix[blackhole-True-device_params0-True-2-2-0-DataType.BFLOAT16-Layout.TILE-2-output_shape0-input_shard_shape0-TensorMemoryLayout.WIDTH_SHARDED]": {
+   "file": "pytest_1867644_1793781619183637345_20261104_084019.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.752
+  }
+ }
+}

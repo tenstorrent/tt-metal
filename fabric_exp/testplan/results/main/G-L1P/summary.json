@@ -1,0 +1,47 @@
+{
+ "group": "G-L1P",
+ "label": "main",
+ "updated": "2026-11-04T05:32:44+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G1-hbw",
+   "status": "PASS",
+   "duration_s": 741.2,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 28,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": 32,
+   "reason": null,
+   "start": "2026-11-04T05:13:07+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 2,
+   "step": "G1-hbw",
+   "status": "PASS",
+   "duration_s": 435.6,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 28,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": 32,
+   "reason": null,
+   "start": "2026-11-04T05:25:28+00:00"
+  }
+ ]
+}

@@ -1,0 +1,1 @@
+Steps of Slurm jobs 171351 / 171352 that started before the /data tree got runtime/hw/lib/*/*.o and the sfpi crt objects (synced 2026-11-03 22:27 UTC; stage excluded *.o everywhere). Every fabric kernel JIT link failed: invalid, not main results.

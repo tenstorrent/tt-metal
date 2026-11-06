@@ -1,0 +1,40 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 15,
+  "filtered": true,
+  "list": "blackhole_e2e_tests.yaml",
+  "name": "fabric fast unit tests (1D, 2D, single erisc)",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 900,
+ "duration_s": 45.0,
+ "end": "2026-11-03T21:04:41+00:00",
+ "failed_lines": [],
+ "group": "LB-L0-a",
+ "junit_files": 1,
+ "label": "main",
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-03T21:03:56+00:00",
+ "status": "PASS",
+ "step": "B0-1e",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 24,
+  "PERF_WINDOW": 0,
+  "SKIP": 7
+ },
+ "timeout_s": 900,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

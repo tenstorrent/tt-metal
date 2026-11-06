@@ -1,0 +1,128 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 19,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_2171046_1793783516709876475_20261104_091156.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_argmax_mesh[blackhole-True-test_1-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 52.257
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_argmax_mesh[blackhole-True-test_2-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 17.042
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_argmax_mesh[blackhole-True-test_3-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 13.92
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_argmax_mesh[blackhole-True-test_4-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.379
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_argmax_single_device_101_cores[1337-50]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.527
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_argmax_single_device_101_cores[17-0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.775
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_argmax_single_device_101_cores[2005-100]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 18.742
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_argmax_single_device_101_cores[4242-73]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.741
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_mesh[blackhole-True-test_1-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 60.419
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_mesh[blackhole-True-test_2-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 42.262
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_mesh[blackhole-True-test_3-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 33.984
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_mesh[blackhole-True-test_4-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 30.536
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_mesh[blackhole-True-test_5-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 30.325
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_mesh[blackhole-True-test_6-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 30.345
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_mesh[blackhole-True-test_7-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 30.535
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_mesh[blackhole-True-test_8-device_params0]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 30.746
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_single_device[test_1]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 13.131
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_single_device[test_2]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 12.691
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_sampling::test_sampling_topk_single_device[test_4]": {
+   "file": "pytest_2171046_1793783516709876475_20261104_091156.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 9.692
+  }
+ }
+}

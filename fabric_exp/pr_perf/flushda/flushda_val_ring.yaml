@@ -1,0 +1,31 @@
+# Flushed-atomic validation on deadlock-avoiding routers (3efd636e8df check, coordinator 2026-11-05; local):
+# test_fabric_sanity_common.yaml's FlowControlAllToAll flushed-atomic rows (atomic_inc, fused_atomic_inc and
+# scatter + atomic_inc, flush off and on; data-checked, flow control on) on Ring and XY-torus topologies.
+Tests:
+- name: FlushA2ARing
+  sync: true
+  enable_flow_control: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ftype:
+    - unicast
+    - mcast
+    ntype:
+    - atomic_inc
+    - type: fused_atomic_inc
+      flush:
+      - false
+      - true
+    - type: unicast_scatter_write
+      atomic_inc: true
+      flush:
+      - false
+      - true
+    size:
+    - 1024
+    - 4096
+  defaults:
+    num_packets: 1000
+  patterns:
+  - type: all_to_all

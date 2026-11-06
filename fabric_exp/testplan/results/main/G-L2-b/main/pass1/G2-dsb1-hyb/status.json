@@ -1,0 +1,50 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 65,
+  "filtered": true,
+  "list": "demo_sp_release_tests.yaml",
+  "name": "bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 3900,
+ "deviation": "buckets prepare_weights_hybrid_allocator + host_io_risk only (fabric_2d runs in G2-dsb1-f2d/-attn); run_isolated_unit_tests.py --no-reset (deviation for main and new): its reset/validation/smoke preflight validates the single-Galaxy XY-torus cabling and fails on every quad-cabled 110-a node (job 172241, ENV like G0-health-cv); the job still resets at start and after any failing step",
+ "duration_s": 270.6,
+ "end": "2026-11-04T06:55:28+00:00",
+ "failed_lines": [],
+ "group": "G-L2-b",
+ "jit_cache": "/tmp/aagarwal-regress/172490/cache/main-main",
+ "junit_files": 2,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a07u08",
+ "note": "the runner sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 for every bucket (as in CI)",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "172490",
+ "start": "2026-11-04T06:50:58+00:00",
+ "status": "PASS",
+ "step": "G2-dsb1-hyb",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 15,
+  "PERF_WINDOW": 0,
+  "SKIP": 59
+ },
+ "timeout_note": null,
+ "timeout_s": 3900,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

@@ -1,0 +1,21 @@
+--- a/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp
++++ b/tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp
+@@ -20,16 +20,13 @@
+ #include "router_sender.hpp"
+ 
+ // Where the passes run (above): out of line on Blackhole, inline on Wormhole.
+-#if defined(ARCH_BLACKHOLE)
+-#define SINGLE_ERISC_PASS __attribute__((noinline))
+-#elif defined(ARCH_WORMHOLE)
++// LOCAL single-ERISC A/B, arm B (never committed): Wormhole's inline form on Blackhole too.
+ #define SINGLE_ERISC_PASS FORCE_INLINE
+-#endif
+ 
+ namespace fabric_router::single {
+ 
+ // Whether the passes run inline (SINGLE_ERISC_PASS), which lets the loop carry the receiver's loop-local progress.
+-constexpr bool inline_passes = is_wormhole_arch;
++constexpr bool inline_passes = true;  // LOCAL A/B arm B; as built: is_wormhole_arch
+ 
+ // The sender's state between passes: sender::run's objects, with the loop-local send state kept here, not copied.
+ struct SenderState {

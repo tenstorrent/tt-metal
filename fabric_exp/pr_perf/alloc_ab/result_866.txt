@@ -1,0 +1,7 @@
+# a09u32 broker job 866 (2026-11-05 23:47-23:48 UTC): bfix_nofix = de8a2ac17a8, bfix_fix = 6a4a961aeab (each + the telemetry
+# switch patch), one pass, nofix then fix; same setup as job 843 (alab_A = 57c55f98118, alab_B = 07322400fd6). 3/3 tests per arm,
+# 0 failed, no hang, post-job health OK. Cycles/packet at 1.35 GHz, write, 14400 B.
+row                  | 843 A 57c5 843 B 0732 | nofix de8a  fix 6a4a | fix-nofix       % | fix-A843
+Mesh1HopEWBidir      |      458.6      470.0 |      470.0     470.0 |      +0.0   +0.01 |    +11.4
+Torus1HopEWBidir     |      426.0      619.2 |      619.6     426.2 |    -193.5  -31.22 |     +0.2
+TorusRingNeighbors   |      427.6      620.0 |      619.3     427.5 |    -191.8  -30.97 |     -0.1

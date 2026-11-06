@@ -1,0 +1,51 @@
+{
+ "capped": true,
+ "ci": {
+  "list": "blaze_models_prefill_tests.yaml",
+  "mirrored": true,
+  "name": "(Kimi-K2.7-1T, Kimi-K3-2.8T) MoE perf 5k",
+  "sku": "bh_sc1_high_power"
+ },
+ "ci_timeout_s": 1800,
+ "data_inodes_at_submit": null,
+ "data_inodes_free": null,
+ "deviation": "the CI entry runs -k galaxy on a Galaxy; here its LoudBox row (-k loudbox, 2x4 Fabric2D, record-only), KIMI_MOE_PERF_REPLAYS=5 so the log shows the in-run spread (the metric stays the first replay, as CI)",
+ "duration_s": 25.0,
+ "end": "2026-11-04T09:14:40+00:00",
+ "failed_lines": [],
+ "group": "LB-L1P-x",
+ "jit_cache": "/home/aagarwal/.tt-metal-cache-regress/new_288afd2-new",
+ "junit_files": 1,
+ "label": "ab_288afd2_lb2",
+ "metrics": 2,
+ "missing_paths": null,
+ "mode": "local",
+ "node": "bh-lb-120-a07u28",
+ "note": null,
+ "pass": 3,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": null,
+ "start": "2026-11-04T09:14:15+00:00",
+ "status": "PASS",
+ "step": "B1x-kimi-moe-lb",
+ "step_env": null,
+ "telemetry": "off (prod default)",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 2,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "timeout_note": null,
+ "timeout_s": 1779,
+ "tree": "/home/aagarwal/tt-metal-new",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

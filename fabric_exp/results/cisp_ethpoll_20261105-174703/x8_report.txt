@@ -1,0 +1,538 @@
+== 1. perturbation: polled vs unpolled, same yaml, profiler on (CSV bandwidth_GB_s per row type: mean over
+   iterations, median over the iterations with no low router; slow iterations poll/nopoll)
+   i   poll  : write iterations 96, slow (a router >2% low) 38
+   i   nopoll: write iterations 96, slow (a router >2% low) 39
+      size 2048 links 1 pkts 100000:  mean poll  22.709 nopoll  22.618 (+0.40%, n 24/24)  median of normal its poll  22.798 nopoll  22.799 (-0.00%, n 18/18)  slow 6/6
+      size 2048 links 2 pkts 100000:  mean poll  22.452 nopoll  22.453 (-0.00%, n 24/24)  median of normal its poll  22.797 nopoll  22.799 (-0.01%, n 13/14)  slow 11/10
+      size 4096 links 1 pkts 100000:  mean poll  45.162 nopoll  45.253 (-0.20%, n 24/24)  median of normal its poll  45.616 nopoll  45.616 (-0.00%, n 17/15)  slow 7/9
+      size 4096 links 2 pkts 100000:  mean poll  44.474 nopoll  44.648 (-0.39%, n 24/24)  median of normal its poll  45.611 nopoll  45.613 (-0.00%, n 10/10)  slow 14/14
+   ii  poll  : write iterations 48, slow (a router >2% low) 0
+   ii  nopoll: write iterations 48, slow (a router >2% low) 0
+      size 2048 links 1 pkts 100000:  mean poll  22.799 nopoll  22.799 (+0.00%, n 24/24)  median of normal its poll  22.799 nopoll  22.799 (+0.00%, n 24/24)  slow 0/0
+      size 4096 links 1 pkts 100000:  mean poll  45.616 nopoll  45.615 (+0.00%, n 24/24)  median of normal its poll  45.616 nopoll  45.615 (+0.00%, n 24/24)  slow 0/0
+   gap poll  : write iterations 96, slow (a router >2% low) 40
+   gap nopoll: write iterations 96, slow (a router >2% low) 38
+      size 2048 links 1 pkts      1:  mean poll   0.451 nopoll   0.441 (+2.33%, n 160/160)  slow 160/160
+      size 2048 links 1 pkts 100000:  mean poll  22.632 nopoll  22.541 (+0.41%, n 24/24)  median of normal its poll  22.799 nopoll  22.800 (-0.00%, n 17/15)  slow 7/9
+      size 2048 links 2 pkts 100000:  mean poll  22.410 nopoll  22.452 (-0.19%, n 24/24)  median of normal its poll  22.798 nopoll  22.797 (+0.00%, n 15/15)  slow 9/9
+      size 4096 links 1 pkts 100000:  mean poll  45.289 nopoll  45.290 (-0.00%, n 24/24)  median of normal its poll  45.617 nopoll  45.616 (+0.00%, n 12/16)  slow 12/8
+      size 4096 links 2 pkts 100000:  mean poll  44.567 nopoll  44.567 (+0.00%, n 24/24)  median of normal its poll  45.611 nopoll  45.609 (+0.00%, n 12/12)  slow 12/12
+
+== 2. link state values seen (all polls, all router cores)
+   i: 15040 polls, 40 cores, 376 sweeps, 9.52 ms/sweep, read errors 0
+      PCS_STATUS               0x1 x15040
+      ERR_STAT                 0x0 x15040
+      eth_status.port_status   0x1 x15040
+      eth_status.train_status  0x2 x15040
+      live.rx_link_up          0x1 x15040
+   ii: 6480 polls, 40 cores, 162 sweeps, 9.34 ms/sweep, read errors 0
+      PCS_STATUS               0x1 x6480
+      ERR_STAT                 0x0 x6480
+      eth_status.port_status   0x1 x6480
+      eth_status.train_status  0x2 x6480
+      live.rx_link_up          0x1 x6480
+   gap: 23400 polls, 40 cores, 585 sweeps, 9.59 ms/sweep, read errors 0
+      PCS_STATUS               0x1 x23400
+      ERR_STAT                 0x0 x23400
+      eth_status.port_status   0x1 x23400
+      eth_status.train_status  0x2 x23400
+      live.rx_link_up          0x1 x23400
+
+== 3. error / recovery counters: change over the run (cores that changed, total, per-core rate /s)
+   i:
+      live.link_flap_count               link-0: 20 cores, total 20, median 0.2802/s; link-1: 20 cores, total 20, median 0.2802/s
+         link-0 c0/e6->W c1/e5 P? T: +1 in 3.57 s
+         link-0 c0/e7->E c2/e4 P? T: +1 in 3.57 s
+         link-0 c0/e8->S c4/e11 P? T: +1 in 3.57 s
+         link-0 c1/e5->E c0/e6 P? R: +1 in 3.57 s
+         link-0 c1/e8->S c5/e11 P? T: +1 in 3.57 s
+         link-0 c2/e4->W c0/e7 P? R: +1 in 3.57 s
+         link-0 c2/e5->E c3/e6 P? T: +1 in 3.57 s
+         link-0 c2/e8->S c6/e11 P? T: +1 in 3.57 s
+         link-0 c3/e6->W c2/e5 P? R: +1 in 3.57 s
+         link-0 c3/e8->S c7/e11 P? T: +1 in 3.57 s
+         link-0 c4/e4->W c5/e7 P? T: +1 in 3.57 s
+         link-0 c4/e5->E c6/e6 P? T: +1 in 3.57 s
+         link-0 c4/e11->N c0/e8 P? R: +1 in 3.57 s
+         link-0 c5/e7->E c4/e4 P? R: +1 in 3.57 s
+         link-0 c5/e11->N c1/e8 P? R: +1 in 3.57 s
+         link-0 c6/e6->W c4/e5 P? R: +1 in 3.57 s
+         link-0 c6/e7->E c7/e4 P? T: +1 in 3.57 s
+         link-0 c6/e11->N c2/e8 P? R: +1 in 3.57 s
+         link-0 c7/e4->W c6/e7 P? R: +1 in 3.57 s
+         link-0 c7/e11->N c3/e8 P? R: +1 in 3.57 s
+         link-1 c0/e4->W c1/e7 P? T: +1 in 3.57 s
+         link-1 c0/e5->E c2/e6 P? T: +1 in 3.57 s
+         link-1 c0/e10->S c4/e9 P? T: +1 in 3.57 s
+         link-1 c1/e7->E c0/e4 P? R: +1 in 3.57 s
+         link-1 c1/e10->S c5/e9 P? T: +1 in 3.57 s
+         link-1 c2/e6->W c0/e5 P? R: +1 in 3.57 s
+         link-1 c2/e7->E c3/e4 P? T: +1 in 3.57 s
+         link-1 c2/e10->S c6/e9 P? T: +1 in 3.57 s
+         link-1 c3/e4->W c2/e7 P? R: +1 in 3.57 s
+         link-1 c3/e10->S c7/e9 P? T: +1 in 3.57 s
+         link-1 c4/e6->W c5/e5 P? T: +1 in 3.57 s
+         link-1 c4/e7->E c6/e4 P? T: +1 in 3.57 s
+         link-1 c4/e9->N c0/e10 P? R: +1 in 3.57 s
+         link-1 c5/e5->E c4/e6 P? R: +1 in 3.57 s
+         link-1 c5/e9->N c1/e10 P? R: +1 in 3.57 s
+         link-1 c6/e4->W c4/e7 P? R: +1 in 3.57 s
+         link-1 c6/e5->E c7/e6 P? T: +1 in 3.57 s
+         link-1 c6/e9->N c2/e10 P? R: +1 in 3.57 s
+         link-1 c7/e6->W c6/e5 P? R: +1 in 3.57 s
+         link-1 c7/e9->N c3/e10 P? R: +1 in 3.57 s
+      live.corr_cw                       link-0: 20 cores, total 964878, median 6507/s; link-1: 20 cores, total 527733, median 6704/s
+   ii:
+      live.link_flap_count               link-0: 20 cores, total 20, median 0.6652/s; link-1: 20 cores, total 20, median 0.6653/s
+         link-0 c0/e6->W c1/e5 P? T: +1 in 1.50 s
+         link-0 c0/e7->E c2/e4 P? T: +1 in 1.50 s
+         link-0 c0/e8->S c4/e11 P? T: +1 in 1.50 s
+         link-0 c1/e5->E c0/e6 P? R: +1 in 1.50 s
+         link-0 c1/e8->S c5/e11 P? T: +1 in 1.50 s
+         link-0 c2/e4->W c0/e7 P? R: +1 in 1.50 s
+         link-0 c2/e5->E c3/e6 P? T: +1 in 1.50 s
+         link-0 c2/e8->S c6/e11 P? T: +1 in 1.50 s
+         link-0 c3/e6->W c2/e5 P? R: +1 in 1.50 s
+         link-0 c3/e8->S c7/e11 P? T: +1 in 1.50 s
+         link-0 c4/e4->W c5/e7 P? T: +1 in 1.50 s
+         link-0 c4/e5->E c6/e6 P? T: +1 in 1.50 s
+         link-0 c4/e11->N c0/e8 P? R: +1 in 1.50 s
+         link-0 c5/e7->E c4/e4 P? R: +1 in 1.50 s
+         link-0 c5/e11->N c1/e8 P? R: +1 in 1.50 s
+         link-0 c6/e6->W c4/e5 P? R: +1 in 1.50 s
+         link-0 c6/e7->E c7/e4 P? T: +1 in 1.50 s
+         link-0 c6/e11->N c2/e8 P? R: +1 in 1.50 s
+         link-0 c7/e4->W c6/e7 P? R: +1 in 1.50 s
+         link-0 c7/e11->N c3/e8 P? R: +1 in 1.50 s
+         link-1 c0/e4->W c1/e7 P? T: +1 in 1.50 s
+         link-1 c0/e5->E c2/e6 P? T: +1 in 1.50 s
+         link-1 c0/e10->S c4/e9 P? T: +1 in 1.50 s
+         link-1 c1/e7->E c0/e4 P? R: +1 in 1.50 s
+         link-1 c1/e10->S c5/e9 P? T: +1 in 1.50 s
+         link-1 c2/e6->W c0/e5 P? R: +1 in 1.50 s
+         link-1 c2/e7->E c3/e4 P? T: +1 in 1.50 s
+         link-1 c2/e10->S c6/e9 P? T: +1 in 1.50 s
+         link-1 c3/e4->W c2/e7 P? R: +1 in 1.50 s
+         link-1 c3/e10->S c7/e9 P? T: +1 in 1.50 s
+         link-1 c4/e6->W c5/e5 P? T: +1 in 1.50 s
+         link-1 c4/e7->E c6/e4 P? T: +1 in 1.50 s
+         link-1 c4/e9->N c0/e10 P? R: +1 in 1.50 s
+         link-1 c5/e5->E c4/e6 P? R: +1 in 1.50 s
+         link-1 c5/e9->N c1/e10 P? R: +1 in 1.50 s
+         link-1 c6/e4->W c4/e7 P? R: +1 in 1.50 s
+         link-1 c6/e5->E c7/e6 P? T: +1 in 1.50 s
+         link-1 c6/e9->N c2/e10 P? R: +1 in 1.50 s
+         link-1 c7/e6->W c6/e5 P? R: +1 in 1.50 s
+         link-1 c7/e9->N c3/e10 P? R: +1 in 1.50 s
+      live.corr_cw                       link-0: 20 cores, total 415674, median 6812/s; link-1: 20 cores, total 223331, median 7093/s
+   gap:
+      live.link_flap_count               link-0: 20 cores, total 20, median 0.1786/s; link-1: 20 cores, total 20, median 0.1786/s
+         link-0 c0/e6->W c1/e5 P? T: +1 in 5.60 s
+         link-0 c0/e7->E c2/e4 P? T: +1 in 5.60 s
+         link-0 c0/e8->S c4/e11 P? T: +1 in 5.60 s
+         link-0 c1/e5->E c0/e6 P? R: +1 in 5.60 s
+         link-0 c1/e8->S c5/e11 P? T: +1 in 5.60 s
+         link-0 c2/e4->W c0/e7 P? R: +1 in 5.60 s
+         link-0 c2/e5->E c3/e6 P? T: +1 in 5.60 s
+         link-0 c2/e8->S c6/e11 P? T: +1 in 5.60 s
+         link-0 c3/e6->W c2/e5 P? R: +1 in 5.60 s
+         link-0 c3/e8->S c7/e11 P? T: +1 in 5.60 s
+         link-0 c4/e4->W c5/e7 P? T: +1 in 5.60 s
+         link-0 c4/e5->E c6/e6 P? T: +1 in 5.60 s
+         link-0 c4/e11->N c0/e8 P? R: +1 in 5.60 s
+         link-0 c5/e7->E c4/e4 P? R: +1 in 5.60 s
+         link-0 c5/e11->N c1/e8 P? R: +1 in 5.60 s
+         link-0 c6/e6->W c4/e5 P? R: +1 in 5.60 s
+         link-0 c6/e7->E c7/e4 P? T: +1 in 5.60 s
+         link-0 c6/e11->N c2/e8 P? R: +1 in 5.60 s
+         link-0 c7/e4->W c6/e7 P? R: +1 in 5.60 s
+         link-0 c7/e11->N c3/e8 P? R: +1 in 5.60 s
+         link-1 c0/e4->W c1/e7 P? T: +1 in 5.60 s
+         link-1 c0/e5->E c2/e6 P? T: +1 in 5.60 s
+         link-1 c0/e10->S c4/e9 P? T: +1 in 5.60 s
+         link-1 c1/e7->E c0/e4 P? R: +1 in 5.60 s
+         link-1 c1/e10->S c5/e9 P? T: +1 in 5.60 s
+         link-1 c2/e6->W c0/e5 P? R: +1 in 5.60 s
+         link-1 c2/e7->E c3/e4 P? T: +1 in 5.60 s
+         link-1 c2/e10->S c6/e9 P? T: +1 in 5.60 s
+         link-1 c3/e4->W c2/e7 P? R: +1 in 5.60 s
+         link-1 c3/e10->S c7/e9 P? T: +1 in 5.60 s
+         link-1 c4/e6->W c5/e5 P? T: +1 in 5.60 s
+         link-1 c4/e7->E c6/e4 P? T: +1 in 5.60 s
+         link-1 c4/e9->N c0/e10 P? R: +1 in 5.60 s
+         link-1 c5/e5->E c4/e6 P? R: +1 in 5.60 s
+         link-1 c5/e9->N c1/e10 P? R: +1 in 5.60 s
+         link-1 c6/e4->W c4/e7 P? R: +1 in 5.60 s
+         link-1 c6/e5->E c7/e6 P? T: +1 in 5.60 s
+         link-1 c6/e9->N c2/e10 P? R: +1 in 5.60 s
+         link-1 c7/e6->W c6/e5 P? R: +1 in 5.60 s
+         link-1 c7/e9->N c3/e10 P? R: +1 in 5.60 s
+      live.corr_cw                       link-0: 20 cores, total 1369115, median 6369/s; link-1: 20 cores, total 795914, median 7031/s
+
+== 4. polled words that change, by router class and iteration class (changes/s, mean d/s)
+   words that change only before the first / after the last iteration (process start / teardown): l1+0x7c598, l1+0x7c5a0, l1+0x7c5b0, l1+0x7c5f0, l1+0x7c5f8, l1+0x7c660, l1+0x7c814, l1+0x7c824, l1+0x7c834, l1+0x7c8b4, l1+0x7c8c4, l1+0x7c8d4, dbg.eth_api_metrics[1], dbg.eth_api_metrics[18], dbg.link_status_check_ts.lo, dbg.dynamic_state_check_ts.lo, dbg.ptp_trace.exit_lo, dbg.ptp_trace.exit_valid, eth_status.fw_stage0, eth_status.fw_stage1, eth_status.heartbeat[1], live.link_flap_count, mbx+0x590
+   core-seconds of poll intervals per class: link-0 i/L1 slow it 3.50, i/L1 normal it 7.53, i/L2 13.92, i/between 37.09, i/post 9.35, ii/L1 normal it 9.91, ii/between 13.20, ii/post 6.95, gap/L1 slow it 4.77, gap/L1 normal it 6.36, gap/L2 13.28, gap/gap row 9.99, gap/between 70.19, gap/post 7.42; link-1 i/L1 slow it 3.46, i/L1 normal it 7.54, i/L2 13.90, i/between 37.13, i/post 9.36, ii/L1 normal it 9.89, ii/between 13.21, ii/post 6.96, gap/L1 slow it 4.77, gap/L1 normal it 6.40, gap/L2 13.45, gap/gap row 9.88, gap/between 70.11, gap/post 7.41
+
+   -- link-1 cores: changes per second (count) in L1 write windows / between, per order
+   word                                   i/L1 slow it   i/L1 normal it        i/between    ii/L1 slow it  ii/L1 normal it       ii/between   gap/L1 slow it gap/L1 normal it      gap/between
+   txq0_STATUS                                     0.3              1.2              8.2                -              2.0              1.4              0.4              0.5              4.6
+   txq0_TRANSFER_CNT                               0.0              0.0             12.1                -              0.0              0.0              0.0              0.0              6.6
+   txq0_PKT_START_CNT                            104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq0_PKT_END_CNT                              104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq0_WORD_CNT                                 104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq1_STATUS                                     0.6              1.1              1.3                -              1.0              1.4              0.8              1.1              1.6
+   txq1_TRANSFER_CNT                               0.0              0.0             12.0                -              0.0              0.0              0.0              0.0              6.6
+   txq1_PKT_START_CNT                            104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq1_PKT_END_CNT                              104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq1_WORD_CNT                                 104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq2_STATUS                                     0.3              0.0              0.2                -              0.1              0.1              0.2              0.0              0.2
+   txq2_TRANSFER_CNT                             104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq2_PKT_START_CNT                            104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq2_PKT_END_CNT                              104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   txq2_WORD_CNT                                 104.7            103.9            105.0                -            106.5            107.2            106.3            104.1            104.9
+   l1+0x7c8e4                                      1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   l1+0x7c8e8                                      0.0              0.1              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c8ec                                      0.3              0.1              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c8f0                                      0.0              0.3              0.0                -              0.0              0.2              0.0              0.0              0.1
+   l1+0x7c8f4                                      0.0              0.0              0.1                -              0.0              0.0              0.0              0.3              0.1
+   l1+0x7c8f8                                      0.3              0.0              0.1                -              0.0              0.2              0.0              0.0              0.1
+   l1+0x7c8fc                                      0.0              0.1              0.0                -              0.0              0.1              0.0              0.2              0.1
+   l1+0x7c900                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.0              0.1
+   l1+0x7c904                                      0.0              0.0              0.1                -              0.1              0.1              0.0              0.0              0.1
+   l1+0x7c908                                      0.0              0.0              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c90c                                      0.0              0.3              0.1                -              0.1              0.2              0.0              0.2              0.1
+   l1+0x7c910                                      0.0              0.1              0.2                -              0.0              0.2              0.2              0.0              0.1
+   l1+0x7c914                                      0.0              0.1              0.1                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c918                                      0.6              0.0              0.0                -              0.0              0.1              0.0              0.3              0.1
+   l1+0x7c91c                                      0.3              0.0              0.0                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c920                                      0.0              0.0              0.0                -              0.1              0.0              0.0              0.0              0.0
+   l1+0x7c924                                      0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c928                                      0.0              0.0              0.1                -              0.1              0.2              0.0              0.0              0.1
+   l1+0x7c92c                                      0.0              0.0              0.1                -              0.0              0.0              0.2              0.0              0.1
+   l1+0x7c930                                      0.0              0.1              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c934                                      0.0              0.0              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c988                                      0.0              0.1              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c98c                                      0.3              0.1              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c990                                      0.0              0.3              0.0                -              0.0              0.2              0.0              0.0              0.1
+   l1+0x7c994                                      0.0              0.0              0.1                -              0.0              0.0              0.0              0.3              0.1
+   l1+0x7c998                                      0.3              0.0              0.1                -              0.0              0.2              0.0              0.0              0.1
+   l1+0x7c99c                                      0.0              0.1              0.0                -              0.0              0.1              0.0              0.2              0.1
+   l1+0x7c9a0                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.0              0.1
+   l1+0x7c9a4                                      0.0              0.0              0.1                -              0.1              0.1              0.0              0.0              0.1
+   l1+0x7c9a8                                      0.0              0.0              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c9ac                                      0.0              0.3              0.1                -              0.1              0.2              0.0              0.2              0.1
+   l1+0x7c9b0                                      0.0              0.1              0.2                -              0.0              0.2              0.2              0.0              0.1
+   l1+0x7c9b4                                      0.0              0.1              0.1                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c9b8                                      0.6              0.0              0.0                -              0.0              0.1              0.0              0.3              0.1
+   l1+0x7c9bc                                      0.3              0.0              0.0                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c9c0                                      0.0              0.0              0.0                -              0.1              0.0              0.0              0.0              0.0
+   l1+0x7c9c4                                      0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c9c8                                      0.0              0.0              0.1                -              0.1              0.2              0.0              0.0              0.1
+   l1+0x7c9cc                                      0.0              0.0              0.1                -              0.0              0.0              0.2              0.0              0.1
+   l1+0x7c9d0                                      0.0              0.1              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c9d4                                      0.0              0.0              0.1                -              0.1              0.0              0.0              0.0              0.1
+   dbg.eth_api_metrics[2]                          1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   dbg.eth_api_metrics[20]                         1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   eth_status.heartbeat[0]                       104.7            103.9            104.9                -            106.5            107.1            106.3            104.1            104.9
+   live.frames_txd                                 1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   live.frames_txd.hi                              0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.0
+   live.frames_txd_ok                              1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   live.frames_txd_ok.hi                           0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.0
+   live.bytes_txd                                  1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   live.bytes_txd.hi                               0.9              1.2              1.2                -              0.0              0.0              0.2              1.1              0.7
+   live.bytes_txd_ok                               1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   live.bytes_txd_ok.hi                            0.9              1.2              1.2                -              0.0              0.0              0.2              1.1              0.7
+   live.frames_rxd                                 1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   live.frames_rxd.hi                              0.3              0.0              0.0                -              0.0              0.0              0.0              0.2              0.0
+   live.frames_rxd_ok                              1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   live.frames_rxd_ok.hi                           0.3              0.0              0.0                -              0.0              0.0              0.0              0.2              0.0
+   live.bytes_rxd                                  1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   live.bytes_rxd.hi                               1.2              1.2              1.2                -              0.0              0.0              0.4              0.6              0.8
+   live.bytes_rxd_ok                               1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   live.bytes_rxd_ok.hi                            1.2              1.2              1.2                -              0.0              0.0              0.4              0.6              0.8
+   live.corr_cw                                    1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   mbx.next_link_check.lo                          1.4              1.3              1.4                -              0.5              1.1              0.4              1.6              1.5
+   mbx.next_link_check.hi                          0.0              0.5              0.4                -              0.1              0.1              0.0              0.6              0.3
+   -- link-1 cores: mean change per second in the same classes
+   txq0_STATUS                                  -296.3           -950.9         -6.4e+04                -            722.9           -463.9           -644.1           -155.1       -4.142e+04
+   txq0_TRANSFER_CNT                                 0                0        6.755e+05                -                0                0                0                0         3.75e+05
+   txq0_PKT_START_CNT                        1.347e+06        1.347e+06        2.115e+06                -        1.347e+06        1.347e+06        1.347e+06        1.347e+06        1.781e+06
+   txq0_PKT_END_CNT                          1.347e+06        1.347e+06        2.106e+06                -        1.347e+06        1.347e+06        1.347e+06        1.347e+06        1.776e+06
+   txq0_WORD_CNT                             1.347e+06        1.347e+06        1.194e+07                -        1.347e+06        1.347e+06        1.347e+06        1.347e+06        7.418e+06
+   txq1_STATUS                                       0            541.3            -7814                -              207             -155             -218            -1281            -2234
+   txq1_TRANSFER_CNT                                 0                0        9.365e+04                -                0                0                0                0        5.136e+04
+   txq1_PKT_START_CNT                        1.347e+06        1.347e+06        1.401e+06                -        1.347e+06        1.347e+06        1.347e+06        1.347e+06        1.376e+06
+   txq1_PKT_END_CNT                          1.347e+06        1.347e+06          1.4e+06                -        1.347e+06        1.347e+06        1.347e+06        1.347e+06        1.376e+06
+   txq1_WORD_CNT                             1.347e+06        1.347e+06          1.4e+06                -        1.347e+06        1.347e+06        1.347e+06        1.347e+06        1.376e+06
+   txq2_STATUS                                   -4.63                0           -54.72                -            103.5           -77.52            214.7                0            14.61
+   txq2_TRANSFER_CNT                          1.28e+04         1.28e+04        1.281e+04                -        1.279e+04        1.281e+04         1.28e+04         1.28e+04        1.281e+04
+   txq2_PKT_START_CNT                        1.747e+05        1.747e+05        1.747e+05                -        1.746e+05        1.747e+05        1.747e+05        1.747e+05        1.747e+05
+   txq2_PKT_END_CNT                          1.747e+05        1.747e+05        1.747e+05                -        1.746e+05        1.747e+05        1.747e+05        1.747e+05        1.747e+05
+   txq2_WORD_CNT                             1.746e+05        1.747e+05        1.747e+05                -        1.746e+05        1.747e+05        1.747e+05        1.747e+05        1.747e+05
+   l1+0x7c8e4                                    1.447            1.327            1.427                -           0.5054            1.136           0.4193            1.563            1.483
+   l1+0x7c8e8                                        0           0.1327          0.08079                -                0                0                0           0.1563          0.05706
+   l1+0x7c8ec                                   0.2894           0.1327           0.1077                -                0                0                0           0.1563          0.07132
+   l1+0x7c8f0                                        0           0.2653          0.02693                -                0           0.1514                0                0          0.07132
+   l1+0x7c8f4                                        0                0          0.08079                -                0                0                0           0.3126          0.08558
+   l1+0x7c8f8                                   0.2894                0           0.1077                -                0           0.2271                0                0          0.08558
+   l1+0x7c8fc                                        0           0.1327          0.02693                -                0           0.0757                0           0.1563           0.1141
+   l1+0x7c900                                        0                0          0.08079                -                0           0.0757                0                0          0.09985
+   l1+0x7c904                                        0                0          0.08079                -           0.1011           0.0757                0                0          0.09985
+   l1+0x7c908                                        0                0           0.1077                -                0                0                0           0.1563          0.09985
+   l1+0x7c90c                                        0           0.2653          0.08079                -           0.1011           0.1514                0           0.1563          0.08558
+   l1+0x7c910                                        0           0.1327           0.1616                -                0           0.1514           0.2097                0          0.07132
+   l1+0x7c914                                        0           0.1327          0.05386                -                0                0                0                0          0.07132
+   l1+0x7c918                                   0.5787                0          0.02693                -                0           0.0757                0           0.3126          0.05706
+   l1+0x7c91c                                   0.2894                0          0.02693                -                0                0                0                0          0.05706
+   l1+0x7c920                                        0                0          0.02693                -           0.1011                0                0                0          0.04279
+   l1+0x7c924                                        0                0          0.02693                -                0                0                0                0          0.07132
+   l1+0x7c928                                        0                0          0.05386                -           0.1011           0.1514                0                0          0.07132
+   l1+0x7c92c                                        0                0          0.08079                -                0                0           0.2097                0          0.05706
+   l1+0x7c930                                        0           0.1327          0.05386                -                0                0                0           0.1563          0.05706
+   l1+0x7c934                                        0                0           0.1346                -           0.1011                0                0                0          0.05706
+   l1+0x7c988                                        0        1.494e+07        1.319e+07                -                0                0                0        1.138e+07        1.119e+07
+   l1+0x7c98c                                5.465e+07        2.475e+07        1.128e+07                -                0                0                0        4.674e+07        1.223e+07
+   l1+0x7c990                                        0        3.994e+07          3.1e+06                -                0        1.125e+07                0                0        1.487e+07
+   l1+0x7c994                                        0                0        1.325e+07                -                0                0                0        2.331e+07        1.545e+07
+   l1+0x7c998                                5.474e+07                0        1.109e+07                -                0        1.742e+07                0                0        1.542e+07
+   l1+0x7c99c                                        0        1.496e+07        2.976e+06                -                0         5.51e+06                0        1.171e+07        2.235e+07
+   l1+0x7c9a0                                        0                0          1.2e+07                -                0        5.505e+06                0                0        1.543e+07
+   l1+0x7c9a4                                        0                0        1.011e+07                -        7.771e+06        5.516e+06                0                0        1.698e+07
+   l1+0x7c9a8                                        0                0        1.209e+07                -                0                0                0         4.67e+07        1.701e+07
+   l1+0x7c9ac                                        0        3.512e+07        1.105e+07                -         7.43e+06         1.16e+07                0        4.647e+07        2.016e+07
+   l1+0x7c9b0                                        0        2.475e+07        2.018e+07                -                0        1.134e+07        6.292e+07                0        1.536e+07
+   l1+0x7c9b4                                        0        1.522e+07        7.079e+06                -                0                0                0                0         1.64e+07
+   l1+0x7c9b8                                 9.75e+07                0        4.087e+06                -                0        5.873e+06                0        5.792e+07        1.064e+07
+   l1+0x7c9bc                                5.463e+07                0        4.973e+06                -                0                0                0                0        7.461e+06
+   l1+0x7c9c0                                        0                0        2.049e+06                -        7.582e+06                0                0                0        6.878e+06
+   l1+0x7c9c4                                        0                0        3.046e+06                -                0                0                0                0        1.278e+07
+   l1+0x7c9c8                                        0                0        6.094e+06                -        7.597e+06        1.132e+07                0                0        1.327e+07
+   l1+0x7c9cc                                        0                0        1.017e+07                -                0                0        6.292e+07                0        1.168e+07
+   l1+0x7c9d0                                        0        1.518e+07        6.139e+06                -                0                0                0         4.67e+07        1.062e+07
+   l1+0x7c9d4                                        0                0        1.727e+07                -         7.73e+06                0                0                0        9.073e+06
+   dbg.eth_api_metrics[2]                        1.447            1.327            1.427                -           0.5054            1.136           0.4193            1.563            1.483
+   dbg.eth_api_metrics[20]                   5.358e+07        4.913e+07        5.288e+07                -        1.872e+07        4.206e+07        1.553e+07         5.79e+07        5.495e+07
+   eth_status.heartbeat[0]                  -6.037e+05       -1.702e+05        2.198e+05                -        1.202e+05       -9.981e+04       -1.137e+05        4.263e+04        7.368e+04
+   live.frames_txd                           6.888e+06        6.203e+06       -1.089e+08                -        1.074e+06        2.413e+06         1.53e+06        5.703e+06       -5.572e+07
+   live.frames_txd.hi                                0                0          0.02693                -                0                0                0                0          0.01426
+   live.frames_txd_ok                        6.888e+06        6.203e+06       -1.089e+08                -        1.074e+06        2.413e+06         1.53e+06        5.703e+06       -5.572e+07
+   live.frames_txd_ok.hi                             0                0          0.02693                -                0                0                0                0          0.01426
+   live.bytes_txd                             1.46e+09       -6.716e+08       -2.044e+08                -        6.877e+07        1.545e+08       -2.789e+07       -1.447e+09        4.134e+08
+   live.bytes_txd.hi                            0.8681            1.194            1.212                -                0                0           0.2097            1.094           0.6561
+   live.bytes_txd_ok                          1.46e+09       -6.716e+08       -2.044e+08                -        6.877e+07        1.545e+08       -2.789e+07       -1.447e+09        4.134e+08
+   live.bytes_txd_ok.hi                         0.8681            1.194            1.212                -                0                0           0.2097            1.094           0.6561
+   live.frames_rxd                          -1.236e+09        6.203e+06         6.79e+06                -        1.074e+06        2.413e+06        1.531e+06       -6.657e+08        5.547e+06
+   live.frames_rxd.hi                           0.2894                0                0                -                0                0                0           0.1563                0
+   live.frames_rxd_ok                       -1.236e+09        6.203e+06         6.79e+06                -        1.074e+06        2.413e+06        1.531e+06       -6.657e+08        5.547e+06
+   live.frames_rxd_ok.hi                        0.2894                0                0                -                0                0                0           0.1563                0
+   live.bytes_rxd                            2.168e+08       -6.716e+08         -3.2e+08                -        6.877e+07        1.545e+08       -9.283e+08        5.675e+08        -1.38e+08
+   live.bytes_rxd.hi                             1.157            1.194            1.239                -                0                0           0.4193           0.6253           0.7845
+   live.bytes_rxd_ok                         2.168e+08       -6.716e+08         -3.2e+08                -        6.877e+07        1.545e+08       -9.283e+08        5.675e+08        -1.38e+08
+   live.bytes_rxd_ok.hi                          1.157            1.194            1.239                -                0                0           0.4193           0.6253           0.7845
+   live.corr_cw                                   3503             5885             7548                -             2281             5779            423.5             5810             7957
+   mbx.next_link_check.lo                    1.447e+09       -9.525e+08        -3.07e+08                -        7.127e+07        8.104e+08        4.193e+08       -1.122e+09        2.756e+07
+   mbx.next_link_check.hi                            0           0.5306           0.4039                -           0.1011           0.0757                0           0.6253           0.3423
+
+   -- link-0 cores: changes per second (count) in L1 write windows / between, per order
+   word                                   i/L1 slow it   i/L1 normal it        i/between    ii/L1 slow it  ii/L1 normal it       ii/between   gap/L1 slow it gap/L1 normal it      gap/between
+   txq0_STATUS                                    60.0             60.6             15.6                -             59.4             19.5             63.9             56.8             10.0
+   txq0_TRANSFER_CNT                             104.5            103.6             26.1                -            106.0             32.6            105.7            103.9             44.4
+   txq0_PKT_START_CNT                            104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq0_PKT_END_CNT                              104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq0_WORD_CNT                                 104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq1_STATUS                                     8.0              5.6              2.5                -              6.1              3.3              9.4              7.5              1.8
+   txq1_TRANSFER_CNT                             104.5            103.6             26.0                -            106.1             32.4            105.9            103.9             44.4
+   txq1_PKT_START_CNT                            104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq1_PKT_END_CNT                              104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq1_WORD_CNT                                 104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq2_STATUS                                     0.0              0.5              0.1                -              0.3              0.2              0.6              0.6              0.2
+   txq2_TRANSFER_CNT                             104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq2_PKT_START_CNT                            104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq2_PKT_END_CNT                              104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   txq2_WORD_CNT                                 104.8            103.9            105.0                -            106.5            107.2            106.3            104.1            105.0
+   l1+0x7c8e4                                      0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   l1+0x7c8e8                                      0.0              0.1              0.1                -              0.0              0.2              0.2              0.0              0.1
+   l1+0x7c8ec                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.0              0.1
+   l1+0x7c8f0                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.2              0.1
+   l1+0x7c8f4                                      0.0              0.0              0.1                -              0.0              0.2              0.0              0.0              0.1
+   l1+0x7c8f8                                      0.0              0.0              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c8fc                                      0.3              0.0              0.1                -              0.1              0.1              0.0              0.0              0.1
+   l1+0x7c900                                      0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c904                                      0.0              0.1              0.1                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c908                                      0.0              0.1              0.1                -              0.0              0.2              0.0              0.0              0.1
+   l1+0x7c90c                                      0.0              0.1              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c910                                      0.3              0.0              0.1                -              0.0              0.1              0.0              0.0              0.1
+   l1+0x7c914                                      0.0              0.0              0.1                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c918                                      0.3              0.0              0.1                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c91c                                      0.0              0.1              0.0                -              0.0              0.2              0.0              0.2              0.1
+   l1+0x7c920                                      0.0              0.0              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c924                                      0.0              0.1              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c928                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.0              0.1
+   l1+0x7c92c                                      0.0              0.0              0.1                -              0.0              0.0              0.2              0.0              0.1
+   l1+0x7c930                                      0.0              0.1              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c934                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.2              0.1
+   l1+0x7c988                                      0.0              0.1              0.1                -              0.0              0.2              0.2              0.0              0.1
+   l1+0x7c98c                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.0              0.1
+   l1+0x7c990                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.2              0.1
+   l1+0x7c994                                      0.0              0.0              0.1                -              0.0              0.2              0.0              0.0              0.1
+   l1+0x7c998                                      0.0              0.0              0.1                -              0.0              0.0              0.0              0.2              0.1
+   l1+0x7c99c                                      0.3              0.0              0.1                -              0.1              0.1              0.0              0.0              0.1
+   l1+0x7c9a0                                      0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c9a4                                      0.0              0.1              0.1                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c9a8                                      0.0              0.1              0.1                -              0.0              0.2              0.0              0.0              0.1
+   l1+0x7c9ac                                      0.0              0.1              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c9b0                                      0.3              0.0              0.1                -              0.0              0.1              0.0              0.0              0.1
+   l1+0x7c9b4                                      0.0              0.0              0.1                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c9b8                                      0.3              0.0              0.1                -              0.0              0.0              0.0              0.0              0.1
+   l1+0x7c9bc                                      0.0              0.1              0.0                -              0.0              0.2              0.0              0.2              0.1
+   l1+0x7c9c0                                      0.0              0.0              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c9c4                                      0.0              0.1              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c9c8                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.0              0.1
+   l1+0x7c9cc                                      0.0              0.0              0.1                -              0.0              0.0              0.2              0.0              0.1
+   l1+0x7c9d0                                      0.0              0.1              0.1                -              0.1              0.0              0.0              0.0              0.1
+   l1+0x7c9d4                                      0.0              0.0              0.1                -              0.0              0.1              0.0              0.2              0.1
+   dbg.eth_api_metrics[2]                          0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   dbg.eth_api_metrics[20]                         0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   eth_status.heartbeat[0]                       104.8            103.9            104.9                -            106.5            107.1            106.3            104.1            104.9
+   live.frames_txd                                 0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.frames_txd.hi                              0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.0
+   live.frames_txd_ok                              0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.frames_txd_ok.hi                           0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.0
+   live.bytes_txd                                  0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.bytes_txd.hi                               0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.5
+   live.bytes_txd_ok                               0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.bytes_txd_ok.hi                            0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.5
+   live.frames_rxd                                 0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.frames_rxd.hi                              0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.0
+   live.frames_rxd_ok                              0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.frames_rxd_ok.hi                           0.0              0.0              0.0                -              0.0              0.0              0.0              0.0              0.0
+   live.bytes_rxd                                  0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.bytes_rxd.hi                               0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.bytes_rxd_ok                               0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.bytes_rxd_ok.hi                            0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   live.corr_cw                                    0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   mbx.next_link_check.lo                          0.9              0.9              1.6                -              0.5              1.1              0.4              0.6              1.6
+   mbx.next_link_check.hi                          0.0              0.5              0.4                -              0.0              0.2              0.0              0.0              0.4
+   -- link-0 cores: mean change per second in the same classes
+   txq0_STATUS                               2.366e+05        1.621e+05       -1.392e+05                -        2.654e+05       -1.978e+05        1.148e+05        1.324e+05       -6.014e+04
+   txq0_TRANSFER_CNT                         1.293e+07        1.282e+07        1.394e+06                -        1.292e+07        1.761e+06        1.359e+07        1.364e+07         8.02e+05
+   txq0_PKT_START_CNT                        1.627e+07        1.587e+07        2.928e+06                -         1.62e+07        3.345e+06        1.754e+07        1.666e+07         2.27e+06
+   txq0_PKT_END_CNT                          1.612e+07        1.573e+07        2.908e+06                -        1.605e+07         3.32e+06        1.736e+07        1.651e+07        2.259e+06
+   txq0_WORD_CNT                             2.108e+08       -3.679e+08        2.314e+07                -       -2.233e+08        2.897e+07        2.351e+08        2.117e+08       -4.693e+07
+   txq1_STATUS                              -1.622e+04             1632            -5262                -        2.102e+04       -1.571e+04        1.868e+04        2.182e+04            -7347
+   txq1_TRANSFER_CNT                          1.82e+06        1.795e+06        1.926e+05                -        1.799e+06        2.413e+05        1.883e+06        1.914e+06        1.101e+05
+   txq1_PKT_START_CNT                        2.378e+06        2.365e+06        1.456e+06                -        2.363e+06        1.484e+06        2.403e+06        2.435e+06        1.409e+06
+   txq1_PKT_END_CNT                          2.378e+06        2.365e+06        1.456e+06                -        2.364e+06        1.483e+06        2.403e+06        2.435e+06        1.409e+06
+   txq1_WORD_CNT                             2.378e+06        2.366e+06        1.456e+06                -        2.364e+06        1.483e+06        2.404e+06        2.436e+06        1.409e+06
+   txq2_STATUS                                       0              272           -81.96                -            103.3           -77.58            214.7                0           -116.9
+   txq2_TRANSFER_CNT                         1.278e+04        1.276e+04        1.282e+04                -        1.277e+04        1.282e+04        1.277e+04        1.276e+04        1.281e+04
+   txq2_PKT_START_CNT                        1.743e+05        1.741e+05        1.747e+05                -        1.742e+05        1.747e+05        1.744e+05        1.741e+05        1.747e+05
+   txq2_PKT_END_CNT                          1.743e+05        1.741e+05        1.747e+05                -        1.742e+05        1.747e+05        1.744e+05        1.741e+05        1.747e+05
+   txq2_WORD_CNT                             1.743e+05        1.741e+05        1.747e+05                -        1.742e+05        1.747e+05        1.744e+05        1.741e+05        1.747e+05
+   l1+0x7c8e4                                   0.8567           0.9298            1.591                -           0.5043            1.136           0.4193            0.629             1.61
+   l1+0x7c8e8                                        0           0.1328           0.1078                -                0           0.2273           0.2096                0            0.114
+   l1+0x7c8ec                                        0                0          0.08089                -                0          0.07576                0                0           0.1282
+   l1+0x7c8f0                                        0                0          0.08089                -                0          0.07576                0           0.1572          0.09974
+   l1+0x7c8f4                                        0                0           0.1078                -                0           0.1515                0                0            0.114
+   l1+0x7c8f8                                        0                0          0.05392                -                0                0                0           0.1572          0.05699
+   l1+0x7c8fc                                   0.2856                0          0.05392                -           0.1009          0.07576                0                0          0.09974
+   l1+0x7c900                                        0                0          0.02696                -                0                0                0                0          0.05699
+   l1+0x7c904                                        0           0.1328          0.05392                -                0                0                0                0          0.07124
+   l1+0x7c908                                        0           0.1328           0.1078                -                0           0.1515                0                0          0.05699
+   l1+0x7c90c                                        0           0.1328          0.08089                -           0.1009                0                0                0          0.05699
+   l1+0x7c910                                   0.2856                0           0.1348                -                0          0.07576                0                0          0.07124
+   l1+0x7c914                                        0                0           0.1078                -                0                0                0                0          0.05699
+   l1+0x7c918                                   0.2856                0          0.05392                -                0                0                0                0          0.05699
+   l1+0x7c91c                                        0           0.1328                0                -                0           0.1515                0           0.1572          0.05699
+   l1+0x7c920                                        0                0          0.08089                -           0.1009                0                0                0          0.05699
+   l1+0x7c924                                        0           0.1328          0.08089                -           0.1009                0                0                0          0.05699
+   l1+0x7c928                                        0                0          0.08089                -                0          0.07576                0                0          0.05699
+   l1+0x7c92c                                        0                0           0.1348                -                0                0           0.2096                0          0.09974
+   l1+0x7c930                                        0           0.1328          0.05392                -           0.1009                0                0                0            0.114
+   l1+0x7c934                                        0                0           0.1078                -                0          0.07576                0           0.1572           0.1282
+   l1+0x7c988                                        0        1.522e+07        1.718e+07                -                0        1.755e+07        5.513e+07                0        1.799e+07
+   l1+0x7c98c                                        0                0        1.314e+07                -                0        5.719e+06                0                0        2.596e+07
+   l1+0x7c990                                        0                0        1.216e+07                -                0        5.741e+06                0        1.161e+07        2.222e+07
+   l1+0x7c994                                        0                0         1.12e+07                -                0        1.112e+07                0                0        2.744e+07
+   l1+0x7c998                                        0                0        7.077e+06                -                0                0                0        4.677e+07        1.218e+07
+   l1+0x7c99c                                5.372e+07                0        9.156e+06                -        7.321e+06        5.611e+06                0                0        1.857e+07
+   l1+0x7c9a0                                        0                0        5.109e+06                -                0                0                0                0        8.523e+06
+   l1+0x7c9a4                                        0        1.041e+07        4.064e+06                -                0                0                0                0        1.171e+07
+   l1+0x7c9a8                                        0        1.495e+07        1.023e+07                -                0        1.171e+07                0                0        1.167e+07
+   l1+0x7c9ac                                        0        1.493e+07        1.112e+07                -        7.614e+06                0                0                0        9.617e+06
+   l1+0x7c9b0                                5.411e+07                0        1.907e+07                -                0        5.745e+06                0                0        1.433e+07
+   l1+0x7c9b4                                        0                0        1.705e+07                -                0                0                0                0        1.222e+07
+   l1+0x7c9b8                                4.225e+07                0        7.055e+06                -                0                0                0                0         1.01e+07
+   l1+0x7c9bc                                        0        1.522e+07                0                -                0        1.136e+07                0        4.677e+07        9.069e+06
+   l1+0x7c9c0                                        0                0        8.179e+06                -         7.47e+06                0                0                0         9.56e+06
+   l1+0x7c9c4                                        0        1.522e+07        1.107e+07                -        7.761e+06                0                0                0        1.329e+07
+   l1+0x7c9c8                                        0                0        1.207e+07                -                0        5.641e+06                0                0        1.019e+07
+   l1+0x7c9cc                                        0                0         1.92e+07                -                0                0          6.3e+07                0        1.278e+07
+   l1+0x7c9d0                                        0        1.522e+07        5.076e+06                -        7.313e+06                0                0                0        1.704e+07
+   l1+0x7c9d4                                        0                0        1.325e+07                -                0        5.834e+06                0         3.55e+07        2.122e+07
+   dbg.eth_api_metrics[2]                       0.8567           0.9298            1.591                -           0.5043            1.136           0.4193            0.629             1.61
+   dbg.eth_api_metrics[20]                   3.182e+07        3.451e+07        5.899e+07                -        1.873e+07        4.221e+07        1.564e+07        2.333e+07        5.966e+07
+   eth_status.heartbeat[0]                  -4.015e+05        3.888e+04        6.736e+04                -       -1.136e+05        8.063e+04       -2.954e+04        3.732e+04        3.833e+04
+   live.frames_txd                           6.692e+06         6.49e+06        1.172e+07                -        4.145e+06        9.342e+06        2.301e+06        3.302e+06        8.602e+06
+   live.frames_txd.hi                                0                0                0                -                0                0                0                0                0
+   live.frames_txd_ok                        6.692e+06         6.49e+06        1.172e+07                -        4.145e+06        9.342e+06        2.301e+06        3.302e+06        8.602e+06
+   live.frames_txd_ok.hi                             0                0                0                -                0                0                0                0                0
+   live.bytes_txd                           -9.543e+08       -1.081e+09       -8.536e+07                -        9.331e+07       -1.151e+08        6.717e+07       -1.017e+08       -5.454e+07
+   live.bytes_txd.hi                             1.713            1.594            2.561                -           0.9078            2.121           0.4193            0.629            1.596
+   live.bytes_txd_ok                        -9.543e+08       -1.081e+09       -8.536e+07                -        9.331e+07       -1.151e+08        6.717e+07       -1.017e+08       -5.454e+07
+   live.bytes_txd_ok.hi                          1.713            1.594            2.561                -           0.9078            2.121           0.4193            0.629            1.596
+   live.frames_rxd                           6.691e+06        6.491e+06        1.172e+07                -        4.145e+06        9.342e+06        2.301e+06        3.302e+06        8.602e+06
+   live.frames_rxd.hi                                0                0                0                -                0                0                0                0                0
+   live.frames_rxd_ok                        6.691e+06        6.491e+06        1.172e+07                -        4.145e+06        9.342e+06        2.301e+06        3.302e+06        8.602e+06
+   live.frames_rxd_ok.hi                             0                0                0                -                0                0                0                0                0
+   live.bytes_rxd                           -9.544e+08          6.3e+08        3.043e+07                -       -3.399e+08       -1.151e+08        6.715e+07       -1.017e+08       -5.453e+07
+   live.bytes_rxd.hi                             1.713            1.195            2.534                -            1.009            2.121           0.4193            0.629            1.596
+   live.bytes_rxd_ok                        -9.544e+08          6.3e+08        3.043e+07                -       -3.399e+08       -1.151e+08        6.715e+07       -1.017e+08       -5.453e+07
+   live.bytes_rxd_ok.hi                          1.713            1.195            2.534                -            1.009            2.121           0.4193            0.629            1.596
+   live.corr_cw                                   7218          1.2e+04        1.517e+04                -             6086             9565             1603             7681        1.384e+04
+   mbx.next_link_check.lo                    8.592e+08        -1.35e+09       -1.442e+08                -        5.056e+08         4.89e+08        4.223e+08          6.3e+08       -1.025e+08
+   mbx.next_link_check.hi                            0           0.5313           0.4044                -                0           0.1515                0                0           0.3989
+
+== 5. base FW link status checks (next-check time moved between two polls), by router and iteration class
+   i: link-0: pre 0, L1 slow it 3, L1 normal it 7, L2 11, gap row 0, between 59, post 4; link-1: pre 0, L1 slow it 5, L1 normal it 10, L2 12, gap row 0, between 53, post 5
+   ii: link-0: pre 0, L1 slow it 0, L1 normal it 5, L2 0, gap row 0, between 15, post 20; link-1: pre 0, L1 slow it 0, L1 normal it 5, L2 0, gap row 0, between 15, post 20
+   gap: link-0: pre 0, L1 slow it 2, L1 normal it 4, L2 5, gap row 16, between 113, post 0; link-1: pre 0, L1 slow it 2, L1 normal it 10, L2 7, gap row 16, between 105, post 0
+
+== 6. rates between consecutive polls of one core, in L1 write windows (median [p10, p90] per second)
+   -- link-1 cores
+   counter                                   i/slow (n 102)              i/normal (n 197)             ii/normal (n 293)              gap/slow (n 122)            gap/normal (n 139)
+   txq0_PKT_START_CNT         1.347e+06 [1.35e+06,1.35e+06] 1.347e+06 [1.35e+06,1.35e+06] 1.347e+06 [1.35e+06,1.35e+06] 1.347e+06 [1.35e+06,1.35e+06] 1.347e+06 [1.35e+06,1.35e+06]
+   txq0_WORD_CNT              1.347e+06 [1.35e+06,1.35e+06] 1.347e+06 [1.34e+06,1.35e+06] 1.347e+06 [1.34e+06,1.35e+06] 1.347e+06 [1.35e+06,1.35e+06] 1.347e+06 [1.34e+06,1.35e+06]
+   txq0_TRANSFER_CNT                  0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]
+   txq1_PKT_START_CNT         1.347e+06 [1.34e+06,1.35e+06] 1.347e+06 [1.34e+06,1.35e+06] 1.347e+06 [1.34e+06,1.35e+06] 1.347e+06 [1.34e+06,1.35e+06] 1.347e+06 [1.34e+06,1.35e+06]
+   txq1_TRANSFER_CNT                  0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]
+   txq2_PKT_START_CNT         1.747e+05 [1.74e+05,1.75e+05] 1.746e+05 [1.74e+05,1.75e+05] 1.746e+05 [1.74e+05,1.75e+05] 1.746e+05 [1.74e+05,1.75e+05] 1.746e+05 [1.74e+05,1.75e+05]
+   txq2_TRANSFER_CNT           1.28e+04 [1.26e+04, 1.3e+04]  1.28e+04 [1.26e+04, 1.3e+04] 1.279e+04 [1.26e+04, 1.3e+04]  1.28e+04 [1.26e+04, 1.3e+04]  1.28e+04 [1.25e+04, 1.3e+04]
+   txq0_RESEND_CNT                    0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]
+   txq1_RESEND_CNT                    0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]
+   txq2_RESEND_CNT                    0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]
+   -- link-0 cores
+   counter                                   i/slow (n 100)              i/normal (n 202)             ii/normal (n 288)              gap/slow (n 128)            gap/normal (n 138)
+   txq0_PKT_START_CNT         2.007e+07 [1.51e+07,2.78e+07]  1.86e+07 [1.41e+07,2.55e+07] 1.916e+07 [1.36e+07,2.59e+07] 2.171e+07 [1.6e+07,2.84e+07] 1.993e+07 [1.5e+07,2.62e+07]
+   txq0_WORD_CNT               2.73e+08 [1.58e+08,4.12e+08] 2.125e+08 [1.46e+08,3.83e+08] 2.286e+08 [1.4e+08, 3.9e+08] 3.196e+08 [1.67e+08,4.28e+08] 2.185e+08 [1.55e+08,3.94e+08]
+   txq0_TRANSFER_CNT           1.68e+07 [1.3e+07,2.03e+07] 1.591e+07 [1.26e+07,1.91e+07] 1.593e+07 [1.24e+07,1.96e+07] 1.736e+07 [1.42e+07,2.06e+07] 1.674e+07 [1.39e+07,1.99e+07]
+   txq1_PKT_START_CNT         2.713e+06 [2.31e+06,3.02e+06] 2.607e+06 [2.28e+06,2.96e+06] 2.595e+06 [2.28e+06,3.02e+06] 2.679e+06 [2.38e+06,3.03e+06] 2.658e+06 [2.39e+06,3.01e+06]
+   txq1_TRANSFER_CNT          2.437e+06 [1.79e+06,2.83e+06] 2.214e+06 [1.74e+06,2.76e+06] 2.212e+06 [1.71e+06,2.82e+06] 2.388e+06 [1.91e+06,2.85e+06]  2.37e+06 [1.92e+06,2.81e+06]
+   txq2_PKT_START_CNT         1.743e+05 [1.73e+05,1.75e+05] 1.738e+05 [1.73e+05,1.75e+05] 1.738e+05 [1.73e+05,1.75e+05] 1.744e+05 [1.73e+05,1.75e+05] 1.739e+05 [1.73e+05,1.75e+05]
+   txq2_TRANSFER_CNT          1.272e+04 [1.25e+04,1.29e+04]  1.27e+04 [1.25e+04,1.29e+04] 1.272e+04 [1.25e+04,1.29e+04] 1.268e+04 [1.25e+04,1.29e+04]  1.27e+04 [1.25e+04,1.29e+04]
+   txq0_RESEND_CNT                    0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]
+   txq1_RESEND_CNT                    0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]
+   txq2_RESEND_CNT                    0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]         0 [      0,       0]
+
+== 7. FEC corrected codewords (live.corr_cw, a snapshot base FW refreshes at ERISC0's link check, ~1/s; the
+   teardown snapshot included): per core, the rate over the run in each order, and the per-core ratio to (ii)
+   link-1: i: 20 cores, median 6671/s, uncorrected 0; ii: 20 cores, median 6519/s, uncorrected 0; gap: 20 cores, median 6725/s, uncorrected 0
+      per-core ratio i/ii: median 1.056, range 0.836 .. 1.333 (n 20)
+      per-core ratio gap/ii: median 1.048, range 0.812 .. 1.220 (n 20)
+   link-0: i: 20 cores, median 6337/s, uncorrected 0; ii: 20 cores, median 6247/s, uncorrected 0; gap: 20 cores, median 6116/s, uncorrected 0
+      per-core ratio i/ii: median 1.039, range 0.818 .. 1.286 (n 20)
+      per-core ratio gap/ii: median 0.954, range 0.631 .. 1.216 (n 20)
+   gap link-0: 140 snapshot intervals, slow share median 4.8% (max 8.5%); corr/s median in the intervals above the median share 6444, at or below 5895
+   gap link-1: 140 snapshot intervals, slow share median 4.8% (max 8.5%); corr/s median in the intervals above the median share 6789, at or below 6498
+   i   link-0: 84 snapshot intervals, slow share median 5.4% (max 7.3%); corr/s median in the intervals above the median share 5852, at or below 6877
+   i   link-1: 85 snapshot intervals, slow share median 5.4% (max 7.3%); corr/s median in the intervals above the median share 6242, at or below 7922

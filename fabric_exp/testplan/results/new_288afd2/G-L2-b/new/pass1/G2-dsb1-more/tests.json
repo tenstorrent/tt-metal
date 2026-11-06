@@ -1,0 +1,653 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 5,
+  "PERF_WINDOW": 0,
+  "SKIP": 101
+ },
+ "files": [
+  "pytest_2494446_1793784618775817764_20261104_093018.xml",
+  "pytest_2498902_1793784664710076039_20261104_093104.xml",
+  "pytest_2508238_1793784739133304765_20261104_093219.xml",
+  "pytest_2516805_1793784837899703585_20261104_093357.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_bcast_moe_reduce_pipeline::test_bcast_moe_reduce_pipeline[blackhole-0-64-7168-device_params0-mesh_device0]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_bcast_moe_reduce_pipeline[blackhole-0-64-7168-device_params0-mesh_device0] hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. I",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_bcast_moe_reduce_pipeline::test_persistent_mode_pipeline[blackhole-10-7168-device_params0-mesh_device0]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_persistent_mode_pipeline[blackhole-10-7168-device_params0-mesh_device0] hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issu",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_broadcast_rms_two_stage_pipeline::test_broadcast_rms_two_stage_pipeline[blackhole-1e-06-0-64-7168-device_params0-mesh_device0]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_broadcast_rms_two_stage_pipeline[blackhole-1e-06-0-64-7168-device_params0-mesh_device0] hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_x[blackhole-True-0-0-mesh_device0-device_params0]": {
+   "file": "pytest_2498902_1793784664710076039_20261104_093104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 15.914
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_x[blackhole-True-0-2-mesh_device0-device_params0]": {
+   "file": "pytest_2498902_1793784664710076039_20261104_093104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.009
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_x[blackhole-True-4-2-mesh_device0-device_params0]": {
+   "file": "pytest_2498902_1793784664710076039_20261104_093104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.027
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_x[blackhole-True-7-3-mesh_device0-device_params0]": {
+   "file": "pytest_2498902_1793784664710076039_20261104_093104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.228
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_xy[blackhole-True-0-0-mesh_device0-device_params0]": {
+   "file": "pytest_2516805_1793784837899703585_20261104_093357.xml",
+   "message": "Run only on systems with Y-dimension torus links enabled.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_xy[blackhole-True-0-2-mesh_device0-device_params0]": {
+   "file": "pytest_2516805_1793784837899703585_20261104_093357.xml",
+   "message": "Run only on systems with Y-dimension torus links enabled.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_xy[blackhole-True-4-2-mesh_device0-device_params0]": {
+   "file": "pytest_2516805_1793784837899703585_20261104_093357.xml",
+   "message": "Run only on systems with Y-dimension torus links enabled.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_xy[blackhole-True-7-3-mesh_device0-device_params0]": {
+   "file": "pytest_2516805_1793784837899703585_20261104_093357.xml",
+   "message": "Run only on systems with Y-dimension torus links enabled.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_y[blackhole-True-0-0-mesh_device0-device_params0]": {
+   "file": "pytest_2516805_1793784837899703585_20261104_093357.xml",
+   "message": "Run only on systems with Y-dimension torus links enabled.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_y[blackhole-True-0-2-mesh_device0-device_params0]": {
+   "file": "pytest_2516805_1793784837899703585_20261104_093357.xml",
+   "message": "Run only on systems with Y-dimension torus links enabled.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_y[blackhole-True-4-2-mesh_device0-device_params0]": {
+   "file": "pytest_2516805_1793784837899703585_20261104_093357.xml",
+   "message": "Run only on systems with Y-dimension torus links enabled.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_ccl_broadcast::test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_y[blackhole-True-7-3-mesh_device0-device_params0]": {
+   "file": "pytest_2516805_1793784837899703585_20261104_093357.xml",
+   "message": "Run only on systems with Y-dimension torus links enabled.",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_15_stages::test_moe_15_stages[blackhole-0-64-7168-device_params0-mesh_device0]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_moe_15_stages[blackhole-0-64-7168-device_params0-mesh_device0] hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43083",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_15_stages::test_persistent_moe_15_stages[blackhole-4000-7168-device_params0-mesh_device0]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_persistent_moe_15_stages[blackhole-4000-7168-device_params0-mesh_device0] hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Is",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_15_stages::test_persistent_moe_multi_token[blackhole-4000-7168-device_params0-mesh_device0]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_persistent_moe_multi_token[blackhole-4000-7168-device_params0-mesh_device0] hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. ",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct[blackhole-device_params0-mesh_device0]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct[blackhole-device_params0-mesh_device0] hit Fabric Router Sync timeout after 10000 ms on Device 0 with FA",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-1024-2048-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-32768-65536-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-512-1024-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-64-1024-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-64-128-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-64-256-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.DEVICE_PULL-64-512-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-1024-2048-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-32768-65536-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-512-1024-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-64-1024-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-64-128-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-64-256-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline[blackhole-device_params0-mesh_device0-H2DMode.HOST_PUSH-64-512-512]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-128-2-1024-3584-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-128-2-1024-3584-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-128-2-2048-1792-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-128-2-2048-1792-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-128-2-256-14336-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-128-2-256-14336-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-128-2-512-7168-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-128-2-512-7168-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-256-4-1024-3584-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-256-4-1024-3584-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-256-4-2048-1792-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-256-4-2048-1792-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-256-4-256-14336-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-256-4-256-14336-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-256-4-512-7168-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-256-4-512-7168-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-512-8-1024-3584-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-512-8-1024-3584-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-512-8-2048-1792-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-512-8-2048-1792-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-512-8-256-14336-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-512-8-256-14336-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-512-8-512-7168-H2DMode.DEVICE_PULL]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_loopback_pipeline_with_embedding[blackhole-device_params0-mesh_device0-512-8-512-7168-H2DMode.HOST_PUSH]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_multi_channel_parallel_loopback_pipeline[blackhole-device_params0-mesh_device0-1-1024-2048-64]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_multi_channel_parallel_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_multi_channel_parallel_loopback_pipeline[blackhole-device_params0-mesh_device0-1-64-128-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_multi_channel_parallel_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_multi_channel_parallel_loopback_pipeline[blackhole-device_params0-mesh_device0-4-1024-2048-64]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_multi_channel_parallel_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_multi_channel_parallel_loopback_pipeline[blackhole-device_params0-mesh_device0-4-64-128-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_multi_channel_parallel_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_multi_channel_parallel_loopback_pipeline[blackhole-device_params0-mesh_device0-8-1024-2048-64]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_multi_channel_parallel_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_multi_host_multi_channel_parallel_loopback_pipeline[blackhole-device_params0-mesh_device0-8-64-128-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_multi_host_multi_channel_parallel_loopback_pipeline cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-128-2-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-256-4-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block[blackhole-device_params0-mesh_device0-512-8-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-128-2-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-128-2-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-128-2-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-128-2-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-256-4-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-256-4-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-256-4-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-256-4-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-512-8-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-512-8-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-512-8-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_host_loopback[blackhole-device_params0-mesh_device0-512-8-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-128-2-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-128-2-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-128-2-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-128-2-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-256-4-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-256-4-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-256-4-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-256-4-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-512-8-1024-3584]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-512-8-2048-1792]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-512-8-256-14336]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_no_loopback[blackhole-device_params0-mesh_device0-512-8-512-7168]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_parallel_devices[blackhole-device_params0-mesh_device0-1-64-128-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_parallel_devices cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_parallel_devices[blackhole-device_params0-mesh_device0-4-64-128-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_parallel_devices cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_pipeline_block_parallel_devices[blackhole-device_params0-mesh_device0-8-64-128-128]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_pipeline_block_parallel_devices cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_multi_host_pipeline::test_single_galaxy_deepseek_pipeline[blackhole-device_params0-mesh_device0-True]": {
+   "file": "pytest_2508238_1793784739133304765_20261104_093219.xml",
+   "message": "[SKIP REASON]: mesh_device setup for test_single_galaxy_deepseek_pipeline hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_reduce_to_all_b1::test_reduce_to_all_2d[blackhole-True-fabric_2d_torus_x]": {
+   "file": "pytest_2498902_1793784664710076039_20261104_093104.xml",
+   "message": "[SKIP REASON]: bh_2d_mesh_device setup hit Fabric Router Sync timeout after 10000 ms on Device 24 for test_reduce_to_all_2d[blackhole-True-fabric_2d_torus_x]. Issue: #43058",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_reduce_to_all_b1::test_reduce_to_all_2d_multi_iter[blackhole-True-fabric_2d_torus_x]": {
+   "file": "pytest_2498902_1793784664710076039_20261104_093104.xml",
+   "message": "[SKIP REASON]: ReduceToAllB1 multi-iter hangs after FabricConfig.FABRIC_2D_TORUS_X setup at 100 iterations; pytest --timeout=180 did not interrupt after 6 min. Issue: #43058",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_reduce_to_one_b1::test_reduce_to_one_1d[blackhole-True-fabric_1d]": {
+   "file": "pytest_2494446_1793784618775817764_20261104_093018.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 24.056
+  }
+ }
+}

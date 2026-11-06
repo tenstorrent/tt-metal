@@ -1,0 +1,23 @@
+job 179741 on bh-lb-120-a08u28
+command: bash fabric_exp/pr_perf/pr_perf_runs.sh gapb
+summary: rc=0 hung=0 node=bh-lb-120-a08u28 job=179741 post=none start=2026-11-05 18:03:18 end=2026-11-05T18:06:13Z
+[lb2 18:01:45 +0s] node=bh-lb-120-a08u28 job=179741 mode=run start=2026-11-05T18:01:45Z timeout=3600s
+[lb2 18:01:45 +0s] command: bash fabric_exp/pr_perf/pr_perf_runs.sh gapb
+[lb2 18:01:46 +1s] stage src-20261105-175729 (full full-20261104-221405), staged 2026-11-05T17:57:48Z
+[lb2 18:01:46 +1s] busy check: clear
+[lb2 18:01:46 +1s] space: 24 GB free < 25: removing our oldest cache /home/aagarwal/.tt-metal-cache-pr-main-a
+[lb2 18:01:46 +1s] space: 25 GB free on /home
+[lb2 18:01:54 +9s] verify: 32686 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T17:57:48Z)
+[lb2 18:01:56 +11s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T17:57:48Z)
+[lb2 18:02:05 +20s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T17:57:48Z)
+[lb2 18:02:07 +22s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T17:57:48Z)
+[lb2 18:02:07 +22s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-05T17:57:48Z)
+[lb2 18:02:09 +24s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 18:02:10 +25s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 18:02:10 +25s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 701 GB available
+[lb2 18:02:10 +25s] reset (start): tt-smi -r
+[lb2 18:03:18 +93s] link check (start, poll 1, +0 s): every fabric link UP/PASS/400 (link gate PASS)
+[lb2 18:03:19 +94s] run: bash fabric_exp/pr_perf/pr_perf_runs.sh gapb
+[lb2 18:06:09 +264s] command exit 0
+[lb2 18:06:13 +268s] copied back: 44 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 0 caches -> /data/aagarwal/lb2/jobs/179741 (MANIFEST.tsv)
+[lb2 18:06:13 +268s] done: rc 0, hung 0; 22 GB free on /home

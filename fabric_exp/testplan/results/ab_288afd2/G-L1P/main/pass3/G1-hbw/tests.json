@@ -1,0 +1,188 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 28,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_1103038_1793784893420226185_20261104_093453.xml",
+  "pytest_1108626_1793784954929716225_20261104_093554.xml",
+  "pytest_1110121_1793784981641249863_20261104_093621.xml",
+  "pytest_1118038_1793785091237554944_20261104_093811.xml",
+  "pytest_1125704_1793785179994211825_20261104_093939.xml",
+  "pytest_1133859_1793785264161443351_20261104_094104.xml",
+  "pytest_1142733_1793785354611849583_20261104_094234.xml"
+ ],
+ "tests": {
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather::test_high_bw_all_gather_galaxy_8x4_whole_mesh_accuracy[silicon_arch_name=blackhole-mesh_device=(8, 4)-fabric_2d_line]": {
+   "file": "pytest_1108626_1793784954929716225_20261104_093554.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.875
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather::test_high_bw_all_gather_galaxy_8x4_whole_mesh_accuracy[silicon_arch_name=blackhole-mesh_device=(8, 4)-fabric_2d_torus_xy]": {
+   "file": "pytest_1108626_1793784954929716225_20261104_093554.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 11.628
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather::test_high_bw_all_gather_galaxy_ci_perf[silicon_arch_name=blackhole-mesh_device=(8, 4)-fabric_2d_torus_xy]": {
+   "file": "pytest_1103038_1793784893420226185_20261104_093453.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 32.147
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather::test_high_bw_all_gather_galaxy_ci_perf_traced[silicon_arch_name=blackhole-mesh_device=(8, 4)-fabric_2d_torus_xy]": {
+   "file": "pytest_1125704_1793785179994211825_20261104_093939.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 59.648
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather::test_high_bw_all_gather_galaxy_full_mesh_ci_perf[silicon_arch_name=blackhole-mesh_device=(8, 4)-fabric_2d_torus_xy]": {
+   "file": "pytest_1118038_1793785091237554944_20261104_093811.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 58.762
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf[silicon_arch_name=blackhole-mesh_device=(8, 4)-fabric_2d_torus_xy]": {
+   "file": "pytest_1110121_1793784981641249863_20261104_093621.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 84.239
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-row_major-dim1-bf16-interleaved-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.978
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-row_major-dim1-bf16-nd_sharded-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.18
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-row_major-dim2-bf16-interleaved-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.042
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-row_major-dim2-bf16-nd_sharded-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.024
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-tile-dim1-bf16-interleaved-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 1.955
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-tile-dim1-bf16-nd_sharded-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.054
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-tile-dim2-bf16-interleaved-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.019
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-tile-dim2-bf16-nd_sharded-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.163
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-tile-dim3-bf16-interleaved-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.059
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_gather[silicon_arch_name=blackhole-tile-dim3-bf16-nd_sharded-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.473
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_metadata_traced[silicon_arch_name=blackhole-row_major-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1142733_1793785354611849583_20261104_094234.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.273
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_metadata_traced[silicon_arch_name=blackhole-tile-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1142733_1793785354611849583_20261104_094234.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.73
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_pages_larger_than_payload[silicon_arch_name=blackhole-interleaved-16KiB_rows-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.659
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_pages_larger_than_payload[silicon_arch_name=blackhole-interleaved-32KiB_rows-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.248
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_pages_larger_than_payload[silicon_arch_name=blackhole-nd_sharded-16KiB_rows-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.026
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_pages_larger_than_payload[silicon_arch_name=blackhole-nd_sharded-32KiB_rows-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 6.181
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_slot_select_partial_extent[silicon_arch_name=blackhole-row_major-interleaved-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.511
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_slot_select_partial_extent[silicon_arch_name=blackhole-row_major-nd_sharded-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.562
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_slot_select_partial_extent[silicon_arch_name=blackhole-tile-interleaved-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.226
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_slot_select_partial_extent[silicon_arch_name=blackhole-tile-nd_sharded-full_mesh-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1133859_1793785264161443351_20261104_094104.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.021
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_subdevice_external_semaphores[silicon_arch_name=blackhole-row_major-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1142733_1793785354611849583_20261104_094234.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.5
+  },
+  "tests.ttnn.unit_tests.operations.experimental.test_high_bw_all_gather_fabric::test_subdevice_external_semaphores[silicon_arch_name=blackhole-tile-mesh_device=(8, 4)-torus_xy_6k]": {
+   "file": "pytest_1142733_1793785354611849583_20261104_094234.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 3.674
+  }
+ }
+}

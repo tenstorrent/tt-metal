@@ -1,0 +1,1 @@
+./build/test/ttnn/unit_tests_ttnn_tensor --gtest_filter='D2DStreamServiceTest.*:StreamPipelineTest.*'

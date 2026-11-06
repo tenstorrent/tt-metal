@@ -1,0 +1,166 @@
+# cisp row-order A (mk_order_yamls.py): unicast_write rows only, 8 repeats.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: NeighborExchangeUnicastR01
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: NeighborExchangeUnicastR02
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: NeighborExchangeUnicastR03
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: NeighborExchangeUnicastR04
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: NeighborExchangeUnicastR05
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: NeighborExchangeUnicastR06
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: NeighborExchangeUnicastR07
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: NeighborExchangeUnicastR08
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3

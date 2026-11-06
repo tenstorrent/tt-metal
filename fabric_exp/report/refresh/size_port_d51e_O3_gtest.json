@@ -1,0 +1,34 @@
+{
+ "opt": "O3",
+ "tree": "d51e42cd78a (/home/aagarwal/tt-metal-rf-port)",
+ "cases": {
+  "bh_2d_udm_gtest": {
+   "images": 40,
+   "builds": 40,
+   "per_erisc": {
+    "E1": {
+     "code": 10432,
+     "free": 4088
+    }
+   },
+   "fatal": [],
+   "flags": []
+  },
+  "bh_trim_gtest": {
+   "images": 436,
+   "builds": 436,
+   "per_erisc": {
+    "E0": {
+     "code": 9768,
+     "free": 1876
+    },
+    "E1": {
+     "code": 6676,
+     "free": 4432
+    }
+   },
+   "fatal": [],
+   "flags": []
+  }
+ }
+}

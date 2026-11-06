@@ -1,0 +1,15 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+GlxNeighborExchange_size_256_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,1,W,1,200000,256,24364081,2.836963,11081887.308
+GlxNeighborExchange_size_256_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,2,W,1,200000,256,24193241,2.856996,11160141.793
+GlxNeighborExchange_size_512_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,1,W,1,200000,512,24358795,5.675158,11084292.142
+GlxNeighborExchange_size_512_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,2,W,1,200000,512,24202530,5.711800,11155858.499
+GlxNeighborExchange_size_1024_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,1,W,1,200000,1024,24340291,11.358944,11092718.653
+GlxNeighborExchange_size_1024_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,2,W,1,200000,1024,24194349,11.427462,11159630.706
+GlxNeighborExchange_size_2048_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,1,W,1,200000,2048,24408910,22.654023,11061534.497
+GlxNeighborExchange_size_2048_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,2,W,1,200000,2048,24407274,22.655541,11062275.943
+GlxNeighborExchange_size_3072_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,1,W,1,200000,3072,35699073,23.234217,7563221.600
+GlxNeighborExchange_size_3072_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,2,W,1,200000,3072,35698590,23.234531,7563323.930
+GlxNeighborExchange_size_4096_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,1,W,1,200000,4096,47855182,23.109723,5642022.216
+GlxNeighborExchange_size_4096_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,2,W,1,200000,4096,47855291,23.109670,5642009.365
+GlxNeighborExchange_size_4352_ntype_unicast_write_num_links_1,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,1,W,1,200000,4352,50623042,23.211564,5333539.616
+GlxNeighborExchange_size_4352_ntype_unicast_write_num_links_2,CHIP_UNICAST,NOC_UNICAST_WRITE,NeighborExchange,0,31,2,W,1,200000,4352,50623092,23.211541,5333534.348

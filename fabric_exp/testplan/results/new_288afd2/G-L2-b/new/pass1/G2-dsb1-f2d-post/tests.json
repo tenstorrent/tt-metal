@@ -1,0 +1,110 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 16
+ },
+ "files": [
+  "pytest_2072292_1793782692582462640_20261104_085812.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa[blackhole-True-ccl_off-False-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA live cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa[blackhole-True-ccl_off-False-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-single_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA live cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa[blackhole-True-ccl_off-True-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA live cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa[blackhole-True-ccl_off-True-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-single_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA live cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa[blackhole-True-ccl_on-False-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA live cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa[blackhole-True-ccl_on-False-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-single_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA live cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa[blackhole-True-ccl_on-True-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA live cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa[blackhole-True-ccl_on-True-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-single_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA live cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa_with_sdpa_phase[blackhole-True-pos127-False-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA-with-SDPA-phase cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa_with_sdpa_phase[blackhole-True-pos127-True-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA-with-SDPA-phase cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa_with_sdpa_phase[blackhole-True-pos1500-False-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA-with-SDPA-phase cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa_with_sdpa_phase[blackhole-True-pos1500-True-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA-with-SDPA-phase cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa_with_sdpa_phase[blackhole-True-pos2500-False-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA-with-SDPA-phase cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa_with_sdpa_phase[blackhole-True-pos2500-True-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA-with-SDPA-phase cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa_with_sdpa_phase[blackhole-True-pos3500-False-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA-with-SDPA-phase cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa::test_post_sdpa_with_sdpa_phase[blackhole-True-pos3500-True-1-1-512-8192-8192-7168-DataType.BFLOAT16-DataType.BFLOAT8_B-device_params0-multi_device]": {
+   "file": "pytest_2072292_1793782692582462640_20261104_085812.xml",
+   "message": "Blackhole PostSDPA-with-SDPA-phase cases fail PCC in fabric_2d isolated run. Issue: #42714",
+   "status": "SKIP",
+   "time": 0.0
+  }
+ }
+}

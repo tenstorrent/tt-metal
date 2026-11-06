@@ -1,0 +1,56 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "fabric_tests.yaml",
+  "mirrored": true,
+  "name": "BH ccl nightly tests",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 1500,
+ "duration_s": 345.5,
+ "end": "2026-11-04T00:27:38+00:00",
+ "failed_lines": [
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_cache_bh.py::test_matmul_reduce_scatter_cache_hit[silicon_arch_name=blackhole-bf16_bias-mesh_device=(1, 4)-device_params={'\"'\"'fabric_config'\"'\"': FabricConfig.FABRIC_1D, '\"'\"'l1_small_size'\"'\"': 24576}]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_cache_bh.py::test_matmul_reduce_scatter_cache_hit[silicon_arch_name=blackhole-fp32_qwen36-mesh_device=(1, 4)-device_params={'\"'\"'fabric_config'\"'\"': FabricConfig.FABRIC_1D, '\"'\"'l1_small_size'\"'\"': 24576}]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py::test_moe_compute_fullccl_linear_1x4[silicon_arch_name=blackhole-h2048_n512_k8_e4_t32-links1-1x4-fabric_1d]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py::test_moe_compute_fullccl_linear_1x4[silicon_arch_name=blackhole-h2048_n512_k8_e4_t32-links_auto-1x4-fabric_1d]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py::test_moe_compute_fullccl_linear_1x4[silicon_arch_name=blackhole-h7168_n2048_k8_e2_t8-links1-1x4-fabric_1d]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py::test_moe_compute_fullccl_linear_1x4[silicon_arch_name=blackhole-h7168_n2048_k8_e2_t8-links_auto-1x4-fabric_1d]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py::test_selective_reduce_combine_linear_1x4[silicon_arch_name=blackhole-h4096-k2-links1-1x4-fabric_1d]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py::test_selective_reduce_combine_linear_1x4[silicon_arch_name=blackhole-h4096-k8-links1-1x4-fabric_1d]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py::test_selective_reduce_combine_linear_1x4[silicon_arch_name=blackhole-h7168-k2-links1-1x4-fabric_1d]'",
+  "[regress] command failed (rc=1): pytest 'tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_moe_compute_multi_card.py::test_selective_reduce_combine_linear_1x4[silicon_arch_name=blackhole-h7168-k8-links1-1x4-fabric_1d]'"
+ ],
+ "group": "LB-X-a09fails",
+ "junit_files": 10,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-lb-120-a07u28",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 1,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "171525",
+ "start": "2026-11-04T00:21:53+00:00",
+ "status": "FAIL",
+ "step": "B1-night-1x4",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 10,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "timeout_s": 1500,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

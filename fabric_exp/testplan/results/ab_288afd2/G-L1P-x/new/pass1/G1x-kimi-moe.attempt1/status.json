@@ -1,0 +1,51 @@
+{
+ "capped": false,
+ "ci": {
+  "list": "blaze_models_prefill_tests.yaml",
+  "mirrored": true,
+  "name": "(Kimi-K2.7-1T, Kimi-K3-2.8T) MoE perf 5k",
+  "sku": "bh_sc1_high_power"
+ },
+ "ci_timeout_s": 1920,
+ "data_inodes_at_submit": "5721433",
+ "data_inodes_free": 5892785,
+ "deviation": "no mpirun wrapper (one host); KIMI_MOE_PERF_IGNORE_POWER=1 (the 110-a hosts' TDP class is unknown; both arms run on one node), KIMI_MOE_PERF_REPLAYS=5 (metric stays the first replay)",
+ "duration_s": 95.1,
+ "end": "2026-11-04T09:15:03+00:00",
+ "failed_lines": [],
+ "group": "G-L1P-x",
+ "jit_cache": "/tmp/aagarwal-regress/172972/cache/new_288afd2-new",
+ "junit_files": 1,
+ "label": "ab_288afd2",
+ "metrics": 0,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-120-c08u14",
+ "note": null,
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "new",
+ "slurm_job": "172972",
+ "start": "2026-11-04T09:13:28+00:00",
+ "status": "PASS",
+ "step": "G1x-kimi-moe",
+ "step_env": null,
+ "telemetry": "off (prod default)",
+ "tests": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 2
+ },
+ "timeout_note": null,
+ "timeout_s": 1920,
+ "tree": "/data/aagarwal/regress/trees/new_288afd2",
+ "tree_name": "new_288afd2",
+ "tree_patches": [],
+ "tree_sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7"
+}

@@ -1,0 +1,44 @@
+{
+ "capped": false,
+ "ci": {
+  "ci_timeout_min": 37,
+  "filtered": false,
+  "list": "galaxy_e2e_tests.yaml",
+  "name": "Galaxy Fabric 2D Torus Nightly Tests",
+  "sku": "bh_galaxy"
+ },
+ "ci_timeout_s": 2220,
+ "duration_s": 1473.8,
+ "end": "2026-11-03T23:42:57+00:00",
+ "failed_lines": [],
+ "group": "G-L0-a",
+ "label": "main",
+ "marker_found": 1,
+ "missing_paths": null,
+ "mode": "slurm",
+ "node": "bh-glx-110-a03u08",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": 0,
+ "rerun_of": null,
+ "router": "main",
+ "slurm_job": "171408",
+ "start": "2026-11-03T23:18:23+00:00",
+ "status": "PASS",
+ "step": "G0-torus-n",
+ "telemetry": "CI default",
+ "timeout_s": 2220,
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+ "tt_fabric": {
+  "executed": 2604,
+  "failed": 0,
+  "runs": 1
+ }
+}

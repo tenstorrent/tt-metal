@@ -1,0 +1,330 @@
+{
+ "counts": {
+  "FAIL": 47,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 5
+ },
+ "files": [],
+ "tests": {
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-batch128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-batch128_logprobs]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-long_context_128k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-long_context_short_prefill_long_decode]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-prefill_128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-prefill_128k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-prefill_16k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-prefill_1k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-prefill_32k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-prefill_4k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-prefill_64k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-prefill_8k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x1-seqlen-sweep]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-batch128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-batch128_logprobs]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-long_context_128k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-long_context_short_prefill_long_decode]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-prefill_128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-prefill_128k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-prefill_16k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-prefill_1k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-prefill_32k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-prefill_4k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-prefill_64k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-prefill_8k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x2-seqlen-sweep]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-batch128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-batch128_logprobs]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-long_context_128k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-long_context_short_prefill_long_decode]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-prefill_128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-prefill_128k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-prefill_16k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-prefill_1k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-prefill_32k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-prefill_4k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-prefill_64k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-prefill_8k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x4-seqlen-sweep]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-batch128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-batch128_logprobs]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-long_context_128k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-long_context_short_prefill_long_decode]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-prefill_128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-prefill_128k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-prefill_16k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-prefill_1k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-prefill_32k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-prefill_4k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-prefill_64k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-prefill_8k]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-1x8-seqlen-sweep]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_128]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "PASS",
+   "time": 0.0
+  }
+ }
+}

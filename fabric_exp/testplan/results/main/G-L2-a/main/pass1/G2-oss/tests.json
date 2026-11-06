@@ -1,0 +1,92 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 12
+ },
+ "files": [
+  "pytest_2220097_1793767452878192811_20261104_044412.xml"
+ ],
+ "tests": {
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-batch128]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "Batch size 128 demo skipped on Blackhole: throughput experts are not supported, only batch=1 low-latency experts run on this arch.",
+   "status": "SKIP",
+   "time": 2.939
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-batch128_logprobs]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "Batch size 128 demo skipped on Blackhole: throughput experts are not supported, only batch=1 low-latency experts run on this arch.",
+   "status": "SKIP",
+   "time": 3.262
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-long_context_128k]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "Batch size 128 demo skipped on Blackhole: throughput experts are not supported, only batch=1 low-latency experts run on this arch.",
+   "status": "SKIP",
+   "time": 2.823
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-long_context_short_prefill_long_decode]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "Batch size 128 demo skipped on Blackhole: throughput experts are not supported, only batch=1 low-latency experts run on this arch.",
+   "status": "SKIP",
+   "time": 6.854
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_128]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 864.503
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_128k]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "This test configuration is skipped in CI: blackhole-4x8-prefill_128k",
+   "status": "SKIP",
+   "time": 3.167
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_16k]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "This test configuration is skipped in CI: blackhole-4x8-prefill_16k",
+   "status": "SKIP",
+   "time": 10.769
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_1k]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "This test configuration is skipped in CI: blackhole-4x8-prefill_1k",
+   "status": "SKIP",
+   "time": 7.318
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_32k]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "This test configuration is skipped in CI: blackhole-4x8-prefill_32k",
+   "status": "SKIP",
+   "time": 20.879
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_4k]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "This test configuration is skipped in CI: blackhole-4x8-prefill_4k",
+   "status": "SKIP",
+   "time": 10.573
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_64k]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "This test configuration is skipped in CI: blackhole-4x8-prefill_64k",
+   "status": "SKIP",
+   "time": 9.171
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-prefill_8k]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "This test configuration is skipped in CI: blackhole-4x8-prefill_8k",
+   "status": "SKIP",
+   "time": 10.923
+  },
+  "models.demos.gpt_oss.demo.text_demo::test_gpt_oss_demo[blackhole-4x8-seqlen-sweep]": {
+   "file": "pytest_2220097_1793767452878192811_20261104_044412.xml",
+   "message": "This test configuration is skipped in CI: blackhole-4x8-seqlen-sweep",
+   "status": "SKIP",
+   "time": 11.034
+  }
+ }
+}

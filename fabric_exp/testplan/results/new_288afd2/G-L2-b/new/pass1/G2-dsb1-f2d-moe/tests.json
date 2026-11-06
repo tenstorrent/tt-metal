@@ -1,0 +1,48 @@
+{
+ "counts": {
+  "FAIL": 2,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 4
+ },
+ "files": [],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp::test_mlp_with_reduce[blackhole-True-all-dram-NOC_MODE.DM_DYNAMIC_NOC-True-mlp-fabric_2d]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp::test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-False-False]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp::test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-False-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp::test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-True-False]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp::test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-True-True]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp::test_moe_fused_with_reduce[blackhole-True-no_sram-NOC_MODE.DM_DYNAMIC_NOC-True-rigged_groups1-fabric_2d]": {
+   "file": "log.txt",
+   "message": "from the -v log (no junit: the step was killed before the summary)",
+   "status": "FAIL",
+   "time": 0.0
+  }
+ }
+}

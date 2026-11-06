@@ -3,7 +3,7 @@
 
   hang_decode.py CAPTURE_DIR CACHE_DIR [--log LOG ...] [--all-slots] [--chip C] [--quiet-routers]
 
-CACHE_DIR is the run's TT_METAL_CACHE (or any directory above kernels/fabric_erisc_router_v2/<hash>/, or a
+CACHE_DIR is the run's TT_METAL_CACHE (or any directory above kernels/<router>/<hash>/, or a
 consolidation builds/<build> dir). Per router config hash the decoder reads named_ct_arg_map_generated.h (named
 compile-time args) and the ERISC ELF (.elf.xip.elf preferred: the loader's XIP image). The positional compile-time args
 (channel buffer bases and slot counts) and the -D defines are not in the cache: they come from logged compile commands
@@ -49,7 +49,9 @@ except ImportError:  # similarity scoring falls back to pure Python
     np = None
 
 ROOT = "/home/aagarwal/tt-metal"
-KDIR = "kernels/fabric_erisc_router_v2/"
+# The router kernel's directory: the study's v2 slot, or the port's (and main's) fabric_erisc_router.
+ROUTER_KERNELS = ("fabric_erisc_router_v2", "fabric_erisc_router")
+KDIRS = tuple(f"kernels/{k}/" for k in ROUTER_KERNELS)
 L1_SIZE = 0x80000
 STREAM_BASE = 0xFFB40000
 STREAM_STRIDE = 0x1000
@@ -278,8 +280,9 @@ class Cfg:
 
 def find_cfg_dirs(cache):
     dirs = set()
-    for pat in (f"{cache}/*/{KDIR}*", f"{cache}/{KDIR}*", f"{cache}/*/*/{KDIR}*", f"{cache}/fabric_erisc_router_v2/*",
-                f"{cache}/*"):
+    pats = [p for k in KDIRS for p in (f"{cache}/*/{k}*", f"{cache}/{k}*", f"{cache}/*/*/{k}*")]
+    pats += [f"{cache}/{k}/*" for k in ROUTER_KERNELS] + [f"{cache}/*"]
+    for pat in pats:
         for d in glob.glob(pat):
             if os.path.isfile(os.path.join(d, "named_ct_arg_map_generated.h")):
                 dirs.add(os.path.normpath(d))
@@ -300,7 +303,7 @@ CMD_RE = re.compile(r"g\+\+ compile cmd: (.*?)\s*\(build\.cpp:\d+\)\s*$")
 
 
 def parse_cmd(cmd):
-    m = re.search(r'-DFULL_KERNEL_NAME="?fabric_erisc_router_v2/(\d+)/', cmd)
+    m = re.search(r'-DFULL_KERNEL_NAME="?fabric_erisc_router(?:_v2)?/(\d+)/', cmd)
     c = re.search(r"-DKERNEL_COMPILE_TIME_ARGS=([0-9,]+)", cmd)
     if not m or not c:
         return None
@@ -316,7 +319,7 @@ def attach_compile_cmds(cfgs, capture_dir, logs):
 
     def feed_lines(lines, src):
         for line in lines:
-            if "fabric_erisc_router_v2/" not in line or "KERNEL_COMPILE_TIME_ARGS" not in line:
+            if not any(f"{k}/" in line for k in ROUTER_KERNELS) or "KERNEL_COMPILE_TIME_ARGS" not in line:
                 continue
             line = re.sub(r"\x1b\[[0-9;]*m", "", line)
             m = CMD_RE.search(line)
@@ -616,6 +619,8 @@ def router_report(rep, core, by_coord, cores):
     hdr = f"=== {core.name} noc0 {core.coord('noc0')} xlat {core.coord('translated')}"
     if peer:
         hdr += f" <-> chip{peer[0]}/eth{peer[1]}"
+    elif core.rec.get("cross_host"):
+        hdr += " <-> (other host)"
     if cfg:
         hdr += f" | facing {DIRS[cfg.g('MY_DIRECTION')]}" + (" intermesh" if cfg.g("IS_INTERMESH_ROUTER") else "")
     P(hdr)

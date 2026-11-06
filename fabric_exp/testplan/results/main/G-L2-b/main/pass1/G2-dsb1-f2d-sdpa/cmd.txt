@@ -1,0 +1,2 @@
+export PYTHONPATH="$TT_METAL_HOME:$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$PYTHONPATH"
+python -m pytest --timeout=480 models/demos/deepseek_v3_b1/tests/unit_tests/test_sdpa_reduce_to_all.py

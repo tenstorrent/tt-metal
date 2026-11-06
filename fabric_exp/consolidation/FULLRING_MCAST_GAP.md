@@ -800,6 +800,10 @@ the next E0's forwarding channel. The bubble check reads only the first. When E1
 sits in the forwarding channel, so the check sees free slots while the ring fills. The ring then reaches the paper's
 full-except-the-bubble state. Main's E1 is slower than a 200G link, so its queue stays in the receiver ring, where the
 check sees it.
+**WRONG** in part: "the check sees free slots while the ring fills". Round samples of v4txa11 on Galaxy 200G
+(RING_JAM_FIX.md §8.3, job 171300) show the opposite in the slow 8-ring rows (3584 / 4352 B): the bubble check's own
+far-slot count is 0 or 1 in 95-96% of contests, with the in-ring channel's backlog at 11+. So the queue fills both
+buffers of a hop. The full-ring reading itself is not contradicted.
 - Also pointed to by the user: Dai, Lu, Ma, Su, Li, "Bubble-Swap Flow Control", ACM TACO 22(1), 2025
   (doi 10.1145/3705316). Read from the abstract only; the full text is behind ACM's access check. It treats deadlock
   as a credit shortage and swaps buffers atomically between adjacent routers using local credit state, so no

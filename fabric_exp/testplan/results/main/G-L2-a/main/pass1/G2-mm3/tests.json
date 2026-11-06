@@ -1,0 +1,422 @@
+{
+ "counts": {
+  "FAIL": 65,
+  "KNOWN_FAIL": 0,
+  "PASS": 0,
+  "PERF_WINDOW": 0,
+  "SKIP": 3
+ },
+ "files": [
+  "pytest_2326197_1793768469699888937_20261104_050109.xml"
+ ],
+ "tests": {
+  "models.demos.minimax_m3.tests.unit.test_attention_chunked_vs_ref::test_attention_chunked[blackhole-dense-chunk640-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 22.745
+  },
+  "models.demos.minimax_m3.tests.unit.test_attention_chunked_vs_ref::test_attention_chunked[blackhole-sparse-chunk640-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.746
+  },
+  "models.demos.minimax_m3.tests.unit.test_attention_chunked_vs_ref::test_attention_chunked_vs_cpu_ref[blackhole-dense-chunk128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.755
+  },
+  "models.demos.minimax_m3.tests.unit.test_attention_chunked_vs_ref::test_attention_chunked_vs_cpu_ref[blackhole-dense-chunk256-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.748
+  },
+  "models.demos.minimax_m3.tests.unit.test_attention_chunked_vs_ref::test_attention_chunked_vs_cpu_ref[blackhole-sparse-chunk128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.734
+  },
+  "models.demos.minimax_m3.tests.unit.test_attention_chunked_vs_ref::test_attention_chunked_vs_cpu_ref[blackhole-sparse-chunk256-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.832
+  },
+  "models.demos.minimax_m3.tests.unit.test_attention_packed_vs_alone::test_attention_packed_vs_alone[blackhole-dense-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.73
+  },
+  "models.demos.minimax_m3.tests.unit.test_attention_packed_vs_alone::test_attention_packed_vs_alone[blackhole-sparse-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.756
+  },
+  "models.demos.minimax_m3.tests.unit.test_attention_vs_ref::test_attention_prefill_vs_ref[blackhole-s128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.758
+  },
+  "models.demos.minimax_m3.tests.unit.test_dense_mlp_vs_ref::test_dense_mlp_vs_ref[blackhole-s128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.831
+  },
+  "models.demos.minimax_m3.tests.unit.test_ep_moe_vs_ref::test_ep_moe_overlap_release_recreate[blackhole-s128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.767
+  },
+  "models.demos.minimax_m3.tests.unit.test_ep_moe_vs_ref::test_ep_moe_shared_schedule[blackhole-fuse_rs-s128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.712
+  },
+  "models.demos.minimax_m3.tests.unit.test_ep_moe_vs_ref::test_ep_moe_shared_schedule[blackhole-overlap-s128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.797
+  },
+  "models.demos.minimax_m3.tests.unit.test_ep_moe_vs_ref::test_ep_moe_shared_schedule[blackhole-overlap_fuse_rs-s128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.749
+  },
+  "models.demos.minimax_m3.tests.unit.test_ep_moe_vs_ref::test_ep_moe_vs_ref[blackhole-s128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.74
+  },
+  "models.demos.minimax_m3.tests.unit.test_kv_cache_gqa_sp_vs_ref::test_kv_cache_gqa_sp[blackhole-2x256-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.906
+  },
+  "models.demos.minimax_m3.tests.unit.test_kv_cache_write_vs_ref::test_kv_cache_write_vs_ref[blackhole-ik_tp_dedup-dense-s5120-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.745
+  },
+  "models.demos.minimax_m3.tests.unit.test_kv_cache_write_vs_ref::test_kv_cache_write_vs_ref[blackhole-ik_tp_dedup-sparse-s5120-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.723
+  },
+  "models.demos.minimax_m3.tests.unit.test_kv_cache_write_vs_ref::test_kv_cache_write_vs_ref[blackhole-ik_tp_replicated-dense-s5120-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.852
+  },
+  "models.demos.minimax_m3.tests.unit.test_kv_cache_write_vs_ref::test_kv_cache_write_vs_ref[blackhole-ik_tp_replicated-sparse-s5120-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.8
+  },
+  "models.demos.minimax_m3.tests.unit.test_model_sp_vs_ref::test_model_sp_dense_vs_ref[blackhole-s1024-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.842
+  },
+  "models.demos.minimax_m3.tests.unit.test_model_sp_vs_ref::test_model_sp_moe_vs_ref[blackhole-s1024-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "unreliable with random gate weights: near-tie top-k routing flips under SP precision drift",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.minimax_m3.tests.unit.test_model_sp_vs_ref::test_model_sp_msa_vs_ref[blackhole-s2048-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "unreliable with random gate weights: near-tie top-k routing flips under SP precision drift",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.minimax_m3.tests.unit.test_model_sp_vs_ref::test_model_sp_tokens_vs_ref[blackhole-s1024-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "unreliable with random gate weights: near-tie top-k routing flips under SP precision drift",
+   "status": "SKIP",
+   "time": 0.0
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_dedup-block_aligned_straddle-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.773
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_dedup-cold_1024-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.803
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_dedup-mid_block_straddle-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.777
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_dedup-rotated-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.921
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_dedup-rotated_straddle-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.81
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_dedup-slab_aligned-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.753
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_replicated-block_aligned_straddle-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.733
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_replicated-cold_1024-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.767
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_replicated-mid_block_straddle-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.812
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_replicated-rotated-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.733
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_replicated-rotated_straddle-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.85
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_mid_slab_vs_ref::test_msa_sp_cache_read_mid_slab[blackhole-ik_tp_replicated-slab_aligned-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.858
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_dedup-bf16cache-prior1_cap2_slot0-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.839
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_dedup-bf16cache-prior1_cap4_slot3-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.786
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_dedup-bf16cache-prior3_cap6_slot1-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.821
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_dedup-bf8cache-prior1_cap2_slot0-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.771
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_dedup-bf8cache-prior1_cap4_slot3-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.785
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_dedup-bf8cache-prior3_cap6_slot1-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.828
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_replicated-bf16cache-prior1_cap2_slot0-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.866
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_replicated-bf16cache-prior1_cap4_slot3-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.747
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_replicated-bf16cache-prior3_cap6_slot1-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.732
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_replicated-bf8cache-prior1_cap2_slot0-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.756
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_replicated-bf8cache-prior1_cap4_slot3-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.753
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_cache_read_vs_ref::test_msa_sp_cache_read_high_bw_pcc[blackhole-ik_tp_replicated-bf8cache-prior3_cap6_slot1-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.82
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_chunked_vs_ref::test_msa_sp_chunked[blackhole-chunk640_prior1-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.816
+  },
+  "models.demos.minimax_m3.tests.unit.test_msa_sp_sharded_vs_ref::test_msa_sp_sharded[blackhole-chunk640-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.865
+  },
+  "models.demos.minimax_m3.tests.unit.test_norm_vs_ref::test_rms_norm_distributed_interleaved[blackhole-m128-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.799
+  },
+  "models.demos.minimax_m3.tests.unit.test_norm_vs_ref::test_rms_norm_distributed_interleaved[blackhole-m640-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.769
+  },
+  "models.demos.minimax_m3.tests.unit.test_parallel_embedding_vs_ref::test_parallel_embedding[blackhole-1d_hidden-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.773
+  },
+  "models.demos.minimax_m3.tests.unit.test_parallel_embedding_vs_ref::test_parallel_embedding[blackhole-2d_vocab-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.759
+  },
+  "models.demos.minimax_m3.tests.unit.test_prefill_runtime_multiturn_resume::test_prefill_runtime_multiturn_resume[blackhole-chunk1024-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.73
+  },
+  "models.demos.minimax_m3.tests.unit.test_prefill_runtime_multiturn_resume::test_prefill_runtime_multiturn_resume[blackhole-chunk5120-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.741
+  },
+  "models.demos.minimax_m3.tests.unit.test_prefill_runtime_packed::test_prefill_runtime_packed[blackhole-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.781
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_metadata_retarget[blackhole-2x256-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.754
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_sp[blackhole-host-2x256-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.792
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_sp[blackhole-host-2x5120-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.727
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_sp[blackhole-tensor-2x256-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 2.001
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_sp[blackhole-tensor-2x5120-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.741
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_sp_mid_slab[blackhole-2x256_rotated-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.764
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_sp_mid_slab[blackhole-5120_mid_block_straddle-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.742
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_sp_mid_slab[blackhole-5120_rotated-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.843
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_cache_read_sp_vs_ref::test_ring_joint_cache_read_sp_mid_slab[blackhole-5120_rotated_straddle-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 5.05
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_sp_vs_ref::test_ring_joint_sp_vs_ref[blackhole-s512-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.771
+  },
+  "models.demos.minimax_m3.tests.unit.test_ring_joint_sp_vs_ref::test_ring_joint_sp_vs_ref[blackhole-s5120-8x4]": {
+   "file": "pytest_2326197_1793768469699888937_20261104_050109.xml",
+   "message": "failed on setup with \"RuntimeError: TT_FATAL @ /home/aagarwal/tt-metal-main/tt_metal/impl/program/program.cpp:3810: state.offset <= max_size\ninfo:\nProgram size (29024) too large for kernel config buffer (26624) on ACTIVE_ETH, 2400 B over:\n  runtime args                 320 B\n  semaphores            ",
+   "status": "FAIL",
+   "time": 1.729
+  }
+ }
+}

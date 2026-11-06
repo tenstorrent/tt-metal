@@ -1,0 +1,74 @@
+{
+ "2d_4352": {
+  "yaml": "fabric_exp/slotstudy/sls_2d_p150.yaml",
+  "tests": 14,
+  "ranks": 1,
+  "env": ""
+ },
+ "2d_3072": {
+  "yaml": "fabric_exp/consolidation/slotalloc/yamls/sls_2d_p150_3072.yaml",
+  "tests": 14,
+  "ranks": 1,
+  "env": ""
+ },
+ "1d_4352": {
+  "yaml": "fabric_exp/slotstudy/sls_1d_p150.yaml",
+  "tests": 6,
+  "ranks": 1,
+  "env": ""
+ },
+ "1d_3072": {
+  "yaml": "fabric_exp/consolidation/slotalloc/yamls/sls_1d_p150_3072.yaml",
+  "tests": 6,
+  "ranks": 1,
+  "env": ""
+ },
+ "ring_4352": {
+  "yaml": "fabric_exp/v4/exp_ring.yaml",
+  "tests": 14,
+  "ranks": 1,
+  "env": ""
+ },
+ "ring_3072": {
+  "yaml": "fabric_exp/consolidation/slotalloc/yamls/exp_ring_3072.yaml",
+  "tests": 14,
+  "ranks": 1,
+  "env": ""
+ },
+ "vc1_4352": {
+  "yaml": "fabric_exp/vc1/sls_vc1_all.yaml",
+  "tests": 41,
+  "ranks": 2,
+  "env": ""
+ },
+ "vc1_3072": {
+  "yaml": "fabric_exp/consolidation/slotalloc/yamls/sls_vc1_all_3072.yaml",
+  "tests": 41,
+  "ranks": 2,
+  "env": ""
+ },
+ "vc2_4352": {
+  "yaml": "fabric_exp/port_slots/yamls/alloc_vc2_4352.yaml",
+  "tests": 12,
+  "ranks": 1,
+  "env": "TT_METAL_ENABLE_FABRIC_VC2=1"
+ },
+ "vc2_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/alloc_vc2_3072.yaml",
+  "tests": 12,
+  "ranks": 1,
+  "env": "TT_METAL_ENABLE_FABRIC_VC2=1"
+ },
+ "ne_4352": {
+  "yaml": "fabric_exp/port_slots/yamls/pvs_c1ne.yaml",
+  "tests": 2,
+  "ranks": 1,
+  "env": ""
+ },
+ "ne_3072": {
+  "yaml": "fabric_exp/port_slots/yamls/alloc_ne_3072.yaml",
+  "tests": 2,
+  "ranks": 1,
+  "env": ""
+ }
+}

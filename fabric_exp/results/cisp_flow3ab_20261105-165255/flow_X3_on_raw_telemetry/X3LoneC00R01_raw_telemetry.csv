@@ -1,0 +1,7 @@
+coord,eth_channel,bw_gbps,pps,connected_coord,connected_eth_channel
+"0,0",5,24.4839,1.16825e+07,MeshCoordinate([0, 1]),6
+"0,0",5,48.3996,1.16807e+07,MeshCoordinate([0, 1]),6
+"0,0",5,24.4748,1.16782e+07,MeshCoordinate([0, 1]),6
+"0,0",5,48.3989,1.16805e+07,MeshCoordinate([0, 1]),6
+"0,0",5,24.4775,1.16794e+07,MeshCoordinate([0, 1]),6
+"0,0",5,48.3942,1.16794e+07,MeshCoordinate([0, 1]),6

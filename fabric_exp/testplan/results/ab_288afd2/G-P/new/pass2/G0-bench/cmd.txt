@@ -1,0 +1,1 @@
+./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_2d_torus_6U_galaxy.yaml

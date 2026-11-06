@@ -8,6 +8,8 @@
 #   lb2_stage.sh full      also build_Release, python_env, runtime (sfpi), the uv Python that python_env links to, and
 #                          .git (kept on /data for the node's git status check; never copied to a node). Needed once,
 #                          and again only after a host-library rebuild on a09u32 (refresh warns when build_Release drifted).
+#                          A refresh syncs .git too when the live HEAD moved (a commit): the node's git status check
+#                          reads the staged .git, so a stale one shows every committed file as changed (lb2 171279).
 #
 # Layout (/data/aagarwal/lb2/stage): src-<time>/ {src.tar.zst, REF_src.sha256, GIT, SCOPE, FULL, STAGE_TIME, CHANGED},
 # full-<time>/ {build_Release, python_env, runtime, uv-python}.tar.zst + REF_<x>.sha256 + FULL_STAMP, git/ (rsync of
@@ -71,9 +73,14 @@ if [ $MODE = full ]; then
     $PK check $F/uv-python.tar.zst $F/REF_uv-python.sha256 || exit 1
     sha256sum $SRC/build_Release/lib/*.so* $SRC/build_Release/tt_metal/*.so* \
         $SRC/build_Release/test/tt_metal/tt_fabric/test_infra/test_tt_fabric 2>/dev/null | sed "s#$SRC/##" > $F/FULL_STAMP
+fi
+# .git for the node's git status check: on a full stage, and on a refresh when the live HEAD is not the staged one
+if [ $MODE = full ] || [ "$(git --git-dir=$ST/git rev-parse HEAD 2>/dev/null)" != "$(git -C $SRC rev-parse HEAD)" ]; then
     mkdir -p $ST/git
     rsync -a --delete --stats $SRC/.git/ $ST/git/ | awk '/Number of regular files transferred/ {n=$NF}
         /Total transferred file size/ {b=$5} END {gsub(",", "", n); gsub(",", "", b); printf "   .git: %s files, %.1f MB moved\n", n, b/1e6}'
+    [ "$(git --git-dir=$ST/git rev-parse HEAD)" = "$(git -C $SRC rev-parse HEAD)" ] ||
+        { echo "!!! the staged .git's HEAD is not the live HEAD after the sync"; exit 1; }
 fi
 
 # source scope: top-level files + SRC_DIRS, unswapped

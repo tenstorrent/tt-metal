@@ -1,0 +1,43 @@
+{
+ "capped": true,
+ "ci": {
+  "ci_timeout_min": 30,
+  "filtered": false,
+  "list": "ops_unit_tests.yaml",
+  "name": "Disaggregated prefill op unit tests (LB)",
+  "sku": "bh_loudbox"
+ },
+ "ci_timeout_s": 1800,
+ "duration_s": 1337.5,
+ "end": "2026-11-03T22:45:46+00:00",
+ "failed_lines": [],
+ "group": "LB-L1",
+ "junit_files": 1,
+ "label": "main",
+ "missing_paths": null,
+ "mode": "broker",
+ "node": "bh-lb-120-a09u32",
+ "pass": 1,
+ "path_map": {
+  "/mnt/MLPerf/huggingface": "/mnt/models/huggingface"
+ },
+ "rc": -15,
+ "router": "main",
+ "slurm_job": null,
+ "start": "2026-11-03T22:23:29+00:00",
+ "status": "CAPPED",
+ "step": "B1-dp",
+ "telemetry": "CI default",
+ "tests": {
+  "FAIL": 0,
+  "PASS": 142,
+  "SKIP": 0
+ },
+ "timeout_s": 1334,
+ "tree": "/home/aagarwal/tt-metal-main",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1"
+}

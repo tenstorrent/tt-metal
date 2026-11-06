@@ -1,0 +1,1 @@
+pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly

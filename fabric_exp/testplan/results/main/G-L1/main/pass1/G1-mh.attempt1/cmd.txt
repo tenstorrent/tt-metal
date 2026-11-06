@@ -1,0 +1,1 @@
+MESH_DEVICE=SINGLE_BH bash tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/scripts/run_multi_host_ccl_tests.sh

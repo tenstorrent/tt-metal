@@ -1,0 +1,2 @@
+export OMP_NUM_THREADS=$(nproc) TT_METAL_SHM_TRACKING_DISABLED=1 KIMI_MOE_PERF_REPLAYS=5
+python -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k loudbox -vvv --tb=short

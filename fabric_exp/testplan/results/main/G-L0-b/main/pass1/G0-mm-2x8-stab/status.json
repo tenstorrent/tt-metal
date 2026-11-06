@@ -1,0 +1,45 @@
+{
+ "ci": {
+  "ci_timeout_min": 10,
+  "filtered": false,
+  "line": "test_fabric_multi_mesh_stability_short_running",
+  "list": "galaxy_e2e_tests.yaml",
+  "name": "Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests",
+  "sku": "bh_galaxy"
+ },
+ "derived_from": "G0-mm-2x8.attempt2 (one run of both CI lines; split 2026-11-04 per coordinator)",
+ "duration_s": 140.2,
+ "end": "2026-11-04T01:22:17+00:00",
+ "group": "G-L0-b",
+ "jit_cache": "/tmp/aagarwal-regress/171909/cache/main-main",
+ "label": "main",
+ "marker_found": 3,
+ "mode": "slurm",
+ "node": "bh-glx-110-a10u08",
+ "pass": 1,
+ "rc": 0,
+ "rescored": [
+  {
+   "at": "2026-11-04T01:35:30+00:00",
+   "from": "FAIL (combined)",
+   "to": "PASS"
+  }
+ ],
+ "router": "main",
+ "slurm_job": "171909",
+ "start": "2026-11-04T01:19:57+00:00",
+ "status": "PASS",
+ "step": "G0-mm-2x8-stab",
+ "telemetry": "CI default",
+ "tree": "/data/aagarwal/regress/trees/main_d2bd12f",
+ "tree_name": "main",
+ "tree_patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+ "tt_fabric": {
+  "executed": 312,
+  "failed": 0,
+  "runs": 3
+ }
+}

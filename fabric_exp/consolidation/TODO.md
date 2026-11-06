@@ -7,6 +7,382 @@ changes.
 
 ## In progress
 
+- **Galaxy pairs: done (2026-11-05).** glxq_pairs.tsv (36 ring pairs, 32 single-cable pairs, from the FSD);
+  `glxq_run.sh --pair any --form F` submits a first-start-wins group (it counts as one allocation). Trial group
+  1105034909 / job 176705 (a10u08 + a10u14), the 16x4 form on 330a2628861: lock + cancel worked, ranks mapped rows 0-7 /
+  8-15, the data-checked all-to-all smoke passed on both ranks. Open: a smoke row for the two-tori forms (they need
+  --no-smoke today); per-step rank log names are new and not yet run on a job.
+- **Allocator + TRID landing (user, 2026-11-05):** allocator tweaks (a) worker depth 18 and (b) receivers to the next
+  power of 2 first in the leftover order, (c) the 1D 3072 B +1.7% accepted; the TRID per-channel rule approved to land
+  (lb2 176756). Sequence: amend the allocator, short P150 rerun, rebase TRID, cherry-pick both onto 330a2628861, P150 val
+  set + Galaxy G-PORT P10, then push. The N/S torus decode spill is a separate diagnostic (compile-time coordinates),
+  design to the user first.
+  **Pushed at 662331732ce on 2026-11-05 ~09:00** (origin/aagarwal/fabric-router-mainline 57c55f98118 -> 662331732ce:
+  allocator, TRID, telemetry switch dropped (ce2dee3cd6e), bring-up tools dropped). P10-mm-2x8 stays open as its own
+  investigation, not a push gate (entry below). **The clock-read fix e7fe1899049** (only the sender reads the wall clock
+  at round start; ERISC1's read could tear ERISC0's latched 64-bit read: the long-run +2^32 outlier) **passed its offline
+  image gate and was pushed: origin at e7fe1899049 (2026-11-05).**
+  - Gate: 7 configs × 3 telemetry modes.
+  - Telemetry off: byte-identical everywhere.
+  - Perf recorder: ERISC0 code-identical apart from a symbol rename; ERISC1 −16 B (the read dropped).
+  - Dynamic stats: −16 B, round_start_impl only.
+  - The only other differences are address-only `_start` diffs.
+- **BH bandwidth golden refresh (user, 2026-11-06):** tests/tt_metal/tt_fabric/test_infra/golden/
+  golden_bandwidth_summary_blackhole_p150_x4.csv (268 rows, num_links 1-4) must be re-recorded with the new router, as
+  WH's was (18e9f1b9ce9: same rows, order and tolerances; telemetry on as CI runs it; median of three runs). Open: it is
+  a P150 x4 (QuietBox) golden, so record on that hardware (CI runner or a P150x4 box), not the LoudBox. Check whether
+  golden_latency_summary_blackhole_p150_x4.csv needs the same.
+- **Push when tests pass (user OK, 2026-11-05):** cleanup branch rebased onto e8decd2e27e (user's WH Galaxy fix), tip
+  539cb2a8434 (7326d59a864 flush, bd6e71c4ce5 CT worker semaphores, 83f62902911 router_single_erisc, 32a6e950990 inline
+  write forms, 539cb2a8434 credit_each_slot); pre-rebase chain kept at aagarwal/fabric-router-mainline-cleanup-prerebase.
+  Gates: G1 G2 G4 G5 identical/as expected; G3 G6 G7 pass; G8 (de8a2ac17a8 single-ERISC inline on BH vs 539cb2a8434)
+  pass as expected: two-ERISC, WH, non-router identical, 700/700 BH one-ERISC changed and smaller
+  (fabric_exp/port_tune/gates_20261105/). New push gate (coordinator, 2026-11-05): flush lb2 180530 + G8.
+  **Flush validation FAILED to run (open, coordinator to decide):** the unpatched arm (PR base) hung on the first
+  data-checked test, FlushA2ARing atomic_inc unicast, on LB (lb2 180530, 1024 B) and Galaxy (180570, 4096 B); patched
+  arm never ran. Captures: results/fdaa_unp_val_ring_hangcap, results/glx180570. Cause open (hypotheses: test-infra
+  limit of flow-controlled all-to-all on Ring, which stock yamls never run; base-router ring/atomic bug); isolating A/B
+  = same yaml on main's router. Not run: awaiting go.
+- **DONE 2026-11-05: replies posted on PR #63939** (user OK; discussion_r4486914997, r4486915272, r4486915594; user closes
+  #63939, review continues on #64160). Was: **Reply on PR #63939 (user, 2026-11-05), after the fixes land; not before.** SeanNijjar's 3 inline comments on the
+  preview branch: (a) rename return_slots -> credit_slots; (b) explain the connection_semaphores array size (named
+  constant); (c) start_running and the context switch (end_round still switches every SWITCH_INTERVAL rounds). Fixes
+  are with the port agent on the cleanup branch. The replies need the user's OK before posting.
+- **Test-side changes stay patches, not in the router PR (user, 2026-11-05):** fabric_exp/streams/port/
+  test_infra_6dad.patch, and adapter_vc2_credits_6dad.patch (touches tt_metal/; patch only, never pushed with the PR).
+- **2026-11-05: cleanup (e5b75d1fbcd) and the decode (6dad5fec638) pushed.** The a09u02 hang was the node (176236). In
+  progress, offline: (1) the TRID rule ported onto 6dad5fec638 + the allocator (agent a6e85079ff596efce, worktree
+  tt-metal-port-trid; hypothesis C check on the 4x2 / Galaxy torus N/S receivers; device A/B after the allocator
+  A/B, on the user's go); (2) the write-path static diff, port vs study, for the remaining write gap (agent a4dc906ee7c1faf44,
+  into RECONCILE_DEVICE.md): done (§8), and the quick test (§8.1, job 798) found the gap is the test sender kernel.
+  Idle-pass recheck on the final allocator 9ce0acbeaba: gate, slot probe (2D 17,16,16,16 R16; 1D 26,25 R32; VC1
+  forwarding 7) and mock vet OK; staged; lb2 177108 done (RECEIVER_TUNING.md §6): i8 vs i4 is 2D −0.20, VC1 −0.08,
+  vc1i ±0.06; i2 is +0.27 / +0.80 / ±0.03. **Closed (user, 2026-11-05): IDLE_PASSES_BEFORE_PARTIAL_CREDIT stays 4,
+  no census for 8** (i8 within 0.2 cycles of i4, i2 slower on 2D and VC1, VC1 inter-mesh flat on the allocator's
+  rows). The pushed comment (57c55f98118) already has the measured reason: no code change. Receiver tuning closed.
+  **2026-11-06, user: no time-based partial-credit rule ("even more fragile"); the NX fix stays open, value not
+  chosen.** Sweep 4/8/16/32/64 done (RECEIVER_TUNING.md §8): Galaxy 200G NX gap closes at 16 (4352 B keeps +0.55); LB
+  burst N8 G500 16 B +3.3% at 16, +1.2% at 8.
+  **Reopened by new evidence, 2026-11-05:** the 200G Galaxy NX gap (port +1.15 /
+  +3.56 / +3.57 cycles/packet vs main at 3072 / 4096 / 4352 B, Slurm 179756) is this constant. A/B Slurm 180134
+  (port only, one constant per arm; fabric_exp/results/glx180134/nxab_report.txt): IDLE_PASSES 4 -> 64 gives
+  −1.14 / −3.56 / −3.03 (main parity at 3072 / 4096, +0.54 left at 4352); receiver depth 16 or 64 and an E0 delay of
+  10-60 move nothing; an E1 spin of 60 per packet speeds the rows up (−1.15 / −2.50 / −2.38). Mechanism (extra
+  credit frames on a wire both directions share) is a hypothesis: frames not counted. The 400G decision (i8 within
+  0.2 of i4) did not test a large value or 200G wire-bound bidirectional rows. To settle: a sweep (e.g. 4/8/16/32/64)
+  on 200G NX plus the 400G census suites and latency, or a time-based partial-credit rule; the user decides.
+  CI streaming-profiler repro (CI run 41963172504; port 57c55f98118, worktree /home/aagarwal/tt-metal-ci-sp, Tracy
+  build; port_tune/cisp/):
+  - Job 801 (telemetry off) produced no ratios: the test's bandwidth is the router telemetry readout. Its profiler-on
+    run also stalled on the Ring config.
+  - Job 810 (telemetry on, the user's one-off CI-fidelity exception) reproduces it: NeighborExchange 4096 B write
+    num_links_2 on/off is 0.9873 / 0.9861 (CI 0.9873; bound 0.989), with off-to-off +0.0037%. The median is 0.9986 /
+    0.9982. The Ring config completed with the profiler on.
+  - Not isolated yet: the router hook, the zone code / placement, or the profiler's runtime activity. Next arms are
+    the coordinator's / user's call.
+  - Split job (results/cisp_ci_20261105-064341; arms off / on / no-hook, router hook compiled out plus the host patch
+    cisp/host_link_solve_warn.patch):
+    - The no-hook arm aborted at its first fabric-config switch on a third host check (device_programs.cpp:792,
+      "link is dead": fewer than 2 rounds in 1 s). The device was held; the broker reset and recovered it (814-816).
+    - Partial, one pass, NX config only. NX 4096 B write 2 links: on 0.9862, no-hook 0.9910. The 1-link row is
+      0.9972 / 0.9969. The other NX rows are 0.9992-0.9995 on, 1.0000 no-hook.
+    - Images: no-hook E0 = on minus the RouterPort / PortBase / eth_ptp functions (end_round and
+      SenderChannelInterfaces::start changed).
+    - Waiting on the coordinator: extend the host patch, or accept the partial result.
+  - Follow-ups, 2026-11-05 (report results/cisp_followups_20261105.md; TELEM=ci; no device runs for (c)):
+    - (a) PC split (job 817, results/cisp_pcs_20261105-074220; port, NX 4096 B write, 80M packets, L1 / L2):
+      - ERISC0 on vs off: link_sync 0.49-0.51% and end_round +0.10-0.17 points; telemetry 12.2% in both. ERISC1 is
+        unchanged.
+      - Steady state: on L1 all 20 routers are within 0.1%. On L2, 39 of 40 routers are at 0.999. One router (chip0/eth7,
+        transmitter) took 4.29G more cycles (about 3.2 s); one occurrence, cause unknown.
+    - (b) Main off/on (job 818, results/cisp_ci_main_20261105-074351; main d2bd12fcf1f + the same test change):
+      - **On is faster on every row.** Median 1.0051 / 1.0049, worst 1.0011; NX write and fused-atomic rows +3.7 to
+        +4.6%. The port (job 810) is at 0.9986 / 0.9982, worst 0.9873.
+      - Per router: main's off routers sit at several cycle levels, and on collapses them all to the fastest. Cause is a
+        hypothesis.
+    - (c) Per-router map (port_tune/cisp/cisp_router_map.py):
+      - **The port's on/off levels are averages of discrete events.** About 540-570k cycles (about 0.4 ms) on one router
+        in 1 or 2 of a test's 3 iterations, which shows as +1.6% / +3.1% in the mean.
+      - **The events repeat at the same test-iterations in every on run.** NX 4096 B write L2 iterations 1-2 and L1
+        iteration 3, FullRing 4096 B fused-atomic L2. They hit 1-26 routers each, a different set per run, transmitters
+        and receivers alike.
+      - **They also occur with the router hook compiled out** (job 811's no-hook arm). So the link-sync hook is not
+        needed; the earlier "hook per-round work / role split" candidates are marked WRONG in the report.
+      - **Main has no events.**
+      - Hypothesis, not tested: the profiler's activity outside the hook, e.g. the router's kernel_profiler ring waiting
+        for a host drain. The isolating A/B is profiler on with the router's zones off, or with a larger ring.
+    - (d) Stall sampling (job 819, results/cisp_pcs2_20261105-083111, report section (d)):
+      - The events reproduce (288 router-iterations).
+      - During them the routers' PC mix, busy share and idle lines match the quiet routers'.
+      - Real-time first and last send are within ±0.15 ms of the quiet peers, while the telemetry counts +0.40 ms.
+      - **Hypothesis: counted time in the perf recorder**, either a wall-clock step or rounds waiting at iteration
+        start, **not a sending stall.** The kernel_profiler ring wait from (c) is not supported: 1 ring_ensure_room_slow
+        sample in 4167.
+      - Next is a recorder variant on the device: per iteration, the longest counted round and its position, or the wall
+        clock beside the cycle counter. It is a design proposal, for the user's go.
+    - (e) Recorder instrumentation (job 820, report section (e)):
+      - Every entry aligns (busy == cycles in all 8640 rows).
+      - Events have no long round (about 2.9k cycles max, as in quiet ones), no clock step, no torn read and no firmware
+        run.
+      - Instead they have about 8% more counted rounds with fewer packets each (21.2 vs 22.9). The extra rounds' fixed
+        cost (~1.3k cycles each) is the ~0.46M excess.
+      - Hypothesis: a batching or supply pattern counted by the round-based recorder, not a stall.
+      - The +4.29G long-run outlier is exactly 2^32, a torn wall-clock read; the fix e7fe1899049 is local, in its gate.
+    - (f) The test's sender-side bandwidth (jobs 821 port, 822 main; report section (f)):
+      - **Port:** worst on/off is 0.9537 / 0.9694 (NX 4096 B write L2), against telemetry 0.9865 / 0.9884; median
+        0.9987.
+      - **The port's sender rows show the same discrete events:** −4.6% iterations at the same positions. So event
+        iterations really are slower. The (d)/(e) "counted time, not a stall" readings are marked WRONG in part.
+      - **Main:** sender-side median 1.0013, worst 0.9977; NX write rows +3.5% to +5.2% with the profiler on.
+      - Hypothesis: a worker-side profiler cost that shows only once the router outruns the worker. WRONG in part (830):
+        the same ~4.7% slow state occurs with the profiler off in another row order (C); not a profiler cost itself.
+    - (g) Stall hunt (jobs 823 zone CSV, 824 Tensix PC samples; report section (g)):
+      - Slow iterations run every sender kernel ~0.43-0.46 ms longer, on most or all chips in the same iteration (41/288,
+        unicast_write rows only). It's not a late start.
+      - In those iterations the senders shift from fabric-credit waits (19% -> 13% of kernel samples) to NoC
+        command-buffer waits (17% -> 25%) and write-ack waits (0.4% -> 2.4%). No profiler code is sampled.
+      - Hypothesis: NoC contention from a periodic profiler transfer (relays or DRAM).
+      - Next: relay-core sampling on the same timeline, then the A/B (design to the coordinator first).
+      - Steps 3-4 (jobs 825, 826; report (g)):
+        - The slow clusters are periodic, ~0.7 s or ~18 iterations, 1-5 iterations long. WRONG as a reading (829
+          review): ~18 iterations is the yaml's spacing of the unicast_write blocks, the only rows that ever go slow.
+        - The eth relay is flat; DRISC activity isn't visible through drisc_pc.
+        - The ship-threshold A/B (kShipMinPct 25 -> 50, kIdlePumpStride x2) leaves the period unchanged, so neither is the
+          trigger. WRONG (829 review): the period is the row layout and can't move; the slow counts barely move (weak
+          evidence only).
+        - Candidate: the relay's kMaxDeferSweeps (2048 sweeps ≈ 0.7 s if a sweep takes ~0.34 ms). A/B arms C/D are
+          designed, not run.
+      - Defer A/B (job 827):
+        - kShipMinPct 50 with kMaxDeferSweeps 4096 or 1024 leaves the period unchanged (~0.68-0.69 s, ~18 iterations).
+        - The relay's ship cadence is ruled out as the clock. WRONG (829 review): not established; the period is the row
+          layout. Next: host-side cadences, after the coordinator's review.
+      - Time vs count (job 828):
+        - The period stays ~18 iterations at num_packets ×1/×2/×4 (0.7 / 0.9 / 1.2 s), so it's count-based. WRONG as
+          worded (829 review): ~18 is the row layout; what stands is that the slow positions in the blocks don't move
+          with iteration length, so the slowdown follows the row sequence, not time.
+        - The excess scales with iteration length (~4.8% of the iteration), a rate change.
+        - No profiler component has a ~0.7 s period; it doesn't matter, since the clock counts iterations. (Premise WRONG,
+          829 review: there's no ~18-iteration clock in evidence.)
+        - The sender's load address doesn't separate slow from normal.
+        - Count-based candidates (producer word count, per-program host state) await review. (Superseded by 829: the
+          ~18 count is the row layout.)
+      - Dispatch observation (job 829, results/cisp_dispatch_20261105-100012; report (g)):
+        - Prefetch, dispatch and dispatch_s sit in the same local wait loops in slow and normal iterations (within ±6
+          points); nothing touches the sender tiles. Dispatch is not active during the slow iterations.
+        - The off arm runs the realtime profiler (dispatch_s records, reserved core f16-11); the on arm doesn't.
+        - Kernel-config ring 69 KB from 0xa3a0: 5 sender programs per wrap on, 6 off; launch ring 8. No ~18-program
+          cycle. Neither kcb nor launch slot separates slow from normal.
+        - Only unicast_write rows ever go slow (0/96 fused_atomic_inc, 0/96 scatter in 7 runs). Slow iterations sit at
+          positions 1-5 of a 6-iteration block, mostly 2-4, almost never the first. Hypothesis: a state that builds up
+          over consecutive unicast_write iterations. WRONG (830): no build-up with write rows only.
+        - Proposed, not run: yaml-only reorder A/B (write rows only; write block moved). Words-vs-programs build on
+          hold (its ~18-count premise is gone).
+      - Row-order checks (job 830, results/cisp_orderab_20261105-101713; report (g)):
+        - S stock control 33/96 slow on, 0 off. B (write block last): the slowdown moves with the block, with the same
+          in-block positions.
+        - A (write rows only): no build-up; slow at positions 2-4 of each 6-iteration size group (around the
+          num_links 1 -> 2 switch), never the group's first two.
+        - C (one write per row, tiny fused rows between): 28/96 slow on, and 14/96 slow OFF at the same ~0.953 level
+          (first L1 writes of a size group). The slow state is not a profiler cost; the profiler changes which
+          iterations land in it. The stock order keeps the off arm out of it.
+        - Open: which flow or core is slow (per-direction rows or per-sender zones), and what setup differs between
+          C's slow and normal off-arm writes.
+      - AICLK check (offline, report (g)): slow iterations take longer in host time by about the cycle excess (+0.42 ms
+        vs +0.44 predicted at 100k packets; +1.5-1.7 ms vs +1.7 at 400k), so AICLK is unchanged within ~1% and the
+        slowdown is real. The zone CSV has no ns; the sync check (AICLK stats) was off and needs a router rebuild.
+        Next (step 1, design first if a build is needed): router state at iteration boundaries. Lead: the logs'
+        per-router telemetry shows two discrete router rates (~48.45 / ~46.3 GB/s) within one iteration.
+      - Per-router tally (offline, 826-830, every arm; report (g)): routers are at baseline or +4.6-4.9% (~+5.5
+        cycles/packet), nothing between. Slow iterations have 1-25 low routers, random subsets (every router low
+        somewhere; no stable set across arms; N/S = E/W, T = R; P1 slightly more than P0). Not chip-wide (2084 of 2113
+        chip groups partial). The CSV flag = a low router sourced on chip 7/3/6, with 0 exceptions, because senders end at
+        a nearest-neighbor end sync. 823's "all senders on a chip run long" is that sync, not a chip-wide state. Next:
+        design to the coordinator (not a stable subset).
+      - X1 + route analysis (job 831, results/cisp_flowab_20261105-162525; report (g)): one flow on one link never enters
+        the state (0/640, on and off); with two links of a pair only the link-0 router does, on the on arm for the S/N
+        and E pairs from chips 1, 2, 5, 6 only (80/320 on, 10/320 off). Routes (debug-logging mock: sender (15,10) link
+        0, (15,9) link 1, receivers (1,2..), NoC0 out / NoC1 in) share no NoC link in X1, and c1->c5 (low) and c0->c4
+        (never) have identical geometry. Neither (A) as NoC link sharing nor (B) as a lone router; chip-specific with
+        two active links. Open: eth-port / chip-specific cause; design to the coordinator.
+        WRONG as a condition (user review): "two links of a pair" is too narrow. The NX 1-link rows slow too (2-3 links
+        per chip, one per neighbor); only a lone flow per chip never slows. Condition: two or more concurrent flows on a
+        chip, any arrangement, chip-dependent, per-packet cost (2048 B = 4096 B in cycles/packet). Next (after Galaxy):
+        the per-packet resource concurrent flows on a chip share (outbound sender writes + acks into routers, inbound
+        deliveries / acks / TRID flushes, eth subsystem); yaml discriminator: send on one link while receiving on
+        another, vs send on two links with nothing inbound.
+      - X3 (job 832, results/cisp_flow3ab_20261105-165255): Lone 0/48; two outbound flows from one chip (SO) 5-6/48 on,
+        the E router only (sender core (15,10)); one out + one in (SR) 0/48; two inbound (RR) 0/48; NX control 42/96 on,
+        0 off. Outbound concurrency is the trigger; inbound isn't. In SO and X1 the flow from core (15,10) slows while
+        (15,9) sends. Next: SO with swapped cores / on chips 0 and 3 (design to the coordinator).
+        Correction: benchmark mode splits senders by direction (split_senders_by_direction_for_benchmark): NX runs one
+        sender core per (direction, link) (823 zones: chip 0 has 3 senders at num_links 1); my mock-based "one core per
+        plane" was WRONG (mock ran benchmark_mode false). X4 (broker 834: SOswap / SOfar / chips 0, 3) queued; X5 (835:
+        one-core arms) is moot: the split makes SO1 = SO2 and NX1 = NXs.
+      - X4 / X5 (jobs 834, 835): every SO arm 0/48 (X3's 5-6/48 doesn't reproduce: swap / far can't discriminate); NX's 20
+        flows written explicitly at 1 link 0/960 router-iterations, while the stock NX write rows in the same job are
+        316/2880. The state appears where num_links 2 rows run (NX's L1 it2 / L2 it0-1 positions; X1's L2). X3's
+        "outbound concurrency is the trigger" marked WRONG. Next (yaml only, coordinator): NX L1-only vs L2-only vs
+        alternating blocks.
+      - Start skew (823 zones, cisp_skew.py): neighbour starts line up within ~20 us (median deviation ~8 us,
+        low-source chip vs neighbour +0.07 us); the slow chip's sender span is +~435 us: the rate is lower all through,
+        not a late start.
+      - X6 (job 838, results/cisp_flow6ab_20261105-171231): NX write rows L1-only 0/48, L2-only 0/48, stock L1/L2
+        alternation 38/96 (on; all 0 off). Positions: L1 it1-2 after an L2 block, L2 it0-1; both planes, every direction
+        and chip. The state needs the switching between link counts (link-1 routers idle after traffic, then active).
+        Next (coordinator): read-only look at the idle link-1 routers in an L1 row after L2 (pc_sampler), or an idle gap
+        between L2 and L1.
+      - X7 (job 839, results/cisp_pcs3_20261105-173030; read-only router PC samples, profiler on): the idle link-1
+        routers' ERISC0/1 PC shares are the same in (i) L1-after-L2 (slow and normal iterations) and (ii) L1-only
+        (passes ~83.5%, telemetry ~10-11%, end_round ~3%, link_sync ~1%; holds_packet 0.7-1.2%, noise); the active
+        routers' low and normal iterations match too. Idle gap after L2: L1 it0 slow in 9/16 (stock: 0/16): the state
+        builds with time at num_links 1 after L2, not with traffic. Next (coordinator): eth status / error counters of
+        the idle links over time, (i) vs (ii).
+      - X8 (job 842, results/cisp_ethpoll_20261105-174703; consolidation/eth_poller.py, read-only, no perturbation seen):
+        links clean (PCS up, ERR_STAT 0, no retrain / CRC / uncorrected FEC / resend / drop / recovery); idle link-1 TX
+        background (txq0/1 1.347 M seq packets/s, txq2 12.8 k transfers/s, hypothesis: link-sync) and FEC corrected
+        (~6.5 k/s) the same in slow / normal / L1-only. No link-level counter tracks the slow state.
+      - Worker cores (offline, 823 zone CSV, cisp_cores_check.py): identical per row type in every iteration, with or
+        without a preceding L2 block (allocator reset per test iteration). Not a placement effect.
+      - **PARKED 2026-11-05 (coordinator).** Summary in report (g) "Parked": established (discrete per-flow state,
+        trigger = L1/L2 alternation, builds with time at L1 after L2), ruled out (relay knobs, AICLK, placement, skew,
+        concurrency alone, router code paths, eth link errors / background TX, worker cores), remains (profiler
+        non-router parts, NoC/NIU state, MAC/PCS, RXQ; profiler-off only in 830 C). Next A/Bs listed there; not queued.
+  Galaxy 200G PR refresh (Slurm 179467, bh-glx-110-a10u08, all 24 steps pass): report/data/bandwidth_glx_pr.json
+  (build_glx_pr.py, 238 records); suite means main/port: mesh 1.33, linear 1.22, ring 1.30, torus 1.52.
+  P150 PR refresh (lb2 179436 / 179445 / 179492): report/data/bandwidth_p150.json pair p150pr-*.
+  PR gap runs (2026-11-05; pr_perf/mk_pr_gap_yamls.py): 400G lb2 179740 (gapa: scatter / fused 256-4352, atomic_inc
+  E/W + N/S, MeshFwd) and 179741 (gapb: XY-torus wrap E/W 2x4 and N/S 4x2, ring 1-hop, 256-4352) -> bandwidth_p150.json
+  (p150pr-{ptype,txw24,txw42,ring1}-*, 88 records); 200G Slurm 179863 (512 / 4096 B rows; 179743 lost pass b to an
+  ENOSPC on /data, superseded) and 179756 (NX write 1 and 2 links, 256-4352) -> bandwidth_glx_pr.json (build_glx_pr.py
+  179467 179863 179756). Observation, no cause: on 200G wire-bound sizes the port is 0.4% (mesh) to 1.4% (NX) below main.
+  PR latency (main d2bd12fcf1f vs port e7fe1899049, same job, passes a/b): 400G lb2 179906 (a08u28, exp_latency.yaml),
+  200G Slurm 179907 (a02u14, pr_glx_latency.yaml incl. Lat7HopNS) -> latency_samejob.json latpr-{p150,glx}-* (56 records).
+  Completion-proof counts (job 800, RECEIVER_TUNING.md §7): 0 cap hits in 598k group proofs, none above 8 reads;
+  only 4352 B write deliverers need 5-8 reads; atomic / fused / scatter always pass at read 1. §5.2's "cap binds on
+  FWD rows" marked WRONG. Ring G 1 checks: about 20% deferred on the deliver-only receivers. Open: what c128 changes
+  on FWD rows (not the proof); FWD_MixCmd c128 pass b +37 outlier.
+  deliver_other inline A/B (job 799, RECONCILE_DEVICE.md §9): inlining slows every common 1-hop row by 0.4 to 5.6
+  cycles/packet (atomic +3.7, scatter +5.5, fused +2.5); only the receiver images change; all fit. As built (noinline) is the faster arm.
+  Done: the study's test-infra changes on 6dad5fec638 as an uncommitted patch, kept apart from the router series
+  (fabric_exp/streams/port/test_infra_6dad.patch, README there; worktree /home/aagarwal/tt-metal-port-testinfra,
+  built, mock-vetted; optional adapter_vc2_credits_6dad.patch for VC2 benchmark workers). For the user to handle
+  separately.
+- **/data inodes at 100% (2026-11-05):** the shared FS has ~0.7-1.1M of 400.6M inodes free. Ours is 4.82M (1.2%):
+  - this study ~3.68M: frs-glx/jobs 1.63M (66 jobs; ~0.6M of it kernel caches), regress/trees 1.05M (6 built trees),
+    frs-glx/trees 0.84M (38), lb2 0.15M;
+  - the user's own work 1.14M (tt-metal clones, /data/aagarwal/slurm; memory: leave alone).
+  - Inventory with ages and references: consolidation/data_inodes_20261105.tsv. Nothing deleted; awaiting the user's
+    decision.
+  - mainline_cb42eb7 is complete: restaged at 2026-11-04 08:00 after a 06:40 stage that hit the inode limit. It's the
+    last-pass tree for 2x8 (172825).
+- **P10-mm-2x8 router sync failure is not node-specific** (2026-11-05 08:44).
+  - **The failure:** Fabric Router Sync timeout on Device 0, master eth chan 3 and sub chan 2 at STARTED, the others at
+    REMOTE_HANDSHAKE_COMPLETE.
+  - **Where it occurs:**
+    - 57c55f98118 on a07u02 (177688);
+    - c3c1813c42a on a07u02 (177459, 177689, and the 06:58 rerun);
+    - c3c1813c42a on **a08u08** (177969).
+  - **Last passes:** e5b75d1fbcd on a10u14 (00:08) and cb42eb72501 on a04u14 (172825).
+  - The "node-linked a07u02" claim is marked WRONG in TEST_PLAN §4.5.
+  - **Commits since e5b75d1fbcd:** 6dad5fec638 decode, cc63d9b0284 review fixes, 330a2628861 comments, 57c55f98118
+    comment, then the allocator and TRID commits.
+  - **Open, tree vs node vs order:** G-PORT-ORD A/B 178014 (e5b75d1fbcd on a08u08) and 178007 (57c55f98118 on
+    a10u14). Not a push gate since the 662331732ce push.
+  - **G-PORT-ORD results (2026-11-05 ~09:27):**
+    - 2x8-first (right after the job-start reset): PASS on both (57c55f98118 / a10u14, e5b75d1fbcd / a08u08).
+    - 4x4: stability PASS on both.
+    - 2x8-again (after 4x4): no reading on either; the stability command died on router JIT compile errors.
+    - The sync failure did not recur.
+    - The JIT errors appear only in these two jobs: 0 in all 24 earlier P10 steps; 5-52 per step here (2x8-first,
+      4x4 then 2x8 order). Mechanism open.
+    - Not the tree, not one node.
+    - Every sync failure followed a 4x4 step in the same job (two earlier 4x4 -> 2x8 jobs passed). Order, state or
+      intermittency remains.
+    - Next, the coordinator's call: the same order with the JIT cache cleared between steps, or 4x4 -> 2x8 repeated
+      on one node.
+- **JIT compile errors in G-PORT-ORD (178007, 178014; 2026-11-05) are harness noise, not router failures** (coordinator).
+  - **Seen:** router builds fail with "get_named_compile_time_arg_val not declared" or "kernel_main not declared" (a
+    kernel directory's generated header missing or empty), mostly in the pass-through command, once in 2x8-again's
+    stability command (178007).
+  - **Harness stays CI-like:** one TT_METAL_CACHE / TT_METAL_HOME for all tt-run ranks; no per-rank caches.
+  - **Mechanism open:** genfiles.cpp writes the generated headers via FileRenamer (tmp + rename), so it isn't a plain
+    write race. Look into it only if it recurs.
+  - **Reading:** 2x8 is read from the stability command's fabric init.
+- **120-c host mapping stall, bh-glx-120-c02u14** (G-PORT 177902, BATCH c3c1813c42a, REGRESS_GLX_SC36_2 window,
+  2026-11-05).
+  - **P10-mm-4x4:** all 3 ranks start their devices (UMD 08:26:19.25), pass the seed broadcast and log "Using custom
+    mesh graph descriptor ... bh_galaxy_split_4x4_2x4_3_mesh". Then nothing until the 600 s kill (HANG, capture rc 0).
+    A healthy run logs "Physical groupings ..." 0.34 s after that line (a07u02, 177689).
+  - **P10-mm-2x8:** stops at the same line (08:38:11; still silent 40 s later).
+  - **Where:** the host control plane's physical grouping / topology mapping, before any router is built or launched.
+  - **Hypothesis:** a mapping stall specific to this 120-c Galaxy's links. Not the router; not probed (the user's rule).
+  - **Batch answer:** the 110-a hedge 177969 (bh-glx-110-a08u08).
+- **Galaxy multi-mesh HANG on e5b75d1fbcd** (Slurm 176161, bh-glx-110-a09u02, 2026-11-04 23:35): P10-mm-4x4 went silent
+  on all 3 ranks right after UMD device start (killed at 600 s); P10-mm-2x8 the same. The cleanup push is held. Tree or
+  node not yet known; the port agent triages offline, then reruns mainline_cb42eb7 (PASS in 172825). Note: the pushed
+  22cdb1e55c3 (drop5) was validated on the P150 only.
+- **Decode A/B on the port: measured** (2026-11-05, agent a6e85079ff596efce; lb2 176226 on a07u28; SLOT_ALLOCATOR.md
+  §12.13, report fabric_exp/port_slots/report_pvs_176226.md). Reading both route bytes makes the 2x4 mesh N/S rows
+  faster (isolating: atomic -7.6, scatter -7.5, writes -1.0 to -1.7 cycles/packet; 96-97% of the atomic and scatter
+  gaps to the study). The 4x2 torus N/S rows are faster by -10.0 to -11.9 (net, confounded by a per-proof stack
+  reload, bound about 2), 0.4-0.6% faster than the study. E/W, 1D and NeighborExchange rows do not move. Next, for the
+  user: a separate port commit with the both-byte decode; RECONCILE_DEVICE §7 A/B-1's Galaxy N/S rows and core census
+  before the upstream PR. Mesh write rows keep +0.9% (4352 B) / +2.8% (16 B) to the study in both directions (not the
+  decode). **Resolved 2026-11-05** (a09u32 job 798, RECONCILE_DEVICE.md §8.1): the test sender kernel. With the
+  study's stream loop in the port's sender and router images identical, the port is -0.2/-0.3% (4352 B) and -1.7%
+  (16 B) against the study. The 16 B lead is a hypothesis, cross-host.
+- **Per-channel TRIDs on the port** (2026-11-05, agent a6e85079ff596efce): worktree
+  /home/aagarwal/tt-metal-port-trid, branch aagarwal/fabric-router-mainline-trid at f9c258d280b (local, unpushed).
+  Offline gate and device A/B in TRID_ALLOCATION.md §7. P150 lb2 176756, rule vs uniform:
+  - 4x2 torus N/S +1.0% to +1.6% (the decode-site spill sits there);
+  - torus E/W -0.5% to -0.8%;
+  - ring 0.0%; mesh and 1D (codegen only) within ±0.1%.
+  Hypothesis (not isolated): the spill, not the ID policy, costs the N/S rows. An A/B keeping 16 IDs without the
+  reload would isolate it; its design goes to the user first.
+- **Staged slot allocator on the port** (2026-11-04/05, agent a6e85079ff596efce): worktree
+  /home/aagarwal/tt-metal-port-alloc, branch aagarwal/fabric-router-mainline-alloc, commit c53b5a5cbbd (local,
+  unpushed). Per-VC forwarding units and a host guard after the 176405 hang (SLOT_ALLOCATOR.md §12.14).
+  - Device A/B against tier (harness: test_infra_6dad + adapter_vc2_credits_6dad, local, router images unchanged):
+    P150 lb2 176714 and Galaxy 176753, both clean.
+  - Met: VC1 / VC2 (P150 and Galaxy; -19% to -59% medians), 1D 4352 B, ring, NeighborExchange.
+  - NOT met: 2D 4352 B (forwarding rows +5.5% to +9.0%: staged 20,15,16 vs tier 17,16,16), 2D 3072 B (1-hop N/S
+    +3.5%), 1D 3072 B (1-hop E/W +1.7%). The user decides; the allocator is unchanged until then.
+  - 2026-11-05: tweaks (a)/(b) and the 32-slot cap in; then the 1D leftover order (user): 1D 26,25,32 at 4352 B and
+    43,42,32 at 3072 B (SLOT_ALLOCATOR.md §12.15). port-alloc 9ce0acbeaba; final pair on 57c55f98118: allocator
+    07322400fd6 + TRID c3c1813c42a. Offline gate passed. P150 lb2 176985: all four 1D / ring suites met the 1% bar
+    (1D 4352 B median -7.3%, 1D 3072 B -0.3%, rings 0.0%; the old 1D 3072 B +1.7% loss is gone). Galaxy 176994
+    ring-jam sanity: clean, no jam level; 8-ring 3584 / 4352 B -8.3% / -5.7% against tier, the rest within 0.1%.
+    Shas sent to the coordinator; tuning agent told 9ce0acbeaba. Next: the port agent cherry-picks the pair.
+- **Study vs port reconciliation** (user, 2026-11-04): the port (22cdb1e55c3) drifted from the study's v4txa11 and
+  was only ever checked against main. Known items: the port kept main's branchy route decode (MAINLINE_PLAN.md:116,
+  marked WRONG: LEDGER E1-18/E1-19 measured that shape at +5.7 to +6.7 on v3 N/S rows), and the port runs main's tier
+  slot table rather than the study's v4 rows. (Narrowed 2026-11-04 by mock captures of both hosts: 2D mesh/torus at 4352 B get the
+  same rows, 17,16,16; 1D line/ring differ, study 26,25,32 vs port 16,16,32; VC1/VC2 and other sizes in RECONCILE_HOST.) Device-side list: agent a4dc906ee7c1faf44 -> RECONCILE_DEVICE.md;
+  host-side per-config args diff: agent a6e85079ff596efce -> RECONCILE_HOST.md; both offline. Then: the user decides
+  per item; A/Bs for anything landing in the port run on port builds; the TRID per-channel A/B is redone on the port
+  (the study-tree result and hypothesis C describe the study tree only).
+  - Device list done (2026-11-04, RECONCILE_DEVICE.md; tools and data in reconcile_device/): 44 rows, (a) 12 /
+    (b) 22 / (c) 10 / (d) 0. Open for the user: A/B-1 decode both bytes on the port (offline check: the port's N/S
+    receivers load the X byte behind the Y branch, the study's load both together); A/B-2 cb42eb72501's register
+    allocation shift on 44 Galaxy pass-through receivers (optional). Everything else: keep the port's.
+  - Write gap after the decode (2026-11-05, RECONCILE_DEVICE.md §8, offline): on the 2D mesh routers the E1 write and
+    forward paths are identical study vs port 6dad5fec638; E0 differs only by aa11a8786df's send placement and
+    7cd3c13a0db's credit (both measured faster on the port). Nothing in router code explains the slower 1-hop rows;
+    candidate: the arms' different test kernels (study's stream benchmark loop vs main's sender). Proposed A/B (not
+    submitted): 6dad5fec638 with and without the study test infra on pvs_ns + pvs_c2d, one lb2 job.
+
+- **Receiver tuning sweep on the port** (user via coordinator, 2026-11-04; RECEIVER_TUNING.md): IDLE_PASSES_BEFORE_
+  PARTIAL_CREDIT (1/2/4/8) and COMPLETION_PROOF_MAX_CHECKS (8/32/128), plus a delay-perturbation pass on the idle
+  arms. Worktree /home/aagarwal/tt-metal-port-tune (22cdb1e55c3 + local fabric_exp/port_tune/port_tune.patch, never
+  committed), staged at /data/aagarwal/lb2/trees/port_tune_22cd. Offline gate passed (default arm = unpatched port on
+  1,328 images; every deadlock-avoidance receiver identical across arms). lb2 176267 idle, 176268 proof, 176269 pert
+  all done (§5). Proof cap stays 32 (coordinator). Idle passes: 1 / 2 regress 2D and amplify sender timing; 4 vs 8
+  held until a rerun on the staged allocator's slot rows (planned, RECEIVER_TUNING §6; waits for the allocator's
+  device A/B, i.e. the user's go). 2026-11-05: the rerun on 4b524653490 (lb2 176425) hung at its first data-checked
+  run like the allocator's own A/B 176405 (staged arm, no tuning patch): an allocator problem, not the idle arm;
+  the rerun waits for the allocator's fix (RECEIVER_TUNING §6). Comment texts proposed in §5.4 for the port agent. 176008 and 176130 stopped at the old link check
+  on ports outside the fabric; the harness now gates on fabric links only (LB2_HARNESS.md "Link gate"). A value changes only on a full census with no suite regressing.
+
 - **DeepSeek CCL perf matrix** (user, 2026-11-02; **parked by the user**, local SDPA test edit reverted): ccl_trace_perf_matrix.py on main's router (main_fw, baseline),
   v4rxo0b and the receiver lead candidate v4rxf4. Payloads 2048/4096/4352/8192/15232; SDPA tuned only. ttnn built in
   build_ttnn. Runs via ccl_matrix_runs.sh ROUTER CCL [LINKS], PASS=a then b (reversed router order). Results in
@@ -351,6 +727,111 @@ changes.
         - lb2 171206 was cancelled before it started.
         - Next: v4txa11k, round-sampled (nothing in the pass; one sample per 32-pass round; fractions), off
           byte-identical, cost measured off vs on, a correlation argument or jitter.
+      - **v4txa11k Galaxy (171300): the room test does NOT separate, so stop on C2/C1 as designed.**
+        - Jam rows (8-ring 3584/4352 B): room >= 8 in 0% of contests, room < 2 in 95-96%; in-ring ready with no far
+          slot 72-78%; backlog 11+. It is a full-ring state.
+        - Control 3072 B: in-ring no far slot 29%, backlog 2-3.
+        - The k cost on the 8-ring: +3..8% (a confound: the worker loses 1 slot).
+        - RING_JAM_FIX §3's mechanism (1:1 arbitration with far room) and §4 are marked WRONG; so is FULLRING §8.13's
+          "check sees free slots" detail. The full-ring reading stands.
+        - New candidate separators from the data: in-ring backlog depth or in-ring credit starvation (C3-like;
+          rejected earlier by reasoning only). The P150 counts (lb2 171279, pending) decide them; the agent is
+          pre-registering predictions and a rule. Taken to the user.
+        - **v4txa11k built (2026-11-03; RING_JAM_FIX.md §8.2):**
+          - One sample per round at a rotating pass index (13 r + 5 mod 32), as jitter. A round-boundary sample
+            can't be argued uncorrelated: the boundary is a pause, and a 32-pass round phase-locks to periods that
+            divide it.
+          - Sample and flush are out of line.
+          - Off is byte-identical (408 / 408, 1056 / 1056). On passes the headroom check on all 59 exact pairs
+            (ring +796 B, torus +868 B).
+          - Tree `trees/v4txa11k_1103`; Galaxy configs a11k / a11kam; P150 `VARIANT=v4txa11k frg_jam_p150_runs.sh`.
+          - Commands sent to the coordinator; the decision rule is unchanged.
+          - 171203 (v4txa11j) counts are recorded in §8.2 as a perturbed reference. Its 4-ring row was not slowed and
+            showed room >= 4 in only 24-26% of contests.
+        - **Galaxy 171300 (v4txa11k, 2026-11-03): the room test does NOT separate (RING_JAM_FIX.md §8.3).**
+          - Jam rows (8-ring 3584 / 4352 B): room >= 8 in 0% of contests, room < 2 in 95-96%, in-ring backlog 11+.
+          - Per the rule: stop, no C2 / C1 build, no fallback without the user. The P150 half (lb2 171279, pending)
+            cannot change the verdict.
+          - Cost: +8% (3584 B) and +3-5% (4352 B) on the 8-ring, other rows <= 2%. Confounded by the on-arm's worker
+            slots 26 -> 25.
+          - Marked WRONG: §3's mechanism for these rows, §4's "far ring mostly free", predictions 1, 3 and 4, and
+            FULLRING_MCAST_GAP.md §8.13's "the check sees free slots".
+          - Open for the user: the next step on the ring jam.
+        - **P150 lb2 171410 (a07u28, via the new `lb2_run.sh -n any`; RING_JAM_FIX.md §8.5):**
+          - Rule S (in-ring ready with no free far slot) SEPARATES: Galaxy jam 59-78%, against P150 11-32% and the
+            Galaxy 3072 B control 29%.
+          - Rule B (backlog >= 8) does NOT: P150 Unidir and Ring write rows are at 78-100%.
+          - No cost flag: RingMulticast write +4.2% / +1.9%, others <= 0.2%.
+          - §5.3's C3 rejection reasoning and the §8.4 backlog predictions are marked WRONG.
+          - Next step (a rate-based refusal trigger? its own A/Bs) is the user's; no build.
+    - **Bubble-threshold sweep (user go, 2026-11-03; RING_JAM_FIX.md §9; variants/v4txa11t):** injection needs T free
+      far slots, T 2..6, one T per arm. Off is byte-identical to v4txa11.
+      - Galaxy 171672 (a03u08): 45 / 45 steps.
+        - 8-ring 3584 B: T5 -24%, T6 -27% (below main's 261).
+        - 8-ring 4352 B: -2 to -4% (main 263.8 stays far).
+        - 4-ring 4352 B: +4%.
+        - Half ring 4352 B: -1 to -5%.
+        - Torus: -0.4%.
+      - P150 lb2 171629 (a07u28, dyn-slots host stage full-20261104-001304): every row <= 3%, except 4x2 multicast,
+        which is noisy.
+      - Validation passed in every arm on both systems. No hangs.
+      - Per-axis T and follow-ups are for the user.
+    - **Slot depth x injection threshold (user-approved; RING_JAM_FIX.md §9.3; Galaxy 171994, a08u02):** 14 configs,
+      99 / 99 steps, validation 10 / 10 in all. Slots logged as asked.
+      - 8-ring 4352 B reaches 254.3 (-32.5%, below main's 263.8) with a 16-slot receiver: C 16/51/16, D 8/59/16,
+        E 4/63/16 at T 2 or 6; B 42/25/16 in pass b only (pass a 364).
+      - Today's slots at T 16 also give 254.2.
+      - F 8/43/32 (user rule with today's receiver) stays at 375 at T 2, and 304 at T 6.
+      - 4-ring 255 and half ring 254 with the same configs.
+      - A 4-slot worker costs ring 1-hop +75% (437).
+      - The rule decision is for the user.
+    - **Rule costing (RING_JAM_FIX.md §9.4):**
+      - Galaxy 172155 (a08u02): A16 and C2 fast in both new passes (8-ring 4352 B 254.2-254.4; four of four passes over
+        the two jobs). Torus T 8 vs T 2: +4.0% at 3072 B, +1.0% at 4352 B.
+      - P150 on the LBs: a07u28's chip 6 eth (7,1) never trained in 172149, 172157 or 172175 (172175: the new poll
+        with 3 resets), and also failed the allocator's 172043. The run moves to the a09u32 broker (commands sent).
+      - lb2.sbatch's link check now polls 90 s per reset, with up to 2 more resets.
+      - frs_glx.sbatch and frs_glx_torus.sbatch are deprecated (guarded).
+      - P150 broker 673 (a09u32, dyn-slots host build):
+        - A16 and C2 cost at most 0.6% on every P150 ring row; ring 1-hop scatter +0.0% / +0.2%.
+        - Torus T 8 costs +2 to +14% on every 2x4 / 4x2 write row; scatter rows 0%.
+        - Rule decision: the user's.
+    - **Fraction or cap (RING_JAM_FIX.md §9.5; Galaxy 172449, P150 broker 710):**
+      - Galaxy jam rows are fast with R - T = 14-16 at every R (C2, A16, G48).
+      - R - T = 8 (C8) is fast but 3-7% slower and +7% at 8-ring 3072 B.
+      - R - T >= 30 (A2, G2) is slow; G32 (T/R 0.5 at R 64, R - T 32) is mostly slow.
+      - P150: C2, A16, G2, G32 and G48 within 0.9%; C8 +2 to +9% on write rows.
+      - v4txa11t: T 2..62 with T < R, ring-only validation yamls, 3584 B max-packet rows for R 64.
+      - Rule choice: the user's.
+        - **Ring-jam rule decided (user, 2026-11-04):** T = max(2, R - 16) on deadlock-avoiding routers. The worker injects
+  only while the far VC0 receiver holds at most 16 packets. R x T sweep §9.5: R-T of 14-16 fixes the jam at R16/32/64;
+  T = R/2 fails at R64; R-T = 8 over-throttles. Independent of the slot-need sweeps (the rule takes R as input).
+  Implemented by a fresh agent on branch aagarwal/fabric-router-mainline-bfc off 4db4f45790b: host named arg plus the
+  router's injection threshold; images identical wherever T stays 2; P150 + Galaxy validation and jam rows.
+  - **Built and gated (2026-11-04, RING_JAM_FIX.md §10):** commit ac86bf0f116 (not pushed). 49 configs: 5,345 router
+    images identical to 4db4f45790b, 170 differ, all 32-slot rings (T 16), one immediate each, +0 bytes. static_assert
+    2 <= T <= R (user).
+  - **Device results (RING_JAM_FIX.md §10.3):**
+    - Galaxy 172983 (bh-glx-120-c08u08): validation 10 / 10 on both trees. Jam rows -23% to -28% (8-ring 3584 B
+      310 -> 228.5, 4352 B 374 -> 269.5, 4-ring 324 / 340 -> 255, half ring 332 -> 253.6). 3072 B control and 1-hop flat.
+    - P150 758 / 759: validation all pass; ring rows -0.6% to +0.1%; torus rows unchanged.
+  - **Next:** the user reviews the device results; then the coordinator pushes ac86bf0f116 (not before).
+  - **Open:** ring + Tensix mux keeps the mux's 2-slot check, so the cap does not apply on mux rings (recorded, not
+    changed).
+  - **Cleanup after the push:**
+    - worktrees /home/aagarwal/tt-metal-mainline-bfc (branch) and -bfcbase (4db4f45790b), builds and .cpmcache;
+    - /data/aagarwal/regress/trees/bfc and /bfcbase, about 49k files each.
+- **Facts review with the user (2026-11-03):** C2 (in-ring burst) and C1's room test as designed are ruled out
+          by the measured state: the jam has 0-1 free far slots in 95-96% of contests, so a burst stops at once and
+          room >= R never fires. Only the probe's action (hold injection) is shown to work.
+        - **Injection-threshold sweep (user go, 2026-11-03; no predictions, per the user):** `variants/v4txa11t`, the
+          bubble rule's injection threshold T in {2 (off), 3, 4, 5, 6} through one env switch (no host change),
+          off = v4txa11 byte-identical. Galaxy jam rows + controls (frgap style) and P150 probe cost rows + XY torus
+          (lb2 -n any), two passes, validation first. Ring agent. Per-axis T or anything further goes to the user.
+          - **Galaxy 171672 (a03u08; RING_JAM_FIX §9.1):** 45/45 steps, validation 10/10 per T. 8-ring 3584 B
+            306 -> T5 234 / T6 222-227 (main 261); 8-ring 4352 B only -3.6% at T6 (375 -> 361; main 264, probe 254);
+            4-ring 4352 B +3.8% (324 -> 337); half ring 4352 B -0.7..-4.8%; torus -0.4%; 3072 B and 1-hop flat.
+            P150 cost run lb2 171629 pending.
     - 562 confirms the trimmed MeshMulticast replay step in the same job: write 136.8 -> 139.2 (+2.4), scatter +1.1,
       Mesh3HopEW flat. 566 splits it at X4/X8. 561 (J7) is clean: main reproduces 476/477, A11 combined +1.2..1.8
       vs v4rxg3 cross-run (fits the parked 507 VC2 X0..X4 step).
@@ -368,6 +849,12 @@ changes.
     v4txa11 is queued as 560. Waiting on the user's go:
     v4txa11v (3-VC gate probe) and v4txa11d (delay hooks for the headroom chart).
   **Regression testing for landing (user, 2026-11-03):**
+  - **Main baselines (d2bd12f, baseline agent):**
+    - a09u32: LB-L0-a 7/7 PASS. LB-L0-b PASS except B0-eth's 2 slow-dispatch cases (TT_FATAL tt_cluster.cpp:1569
+      "connects to a remote mmio device"; main-only, to re-run once for flakes). LB-L1 B1-apc PASS (131).
+    - Queued: B1-night and the rest of L1, L1P (2 passes), L2, LB-P telemetry-off fabric perf (612/613).
+    - Galaxy plan OKed: G-L0-a + G-L0-b now, then G-P + G-L1, then G-L1P. G-L2-a/b held until the env report
+      shows the model mounts. At most 2 of the agent's Galaxy jobs at once (the quad 171264 stays pending).
   - **TEST_PLAN.md DONE (559 lines; for user review).**
     - Two modes: the shared commits with main's router (byte-identical expected) and the router commits with the new
       router. CI exercises the new router only via a throwaway branch that makes it the default.
@@ -375,8 +862,13 @@ changes.
       models/model_targets.yaml (15%). The main-vs-new thresholds (1% fabric / 2% model) are proposals.
     - Gaps: exabox is BH-only (WH is CI-only); P300 has no coverage; BH Galaxy has no fabric BW golden; Nightly fabric
       fixtures don't run on BH boxes in CI; the TG perf scripts are in no CI list.
-    - **Questions for the user:** may we use bh_qb2 / bh_lb_single; can a 1-card QB2 stand in for P300; telemetry
-      on (CI default) vs off for main-vs-new perf.
+    - **Answered (user):**
+      - P300 tests held for now.
+      - bh_qb2 and bh_lb_single may be used if available, but aren't needed: QB2 (2x P300) is covered via CI dispatch
+        (same commands per SKU; the fabric goldens live there), and bh_lb_single is overflow LB capacity only.
+    - **Telemetry answered (user):** OFF for main-vs-new fabric perf. Production has it disabled by default, so CI
+      should keep it off too. CI's perf goldens were recorded with it on, so propose re-goldening with it off to the
+      team.
   - (was) **TEST_PLAN.md (the mainline-audit agent, read-only).** Relevant tests by level:
     - L0: fabric gtests / test_tt_fabric yamls / stability / ubench / infra;
     - L1: CCL functional and perf;
@@ -407,8 +899,26 @@ changes.
   - Kernel name: reuse main's (fabric_erisc_router.cpp); the new router replaces main's implementation.
   - WH bring-up: the user does it with another agent on a WH machine after the push. The notes are in
     consolidation/WH_BRINGUP.md.
-  - Strategy (proposed to the user, pending): checkpoint the study branch (no merge of main); a mainline worktree on
-    latest main; baselines on main right away; port commits 1-5 with bytecmp gates; the main-config parity check.
+  - Strategy (user go on 1-3, 2026-11-03):
+    - Checkpoint 13 committed and pushed: e569c5deb20 on origin aagarwal/fabric-router-study, which also carries the
+      unpushed checkpoint 12. Hang captures and .tgz are now gitignored.
+    - Mainline worktree /home/aagarwal/tt-metal-mainline, branch aagarwal/fabric-router-mainline at d2bd12fcf1f
+      (porting agent).
+    - Main baseline worktree /home/aagarwal/tt-metal-main at the same commit (baseline agent).
+    - WH may be broken on the branch for now (user).
+  - **Parity (PARITY.md):** gaps besides WH:
+    - VC1+VC2 on one router;
+    - UDM on a torus;
+    - UDM with multi-mesh;
+    - mux with multi-mesh;
+    - the streaming-profiler link-sync hook missing;
+    - never-built configs 7-12 (DISABLE_INTERMESH_VC: production SC4 prefill; Z-port multi-mesh; pass-through;
+      per-mesh tori; express E/W; >16-hop 1D).
+    **User approved (2026-11-03):** lift the VC1+VC2 gate (v4txa11v validated), add the profiler hook (own commit),
+    host TT_FATAL for 3-5 (known gaps), must-pass Galaxy/quad runs for 7-10, offline builds for 7-12 after commit 5.
+    Relayed to the porting agent.
+  - Galaxy scheduling (user): quad 171264 stays queued and single-Galaxy jobs run alongside (Galaxy k telemetry
+    171298, P150 k 171279).
   **Mainline prep (user, 2026-11-03): audit DONE, consolidation/MAINLINE_PLAN.md (611 lines), for user review.**
   - Build the mainline branch fresh on origin/main from listed pieces (13 of the study's 33 changed tt_metal/ files,
     plus dataflow_api_raw.h, the router headers and the kernel); don't rebase the study branch. All 28 host
@@ -916,6 +1426,25 @@ changes.
       requested; not an issue to raise. An X-torus suite for the LoudBox (real row wraps) was offered, not requested.
   - The Galaxy agent was asked to check realization for its 200G torus/ring suites and label any fallbacks.
 
+- **Per-side slack study, main vs the port (user-approved, 2026-11-05; port_tune/slack/NOTES.md).** One-side spin
+  A/Bs on P150 (1-hop E/W 2048/4096/4352 B, NeighborExchange 4096 B 1/2 links), local roots only.
+  - Status: done, including the settling A/B (mcycle spin, a09u32 jobs 840/841, NOTES §10). slack.json has the mcycle
+    set; the wall-clock set (jobs 833/836/837) is kept as `wallclock_*` records, SUPERSEDED. The page's SLACK_HOLD on
+    `port@e7fe1899049` is the coordinator's to release.
+  - Bound sides: port 2D 1-hop both ERISCs (clear-drop knees 4-8 cycles on both, E0 steeper); port NeighborExchange
+    neither; main E0 on every row.
+  - **Follow-up 1, spin floor / N+12 reading:** the study's v4txa11 "E1 slack ~25" at Mesh1HopEW 4352 B (slack.json
+    v4txa11 records) is an N+12 model reading. On the port the full mcycle ladder shows E1 pays +1.3 at D=1 and +4.9 at
+    D=8 (knee 4-8), with c32 matching v4txa11's. Hypothesis: v4txa11 reads the same way. To settle it, run the mcycle
+    ladder (D 1..32) on v4txa11's Mesh1HopEW rows; mark its records WRONG only if it reproduces. Also open: the
+    wall-clock spin's ~10-cycle step at D>=4 (D>=2 on main's E0); the debug wall-clock read was not timed (NOTES
+    §10.2).
+  - **Follow-up 2, main's E0 spin cost:** main's E0 pays ~11 cycles/packet for a 1-cycle mcycle spin (the port's
+    ~1.3), on the regular 2D path and on the speedy NeighborExchange path. The cause is not isolated. Hypotheses:
+    kernel_main code generation around the inlined send copies (+12 instructions at mtx1), or the spin delaying E0
+    work after a send. First isolating A/B: the same spin at a different main E0 site (e.g. after the credit
+    processing), or a code-only arm.
+
 ## Next, in order
 
 1. **Host: correct the worker-role rule in the main tree** (`SENDER_CH_<i>_IS_WORKER_CHANNEL`): the first sender
@@ -1005,6 +1534,433 @@ changes.
   parked by the user 2026-11-03.
 - **P150 ring multicast write +0.9..3.3 (X3k, X3a):** parked by the user 2026-11-03; record in
   V4_SENDER_CONSOLIDATION.md §6.11.
+- **Channel-trimmed MeshMulticast replay +2.4 write / +1.1 scatter, from C0 (the N/S-fix merge):** parked by the user
+  2026-11-03.
+  - Hypotheses ruled out: H-C0a (wait order; v4txa11w flat) and H-C0b for the write row (E0-bound).
+  - The new router is still ~17% faster than main on the row; only trimmed routers move.
+  - Record: V4_SENDER_CONSOLIDATION.md §6.12.
+  - Not adopted: v4txa11w, v4txa11g.
+- **TRID allocator: the NoC transaction-ID count from the HAL** (parked by the user 2026-11-05). Today
+  fabric_trid_allocator.hpp:31 hard-codes `noc_transaction_ids = 16`.
+  - Plan:
+    - Add a Hal field and getter, e.g. `get_noc_num_transaction_ids()`, next to `get_noc_max_burst_size_bytes()`
+      (hal.hpp:640). Set it in bh_hal.cpp / wh_hal.cpp to `NOC_MAX_TRANSACTION_ID + 1` (16).
+    - Set it in qa_hal.cpp to the kernel-usable pool `USER_TXN_ID_MAX + 1` (8). On Quasar the dataflow buffers own
+      IDs 8-15 (dataflow_buffer_config.h).
+    - `assign_transaction_ids(channels, available_ids)` takes the count as an input. The caller
+      (erisc_datamover_builder.cpp:1478) passes the HAL value.
+    - Check with the standalone old-vs-new harness: identical outputs on WH/BH.
+  - Related, same mismatch:
+    - the device static_assert in router_receiver.hpp:83 bounds by NOC_MAX_TRANSACTION_ID, which would allow Quasar's
+      DFB IDs;
+    - FabricMuxV2Config::kTridRingCapacity = 16 (fabric.hpp:399) could use the same getter.
+
+## Dynamic slot allocator (user, 2026-11-03)
+
+- **Rework (user, 2026-11-04):** decent defaults and simple later tuning, not per-case optima; no override
+  mechanism or perf notes in the allocator now; golden table CPU-only if needed. Staged design (needs; receivers
+  first in order, not amount; recalibrate; senders; leftover list) in ALLOCATOR_NEEDS_FIRST.md (v1 kept as _v1),
+  sketch slotalloc/staged_sketch.py. Waiting on: §12.12 on the port (lb2 175938) and the user's D1-D4.
+
+- **Two steps (agreed):**
+  1. Make it dynamic, still one allocation for every router on the chip.
+  2. Adapt it per router on top of the team's builder changes.
+- **Design (agreed):**
+  - A pure allocate_slots(router shape) function: step 1 calls it chip-wide, step 2 per router.
+  - Inputs: arch, slot size, VCs present, channel kinds, mesh dims, ring/line per dim. No measured perf, no link
+    speed, no optimizer.
+  - Byte-budget shares (slot-size invariant).
+  - Minimums: >= 2 per channel; ring receivers bubble 2 + K+2 (K+2 dropped later, see Redesign).
+  - About five weights (per channel kind, VC priority, a long-dim forwarding bump), seeded from measured ratios;
+    a byte-share cap; reasons logged; explicit override kept.
+- **Step 1 (a fresh agent, study branch, off by default):** SLOT_ALLOCATOR.md, a builder switch, an offline
+  allocation table vs tiers and the study's best rows, then a P150 + Galaxy A/B at 4352 and 3072 B slots plus a
+  code-size check. It becomes mainline commit 6.
+  - 2026-11-03: reworked to the user's step-1 decisions (slots; VC ratios 3:1 / 12:1 / 12:4:1; integer kind weights;
+    order a-d; `receiver_round`; min 2, no K+2). SLOT_ALLOCATOR.md, `TT_FABRIC_EXP_DYN_SLOTS=1`, host patch
+    variants/host_dynslots; tools in slotalloc/.
+  - Fit:
+    - worker 2 : forwarding 1, x2 on long dims, receiver 4/5 of its VC's heaviest sender;
+    - 3:1 with largest-remainder VC shares;
+    - at 4352 B it keeps 17,16,16 / 26,25,32 / 19,9,16,5,4, and VC1 first (2:1) gives the measured 18,7,16,7,5.
+  - Rows that move: VC2 on 17,14,16 + 4,2 (was + 2,4); three VCs 17,8,16,5,4 + 3,2.
+  - 2026-11-04:
+    - host rebuilt (broker 648);
+    - LB full stage full-20261104-001304;
+    - Galaxy tree v4txa11_dyn;
+    - mock vet clean (26 checks; code +168 B max, stack unchanged);
+    - submitted the P150 A/B (lb2 171995, a07u28; 171943 stopped on a08u28's /home space) and Galaxy pass a
+      (171946, running); pass b waits for the cap.
+  - Slot-need sweeps (SLOT_ALLOCATOR §12, knee/): sets A-G3, Q, CG, XO done (§12.1-12.9). §12.10 done 2026-11-04:
+    study switch TT_FABRIC_EXP_COMPLETION_GROUP (host rebuild broker 769; Galaxy tree v4txa11id_1104cg; gate
+    cg_gate.py, vet trid_vet.sh CG=) and the k-channel merge sweep (sets M24 / M42 / MG; broker 777, 778; Slurm
+    175221; knee/merge_report.py). Result: G4's cost on squeezed senders shrinks with k and reverses once the merged
+    supply is enough; G4 is fastest for unsqueezed senders; rules A / B (G2 for squeezed depths) do not beat today
+    across the suite. §12.8 / §12.9 depth readings marked WRONG. Open: why G4 is faster on a busy merged link (no
+    tested hypothesis), which ERISC bounds it (needs a one-side A/B); both wait for the user. §12.11 (broker 787): P150
+    1D at 8704 B slots (13,12,16): at 8704 B packets G1 / G2 / G4 all 243.8 cycles (no large-slot exception); at
+    256 B G4 costs a lone worker 6.3% against G2 and wins the 2-flow merge by 11.3%.
+  - The `dynw24` arm decides `worker_cap_slots`. Galaxy (passes a + b, 171946 / 172172): dynw24 never >1% slower
+    than dyn, up to 3.6% faster on the VC1 split at 3072 B. VC1 split 3072 B misses the best row by up to +17% on the
+    inter-mesh rows (both passes; hypothesis VC1 7 / 6 against 9 / 7, not isolated). P150 rows: broker parts
+    `dyn_lb_ab.sh r2 a1|a2|b1|b2` (a07u28 needs an operator; a04u24 busy).
+  - Receiver multiple-of-4 sweep done (lb2 171579, SLOT_ALLOCATOR §9):
+    - mesh rows: 0 except 3-hop scatter +1.5 cycles/packet;
+    - ring: +8 (+5%);
+    - `receiver_round=mult4` on non-ring routers is the user's call.
+  - VC0 receiver floor on 2D routers (user, 2026-11-04; SLOT_ALLOCATOR §10), offline done:
+    - `vc0_receiver_floor=1:5` (default; `off`), share = max(weighted, N/5), then the pow2 rounding; `two_d` from
+      the topology; a missed floor takes what fits, rounded down to a power of 2, and logs both (three VCs at max
+      payload: 2);
+    - "every channel's minimum first" (approved by the coordinator): VC shares raised to their channels' minimums,
+      and senders raised to the minimum take slots back from the largest sender; only max-payload rows that were
+      errors change;
+    - 4352 B must-keep rows unchanged; the 4x4 VC1 split goes 15,13,8,5,4 -> 13,11,16,5,4; every 2D 3072 B row's VC0
+      receiver goes 16 -> 32 (2D 23,20,32; VC1 split 26,10,32,7,6);
+    - host: patch 1 updated (one line, `shape.two_d`); goes into the TRID rebuild (host_rebuild_tridalloc.sh checks
+      both);
+    - the running A/B (lb2 171995, Galaxy 171946, pass b on trees/v4txa11_dyn) measures the pre-floor rows; on a
+      floor library the scripts run dyn / dynw24 with `vc0_receiver_floor=off` themselves;
+    - next P150 / Galaxy round: the `dynfloor` arm at 3072 B (2D 23,20,32, VC1 2x2 26,10,32,7,6) next to the
+      floor-off rows (dyn_lb_ab.sh, dyn_glx_submit.sh add it on a floor library); the vet's dynfloor arm recaptures
+      the VC1 split for the TRID compile.
+- **Transaction-ID allocation that follows the slot counts** (user-approved 2026-11-04; TRID_ALLOCATION.md):
+  - host-owned rule per receiving ERISC;
+  - per-channel G / ids / start named args;
+  - router variant v4txa11id;
+  - switch TT_FABRIC_EXP_TRID_ALLOC=1.
+  - 2026-11-04: rule, host patch (variants/host_dynslots/2_trid_alloc.patch, host_rebuild_tridalloc.sh) and variant
+    built. Offline table: every expected value holds. Offline compile of captured configs (trid_offline_build.py):
+    152 ELFs, E1 +32 B on the VC1 split, stack unchanged.
+  - 2026-11-04 correction (coordinator): a shrinking count rounds down to a power of 2 first (20 -> 16), then halves;
+    the first version sent 20 to 8. Fixed in fabric_trid_allocator.cpp; unit checks added to the offline table (all
+    pass). No captured config or table row changes (host only, no router change).
+  - Host rebuild with the slot floor: broker 649 done (HOST_REBUILT, library has the floor and the TRID switch). lb2
+    171995 cancelled while pending; LB re-staged (src/full-20261104-020334); P150 dyn A/B resubmitted as lb2 172043
+    (a07u28). Galaxy base_1104trid with trees v4txa11id_1104 and v4txa11_1104. TRID mock vet (trid_vet.sh): 728
+    configs, 0 mismatches against the rule, switch on and off; code E0+E1 22,268 max. Slot vet on the new host:
+    floor-off rows = pass a's, dynfloor rows as the table.
+  - Latent harness race in the VC1 suites (coordinator, 2026-11-04; the port's VC1+VC2 "hang", broker 660): the
+    data-checked MultiMeshAllToAll runs 100 packets per flow, no flow control, inter-mesh across the two ranks, into a
+    256 KiB receiver ring (max_configs_per_core 4): 64 slots at 4096 B, 85 at 3072 B. The start sync is per mesh, so
+    one rank's senders can lap the other rank's receivers. Exposed: vc1/{sls_vc1_all,vc1_alloc,vc1_sanity,vc1_split},
+    slotstudy/sls_glx_vc1{,_4x2,_4x4}, slotalloc/yamls/sls_vc1_all_3072 (sls_glx_vc1_3k at 2048 B: 128 slots, safe).
+    A hang or data mismatch there is the harness, not the router. Fix (coordinator-approved: cap, not flow control),
+    applied 2026-11-04 03:48 after 671/672, lb2 172170 and Galaxy 172172 had ended: slotalloc/cap_ring_packets.py
+    --apply, num_packets 100 -> 64 (85 in the 3072 B file). Checked by parsing before / after: in every file the only
+    change is MultiMeshAllToAll's defaults.num_packets, a data-checked test (benchmark_mode off) with no benchmark rows
+    in the CSVs, so no benchmark row's numbers change; every other test and the top level are identical. LB stage
+    refreshed (src-20261104-034921); the Galaxy trees' copies (sls_bdd, sls_bddml, sls_bddsl, sls_lead,
+    v4txa11_1104, v4txa11_dyn, v4txa11id_1104) capped by replacing the files (new inodes, so running hard-linked job
+    copies are untouched). The porting agent uses the same cap for its vc1_sanity.yaml.
+  - P150 validation passed (broker 661, 662: 12 runs; every two-ERISC run logged the assigned IDs, none uniform).
+    Galaxy ring / torus rows: Slurm 172183 (trid_glx.sbatch).
+  - P150 A/B done (broker 671, 672; TRID_ALLOCATION.md §6.2): the ID counts give no gain (ring 0.0%, 2x4 torus -0.5%,
+    VC1 0.1%), lose ~+1% on the 4x2 torus N/S rows and +1.0-1.5% on two VC1-with-floor rows; census neutral; the code
+    change alone +0.3% on census 1D. Galaxy rows (Slurm 172183) agree: no suite gains; torus N/S rows +1.4%
+    (~+2 cycles/packet), as on the P150 4x2. For the user's decision: the rule as built does not pay.
+  - Credit-cadence A/B done (broker 704 safety, 705 A/B; TRID_ALLOCATION.md §6.4): the snapshot loop leaves the
+    rate unchanged (+0.02 cycles/packet). Credits per data packet are 1.000 with 8 and with 16 IDs on every 4x2-torus
+    N/S row (k = 2.00), while 16 IDs still lose 2.0-2.2 cycles/packet: hypothesis A (credit cadence) WRONG. Next, on
+    a go: hypothesis B (occupancy), round-sampled far-ring room.
+  - Port measurements (2026-11-04, user top priority; SLOT_ALLOCATOR §12.12 to be written): worktree
+    /home/aagarwal/tt-metal-port-slots at 22cdb1e55c3 + fabric_exp/port_slots/slot_override.patch (local, never
+    committed: the study's explicit-row switches and slot log), staged lean at /data/aagarwal/lb2/trees/port_slots_22cd.
+    lb2 175938 (port_slot_runs.sh V F2 F1 S: forwarding knee 2D / 1D at 3072 B, receiver and forwarding at 3072 vs
+    4352 B) and 175939 (pvs_runs.sh: port against study, slot rows matched; afterok 175938). All arms mock-vetted.
+  - Host reconciliation done (RECONCILE_HOST.md, offline): slot rows differ on 1D (study split) and VC1 / VC2 (study
+    design rows); T = 16 on the port's 32-slot rings (ring-jam fix) against 2; ID counts identical (uniform rule);
+    study-only args unused by v4txa11; -DL1_ECC_HALT only on the port (main's). Port worktree to clean up after
+    §12.12 (the user's call).
+  - Offline codegen diff of the N/S loss done (TRID_ALLOCATION.md §6.5, no device runs): E0 byte-identical in both
+    arms; only the 4x2 N/S receivers get a per-packet stack reload (a chip coordinate in the route decode) and a net
+    +1 instruction per packet with 16 IDs, every other receiver nets -1. Hypothesis C (that spill causes the ~2
+    cycles) and B both untested; the isolating A/B (change only that spill) needs a design for the user.
+  - P150 validation script: slotalloc/trid_val_p150_runs.sh a|b (part a sanity / ring / tori, part b VC1 split,
+    inline + atomic gtests, UDM).
+  - Next:
+    - the host rebuild (broker, through the coordinator); the LB re-stage must wait for lb2 171995 to start;
+    - mock vet;
+    - P150 validation;
+    - the A/B.
+- **Redesign (user, 2026-11-03, sent to the allocator agent):**
+  - in slots: N = floor(buffer bytes / slot size); caps in slots or fractions of N;
+  - VC split by an integer ratio by VCs built: VC0+VC1 3:1, VC0+VC2 12:1, all three 12:4:1 ("VC1 first" = 2:1);
+    replaces vc_step / vc1_first / vc2_priority; kind weights become integer ratios too, fitted to keep today's
+    4352 B rows;
+  - receivers first (VC0: nearest power of 2, policy key `receiver_round`), senders split the rest, leftover to the
+    VC0 worker up to its cap, past the cap to VC0 forwarding;
+  - K+2 ring-jam minimum DROPPED (bubble 2 stays);
+  - worker cap in slots (24) stays an option, decided by the dynw24 arm. 24 is a pick, not a measurement (3072 B best
+    worker ~20; 1D 4352 B flat 23-27);
+  - mix rows are judged by the link total (user: yes), with per-flow numbers shown.
+- **Transaction-ID allocation from slot counts (user, 2026-11-04; allocator agent, after its vet + A/B submits):**
+  per receiver channel, groups = ceil(slots / G) with today's G rule; one ID per group when the total fits the NoC's
+  16 (identity map); otherwise shrink the largest count until it fits: round it down to a power of 2 first (20 -> 16),
+  then halve (mask); at least 1 ID each; leftover
+  IDs unused; consecutive starts. The host owns the rule (per-channel named args; the router asserts it). Switch
+  TT_FABRIC_EXP_TRID_ALLOC=1, variant on v4txa11. Replaces main's uniform 8/4 and the study's lone-receiver 16, which
+  were never A/B'd as counts. Design and results: TRID_ALLOCATION.md.
+- **Allocator reframe (user, 2026-11-04): slots, not bytes.** A slot holds one packet of any size up to the slot
+  size, so a channel's need is packets in flight (credit loop / time per packet), and it bottoms out at the router's
+  per-packet cost: smaller packets don't need more slots. The byte framing (VC1 "constant bytes", the byte floor, the
+  2 KB-slot worker test) is dropped. The 1/5 VC0 receiver floor hurt the VC1 split at 3072 B (VC0 2-hop +24-32%), so it
+  stays off by default. Next: sweeps of each channel kind's knee in slots versus the traffic's packet size at a fixed
+  slot size (worker, VC0 forwarding, VC0 receiver, VC1; P150 + Galaxy), then a needs-first allocator sketch for the
+  user. No allocator rule changes until then.
+- **TRID result and next step (2026-11-04):** the group-sized ID rule costs about 2 cycles/packet on torus N/S rows
+  (P150 4x2, Galaxy) and 1-1.5% on the floored VC1 split. idoff (new code, old counts) is neutral, so the counts, not the
+  code, cost. The user values the rule's consistency, so the mechanism comes first: credit-cadence A/B (credit frames
+  per data packet at 8 vs 16 IDs, from read-only TXQ0/TXQ1 transfer counters; safety check first). Hypothesis A: 8-ID
+  aliasing batches completions, so fewer credit frames (WRONG, broker 705: credit frames per data packet equal at
+  1.000). Hypothesis B: earlier credits raise ring occupancy (untested, next). Allocator agent owns it.
+- **Receiver multiple-of-4 A/B (no build, does not block the bring-up):** P150 2D 3072 B receiver 16/20/24/28/32 with
+  the senders fixed, plus ring 24/28/32. Hypothesis: mesh routers (groups of 4) pay ≤1 cycle/packet off a power of 2;
+  rings (first-level acks, groups of 1, ~4 index wraps/packet) pay ~8 as on v4u (RESULTS §98). If meshes are free,
+  the candidate is `receiver_round=mult4` on non-ring routers (user decides). A router change for cheap ring wraps
+  needs a design first.
+
+## Mainline port follow-ups (user decisions 2026-11-04)
+
+- Branch origin/aagarwal/fabric-router-mainline at 4db4f45790b (2026-11-04, fast-forward from b2473363016): 6 port
+  commits + WH doc + 4 image-identical cleanups + WH bring-up tools + the cleanup batch (5206b9a57da names, d7a9ced282f
+  VC1+VC2 ring/torus TT_FATAL, d2343171a56 stock inline write, bd290f3246c SKIP_SRC_CH_ID_UPDATE dropped, 25d65133347
+  generic inline with_state write, 4db4f45790b is_vc_configured; no opt-rule commit: -Os only for VC1+VC2).
+  Validated on the P150 (a09u32): 659 inline_udm (inline 1D/2D, UDM unit 8, nightly 68: pass); 650 two, its non-trim
+  runs (mesh 96, val1d 143, ring 19, Y-torus 12, mux 19, VC2 10, NeighborExchange 7, trimming gtests 63: pass; its
+  trim2d ran the earlier random-pairing yaml, which hangs by design; the deterministic yaml has not run on the batch
+  yet); 674 vc1 at 4db4f45790b (vc1 and vc1_1e at -O3, vc1_vc2 at -Os, 12/12 on both ranks each).
+- Unpushed on aagarwal/fabric-router-mainline-cleanup after 4db4f45790b: 3b4ccab4dd7 cold (control paths; was
+  16260ea5bff, message "first of two") and cb42eb72501 multicast landing out of line and cold (was cdceea943bc; message
+  states the pass-through receiver::run side effect, cause unknown). Re-gate passed as decided (PARITY.md, CI table).
+  Validation tree /home/aagarwal/tt-metal-mainline and glx tree at cb42eb72501 (no host change).
+  - P150 validation of cb42eb72501 clean (broker 723 two incl. deterministic trim2d 2/2, 724 inline_udm, 725 vc1:
+    vc1 / vc1_1e -O3, vc1_vc2 -Os); push of 3b4ccab4dd7 + cb42eb72501 cleared by the coordinator's rule.
+  - Landing A/B (726 / 727, v4txa11land vs v4txa11, passes reversed): VC1 mean 158.3 / 158.4, inter-mesh unicast
+    mean 333.1 / 333.0, every row within 0.4: no measurable effect. Multicast landings unmeasured (no traffic).
+  - 288afd237a7 (A2, option b): noc_wwrite_with_state `update_addr_mid`; noc_write_to_node_with_state removed; gate
+    5,007 / 5,007 images byte-identical to cb42eb72501.
+  - **Pushed (coordinator, 2026-11-04): origin/aagarwal/fabric-router-mainline 4db4f45790b..288afd237a7** (3b4ccab4dd7,
+    cb42eb72501, 288afd237a7). 288afd237a7 also committed a stray symlink tt_metal/pre-compiled (git add -A); fix
+    2fc06852f48 removes it (no history rewrite), `/tt_metal/pre-compiled` added to .git/info/exclude; awaiting push.
+    acc4656caaf's message stays; the PR description carries "no new NoC names, only extensions of main's".
+  - Validation tree at 2fc06852f48 (rebuilt, CCACHE_DISABLE=1 while /data has no inodes; no host change).
+  - Ring-jam rule (user-approved): ac86bf0f116 cherry-picked onto 2fc06852f48 as **df64d0ad677** (no conflict; patch
+    identical). Gate (two mock captures, base host 2fc06852f48 = validation tree, new host df64d0ad677 = glx tree, the
+    rule agent's 49 configs, bfc_gate.py pairing with the new arg stripped): router 170 differ / 5,362 identical, other
+    232 identical; the 170 = bh_ring E0 36, bh_ring_1erisc E1 36, glx_ring E0 60, glx_1x32_ring E0 38, each exactly one
+    instruction (srli 0x11 -> 0x14, visit_worker has_room, router_sender.hpp:643), code bytes +0. Unpaired: 80 + 80
+    bh_2d_streaming router builds (paired via the JIT cache: 3 lui immediates each at kernel_profiler_streaming.hpp:202,
+    the per-run profiler TU ids, as the rule agent found), glx3_mesh 2 + 2 (identical), and non-router test kernels.
+    T from the new capture's named args: rings 16 (bh_ring x72, glx_ring x120, glx_1x32_ring x76, ring+mux x36 unused),
+    tori / express / per-mesh torus / trim gtests 2. Outputs: bfc/gate/gate_full_on_2fc06852f48.txt,
+    insn_summary_on_2fc06852f48.txt; captures pruned. glx tree now at df64d0ad677 (host rebuilt; its /data copy
+    mainline_cb42eb7 unchanged).
+  - G-PORT P10 (4x4 + 2x8 pass-through) staging of mainline_cb42eb7 (port manifest .scratch/regress/manifest.yaml)
+    blocked: /data out of inodes (7 free, 2026-11-04 07:2x); Galaxy 172734 (A1/A2 pass b) failed at mkdir for the
+    same reason and needs a resubmit.
+    Done after the /data cleanup: staged mainline_cb42eb7 (07:50-08:00, verify OK); **G-PORT P10 Slurm 172825
+    (bh-glx-110-a04u14): P10-mm-4x4 PASS and P10-mm-2x8 PASS** (each: multi-mesh stability 104 tests and the mesh
+    pass-through yaml 48 tests on 3 ranks, 0 failed, no program-size error). The 2x8 pass-through line, which main
+    fails 96 B over, runs on the port (router images of cb42eb72501 = 288afd237a7 = 2fc06852f48). The port manifest
+    copy has min_data_inodes_free 200000 (coordinator's one-off; the shared manifest keeps 2M).
+    A1/A2 Galaxy pass b: Slurm 172794 (bh-glx-110-a01u08), every step 0 failed; ran 2d2k pass b plus 2dk passes a/b.
+  - **Pushed (coordinator, 2026-11-04): origin/aagarwal/fabric-router-mainline at 7cd3c13a0db** (df64d0ad677 ring-jam
+    rule, 80ec66916c8, 7cd3c13a0db; unpushed on top: 3cbc209a497 order_point drop, c7a4d0fb29f comment nit).
+    80ec66916c8 restores main's router design block at the top of
+    fabric_erisc_router.cpp (flow-control section rewritten for this router); gate: every image identical.
+    7cd3c13a0db full-preset worker credit (the credit buffer holds the whole posted write; a credit stores the read
+    counter and sends): gate 2,466 E0 images differ, only WorkerChannel<0> (plus <4>/<7> VC2 workers) credit 19 -> 13
+    and preset_credit 18 -> 24 instructions; non-router kernels identical. P150 validation at 7cd3c13a0db: 764 two
+    (mesh 96, val1d 143, ring 19, Y-torus 12, mux 19, VC2 10 pass; nbr / trim / trim2d failed on /home ENOSPC, rerun
+    775: nbr 7, trim 63 + 3 T3K skips, trim2d 2 pass), 765 inline_udm (udm_nightly ENOSPC, rerun 776: inline 1D/2D,
+    UDM unit 8, nightly 68 pass), 766 vc1 (12/12 x3), 767 credit (worker 256 B 2, stability 960: pass).
+    Perf A/B 768 (vs df64d0ad677, passes reversed, credit_perf_p150.yaml, cycles/packet base -> new): 1-hop
+    unidirectional 4352 B -0.5 (1D 131.6 -> 131.1) and -0.4 (2D 128.4 -> 128.1), 1D bidir 4352 B -0.2, 2D bidir
+    4352 B 0.0, 256 B rows 0.0..-0.1; both passes agree, base pass spread <= 0.1. The A/B changes only the credit, so
+    the gain is the credit's; that fewer instructions per credit is why is a hypothesis.
+  - Placement-primitive audit (coordinator, 2026-11-04), offline steps 1-2 at 7cd3c13a0db (11 arms, each removing one
+    site; router-only PCH-less offline builds of the credit capture, a_base = the capture's JIT images 5,010/5,010):
+    order_point (sender 617) is inert (5,010 identical); every read group and keep_in_memory site changes code
+    (scheduling, spills, inlining of single::receiver_pass). All MMIO accessors in the read groups are volatile, so no
+    site guards correctness at the compiler level; device A/B per arm decides keep / drop (step 3, not run).
+    Tables: scratchpad audit_r1..r4.txt (copied to bfc/audit/).
+    - order_point dropped (user): **3cbc209a497** on the cleanup branch (use and helper removed); gate: offline
+      router-only build of the cleanup tree from the credit capture, 5,010 / 5,010 images identical to 7cd3c13a0db.
+    - Per-config classification of each arm's loop changes (code = instruction / spill counts, sched = order only):
+      bfc/audit/audit_cases.txt. rg_s537 / rg_s605 change order only on two ERISCs (rg_s537 +2 in single-ERISC
+      sender_pass); rg_r755 changes two-ERISC receiver::run order only except bh_neighbor E1 (+17, not run).
+    - Step 3 (user: about 1 h of device time): arm farms /home/aagarwal/tt-metal-audit/<arm> (mkfarm.py: symlinks into
+      the validation tree, real router headers with the arm applied; mock-checked: the base farm's images equal the
+      tree's, each arm's differ where the gate says); plan .scratch/audit/audit_plan.py (rows per arm from the
+      classification, rg_s537 + rg_s605 as one arm rg_sched), runner audit_ab2.sh JOB (base, arms..., base on one host),
+      report audit_report.py JOB. Jobs A (rg_s583, kim_s755, rg_d414) and B (rg_sched, rg_s673, rg_r755, kim_s816,
+      kim_r713), about 14 and 13 min. Confirmation pass (reversed) only for arms past max(spread, 0.5).
+    - Job A (broker 779, 389 s; bases agree within 0.1; cycles/packet, d = arm - base, negative = removal faster):
+      rg_s583 2D 3-hop -5.8 / -3.0 (256 / 4352 B), every other row within 0.3, one ERISC flat: drop candidate.
+      kim_s755 2D 3-hop +8.3 / +6.1, torus Y 3-hop E/W +8.7 / +6.3, every one-ERISC 2D row +7.6..+7.8, 1D 4352 B
+      +0.6: keep. rg_d414 two ERISCs within 0.1, one-ERISC 3-hop -2.6 / -2.2, multicast -0.6: drop candidate.
+      VC1 inter rows: no data (main defect below). Tables: bfc/audit/auditA_table.txt, auditAB_tests.txt.
+    - Job B (780): VC2-worker rows do not compile in benchmark mode and inter-mesh rows abort (both main test-infra
+      defects, TEST_PLAN §4.5); after the abort of the torus Y + VC2 run every later fabric init timed out on device 0
+      eth core 28-25 (coordinator reset the host; hypothesis: the abort with the torus fabric up). Salvaged rows (per-test
+      CSVs, against A's bases + B's first base): rg_sched 2D 3-hop 256 B +2.3, one-ERISC -1.0 (mixed: split into
+      rg_s537 / rg_s605); rg_s673 2D 3-hop -1.1 / -0.8, one-ERISC -1.0; rg_r755 one-ERISC -2.9 / -3.0 / multicast -7.7.
+      kim_s816 / kim_r713: no rows ran.
+    - Job C (reversed confirmation + B rerun, VC0 workers on VC2-enabled fabrics for kim_r713 / kim_s816) and job D
+      (two-rank split, VC0 traffic inside mesh 0, the VC1-config images) sent; runner now stops at the first eth-core
+      fabric-init timeout. These rows measure the per-pass cost of the VC1 / VC2 routers, not VC1 / VC2 traffic.
+    - **Result (C 785, D 786, E 788; every run passed; C reproduced A / B, E reproduced C / D within 0.2):**
+      drop: order_point (done, 3cbc209a497), rg 537 (one-ERISC -1.0), rg 583 (2D 3-hop -5.8 / -3.0, VC1 2-hop
+      -1.2), rg receiver 755 (one-ERISC -2.9..-3.0), kim 816 (inert on one-ERISC VC2 rows, single pass), kim 713
+      (one-ERISC VC2 -1.4..-2.0); keep: rg 605 (2D 3-hop 256 B +2.2), kim 755 (+6..+9 forwarding, +7.7 one-ERISC);
+      mixed, lean keep (user decides): rg 673 (-0.8..-3.0 except VC1 2-hop 4352 B +2.0), rg 414 (one-ERISC -2.6,
+      VC1 2-hop +4.3). Causes: hypotheses (each A/B isolates its site, not the mechanism). Tables bfc/audit/auditC/D/E.
+    - Joint check of the five drops (user: allocation and scheduling aren't additive), arm drop5 = 537 + 583 +
+      receiver 755 + 816 + 713. Offline (bfc/audit/drop5_gate.txt): changed functions = the union of the singles' in
+      every image; no inlining change beyond the singles'; pass-loop instruction / stack load / store counts = base +
+      the singles' deltas in 90 of 91 (config, ERISC, function) groups; bh_vc1_1erisc E1 single::sender_pass 918
+      instructions vs 920 predicted (same 6 / 6 stack loads / stores). Device: job F (base, drop5, base, drop5, base;
+      the union of the arms' rows plus torus Y 3-hop and the one-ERISC VC1 split) and optional job G (singles on F's
+      rows they never ran on); report drop5_report.py; accept only if no row is slower beyond max(noise, 0.5).
+      **Job F (789, every run passed): no row slower.** drop5 vs base (3 base runs, 2 drop5 runs, noise <= 0.4):
+      2D 3-hop and torus Y 3-hop E/W -5.8 / -3.0, one-ERISC 2D -3.9..-4.0, one-ERISC multicast -5.0,
+      one-ERISC VC2fab -5.1 / -3.1..-3.7, one-ERISC VC1 split -7.7..-11.0, VC1 split 2-hop -1.1, VC2fab -0.5..-1.4;
+      2D 1-hop / bidir within 0.3. Where every single arm was measured, drop5 = the sum of the singles within 0.1;
+      elsewhere drop5 is faster than the measured singles' sum, the difference being unmeasured singles (job G
+      not run; the coordinator holds it unless a row is slower). Table: bfc/audit/drop5_F.txt.
+    - **User decision: the five drops.** Commits on the cleanup branch after c7a4d0fb29f: 993c99a564b (537),
+      aa11a8786df (583), 82ea91f44a4 (receiver 755), 5fb378a7880 (816), bc0108869e2 (713; after_step removed),
+      22cdb1e55c3 (comment only: measured reasons at the kept sites 605, 673, 414, sender 755). Gate
+      (bfc/audit/drop_commits_gate.txt): each commit changes exactly its single arm's functions in 5,010 / 5,010
+      images; the comment commit 0 images; 22cdb1e55c3 = a_drop5 in 5,010 / 5,010. Farms removed; validation
+      tree at 22cdb1e55c3 (router headers only since 7cd3c13a0db, no host rebuild). Val set: broker 790 two, 791 one, 792
+      inline_udm, 793 vc1 (VAL_TAG=drop5).
+  - Cleanup batch: item 1 **3860614b218** (has_vc1 = ACTUAL_VC1_SENDER_CHANNELS > 0; FABRIC_2D_VC1_ACTIVE gone from
+    host and kernel). Precondition: define present exactly when ACTUAL_VC1_SENDER_CHANNELS > 0 in 16,543 router
+    kernels of 15 captures (bfc/audit/vc1_active_check.txt); the CI captures without caches are covered by the host
+    code (both from vc_shape_.sender_counts[1]). Gate: offline build with the define stripped from the captured
+    commands, 5,010 / 5,010 identical to 22cdb1e55c3. Host rebuild + val pending (after 790-793).
+    463f35e3eb0: WH_BRINGUP.md wording (the receiver pass's first reads). Drop5 val 790-793 clean; coordinator pushed
+    22cdb1e55c3. Items 3 / 5 / 6 / 4 (user-approved design; vc_forwards_to_routers renamed any_forwards_on_vc):
+    44ad66cba15 (item 3: 262 E1 images differ, the predicted speedy-path and VC0-crossover receivers; VC0 downstream
+    init / preset gone, VC1 presets the shared pair, loop changes are memory offsets only), d79db3f2600 (item 5,
+    identical), 22ef990288c (item 6; 12 bh_2d_telemetry E1 images reorder 4 functions, layout only; a first
+    version failed to build without VC1: ForwardCommands<1> named in a non-template's discarded branch, fixed with
+    preset_forward_pair<VC>), e5b75d1fbcd (item 4: validate_router_config in get_compile_time_args, 12 TT_FATALs,
+    kernel keeps 5 invariants; identical images). Gates in bfc/audit/item*_gate.txt. Next: host rebuild with a
+    temporary force patch for the 12 forced mocks, unforced mocks of every case, P150 val (cl1), Galaxy P10.
+    Done 2026-11-04 22:05-23:31: validation tree at e5b75d1fbcd, forced mocks 12/12 PASS (bfc/audit/forced_mocks.txt),
+    patch removed, git clean, full build + install; unforced mocks of all 103 cov.py cases: no support-matrix
+    TT_FATAL, no -DFABRIC_2D_VC1_ACTIVE in 19,843 router compile lines (glx3_torus_yx_vc2_* stop at the known
+    VC1+VC2 ring/torus TT_FATAL). Glx tree at e5b75d1fbcd, built, staged as mainline_e5b75d1 (verify OK; rsync
+    58 min, ~1.4M inodes). Galaxy dry-run: allocation failure while every bh-glx-110-a* node is allocated.
+    P150 cl1 lines and the Galaxy --go line sent to the coordinator.
+    P150 cl1 (broker 794 two, 795 one, 796 inline_udm, 797 vc1): every run 0 failed, no hang capture; router
+    compile lines carry no FABRIC_2D_VC1_ACTIVE. Galaxy G-PORT P10-mm-4x4 / 2x8: Slurm 176161 (pending at
+    23:35). Pass: per step multi-mesh stability 104 and pass-through 48 tests on 3 ranks, 0 failed, no size error.
+    176161 (bh-glx-110-a09u02): both steps HUNG (600 s) right after UMD "Starting devices in cluster completed",
+    before main()'s first log ("Relative fpath", CmdlineParser), so before any fabric build or router code; no
+    rank stderr / TT_FATAL. Same signature as TEST_PLAN §4.5's ENV tt-run stall (a03u14, a08u20). Hypothesis:
+    node a09u02. Node A/B proposed: cb42eb7 P10-mm-4x4 pinned to a09u02 (and optionally e5b75d1 on a04u14).
+    Rerun 176235 (e5b75d1fbcd, bh-glx-110-a10u14): P10-mm-4x4 PASS and P10-mm-2x8 PASS (each: 104 + 48 tests on
+    3 ranks, 0 failed, no size error); covers the cleanup batch and drop5 on Galaxy multi-mesh. Node A/B 176236
+    (cb42eb7, the morning's PASS tree, pinned to a09u02): both steps HUNG with the same signature, so the node.
+    a09u02 added to the standing excludes (testplan manifest and the port copy) and to TEST_PLAN §4.5's ENV entry.
+  - Coordinator pushed the cleanup batch: origin 22cdb1e55c3..e5b75d1fbcd (2026-11-05).
+  - Route decode (user-approved; lb2 176226): **6dad5fec638** on the cleanup branch, decode_action_y_first reads both
+    bytes then selects. Gate 1 (credit capture): 1,047 / 5,010 images differ, all E1 2D Y-first receivers (N/S,
+    Z on a Y express axis) and intermesh landings; E0, 1D, E/W and X-axis Z identical; functions receiver::run /
+    single::receiver_pass (+ _start layout). Gate 2 (the A/B's 616 decode-on builds rebuilt on 6dad5fec638): 508
+    byte-identical; the 108 others differ the same way decode off vs e5b75d1fbcd (the cleanup batch's function
+    order and VC0-crossover receivers), and the decode change itself is identical at both bases (after normalizing
+    the downstream-state offsets item 3 moved, in the VC1-split receivers). Files bfc/audit/decode_*.
+    **Pushed (coordinator, 2026-11-05): origin e5b75d1fbcd..6dad5fec638.** Its functional validation rides with the next
+    batch's P150 val set (open).
+    - c7a4d0fb29f on the cleanup branch: comment-only fix of deliver_other's comment (user nit); gate 5,010 / 5,010
+      router images identical to 7cd3c13a0db (bfc/audit/dlvcmt_gate.txt).
+  - Gates (2026-11-04, offline full builds of the c5 set, per-function compare with branch/call targets normalized):
+    16260ea5bff passes (only teardown / run_router_command / wait_for_connect_request, `_start` immediates, and
+    layout). coldwait (fba07604d81, cold on the library's wait_for_notification) FAILED: it changed the single-ERISC
+    loops of 136 Tensix-mux / UDM E1 images (receiver_pass -16..-59 instructions) for 160-224 B; **dropped**
+    (coordinator). Landing option 1 changes receiver::run's register allocation in 44 glx3_passthrough E1 images
+    (frame 240 -> 224 B, same calls); kept as a codegen side effect of a source change (coordinator, per the user's
+    rule). IPA-RA as the cause: **WRONG** (refuted: an offline -fno-ipa-ra build shows the same change).
+  - Later option (not now): `cold` on the router's own startup wrappers (handshakes, the downstream-mux wait) instead
+    of the library's wait_for_notification; would need its own gate (loops unchanged in mux / UDM builds).
+- **Code size (user, 2026-11-04): cold attribute on run_router_command / teardown / wait_for_connect_request and on
+  the library's wait_for_notification, plus landing option 1 (multicast landing rebuild out of line, cold).** That fits
+  every CI multi-mesh config at -O3 (2x8 pass-through 896 B left, a line main fails). The -Os-for-VC1 opt-rule commit
+  is dropped; -Os stays only for VC1+VC2. Known gap: VC1+VC2 2x8 pass-through 688 B over even with the init/open
+  merge (non-CI), left for later merges. Validation: the P150 set, an inter-mesh multicast perf row, Galaxy P10-2x8.
+- **Code-size gates (2026-11-04):** cold x3 (16260ea5bff) passes: loops identical once branch/call targets are
+  normalized. Cold on the library's wait_for_notification (fba07604d81) changed single-ERISC loop code in 136 mux/UDM E1
+  images to save only 160-224 B, so it is dropped (later option: cold on the router's own startup wrappers). Landing
+  option 1 changed receiver::run's register allocation in 44 glx3_passthrough E1 images (fewer instructions and
+  spills); hypothesis: IPA-RA clobber sets, checked with -fno-ipa-ra. It is kept as a codegen side effect, not a perf
+  claim. CI size re-measured without coldwait (2x8_pt about 736 B left).
+- **-Os for VC1+VC2 stays** until the cold-path stage lands (at -O3: P150 1,456 B left, Galaxy Z-ring 608 B left,
+  dual-Galaxy / 3-mesh split 400 B over, pass-through 1,424 B over). Cold-path stage: design first (cold attribute on 4
+  E0 functions, set_landing_route shape, template merges), offline sizes, then the switch to -O3 everywhere.
+- **TT_FATAL for VC1+VC2 on ring/torus routers** (3 receiver channels x 8 IDs > 16): a known gap until the
+  per-channel transaction-ID allocation lands.
+- **API audit (porting agent):** drop the inline-write cmd_buf / emulated_write_on_cmd_buf API change (stock call +
+  local_write_init) and the SKIP_SRC_CH_ID_UPDATE host arg; keep the node-addressed credit write, the one-check flush
+  and the ct-arg arrays. Removal A/Bs A1 (skip flags), A2 (node-addressed data write), A3 (header load/unpack), A4
+  (merged credit frames), A5 (credit write's share of the partial-preset gain), all approved.
+  - A/B runs (2026-11-04): P150 broker 711-714 (a15a / a34a / a15b / a34b); Galaxy N/S Slurm 172435 (trees
+    a11{ns,ww,cs}_1104 = v4txa11_1104 + the arm's file). **A5 (v4txa11cs, stateless credit write) HUNG on the Galaxy**
+    (2d2k_a_cs at SlsMulticast 2048, node a10u14): the capture shows over-credited E1 copies (45 > 32 slots) and lost
+    credits upstream, i.e. credits landing on the wrong stream where a router has several downstreams (hypothesis: the
+    stateless write disturbs command-buffer state the stateful writes rely on). A5 as written is ruled out (hang rule;
+    decode: scratchpad dec172435.txt, capture /data/aagarwal/frs-glx/jobs/172435/results/2d2k_a_cs_hangcap). The decode
+    is also the reason the node-addressed inline credit write stays: the stateless replacement is not functionally
+    equivalent on multi-downstream routers, so the stateful form is required, not only faster. P150 jobs re-queued
+    without cs / csml: 717 (a15a), 718 (a34a), 719 (a15b), 720 (a34b); Galaxy pass b (ns / ww only) waits for a slot.
+  - **P150 results (717-720, 2026-11-04; passes a / b reversed, every run 0 failed, no hang, passes within 0.2;
+    cycles/packet, arm vs v4txa11; positive = the arm is slower, i.e. the port's form is faster):**
+    - A1 ns (skip_cmdbuf_chk off): 1-hop rows and ring1 0; lin3 +10.6 (+8.5%); VC1 2-hop +4.0 / +2.5 (16 B / 4352 B),
+      vc1 mean +0.4%, inter-mesh mean +1.2% (to mesh 1 chip 3, 16 B +11.8); ml proxy 3-hop E/W +19.7 (+13.6%), turn
+      +12.1, row merge +6.8, multicast +18.4 / +23.3, 1D lin3 +16.0.
+    - A2 ww (main's noc_wwrite_with_state): 1D / ring / VC1 0 (largest +0.6, inter-mesh 16 B); ml proxy +0.1..+0.4
+      (3-hop 4352 B +0.4 = +0.3%, multicast +0.4, row merge +0.3). Galaxy pass a: N/S +0.7..+1.0.
+    - A3 hdr (header load/unpack): ewscatter +6.8 (+4.8%), ring1 +5.9 (+4.2%), torusns +6.4 (+4.3%), 2D multicast
+      +0.2, ring multicast -1.8 (-1.2%).
+    - A4 cr (one credit frame per event): ewscatter +2.3 (+1.6%), ring1 +12.6 (+8.9%), torusns +14.3 (+9.6%),
+      2D multicast +10.3 (+7.3%), ring multicast +3.0 (+2.0%).
+    - Tables: row_ab_report.py a15a|a15b|a34a|a34b|a34am|a34bm; census_report.py --routers=v4txa11,v4txa11ns,v4txa11ww
+      --passes=a15a,a15b --rows vc1 vc1i; loopvars_maps/ns_presets/slsab.py a15a,a15b v4txa11ml,v4txa11nsml,v4txa11wwml.
+    - Galaxy N/S (Slurm 172435 pass a: a11 / ns / ww 0 failed, cs hung; 172794 pass b: every step 0 failed;
+      sls2k_report.py <job>/results 2d):
+      2 KiB slots, both passes agree: A1 ns +16..+23 cycles/packet on N/S forwarding rows (3-hop N/S 136.8 -> 159.4 /
+      159.6), A2 ww +0.7..+1.0 (3-hop N/S 136.8 -> 137.8). 4352 B slots (172794, passes a / b): A1 3-hop N/S 1 KiB
+      152.5 -> 170.1, turn 145.2 -> 165.6; A2 +0.4..+0.8. 4352 B payloads are wire-bound (252.1) for every arm.
+- **HANG in the cleanup batch's VC1 validation (job 660, 2026-11-04):** vc1_vc2 (P150 split, VC1+VC2 at -Os) stalled at
+  MultiMeshAllToAll_size_4096 unicast_write; rank 0 never finished; the router decode shows idle, empty routers
+  (hypothesis: a worker or host-side wait). The pushed 58a9a1e passed the same set (647). A/B: broker 669 (batch tip
+  x3) vs 670 (pushed tip x3). The push of b2473363016..4db4f45790b is on hold until this is understood. A fresh porting
+  agent took over (the previous one ran out of context).
+  - Worker decode (2026-11-04; hang_workers.py ported to .scratch/val with main's Tensix L1 bases; capture dir
+    results_660_os/mval_vc1_vc1_vc2_hangcap/decode_workers.txt, slot_map.txt): rank 0 waited on its 16 inter-mesh
+    receivers (tensix (1,5)-(1,8) on chips 0-3), each at validated 0/100, polling packet 1. Their rank-1 senders sent
+    100/100; router counters agree; every channel empty. All 16 rings hold packets 65-100 in slots 1-36 and 37-64 in
+    37-64, every word correct: everything arrived, and packet 65 overwrote slot 1 before the receiver saw packet 1. The
+    yaml allows this: 100 x 4096 B into a 64-slot ring, no receiver credits, start sync per mesh only (nothing
+    holds rank 1's senders for rank 0's receivers; only the host barrier aligns the ranks).
+    The overrun is observed; "rank 0 started late" is a hypothesis (cross-rank launch skew): a harness race in our own
+    vc1_sanity.yaml, not a router fault. 669 and 670 both passed 3/3, so no bisect. Sleep-on-one-rank A/B skipped
+    (coordinator). Fix applied: MultiMeshAllToAll num_packets 100 -> 64 (slotalloc/cap_ring_packets.py; mock run parses,
+    compiles, launches). Next: `val_runs.sh vc1` with the validation worktree at 4db4f45790b (push range, VC1 at -O3);
+    clean -> pushed. Done: 674 clean, 4db4f45790b pushed (2026-11-04).
+- §5.2-5.4 cleanup commit (5206b9a57da): pushed with 4db4f45790b; its 14 channel-trimming-capture E1 image changes
+  appear only when three of its edits combine (stated in the commit message).
+- **NoC API: extend main's functions, add none (user, 2026-11-04).** The inline credit write extends
+  noc_inline_dw_write_with_state / noc_fast_write_dw_inline_with_state (both address updates, node coordinate as an
+  extra argument; the narrow *_to_node_* inline forms go; identity-gated). The data write uses main's
+  noc_wwrite_with_state if A2 (one extra RET_ADDR_MID store per forward) shows no cost; otherwise an option inside
+  wwrite. noc_write_to_node_with_state is a copy of wwrite minus the MID write and goes either way.
+- Porting agent's gate tool (cov.py --alt-tree) could build the wrong worktree: the pushed cleanup gates are valid;
+  the §5.2-5.4, (b) and (c) gates were WRONG and are being redone.
 
 ## To explore (user ideas, not started)
 
@@ -1030,8 +1986,19 @@ changes.
   - VC1 policy on 400G (today's default plus a host setting recommended);
   - when to write the allocator design note (mesh size, packet size, link speed);
   - a burst-aware worker step.
+- **Open, not chased (placement audit job D, 786, 2026-11-04):** on the P150x8 split into two 2x2 meshes (VC1-enabled
+  routers, two ranks), VC0 traffic inside mesh 0 runs 175.2 / 193.2 cycles/packet for 1 hop and 425.8 / 478.8 for
+  2 hops with a turn (256 / 4352 B; the port at 7cd3c13a0db). On the plain 2x4 mesh the turn row runs 143.5 / 144.9
+  and 1 hop 120.3 / 128.0. Not compared like for like (different mesh shape, VC1 on, two processes); no cause
+  claimed. Rows: .scratch/audit/yamls/D_base_vc1.yaml; results pauD_*_vc1.
 
 ## Tooling and housekeeping
+
+- 2026-11-04: root reached 100%. Deleted 228 JIT caches (~148 GB) that no recorded command, note, cmds.json or
+  yaml under fabric_exp referenced and that had been untouched for 2+ days; the list is
+  consolidation/deleted_caches_20261104.txt. Saved ELFs in consolidation/builds and loopvars_golden still hold debug
+  paths into some of them, but the ELFs are self-contained. Root is back to about 200 GB free.
+
 
 - Bubble flow control's 2 as one shared host-device constant (V4_SENDER_OWNERSHIP §2 #6; decided): deferred from the
   sender pass (2026-11-02). It lives in hostdevcommon/fabric_common.h, which another agent's study jobs swap; doing it
@@ -1045,6 +2012,29 @@ changes.
   line-VC work.
 - Test infra bug: a mux and a sync core both connect to one router channel (Galaxy PerfAllFlows hang,
   VC2_LINE_BRINGUP.md phase 4). Report upstream eventually.
+- **Test infra, not the router (2026-11-05/06; coordinator):**
+  - **Flow-controlled ring all-to-all with atomic_inc hangs on main and on the PR.** FlushA2ARing_size_4096_ntype_
+    atomic_inc_ftype_unicast (pr_perf/flushda/hangab_glx_ring.yaml: all-to-all, enable_flow_control, 200 packets) hangs
+    on Galaxy:
+    - PR base: Slurm 180570, a10u08. Main d2bd12fcf1f: 180726, a08u02.
+    - The decoded end state is identical (results/glx180570/a_unp_val_ring_decode.txt, results/glx180726):
+      - every router channel empty;
+      - 670 sender configs at 128/200 with no receiver credits;
+      - 232 "sent all 200, not arrived";
+      - receivers' atomic counters sum to 512.
+    - The P150 1024 B form hangs the PR base the same way (lb2 180530).
+    - Stock yamls run this pattern only on Linear/Mesh, and on Torus in the 2D torus stability yaml.
+    - Never run flow-controlled full-ring rows on a LoudBox.
+  - **Data-checked explicit 1-hop ring rows mismatch at large sizes.** DATA_MISMATCH at receiver (M0, D1) core 0-0
+    for a sender device [0,0] → destination [0,1] on Ring (P150, a09u32 broker):
+    - FlushRing1HopEW_size_4096_ntype_fused_atomic_inc without flush: the PR base and main both fail (851, 852).
+    - Ring1HopEW_size_3072 unicast_write (benchmark off): the tip (861) and main (874) both fail.
+    - The same form at 1024 B passes, and so does atomic_inc at 4096 B.
+    - Cause open (hypothesis: the test infra's data check on this pattern).
+- Candidate upstream issue (for the user): main's test_fabric_multi_mesh_sanity_common.yaml MultiMeshAllToAll runs
+  num_packets 100 at 4096 B with sync on and no flow control: a 64-slot receiver ring, and the start sync is per mesh,
+  so one rank's senders can overrun the other rank's receivers (seen in the port's job 660; PARITY.md "Device
+  validation notes"). Fix there: cap num_packets at the ring's slots or enable flow control.
 - Optional outside the study: `tt_buf_rw::note<>` always_inline would recover about half the -Os gap for every -Os
   kernel (job 367). A suggestion for the API owners.
 - Uncommitted since checkpoint 12 (main tree): host changes (builder: per-VC args, worker-role arg, VC1 -O3; worker
@@ -1078,3 +2068,17 @@ changes.
 - Register-map guard loopvars.py (self-tested, golden records, --live, --headroom).
 - Bound map, command-buffer audit, TX-queue probe (V4_BOUNDS.md); send batching study (V4_SEND_BATCH.md); VC1
   opt-level A/B (job 367).
+- 2026-11-05 JIT compile errors in multi-rank regress steps (3 ranks, one shared warm TT_METAL_CACHE per job, as CI on
+  one host): "get_named_compile_time_arg_val not declared" (named_ct_arg_map_generated.h) and "kernel_main not
+  declared" (kernel source wrapper), in 178007 / 178014 pass-through and 2x8-again commands. Harness noise, not router.
+  Known class (user's Glean search): tt-metal #46925 (fix d090a3934eb on blaze-metal branches; the same atomic
+  named_args_generated.h write is already in our base, genfiles.cpp:701-768, so not this one), #29164 (per-process
+  caches as workaround), tt-xla #4453, #34014, #39858 (old race not reproduced on main in 10 cold-cache runs; ours is
+  warm-cache). Mechanism open: generated headers are FileRenamer-atomic in our base. Optional: add repro data to
+  #39858 / #29164 after the user's OK.
+- 2026-11-05 slot allocator cleanup eebd9e9e320 (pushed to origin/aagarwal/fabric-router-mainline): the allocator returns numbers only (no
+  notes / reason strings), enchantum for ChannelKind, RouterShape::is_2d from is_2D_topology(), a per-VC depth table.
+  Identical counts/stages over 92,160 shapes (scratchpad alloc_eq/). Study tool slotalloc/slot_alloc_table.cpp still
+  uses notes / reason / one_d: update it before its next use. The TRID allocator (fabric_trid_allocator.cpp,
+  trid_detail::describe -> reason, logged in erisc_datamover_builder.cpp:1499) has the same string pattern: offer the
+  same treatment.

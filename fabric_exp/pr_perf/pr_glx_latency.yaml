@@ -1,0 +1,91 @@
+# PR perf, Galaxy 200G latency (mk_pr_gap_yamls.py): exp_latency.yaml's rows (one-packet round trips, 1000 samples,
+# 16 and 4096 B, write and fused_atomic_inc) plus Lat7HopNS ([0,0] -> [0,28], column 0).
+Tests:
+- name: Lat1HopEW
+  latency_test_mode: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    size:
+    - 16
+    - 4096
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - ftype: unicast
+      num_packets: 1000
+      destination:
+        device:
+        - 0
+        - 1
+- name: Lat1HopNS
+  latency_test_mode: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    size:
+    - 16
+    - 4096
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - ftype: unicast
+      num_packets: 1000
+      destination:
+        device:
+        - 0
+        - 4
+- name: Lat3HopEW
+  latency_test_mode: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    size:
+    - 16
+    - 4096
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - ftype: unicast
+      num_packets: 1000
+      destination:
+        device:
+        - 0
+        - 3
+- name: Lat7HopNS
+  latency_test_mode: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    size:
+    - 16
+    - 4096
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - ftype: unicast
+      num_packets: 1000
+      destination:
+        device:
+        - 0
+        - 28

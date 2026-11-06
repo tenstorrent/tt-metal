@@ -1,0 +1,1 @@
+nxab arm e60: farm of /data/aagarwal/frs-glx/trees/nxab_host; E0 spin 0, E1 spin 60 core cycles per packet, IDLE_PASSES_BEFORE_PARTIAL_CREDIT 4

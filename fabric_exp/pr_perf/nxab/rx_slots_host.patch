@@ -1,0 +1,58 @@
+diff --git a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+index 6d87115c018..8e37785e141 100644
+--- a/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
++++ b/tt_metal/fabric/builder/fabric_static_sized_channels_allocator.cpp
+@@ -12,6 +12,7 @@
+ #include <tt_stl/indestructible.hpp>
+ #include <tt_stl/assert.hpp>
+ #include <tt_stl/fmt.hpp>
++#include <cstdlib>  // LOCAL NX A/B (never committed): std::getenv
+ #include <algorithm>
+ #include <numeric>
+ 
+@@ -770,7 +771,44 @@ void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
+     shape.vcs[1] = {0, num_used_sender_channels_per_vc[1], num_used_receiver_channels_per_vc[1]};
+     shape.vcs[2] = {num_used_sender_channels_per_vc[2], 0, num_used_receiver_channels_per_vc[2]};
+ 
+-    const sa::Allocation allocation = sa::allocate_slots(shape);
++    sa::Allocation allocation = sa::allocate_slots(shape);
++    // LOCAL NX A/B (fabric_exp/pr_perf/nxab, never committed): TT_FABRIC_AB_VC0_RX_SLOTS=R sets the VC0 receiver
++    // channel's depth to R (a power of 2, 2..127) after the allocation; the VC0 worker channel takes the difference, so
++    // the total is unchanged. Unset: the allocator's own counts.
++    if (const char* rx_override = std::getenv("TT_FABRIC_AB_VC0_RX_SLOTS"); rx_override != nullptr) {
++        const long requested = std::strtol(rx_override, nullptr, 10);
++        TT_FATAL(
++            requested >= 2 && requested <= 127 && (requested & (requested - 1)) == 0,
++            "TT_FABRIC_AB_VC0_RX_SLOTS={} is not a power of 2 in 2..127",
++            rx_override);
++        sa::ChannelSlots* receiver = nullptr;
++        sa::ChannelSlots* worker = nullptr;
++        for (auto& c : allocation.channels) {
++            if (c.vc == 0 && c.kind == sa::ChannelKind::Receiver && c.index == 0) {
++                receiver = &c;
++            } else if (c.vc == 0 && c.kind == sa::ChannelKind::Worker) {
++                worker = &c;
++            }
++        }
++        TT_FATAL(receiver != nullptr && worker != nullptr, "TT_FABRIC_AB_VC0_RX_SLOTS: no VC0 receiver and worker");
++        const long worker_slots = static_cast<long>(worker->slots) + static_cast<long>(receiver->slots) - requested;
++        TT_FATAL(
++            worker_slots >= 2 && worker_slots <= 127,
++            "TT_FABRIC_AB_VC0_RX_SLOTS={}: the worker would get {} slots",
++            requested,
++            worker_slots);
++        log_info(
++            tt::LogFabric,
++            "LOCAL NX A/B: VC0 receiver {} -> {} slots, VC0 worker {} -> {} slots",
++            receiver->slots,
++            requested,
++            worker->slots,
++            worker_slots);
++        receiver->slots = static_cast<std::size_t>(requested);
++        receiver->reason = "TT_FABRIC_AB_VC0_RX_SLOTS";
++        worker->slots = static_cast<std::size_t>(worker_slots);
++        worker->reason = "TT_FABRIC_AB_VC0_RX_SLOTS (the rest)";
++    }
+     TT_FATAL(
+         !allocation.error.has_value(),
+         "Fabric channel slots ({} B slots, {} B of channel buffers): {}",

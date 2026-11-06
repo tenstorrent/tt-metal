@@ -1,0 +1,7579 @@
+[
+ {
+  "file": "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router_v2.cpp",
+  "s": [
+   4,
+   0
+  ],
+  "p": [
+   5,
+   162
+  ],
+  "port_commits": [
+   "80ec66916c8"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 162
+ },
+ {
+  "file": "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router_v2.cpp",
+  "s": [
+   18,
+   4
+  ],
+  "p": [
+   179,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 4,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router_v2.cpp",
+  "s": [
+   95,
+   1
+  ],
+  "p": [
+   253,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   51,
+   2
+  ],
+  "p": [
+   51,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   74,
+   8
+  ],
+  "p": [
+   74,
+   6
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 8,
+  "comment_only": false,
+  "ns": 8,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   140,
+   2
+  ],
+  "p": [
+   138,
+   5
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   143,
+   2
+  ],
+  "p": [
+   144,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   148,
+   1
+  ],
+  "p": [
+   148,
+   3
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   151,
+   0
+  ],
+  "p": [
+   154,
+   10
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 10
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   192,
+   2
+  ],
+  "p": [
+   204,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   219,
+   2
+  ],
+  "p": [
+   231,
+   2
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   242,
+   4
+  ],
+  "p": [
+   254,
+   16
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 4,
+  "np": 16
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   268,
+   1
+  ],
+  "p": [
+   292,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   281,
+   5
+  ],
+  "p": [
+   306,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 5,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   288,
+   2
+  ],
+  "p": [
+   311,
+   2
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   303,
+   1
+  ],
+  "p": [
+   326,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   308,
+   2
+  ],
+  "p": [
+   331,
+   4
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_common.hpp",
+  "s": [
+   317,
+   2
+  ],
+  "p": [
+   342,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp",
+  "s": [
+   26,
+   2
+  ],
+  "p": [
+   26,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp",
+  "s": [
+   30,
+   0
+  ],
+  "p": [
+   32,
+   2
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp",
+  "s": [
+   108,
+   1
+  ],
+  "p": [
+   111,
+   1
+  ],
+  "port_commits": [
+   "bc0108869e2"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_utils.hpp",
+  "s": [
+   122,
+   4
+  ],
+  "p": [
+   124,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 4,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   63,
+   4
+  ],
+  "p": [
+   63,
+   3
+  ],
+  "port_commits": [
+   "5206b9a57da",
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": true,
+  "ns": 4,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   72,
+   1
+  ],
+  "p": [
+   71,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   91,
+   12
+  ],
+  "p": [
+   90,
+   8
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 12,
+  "comment_only": false,
+  "ns": 12,
+  "np": 8
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   104,
+   1
+  ],
+  "p": [
+   98,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   105,
+   0
+  ],
+  "p": [
+   100,
+   1
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   116,
+   2
+  ],
+  "p": [
+   111,
+   2
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   119,
+   1
+  ],
+  "p": [
+   114,
+   1
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   123,
+   1
+  ],
+  "p": [
+   118,
+   2
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   125,
+   0
+  ],
+  "p": [
+   122,
+   4
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   129,
+   2
+  ],
+  "p": [
+   129,
+   2
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   133,
+   1
+  ],
+  "p": [
+   133,
+   1
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   137,
+   1
+  ],
+  "p": [
+   137,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   208,
+   1
+  ],
+  "p": [
+   208,
+   1
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   214,
+   1
+  ],
+  "p": [
+   214,
+   1
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   225,
+   1
+  ],
+  "p": [
+   225,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   271,
+   1
+  ],
+  "p": [
+   272,
+   4
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   275,
+   4
+  ],
+  "p": [
+   279,
+   5
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 4,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   289,
+   2
+  ],
+  "p": [
+   294,
+   3
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   292,
+   4
+  ],
+  "p": [
+   298,
+   1
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 4,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   315,
+   1
+  ],
+  "p": [
+   318,
+   1
+  ],
+  "port_commits": [
+   "288afd237a7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   322,
+   3
+  ],
+  "p": [
+   325,
+   11
+  ],
+  "port_commits": [
+   "25d65133347",
+   "288afd237a7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 11
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   327,
+   1
+  ],
+  "p": [
+   338,
+   2
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   353,
+   1
+  ],
+  "p": [
+   365,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   354,
+   0
+  ],
+  "p": [
+   367,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   374,
+   1
+  ],
+  "p": [
+   387,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   392,
+   1
+  ],
+  "p": [
+   405,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   395,
+   1
+  ],
+  "p": [
+   408,
+   3
+  ],
+  "port_commits": [
+   "22cdb1e55c3"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   498,
+   1
+  ],
+  "p": [
+   512,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   516,
+   2
+  ],
+  "p": [
+   530,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   552,
+   1
+  ],
+  "p": [
+   566,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   554,
+   2
+  ],
+  "p": [
+   569,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   563,
+   1
+  ],
+  "p": [
+   578,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   578,
+   1
+  ],
+  "p": [
+   593,
+   4
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_downstream.hpp",
+  "s": [
+   589,
+   2
+  ],
+  "p": [
+   607,
+   5
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   12,
+   1
+  ],
+  "p": [
+   12,
+   1
+  ],
+  "port_commits": [
+   "82ea91f44a4"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   123,
+   2
+  ],
+  "p": [
+   123,
+   3
+  ],
+  "port_commits": [
+   "4db4f45790b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   126,
+   1
+  ],
+  "p": [
+   127,
+   1
+  ],
+  "port_commits": [
+   "4db4f45790b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   131,
+   1
+  ],
+  "p": [
+   132,
+   7
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 7
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   187,
+   2
+  ],
+  "p": [
+   194,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   216,
+   2
+  ],
+  "p": [
+   223,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   327,
+   1
+  ],
+  "p": [
+   334,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   338,
+   1
+  ],
+  "p": [
+   345,
+   1
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   344,
+   1
+  ],
+  "p": [
+   351,
+   3
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   352,
+   1
+  ],
+  "p": [
+   361,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   454,
+   1
+  ],
+  "p": [
+   463,
+   1
+  ],
+  "port_commits": [
+   "82ea91f44a4"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   522,
+   2
+  ],
+  "p": [
+   531,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   556,
+   3
+  ],
+  "p": [
+   565,
+   2
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": true,
+  "ns": 3,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   560,
+   2
+  ],
+  "p": [
+   568,
+   4
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   566,
+   1
+  ],
+  "p": [
+   576,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   605,
+   2
+  ],
+  "p": [
+   615,
+   2
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   659,
+   1
+  ],
+  "p": [
+   669,
+   3
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   667,
+   2
+  ],
+  "p": [
+   679,
+   2
+  ],
+  "port_commits": [
+   "bc0108869e2"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   696,
+   8
+  ],
+  "p": [
+   707,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 7,
+  "comment_only": false,
+  "ns": 8,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   725,
+   1
+  ],
+  "p": [
+   728,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   729,
+   3
+  ],
+  "p": [
+   732,
+   3
+  ],
+  "port_commits": [
+   "82ea91f44a4"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": true,
+  "ns": 3,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   743,
+   3
+  ],
+  "p": [
+   746,
+   4
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   750,
+   1
+  ],
+  "p": [
+   753,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   766,
+   3
+  ],
+  "p": [
+   769,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   808,
+   4
+  ],
+  "p": [
+   810,
+   4
+  ],
+  "port_commits": [
+   "5206b9a57da",
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": true,
+  "ns": 4,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   827,
+   2
+  ],
+  "p": [
+   829,
+   10
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 10
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp",
+  "s": [
+   856,
+   1
+  ],
+  "p": [
+   866,
+   2
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   12,
+   2
+  ],
+  "p": [
+   12,
+   2
+  ],
+  "port_commits": [
+   "993c99a564b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   76,
+   2
+  ],
+  "p": [
+   76,
+   6
+  ],
+  "port_commits": [
+   "df64d0ad677"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   79,
+   3
+  ],
+  "p": [
+   83,
+   1
+  ],
+  "port_commits": [
+   "df64d0ad677"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   126,
+   2
+  ],
+  "p": [
+   128,
+   2
+  ],
+  "port_commits": [
+   "993c99a564b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   133,
+   1
+  ],
+  "p": [
+   135,
+   1
+  ],
+  "port_commits": [
+   "993c99a564b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   197,
+   2
+  ],
+  "p": [
+   199,
+   3
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   215,
+   0
+  ],
+  "p": [
+   219,
+   4
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   217,
+   1
+  ],
+  "p": [
+   224,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   223,
+   3
+  ],
+  "p": [
+   230,
+   9
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 9
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   228,
+   1
+  ],
+  "p": [
+   241,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   269,
+   3
+  ],
+  "p": [
+   282,
+   4
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   298,
+   1
+  ],
+  "p": [
+   312,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   343,
+   5
+  ],
+  "p": [
+   357,
+   6
+  ],
+  "port_commits": [
+   "7cd3c13a0db"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": true,
+  "ns": 5,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   366,
+   1
+  ],
+  "p": [
+   381,
+   1
+  ],
+  "port_commits": [
+   "993c99a564b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   378,
+   0
+  ],
+  "p": [
+   394,
+   1
+  ],
+  "port_commits": [
+   "7cd3c13a0db"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   384,
+   2
+  ],
+  "p": [
+   400,
+   2
+  ],
+  "port_commits": [
+   "7cd3c13a0db"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   387,
+   2
+  ],
+  "p": [
+   403,
+   5
+  ],
+  "port_commits": [
+   "7cd3c13a0db"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   408,
+   1
+  ],
+  "p": [
+   427,
+   3
+  ],
+  "port_commits": [
+   "7cd3c13a0db"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   410,
+   0
+  ],
+  "p": [
+   432,
+   1
+  ],
+  "port_commits": [
+   "7cd3c13a0db"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   414,
+   1
+  ],
+  "p": [
+   436,
+   1
+  ],
+  "port_commits": [
+   "7cd3c13a0db"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   416,
+   0
+  ],
+  "p": [
+   439,
+   11
+  ],
+  "port_commits": [
+   "7cd3c13a0db"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 11
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   499,
+   2
+  ],
+  "p": [
+   532,
+   2
+  ],
+  "port_commits": [
+   "993c99a564b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   503,
+   2
+  ],
+  "p": [
+   536,
+   1
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   507,
+   1
+  ],
+  "p": [
+   538,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   539,
+   0
+  ],
+  "p": [
+   571,
+   7
+  ],
+  "port_commits": [
+   "df64d0ad677"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 7
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   543,
+   1
+  ],
+  "p": [
+   580,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   546,
+   1
+  ],
+  "p": [
+   582,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   564,
+   0
+  ],
+  "p": [
+   601,
+   2
+  ],
+  "port_commits": [
+   "22cdb1e55c3"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 0,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   577,
+   1
+  ],
+  "p": [
+   614,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   609,
+   2
+  ],
+  "p": [
+   646,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   628,
+   1
+  ],
+  "p": [
+   665,
+   2
+  ],
+  "port_commits": [
+   "22cdb1e55c3"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   666,
+   1
+  ],
+  "p": [
+   704,
+   1
+  ],
+  "port_commits": [
+   "aa11a8786df"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   703,
+   3
+  ],
+  "p": [
+   741,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   728,
+   1
+  ],
+  "p": [
+   766,
+   2
+  ],
+  "port_commits": [
+   "22cdb1e55c3"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   744,
+   2
+  ],
+  "p": [
+   783,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   765,
+   2
+  ],
+  "p": [
+   804,
+   2
+  ],
+  "port_commits": [
+   "5fb378a7880",
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   776,
+   1
+  ],
+  "p": [
+   814,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   784,
+   5
+  ],
+  "p": [
+   822,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 5,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   794,
+   2
+  ],
+  "p": [
+   828,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   797,
+   2
+  ],
+  "p": [
+   830,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   831,
+   1
+  ],
+  "p": [
+   863,
+   1
+  ],
+  "port_commits": [
+   "993c99a564b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   915,
+   1
+  ],
+  "p": [
+   947,
+   1
+  ],
+  "port_commits": [
+   "993c99a564b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   927,
+   1
+  ],
+  "p": [
+   959,
+   1
+  ],
+  "port_commits": [
+   "993c99a564b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   932,
+   4
+  ],
+  "p": [
+   964,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 4,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   937,
+   1
+  ],
+  "p": [
+   966,
+   1
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   969,
+   2
+  ],
+  "p": [
+   998,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   978,
+   1
+  ],
+  "p": [
+   1007,
+   1
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   1031,
+   1
+  ],
+  "p": [
+   1060,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   1033,
+   1
+  ],
+  "p": [
+   1063,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp",
+  "s": [
+   1071,
+   1
+  ],
+  "p": [
+   1103,
+   2
+  ],
+  "port_commits": [
+   "3b4ccab4dd7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   80,
+   2
+  ],
+  "p": [
+   80,
+   2
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   87,
+   1
+  ],
+  "p": [
+   87,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   90,
+   1
+  ],
+  "p": [
+   90,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   113,
+   1
+  ],
+  "p": [
+   113,
+   1
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   115,
+   1
+  ],
+  "p": [
+   115,
+   5
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   119,
+   1
+  ],
+  "p": [
+   123,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   122,
+   1
+  ],
+  "p": [
+   126,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   130,
+   1
+  ],
+  "p": [
+   134,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   132,
+   1
+  ],
+  "p": [
+   136,
+   1
+  ],
+  "port_commits": [
+   "5206b9a57da"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   149,
+   1
+  ],
+  "p": [
+   152,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   157,
+   1
+  ],
+  "p": [
+   160,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   247,
+   2
+  ],
+  "p": [
+   251,
+   8
+  ],
+  "port_commits": [
+   "e44ee14e634",
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 8
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   310,
+   1
+  ],
+  "p": [
+   320,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   318,
+   1
+  ],
+  "p": [
+   328,
+   4
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   322,
+   1
+  ],
+  "p": [
+   335,
+   4
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   325,
+   1
+  ],
+  "p": [
+   341,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   335,
+   1
+  ],
+  "p": [
+   352,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   342,
+   1
+  ],
+  "p": [
+   360,
+   1
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   345,
+   1
+  ],
+  "p": [
+   363,
+   3
+  ],
+  "port_commits": [
+   "e44ee14e634",
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   356,
+   2
+  ],
+  "p": [
+   376,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   360,
+   1
+  ],
+  "p": [
+   381,
+   4
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   371,
+   1
+  ],
+  "p": [
+   395,
+   2
+  ],
+  "port_commits": [
+   "3b4ccab4dd7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp",
+  "s": [
+   379,
+   1
+  ],
+  "p": [
+   404,
+   2
+  ],
+  "port_commits": [
+   "e44ee14e634",
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp",
+  "s": [
+   7,
+   3
+  ],
+  "p": [
+   7,
+   4
+  ],
+  "port_commits": [
+   "58a9a1e1a72"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": true,
+  "ns": 3,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp",
+  "s": [
+   16,
+   0
+  ],
+  "p": [
+   18,
+   3
+  ],
+  "port_commits": [
+   "58a9a1e1a72"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp",
+  "s": [
+   48,
+   1
+  ],
+  "p": [
+   52,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp",
+  "s": [
+   105,
+   4
+  ],
+  "p": [
+   111,
+   5
+  ],
+  "port_commits": [
+   "58a9a1e1a72"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": true,
+  "ns": 4,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp",
+  "s": [
+   112,
+   0
+  ],
+  "p": [
+   120,
+   6
+  ],
+  "port_commits": [
+   "58a9a1e1a72"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp",
+  "s": [
+   130,
+   1
+  ],
+  "p": [
+   143,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp",
+  "s": [
+   142,
+   1
+  ],
+  "p": [
+   155,
+   2
+  ],
+  "port_commits": [
+   "3b4ccab4dd7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_round.hpp",
+  "s": [
+   176,
+   3
+  ],
+  "p": [
+   190,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": true,
+  "ns": 3,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp",
+  "s": [
+   38,
+   2
+  ],
+  "p": [
+   38,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp",
+  "s": [
+   85,
+   1
+  ],
+  "p": [
+   85,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp",
+  "s": [
+   90,
+   2
+  ],
+  "p": [
+   90,
+   7
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 7
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp",
+  "s": [
+   93,
+   8
+  ],
+  "p": [
+   98,
+   2
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 8,
+  "comment_only": false,
+  "ns": 8,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp",
+  "s": [
+   104,
+   1
+  ],
+  "p": [
+   103,
+   4
+  ],
+  "port_commits": [
+   "c7a4d0fb29f"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp",
+  "s": [
+   106,
+   1
+  ],
+  "p": [
+   108,
+   5
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp",
+  "s": [
+   131,
+   2
+  ],
+  "p": [
+   136,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_local_delivery.hpp",
+  "s": [
+   156,
+   1
+  ],
+  "p": [
+   160,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp",
+  "s": [
+   47,
+   1
+  ],
+  "p": [
+   46,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp",
+  "s": [
+   78,
+   1
+  ],
+  "p": [
+   77,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp",
+  "s": [
+   86,
+   1
+  ],
+  "p": [
+   86,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_routing.hpp",
+  "s": [
+   144,
+   2
+  ],
+  "p": [
+   144,
+   2
+  ],
+  "port_commits": [
+   "3a9486d6da0"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp",
+  "s": [
+   7,
+   4
+  ],
+  "p": [
+   7,
+   4
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": true,
+  "ns": 4,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp",
+  "s": [
+   12,
+   2
+  ],
+  "p": [
+   12,
+   3
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_single.hpp",
+  "s": [
+   41,
+   2
+  ],
+  "p": [
+   42,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   9,
+   2
+  ],
+  "p": [
+   9,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   15,
+   1
+  ],
+  "p": [
+   15,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   17,
+   2
+  ],
+  "p": [
+   17,
+   1
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   35,
+   2
+  ],
+  "p": [
+   34,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   131,
+   2
+  ],
+  "p": [
+   130,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   134,
+   1
+  ],
+  "p": [
+   133,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   146,
+   1
+  ],
+  "p": [
+   146,
+   1
+  ],
+  "port_commits": [
+   "fe645101fcd"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   162,
+   1
+  ],
+  "p": [
+   162,
+   5
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/router/router_telemetry.hpp",
+  "s": [
+   168,
+   1
+  ],
+  "p": [
+   172,
+   5
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   96,
+   8
+  ],
+  "p": [
+   96,
+   8
+  ],
+  "port_commits": [
+   "a9150295798"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 8,
+  "comment_only": false,
+  "ns": 8,
+  "np": 8
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   107,
+   9
+  ],
+  "p": [
+   107,
+   2
+  ],
+  "port_commits": [
+   "a9150295798"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 8,
+  "comment_only": false,
+  "ns": 9,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   150,
+   5
+  ],
+  "p": [
+   143,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 5,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   157,
+   128
+  ],
+  "p": [
+   146,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 93,
+  "comment_only": false,
+  "ns": 128,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   298,
+   2
+  ],
+  "p": [
+   160,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "24312"
+  ],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   336,
+   4
+  ],
+  "p": [
+   196,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 4,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   348,
+   1
+  ],
+  "p": [
+   204,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   354,
+   8
+  ],
+  "p": [
+   210,
+   4
+  ],
+  "port_commits": [],
+  "main": [
+   "19765",
+   "19877",
+   "21450"
+  ],
+  "study_lines_not_in_main": 6,
+  "comment_only": false,
+  "ns": 8,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   364,
+   5
+  ],
+  "p": [
+   216,
+   3
+  ],
+  "port_commits": [],
+  "main": [
+   "18712",
+   "21450"
+  ],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 5,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   380,
+   3
+  ],
+  "p": [
+   229,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 3,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   387,
+   9
+  ],
+  "p": [
+   233,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 7,
+  "comment_only": false,
+  "ns": 9,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   404,
+   1
+  ],
+  "p": [
+   242,
+   7
+  ],
+  "port_commits": [],
+  "main": [
+   "19877",
+   "21450"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 7
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   407,
+   5
+  ],
+  "p": [
+   251,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "21450"
+  ],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 5,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   417,
+   62
+  ],
+  "p": [
+   257,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 36,
+  "comment_only": false,
+  "ns": 62,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   535,
+   2
+  ],
+  "p": [
+   314,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   548,
+   0
+  ],
+  "p": [
+   328,
+   3
+  ],
+  "port_commits": [],
+  "main": [
+   "37751"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   551,
+   1
+  ],
+  "p": [
+   333,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "37751"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   554,
+   7
+  ],
+  "p": [
+   336,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "37751"
+  ],
+  "study_lines_not_in_main": 7,
+  "comment_only": false,
+  "ns": 7,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   566,
+   1
+  ],
+  "p": [
+   342,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   701,
+   6
+  ],
+  "p": [
+   477,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "33222"
+  ],
+  "study_lines_not_in_main": 6,
+  "comment_only": false,
+  "ns": 6,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp",
+  "s": [
+   729,
+   2
+  ],
+  "p": [
+   500,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "24312"
+  ],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   115,
+   3
+  ],
+  "p": [
+   114,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   138,
+   9
+  ],
+  "p": [
+   134,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 7,
+  "comment_only": false,
+  "ns": 9,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   150,
+   3
+  ],
+  "p": [
+   137,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   154,
+   1
+  ],
+  "p": [
+   138,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   455,
+   1
+  ],
+  "p": [
+   439,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   458,
+   15
+  ],
+  "p": [
+   442,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 15,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   509,
+   1
+  ],
+  "p": [
+   479,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   511,
+   2
+  ],
+  "p": [
+   481,
+   2
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   520,
+   1
+  ],
+  "p": [
+   489,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   523,
+   0
+  ],
+  "p": [
+   493,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   525,
+   1
+  ],
+  "p": [
+   495,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   539,
+   1
+  ],
+  "p": [
+   509,
+   1
+  ],
+  "port_commits": [
+   "f4779d68dc5"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   549,
+   1
+  ],
+  "p": [
+   518,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp",
+  "s": [
+   588,
+   4
+  ],
+  "p": [
+   556,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 4,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   226,
+   2
+  ],
+  "p": [
+   226,
+   1
+  ],
+  "port_commits": [
+   "bd290f3246c"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   235,
+   2
+  ],
+  "p": [
+   234,
+   5
+  ],
+  "port_commits": [
+   "4db4f45790b"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   359,
+   2
+  ],
+  "p": [
+   361,
+   2
+  ],
+  "port_commits": [
+   "400d5bd0473"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   362,
+   5
+  ],
+  "p": [
+   364,
+   10
+  ],
+  "port_commits": [
+   "a9150295798"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 5,
+  "np": 10
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   368,
+   5
+  ],
+  "p": [
+   375,
+   10
+  ],
+  "port_commits": [
+   "400d5bd0473"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 5,
+  "np": 10
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   457,
+   0
+  ],
+  "p": [
+   470,
+   2
+  ],
+  "port_commits": [
+   "e44ee14e634"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   638,
+   1
+  ],
+  "p": [
+   652,
+   5
+  ],
+  "port_commits": [
+   "df64d0ad677"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   822,
+   9
+  ],
+  "p": [
+   839,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 6,
+  "comment_only": false,
+  "ns": 9,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp",
+  "s": [
+   832,
+   9
+  ],
+  "p": [
+   841,
+   2
+  ],
+  "port_commits": [
+   "400d5bd0473"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 9,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp",
+  "s": [
+   36,
+   0
+  ],
+  "p": [
+   37,
+   3
+  ],
+  "port_commits": [
+   "a9150295798"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 0,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp",
+  "s": [
+   49,
+   0
+  ],
+  "p": [
+   53,
+   2
+  ],
+  "port_commits": [
+   "a9150295798"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 0,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp",
+  "s": [
+   87,
+   6
+  ],
+  "p": [
+   91,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 6,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp",
+  "s": [
+   185,
+   6
+  ],
+  "p": [
+   183,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 6,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp",
+  "s": [
+   195,
+   1
+  ],
+  "p": [
+   187,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp",
+  "s": [
+   221,
+   5
+  ],
+  "p": [
+   212,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 5,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   113,
+   10
+  ],
+  "p": [
+   112,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 9,
+  "comment_only": false,
+  "ns": 10,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   126,
+   1
+  ],
+  "p": [
+   115,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   188,
+   6
+  ],
+  "p": [
+   177,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "33222"
+  ],
+  "study_lines_not_in_main": 6,
+  "comment_only": false,
+  "ns": 6,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   200,
+   2
+  ],
+  "p": [
+   184,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "28068"
+  ],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   207,
+   3
+  ],
+  "p": [
+   189,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 3,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   212,
+   1
+  ],
+  "p": [
+   191,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   233,
+   6
+  ],
+  "p": [
+   211,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 6,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   240,
+   1
+  ],
+  "p": [
+   212,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   258,
+   1
+  ],
+  "p": [
+   229,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   260,
+   1
+  ],
+  "p": [
+   230,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   284,
+   3
+  ],
+  "p": [
+   253,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 3,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   288,
+   1
+  ],
+  "p": [
+   254,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   291,
+   1
+  ],
+  "p": [
+   257,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "33222"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   293,
+   32
+  ],
+  "p": [
+   258,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 16,
+  "comment_only": false,
+  "ns": 32,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   330,
+   1
+  ],
+  "p": [
+   264,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "33222"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   336,
+   1
+  ],
+  "p": [
+   270,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "28068"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   345,
+   4
+  ],
+  "p": [
+   279,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "57785"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 4,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   351,
+   1
+  ],
+  "p": [
+   282,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   353,
+   1
+  ],
+  "p": [
+   283,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   356,
+   5
+  ],
+  "p": [
+   285,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 5,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   362,
+   1
+  ],
+  "p": [
+   286,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   365,
+   1
+  ],
+  "p": [
+   289,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "33222"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   368,
+   1
+  ],
+  "p": [
+   292,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "33222"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   371,
+   6
+  ],
+  "p": [
+   295,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "33222"
+  ],
+  "study_lines_not_in_main": 6,
+  "comment_only": false,
+  "ns": 6,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   383,
+   28
+  ],
+  "p": [
+   301,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 18,
+  "comment_only": false,
+  "ns": 28,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   419,
+   2
+  ],
+  "p": [
+   310,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "28068"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp",
+  "s": [
+   423,
+   2
+  ],
+  "p": [
+   313,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "33222"
+  ],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp",
+  "s": [
+   231,
+   8
+  ],
+  "p": [
+   230,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 6,
+  "comment_only": false,
+  "ns": 8,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp",
+  "s": [
+   251,
+   3
+  ],
+  "p": [
+   242,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp",
+  "s": [
+   270,
+   1
+  ],
+  "p": [
+   258,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp",
+  "s": [
+   54,
+   10
+  ],
+  "p": [
+   53,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 9,
+  "comment_only": false,
+  "ns": 10,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp",
+  "s": [
+   66,
+   1
+  ],
+  "p": [
+   55,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp",
+  "s": [
+   9,
+   0
+  ],
+  "p": [
+   10,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp",
+  "s": [
+   45,
+   12
+  ],
+  "p": [
+   45,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 12,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp",
+  "s": [
+   14,
+   3
+  ],
+  "p": [
+   14,
+   5
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 3,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp",
+  "s": [
+   100,
+   8
+  ],
+  "p": [
+   99,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 7,
+  "comment_only": false,
+  "ns": 8,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp",
+  "s": [
+   9,
+   1
+  ],
+  "p": [
+   8,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp",
+  "s": [
+   11,
+   1
+  ],
+  "p": [
+   9,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp",
+  "s": [
+   98,
+   1
+  ],
+  "p": [
+   95,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp",
+  "s": [
+   109,
+   1
+  ],
+  "p": [
+   105,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/tt_fabric_api.h",
+  "s": [
+   11,
+   1
+  ],
+  "p": [
+   10,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/tt_fabric_api.h",
+  "s": [
+   13,
+   1
+  ],
+  "p": [
+   11,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/tt_fabric_api.h",
+  "s": [
+   197,
+   0
+  ],
+  "p": [
+   196,
+   35
+  ],
+  "port_commits": [
+   "cb42eb72501"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 35
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/tt_fabric_api.h",
+  "s": [
+   236,
+   25
+  ],
+  "p": [
+   269,
+   1
+  ],
+  "port_commits": [
+   "cb42eb72501"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 25,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/tt_fabric_api.h",
+  "s": [
+   264,
+   1
+  ],
+  "p": [
+   273,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/tt_fabric_api.h",
+  "s": [
+   286,
+   2
+  ],
+  "p": [
+   295,
+   3
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 2,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/tt_fabric_api.h",
+  "s": [
+   291,
+   1
+  ],
+  "p": [
+   301,
+   9
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 9
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/fabric_2d_route_interface.h",
+  "s": [
+   80,
+   13
+  ],
+  "p": [
+   80,
+   8
+  ],
+  "port_commits": [],
+  "main": [
+   "57264",
+   "63452"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 13,
+  "np": 8
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/fabric_2d_route_interface.h",
+  "s": [
+   168,
+   1
+  ],
+  "p": [
+   163,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/fabric_2d_route_interface.h",
+  "s": [
+   172,
+   1
+  ],
+  "p": [
+   167,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/fabric_2d_route_interface.h",
+  "s": [
+   180,
+   1
+  ],
+  "p": [
+   175,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/fabric/hw/inc/fabric_2d_route_interface.h",
+  "s": [
+   188,
+   1
+  ],
+  "p": [
+   183,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   25,
+   0
+  ],
+  "p": [
+   26,
+   8
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 8
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   33,
+   0
+  ],
+  "p": [
+   42,
+   17
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 17
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   124,
+   0
+  ],
+  "p": [
+   150,
+   7
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 7
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   127,
+   4
+  ],
+  "p": [
+   158,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 4,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   166,
+   0
+  ],
+  "p": [
+   195,
+   4
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   183,
+   11
+  ],
+  "p": [
+   215,
+   20
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 11,
+  "np": 20
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   213,
+   7
+  ],
+  "p": [
+   254,
+   8
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 7,
+  "np": 8
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   223,
+   5
+  ],
+  "p": [
+   265,
+   8
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 5,
+  "np": 8
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   228,
+   0
+  ],
+  "p": [
+   274,
+   4
+  ],
+  "port_commits": [],
+  "main": [
+   "57264",
+   "57785"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   255,
+   3
+  ],
+  "p": [
+   304,
+   32
+  ],
+  "port_commits": [],
+  "main": [
+   "57264",
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 3,
+  "np": 32
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   259,
+   1
+  ],
+  "p": [
+   337,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   281,
+   2
+  ],
+  "p": [
+   359,
+   4
+  ],
+  "port_commits": [],
+  "main": [
+   "57785"
+  ],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   286,
+   4
+  ],
+  "p": [
+   366,
+   6
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 4,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   292,
+   1
+  ],
+  "p": [
+   374,
+   3
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   370,
+   0
+  ],
+  "p": [
+   455,
+   47
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 47
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   393,
+   1
+  ],
+  "p": [
+   524,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   396,
+   4
+  ],
+  "p": [
+   527,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 4,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   403,
+   1
+  ],
+  "p": [
+   531,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   445,
+   1
+  ],
+  "p": [
+   573,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   455,
+   1
+  ],
+  "p": [
+   583,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   516,
+   1
+  ],
+  "p": [
+   644,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   518,
+   1
+  ],
+  "p": [
+   646,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   560,
+   1
+  ],
+  "p": [
+   688,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   570,
+   1
+  ],
+  "p": [
+   698,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   573,
+   3
+  ],
+  "p": [
+   701,
+   3
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 3,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h",
+  "s": [
+   577,
+   1
+  ],
+  "p": [
+   705,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   183,
+   0
+  ],
+  "p": [
+   184,
+   4
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   191,
+   1
+  ],
+  "p": [
+   195,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "59086"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   252,
+   6
+  ],
+  "p": [
+   255,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 6,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   265,
+   1
+  ],
+  "p": [
+   263,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "37751"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   272,
+   1
+  ],
+  "p": [
+   270,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "37751"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   296,
+   1
+  ],
+  "p": [
+   294,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "31016"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   301,
+   1
+  ],
+  "p": [
+   299,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "19765"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   305,
+   4
+  ],
+  "p": [
+   303,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "31016"
+  ],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 4,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   314,
+   1
+  ],
+  "p": [
+   309,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "19877"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   437,
+   3
+  ],
+  "p": [
+   431,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 3,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   441,
+   3
+  ],
+  "p": [
+   433,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "38835"
+  ],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 3,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   447,
+   0
+  ],
+  "p": [
+   438,
+   11
+  ],
+  "port_commits": [
+   "a9150295798"
+  ],
+  "main": [
+   "38835"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 11
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   452,
+   2
+  ],
+  "p": [
+   453,
+   7
+  ],
+  "port_commits": [
+   "a9150295798"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 7
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   457,
+   1
+  ],
+  "p": [
+   463,
+   1
+  ],
+  "port_commits": [
+   "a9150295798"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   789,
+   1
+  ],
+  "p": [
+   795,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "37751"
+  ],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   791,
+   3
+  ],
+  "p": [
+   796,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 3,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp",
+  "s": [
+   1359,
+   1
+  ],
+  "p": [
+   1362,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "57264"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2207,
+   2
+  ],
+  "p": [
+   2206,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": true,
+  "ns": 2,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2212,
+   5
+  ],
+  "p": [
+   2209,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": true,
+  "ns": 5,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2222,
+   5
+  ],
+  "p": [
+   2215,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 5,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2233,
+   2
+  ],
+  "p": [
+   2222,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2236,
+   2
+  ],
+  "p": [
+   2224,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 2,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2336,
+   1
+  ],
+  "p": [
+   2323,
+   2
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2352,
+   0
+  ],
+  "p": [
+   2341,
+   1
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2370,
+   1
+  ],
+  "p": [
+   2359,
+   5
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2389,
+   1
+  ],
+  "p": [
+   2382,
+   1
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2395,
+   23
+  ],
+  "p": [
+   2387,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 12,
+  "comment_only": false,
+  "ns": 23,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+  "s": [
+   2453,
+   27
+  ],
+  "p": [
+   2422,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 27,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h",
+  "s": [
+   360,
+   5
+  ],
+  "p": [
+   360,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 5,
+  "comment_only": false,
+  "ns": 5,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h",
+  "s": [
+   371,
+   2
+  ],
+  "p": [
+   367,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h",
+  "s": [
+   390,
+   5
+  ],
+  "p": [
+   384,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 5,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h",
+  "s": [
+   396,
+   1
+  ],
+  "p": [
+   385,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h",
+  "s": [
+   398,
+   1
+  ],
+  "p": [
+   387,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1070,
+   4
+  ],
+  "p": [
+   1070,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 4,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1126,
+   1
+  ],
+  "p": [
+   1122,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1128,
+   1
+  ],
+  "p": [
+   1124,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1131,
+   1
+  ],
+  "p": [
+   1127,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1194,
+   5
+  ],
+  "p": [
+   1190,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 3,
+  "comment_only": false,
+  "ns": 5,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1215,
+   1
+  ],
+  "p": [
+   1207,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1219,
+   1
+  ],
+  "p": [
+   1211,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1228,
+   6
+  ],
+  "p": [
+   1220,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 6,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1244,
+   1
+  ],
+  "p": [
+   1231,
+   1
+  ],
+  "port_commits": [
+   "d2343171a56"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 1,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1322,
+   59
+  ],
+  "p": [
+   1308,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 59,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1916,
+   2
+  ],
+  "p": [
+   1844,
+   1
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1936,
+   0
+  ],
+  "p": [
+   1864,
+   4
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   1957,
+   41
+  ],
+  "p": [
+   1887,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 11,
+  "comment_only": false,
+  "ns": 41,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   2339,
+   0
+  ],
+  "p": [
+   2230,
+   2
+  ],
+  "port_commits": [
+   "288afd237a7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 0,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   2348,
+   1
+  ],
+  "p": [
+   2240,
+   2
+  ],
+  "port_commits": [
+   "288afd237a7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   2354,
+   1
+  ],
+  "p": [
+   2247,
+   3
+  ],
+  "port_commits": [
+   "288afd237a7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h",
+  "s": [
+   2359,
+   30
+  ],
+  "p": [
+   2253,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 7,
+  "comment_only": false,
+  "ns": 30,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/wormhole/noc_nonblocking_api.h",
+  "s": [
+   1012,
+   54
+  ],
+  "p": [
+   1011,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 4,
+  "comment_only": false,
+  "ns": 54,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/wormhole/noc_nonblocking_api.h",
+  "s": [
+   1517,
+   2
+  ],
+  "p": [
+   1463,
+   1
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 2,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/wormhole/noc_nonblocking_api.h",
+  "s": [
+   1537,
+   0
+  ],
+  "p": [
+   1483,
+   4
+  ],
+  "port_commits": [
+   "25d65133347"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/wormhole/noc_nonblocking_api.h",
+  "s": [
+   1558,
+   41
+  ],
+  "p": [
+   1506,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 11,
+  "comment_only": false,
+  "ns": 41,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/wormhole/noc_nonblocking_api.h",
+  "s": [
+   1878,
+   1
+  ],
+  "p": [
+   1786,
+   2
+  ],
+  "port_commits": [
+   "288afd237a7"
+  ],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/wormhole/noc_nonblocking_api.h",
+  "s": [
+   1940,
+   21
+  ],
+  "p": [
+   1848,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 6,
+  "comment_only": false,
+  "ns": 21,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/eth_fw_api.h",
+  "s": [
+   86,
+   0
+  ],
+  "p": [
+   87,
+   31
+  ],
+  "port_commits": [],
+  "main": [
+   "59626"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 31
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/eth_fw_api.h",
+  "s": [
+   94,
+   1
+  ],
+  "p": [
+   125,
+   3
+  ],
+  "port_commits": [],
+  "main": [
+   "59626"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/eth_fw_api.h",
+  "s": [
+   341,
+   0
+  ],
+  "p": [
+   375,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "59626"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h",
+  "s": [
+   67,
+   1
+  ],
+  "p": [
+   67,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "61568"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h",
+  "s": [
+   119,
+   1
+  ],
+  "p": [
+   119,
+   6
+  ],
+  "port_commits": [],
+  "main": [
+   "61568"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/dev_msgs.h",
+  "s": [
+   387,
+   0
+  ],
+  "p": [
+   388,
+   19
+  ],
+  "port_commits": [],
+  "main": [
+   "61568"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 19
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/device_print_structures.h",
+  "s": [
+   69,
+   1
+  ],
+  "p": [
+   69,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "62697"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/hostdev/device_print_structures.h",
+  "s": [
+   80,
+   1
+  ],
+  "p": [
+   81,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "62697"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/tensor/tensor_binding_token.h",
+  "s": [
+   117,
+   0
+  ],
+  "p": [
+   118,
+   57
+  ],
+  "port_commits": [],
+  "main": [
+   "61952"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 57
+ },
+ {
+  "file": "tt_metal/hw/inc/api/tensor/tensor_accessor.h",
+  "s": [
+   129,
+   0
+  ],
+  "p": [
+   130,
+   10
+  ],
+  "port_commits": [],
+  "main": [
+   "61952"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 10
+ },
+ {
+  "file": "tt_metal/hw/inc/api/tensor/tensor_accessor.h",
+  "s": [
+   707,
+   0
+  ],
+  "p": [
+   718,
+   6
+  ],
+  "port_commits": [],
+  "main": [
+   "61952"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/hw/inc/api/debug/ring_buffer.h",
+  "s": [
+   22,
+   0
+  ],
+  "p": [
+   23,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "62910"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/debug/ring_buffer.h",
+  "s": [
+   27,
+   0
+  ],
+  "p": [
+   29,
+   24
+  ],
+  "port_commits": [],
+  "main": [
+   "62910"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 24
+ },
+ {
+  "file": "tt_metal/hw/inc/api/debug/ring_buffer.h",
+  "s": [
+   35,
+   2
+  ],
+  "p": [
+   60,
+   15
+  ],
+  "port_commits": [],
+  "main": [
+   "62910"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 2,
+  "np": 15
+ },
+ {
+  "file": "tt_metal/hw/inc/api/debug/ring_buffer.h",
+  "s": [
+   72,
+   1
+  ],
+  "p": [
+   110,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "62910"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/debug/kernel_profiler.hpp",
+  "s": [
+   641,
+   0
+  ],
+  "p": [
+   642,
+   3
+  ],
+  "port_commits": [],
+  "main": [
+   "63524"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 3
+ },
+ {
+  "file": "tt_metal/hw/inc/api/debug/kernel_profiler.hpp",
+  "s": [
+   643,
+   2
+  ],
+  "p": [
+   646,
+   4
+  ],
+  "port_commits": [],
+  "main": [
+   "63524"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 2,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/hw/inc/api/debug/kernel_profiler.hpp",
+  "s": [
+   653,
+   2
+  ],
+  "p": [
+   658,
+   4
+  ],
+  "port_commits": [],
+  "main": [
+   "63524"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 2,
+  "np": 4
+ },
+ {
+  "file": "tt_metal/hw/inc/api/debug/kernel_profiler.hpp",
+  "s": [
+   734,
+   1
+  ],
+  "p": [
+   741,
+   5
+  ],
+  "port_commits": [],
+  "main": [
+   "63524"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/hw/inc/api/kernel_thread_globals.h",
+  "s": [
+   95,
+   1
+  ],
+  "p": [
+   95,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "60188"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/api/kernel_thread_globals.h",
+  "s": [
+   101,
+   0
+  ],
+  "p": [
+   103,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "60188"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/kernel_thread_globals.h",
+  "s": [
+   102,
+   0
+  ],
+  "p": [
+   105,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "60188"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/api/kernel_thread_globals.h",
+  "s": [
+   107,
+   0
+  ],
+  "p": [
+   112,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "60188"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 0,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/kernel_thread_globals.h",
+  "s": [
+   112,
+   2
+  ],
+  "p": [
+   117,
+   2
+  ],
+  "port_commits": [],
+  "main": [
+   "60188"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 2,
+  "np": 2
+ },
+ {
+  "file": "tt_metal/hw/inc/api/kernel_thread_globals.h",
+  "s": [
+   117,
+   0
+  ],
+  "p": [
+   123,
+   6
+  ],
+  "port_commits": [],
+  "main": [
+   "60188"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/hw/inc/api/kernel_thread_globals.h",
+  "s": [
+   161,
+   1
+  ],
+  "p": [
+   172,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "60188"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/hw/inc/api/kernel_thread_globals.h",
+  "s": [
+   166,
+   0
+  ],
+  "p": [
+   178,
+   5
+  ],
+  "port_commits": [],
+  "main": [
+   "60188"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 5
+ },
+ {
+  "file": "tt_metal/api/tt-metalium/circular_buffer_constants.h",
+  "s": [
+   6,
+   0
+  ],
+  "p": [
+   7,
+   6
+  ],
+  "port_commits": [],
+  "main": [
+   "62814"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 0,
+  "np": 6
+ },
+ {
+  "file": "tt_metal/api/tt-metalium/circular_buffer_constants.h",
+  "s": [
+   9,
+   2
+  ],
+  "p": [
+   14,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 2,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/api/tt-metalium/circular_buffer_constants.h",
+  "s": [
+   13,
+   1
+  ],
+  "p": [
+   17,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "62814"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 1
+ },
+ {
+  "file": "tt_metal/api/tt-metalium/circular_buffer_constants.h",
+  "s": [
+   16,
+   5
+  ],
+  "p": [
+   19,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 5,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/api/tt-metalium/circular_buffer_constants.h",
+  "s": [
+   25,
+   1
+  ],
+  "p": [
+   23,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": true,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/api/tt-metalium/circular_buffer_constants.h",
+  "s": [
+   33,
+   5
+  ],
+  "p": [
+   30,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 5,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/api/tt-metalium/circular_buffer_constants.h",
+  "s": [
+   39,
+   1
+  ],
+  "p": [
+   31,
+   0
+  ],
+  "port_commits": [],
+  "main": [],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 0
+ },
+ {
+  "file": "tt_metal/hw/inc/internal/circular_buffer_interface.h",
+  "s": [
+   9,
+   1
+  ],
+  "p": [
+   9,
+   1
+  ],
+  "port_commits": [],
+  "main": [
+   "62814"
+  ],
+  "study_lines_not_in_main": 0,
+  "comment_only": false,
+  "ns": 1,
+  "np": 1
+ }
+]

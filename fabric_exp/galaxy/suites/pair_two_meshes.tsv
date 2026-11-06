@@ -1,0 +1,13 @@
+# config	label	form	timeout_s	env	yaml
+mm_exp	mm_exp_mesh_sanity	mm_exp	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+mm_exp	mm_exp_multi_mesh	mm_exp	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+mm_exp8	mm_exp8_mesh_sanity	mm_exp8	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+mm_exp8	mm_exp8_multi_mesh	mm_exp8	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+mm_zfb	mm_zfb_mesh_sanity	mm_zfb	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+mm_zfb	mm_zfb_multi_mesh	mm_zfb	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+mm_zfb8	mm_zfb8_mesh_sanity	mm_zfb8	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+mm_zfb8	mm_zfb8_multi_mesh	mm_zfb8	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+override_mm_exp	ov_mm_exp	mm_exp	1800	TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml
+override_mm_exp8	ov_mm_exp8	mm_exp8	1800	TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml
+override_mm_zfb	ov_mm_zfb	mm_zfb	1800	TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml
+override_mm_zfb8	ov_mm_zfb8	mm_zfb8	1800	TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1	/home/aagarwal/tt-metal/fabric_exp/galaxy/glxp_override_acyclic.yaml

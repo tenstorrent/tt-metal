@@ -1,0 +1,23 @@
+# mk_p1d_yamls.py: pval1d_3072.yaml at 4352 B (default slots), 51 packets. Data-checked SlsLin1HopEW.
+Tests:
+- name: ValSlsLin1HopEW
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 51
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

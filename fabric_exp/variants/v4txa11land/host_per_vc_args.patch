@@ -1,0 +1,15 @@
+--- a/tt_metal/fabric/erisc_datamover_builder.cpp	2026-11-01 20:12:30.703887822 +0000
++++ b/tt_metal/fabric/erisc_datamover_builder.cpp	2026-11-01 20:12:30.718888027 +0000
+@@ -1351,6 +1351,12 @@
+     // agree across every VC1 link, since the acking receiver and upstream sender are on different
+     // routers, so it cannot be enabled per-router.
+     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;
++    // VC2 (neighbour exchange): one hop and no bubble flow control, so no first-level acks. One arg per VC, so the
++    // router reads every VC's setting from the host (VC2 line mode sets it by mode).
++    named_args["ENABLE_FIRST_LEVEL_ACK_VC2"] = 0;
++    // Whether VC2's receiver forwards onto VC1's downstream routers here (crossover, as FABRIC_2D_VC0_CROSSOVER_TO_VC1
++    // is for VC0). Neighbour exchange never forwards; VC2 line mode sets it where its line fans into VC1.
++    named_args["VC2_CROSSOVER_TO_VC1"] = 0;
+     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
+     named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
+     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;

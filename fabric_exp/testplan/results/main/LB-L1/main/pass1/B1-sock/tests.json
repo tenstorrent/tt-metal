@@ -1,0 +1,44 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 5,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "distributed_unit_tests.xml"
+ ],
+ "tests": {
+  "HDSocketFixture::D2HSocket": {
+   "file": "distributed_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.825
+  },
+  "HDSocketFixture::H2DSocket": {
+   "file": "distributed_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 5.471
+  },
+  "HDSocketFixture::H2DSocketLoopback": {
+   "file": "distributed_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.349
+  },
+  "HDSocketFixture::H2DSocketLoopbackMultiThreadedStress": {
+   "file": "distributed_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 4.617
+  },
+  "HDSocketFixture::H2DSocketStagedLoopback": {
+   "file": "distributed_unit_tests.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 2.648
+  }
+ }
+}

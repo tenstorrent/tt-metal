@@ -1,0 +1,8 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+TorusXY4x2_Wrap1HopNS_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,8,6,1,S,1,50000,256,7445466,2.320876,9065920.118
+TorusXY4x2_Wrap1HopNS_size_512_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,8,6,1,S,1,50000,512,7444577,4.642305,9067002.732
+TorusXY4x2_Wrap1HopNS_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,8,6,1,S,1,50000,1024,7442858,9.286755,9069096.844
+TorusXY4x2_Wrap1HopNS_size_2048_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,8,6,1,S,1,50000,2048,7443876,18.570970,9067856.584
+TorusXY4x2_Wrap1HopNS_size_3072_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,8,6,1,S,1,50000,3072,7468941,27.762972,9037425.788
+TorusXY4x2_Wrap1HopNS_size_4096_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,8,6,1,S,1,50000,4096,7474832,36.988122,9030303.290
+TorusXY4x2_Wrap1HopNS_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Torus,8,6,1,S,1,50000,4352,7467512,39.338403,9039155.210

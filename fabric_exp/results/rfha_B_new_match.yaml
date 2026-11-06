@@ -1,0 +1,75 @@
+# fabric_exp/report/refresh/rf_matched.py from this job's pass a (set B_new): N_i = 1.5e+09 / r_i.
+# 256 B: F0 6272000 (r 239.2), F1 3704000 (r 405.0); 1024 B: F0 6249000 (r 240.0), F1 3663000 (r 409.5); 4352 B: F0 6060000 (r 247.5), F1 3443000 (r 435.7)
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+  - name: "MVC3_B_new_M01_s256"
+    benchmark_mode: true
+    sync: false  # each sender times its own send loop (mvc3_yamls.py)
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [256]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [1, 0]
+        vc_id: 0
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 6272000
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 3704000
+
+  - name: "MVC3_B_new_M01_s1024"
+    benchmark_mode: true
+    sync: false  # each sender times its own send loop (mvc3_yamls.py)
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [1, 0]
+        vc_id: 0
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 6249000
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 3663000
+
+  - name: "MVC3_B_new_M01_s4352"
+    benchmark_mode: true
+    sync: false  # each sender times its own send loop (mvc3_yamls.py)
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [4352]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [1, 0]
+        vc_id: 0
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 6060000
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+            num_packets: 3443000

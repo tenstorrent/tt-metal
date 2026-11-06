@@ -1,0 +1,6 @@
+ccl,cfg,payload,value
+all_gather,"num_links=1, ",2048,3.006
+all_gather,"num_links=1, ",4096,2.685
+all_gather,"num_links=1, ",4352,2.632
+all_gather,"num_links=1, ",8192,2.612
+all_gather,"num_links=1, ",15232,2.629

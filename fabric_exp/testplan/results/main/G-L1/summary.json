@@ -1,0 +1,81 @@
+{
+ "group": "G-L1",
+ "label": "main",
+ "updated": "2026-11-04T05:10:56+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G1-dp-combine",
+   "status": "PASS",
+   "duration_s": 525.8,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 21,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T04:47:48+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G1-dp-hybrid",
+   "status": "PASS",
+   "duration_s": 861.2,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 6,
+    "PERF_WINDOW": 0,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T04:56:34+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G1-mh",
+   "status": "NOT_RUN",
+   "duration_s": 0,
+   "node": "bh-glx-110-a09u14",
+   "tree_sha": null,
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": "NOT RUN: on main d2bd12f MESH_DEVICE=SINGLE_BH selects 0 of 78 tests (job 171912: 'collected 78 items / 78 deselected / 0 selected', pytest rc 5); the suite has no _8x4 cases",
+   "start": "2026-11-04T02:50:44+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "G1-night",
+   "status": "PASS",
+   "duration_s": 1422.0,
+   "node": "bh-glx-110-a03u08",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "KNOWN_FAIL": 0,
+    "PASS": 100,
+    "PERF_WINDOW": 0,
+    "SKIP": 2
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-04T04:24:06+00:00"
+  }
+ ]
+}

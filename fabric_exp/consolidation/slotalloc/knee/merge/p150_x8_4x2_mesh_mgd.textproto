@@ -1,0 +1,12 @@
+# Study descriptor (2026-11-04, SLOT_ALLOCATOR.md section 12.10): the P150x8 as a 4x2 MESH (dims [4, 2], both axes
+# LINE), passed with TT_MESH_GRAPH_DESC_PATH; auto-discovery would make it 2x4. Copy of fabric_exp/torus/
+# p150_x8_4x2_torus_xy_mgd.textproto with the RING axis made LINE.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -1,0 +1,22 @@
+job 172799 on bh-lb-120-a07u28
+command: KNEE_PREFIX=kr bash fabric_exp/consolidation/slotalloc/knee/knee_p150_runs.sh E
+summary: rc=0 hung=0 node=bh-lb-120-a07u28 job=172799 post=none start=2026-11-04 07:55:15 end=2026-11-04T08:11:08Z
+[lb2 07:53:44 +0s] node=bh-lb-120-a07u28 job=172799 mode=run start=2026-11-04T07:53:44Z timeout=6000s
+[lb2 07:53:44 +0s] command: KNEE_PREFIX=kr bash fabric_exp/consolidation/slotalloc/knee/knee_p150_runs.sh E
+[lb2 07:53:44 +0s] stage src-20261104-075310 (full full-20261104-020334), staged 2026-11-04T07:53:26Z
+[lb2 07:53:44 +0s] busy check: clear
+[lb2 07:53:44 +0s] space: 921 GB free on /home
+[lb2 07:53:52 +8s] verify: 30576 files of REF_src.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T07:53:26Z)
+[lb2 07:53:54 +10s] verify: 3454 files of REF_build_Release.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T07:53:26Z)
+[lb2 07:54:03 +19s] verify: 67280 files of REF_python_env.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T07:53:26Z)
+[lb2 07:54:04 +20s] verify: 1502 files of REF_runtime.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T07:53:26Z)
+[lb2 07:54:04 +20s] verify: 4215 files of REF_uv-python.sha256 match (live a09u32 tree, unswapped view, at 2026-11-04T07:53:26Z)
+[lb2 07:54:06 +22s] git: HEAD e569c5deb20; status and per-file diff of the node copy = the live tree's at stage time
+[lb2 07:54:06 +22s] preflight: binaries, sfpi, python modules, MPI and tt-smi present; command inputs present (variants: none)
+[lb2 07:54:06 +22s] cpus: nproc 64, Cpus_allowed_list: 0-63, memory 580 GB available
+[lb2 07:54:06 +22s] reset (start): tt-smi -r
+[lb2 07:55:15 +91s] link check (start, poll 1, +0 s): all baseline links UP/PASS/400
+[lb2 07:55:16 +92s] run: KNEE_PREFIX=kr bash fabric_exp/consolidation/slotalloc/knee/knee_p150_runs.sh E
+[lb2 08:03:11 +567s] command exit 0
+[lb2 08:11:08 +1044s] copied back: 132 result files, 0 other fabric_exp files, 0 builds, router ELFs/headers of 1 caches -> /data/aagarwal/lb2/jobs/172799 (MANIFEST.tsv)
+[lb2 08:11:08 +1044s] done: rc 0, hung 0; 916 GB free on /home

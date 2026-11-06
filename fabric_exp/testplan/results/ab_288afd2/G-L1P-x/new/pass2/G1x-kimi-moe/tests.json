@@ -1,0 +1,26 @@
+{
+ "counts": {
+  "FAIL": 1,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_768376_1793811216817617545_20261104_165336.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.perf.test_kimi_moe_perf::test_kimi_moe_perf[blackhole-k2_7-galaxy-torus-xy-8x4]": {
+   "file": "pytest_768376_1793811216817617545_20261104_165336.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 54.331
+  },
+  "models.demos.deepseek_v3_d_p.tests.perf.test_kimi_moe_perf::test_kimi_moe_perf[blackhole-k3-galaxy-torus-xy-8x4]": {
+   "file": "pytest_768376_1793811216817617545_20261104_165336.xml",
+   "message": "AssertionError: kimi-k3: traced replay 6,086,353 ns outside band [6,120,700, 6,499,300] (expected 6,310,000 ns, margin +/- 3.0%)\nassert 6120700.0 <= 6086353",
+   "status": "FAIL",
+   "time": 50.233
+  }
+ }
+}

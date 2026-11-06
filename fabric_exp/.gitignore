@@ -13,3 +13,13 @@ consolidation/builds/
 # Hang captures (device-state dumps) and source snapshots (.tgz) stay local: raw artifacts, like the logs.
 results/*_hangcap/
 results/*.tgz
+# Raw run output in per-run subdirectories stays local too: per-sample latency CSVs, zone samples, numpy dumps and
+# hang captures (results/<run>/...), the latency sweep's per-sample CSVs, and the regression runner's raw test logs
+# and junit files (testplan/results/.../log.txt, junit/); their summaries (status.json, compare_*.md/csv) are committed.
+results/**/*_latency.csv
+results/**/*_zones.csv
+results/**/*.npz
+results/**/*_hangcap/
+latsweep/results/*.csv
+testplan/results/**/log.txt
+testplan/results/**/junit/

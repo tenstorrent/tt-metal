@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+GlxTorusWrapEW_size_1024_ntype_fused_atomic_inc,CHIP_UNICAST,NOC_FUSED_UNICAST_ATOMIC_INC,Torus,32,0,1,W,1,50000,1024,9387898,7.362671,7190107.945
+GlxTorusWrapEW_size_4096_ntype_fused_atomic_inc,CHIP_UNICAST,NOC_FUSED_UNICAST_ATOMIC_INC,Torus,32,0,1,W,1,50000,4096,11913460,23.207364,5665860.296
+GlxTorusWrapEW_size_4352_ntype_fused_atomic_inc,CHIP_UNICAST,NOC_FUSED_UNICAST_ATOMIC_INC,Torus,32,0,1,W,1,50000,4352,12607762,23.299932,5353844.719

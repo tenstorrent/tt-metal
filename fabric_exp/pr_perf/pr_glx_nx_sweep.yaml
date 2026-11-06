@@ -1,0 +1,32 @@
+# PR perf gap runs, Galaxy 200G (mk_pr_gap_yamls.py): NeighborExchange write, 1 and 2 links, 256-4352 B (pr_size_sweep.yaml's row,
+# pr_glx_size_sweep.yaml's packet count).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxNeighborExchange
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 3072
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1

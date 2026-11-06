@@ -1,0 +1,81 @@
+{
+ "counts": {
+  "FAIL": 10,
+  "PASS": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_1534539_1793747637309288573.xml",
+  "pytest_1539442_1793747654566901949.xml",
+  "pytest_1548044_1793747671531465274.xml",
+  "pytest_1553099_1793747688907891684.xml",
+  "pytest_1558447_1793747706353415374.xml",
+  "pytest_1571567_1793747721438966533.xml",
+  "pytest_1588022_1793747736347754165.xml",
+  "pytest_1589440_1793747751203865547.xml",
+  "pytest_1590496_1793747766095350880.xml",
+  "pytest_1594552_1793747781071257308.xml"
+ ],
+ "tests": {
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_matmul_reduce_scatter_cache_bh::test_matmul_reduce_scatter_cache_hit[silicon_arch_name=blackhole-bf16_bias-mesh_device=(1, 4)-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'l1_small_size': 24576}]": {
+   "file": "pytest_1534539_1793747637309288573.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.311
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_matmul_reduce_scatter_cache_bh::test_matmul_reduce_scatter_cache_hit[silicon_arch_name=blackhole-fp32_qwen36-mesh_device=(1, 4)-device_params={'fabric_config': FabricConfig.FABRIC_1D, 'l1_small_size': 24576}]": {
+   "file": "pytest_1539442_1793747654566901949.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.233
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_moe_compute_multi_card::test_moe_compute_fullccl_linear_1x4[silicon_arch_name=blackhole-h2048_n512_k8_e4_t32-links1-1x4-fabric_1d]": {
+   "file": "pytest_1548044_1793747671531465274.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.377
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_moe_compute_multi_card::test_moe_compute_fullccl_linear_1x4[silicon_arch_name=blackhole-h2048_n512_k8_e4_t32-links_auto-1x4-fabric_1d]": {
+   "file": "pytest_1553099_1793747688907891684.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.294
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_moe_compute_multi_card::test_moe_compute_fullccl_linear_1x4[silicon_arch_name=blackhole-h7168_n2048_k8_e2_t8-links1-1x4-fabric_1d]": {
+   "file": "pytest_1558447_1793747706353415374.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.072
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_moe_compute_multi_card::test_moe_compute_fullccl_linear_1x4[silicon_arch_name=blackhole-h7168_n2048_k8_e2_t8-links_auto-1x4-fabric_1d]": {
+   "file": "pytest_1571567_1793747721438966533.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 10.996
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_moe_compute_multi_card::test_selective_reduce_combine_linear_1x4[silicon_arch_name=blackhole-h4096-k2-links1-1x4-fabric_1d]": {
+   "file": "pytest_1588022_1793747736347754165.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.022
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_moe_compute_multi_card::test_selective_reduce_combine_linear_1x4[silicon_arch_name=blackhole-h4096-k8-links1-1x4-fabric_1d]": {
+   "file": "pytest_1589440_1793747751203865547.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.051
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_moe_compute_multi_card::test_selective_reduce_combine_linear_1x4[silicon_arch_name=blackhole-h7168-k2-links1-1x4-fabric_1d]": {
+   "file": "pytest_1590496_1793747766095350880.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.038
+  },
+  "tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_moe_compute_multi_card::test_selective_reduce_combine_linear_1x4[silicon_arch_name=blackhole-h7168-k8-links1-1x4-fabric_1d]": {
+   "file": "pytest_1594552_1793747781071257308.xml",
+   "message": "failed on setup with \"RuntimeError: TT_THROW @ /home/aagarwal/tt-metal-main/tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:289: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2. Master chan=10 got 0xa0b0c0d0. furthest-behind stage:",
+   "status": "FAIL",
+   "time": 11.087
+  }
+ }
+}

@@ -1,0 +1,20 @@
+{
+ "counts": {
+  "FAIL": 0,
+  "KNOWN_FAIL": 0,
+  "PASS": 1,
+  "PERF_WINDOW": 0,
+  "SKIP": 0
+ },
+ "files": [
+  "pytest_4048677_1793772782025333903_20261104_061302.xml"
+ ],
+ "tests": {
+  "models.demos.deepseek_v3_b1.tests.unit_tests.test_reduce_to_one_b1::test_reduce_to_one_2d[blackhole-True-fabric_2d]": {
+   "file": "pytest_4048677_1793772782025333903_20261104_061302.xml",
+   "message": "",
+   "status": "PASS",
+   "time": 13.997
+  }
+ }
+}

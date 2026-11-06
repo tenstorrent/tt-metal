@@ -1,0 +1,33 @@
+# Port slot measurements (SLOT_ALLOCATOR.md section 12.12; fabric_exp/port_slots/mk_port_yamls.py)
+# N/S 3-hop on the P150 as a 4x2 mesh (needs TT_MESH_GRAPH_DESC_PATH=4x2 mesh), 3072 B slots.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Sls3HopNS4x2
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    max_packet_size: 3072
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 2048
+    - 3072
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 6

@@ -1,0 +1,11 @@
+ccl,cfg,payload,value
+all_reduce,"num_links=1, ",2048,1.491
+all_reduce,"num_links=1, ",4096,1.289
+all_reduce,"num_links=1, ",4352,1.286
+all_reduce,"num_links=1, ",8192,1.284
+all_reduce,"num_links=1, ",15232,1.28
+all_reduce,"num_links=2, ",2048,1.35
+all_reduce,"num_links=2, ",4096,1.266
+all_reduce,"num_links=2, ",4352,1.283
+all_reduce,"num_links=2, ",8192,1.292
+all_reduce,"num_links=2, ",15232,1.275

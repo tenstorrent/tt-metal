@@ -1,0 +1,107 @@
+{
+ "group": "LB-L0-b",
+ "label": "main",
+ "updated": "2026-11-03T23:13:37+00:00",
+ "steps": [
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-eth",
+   "status": "FAIL",
+   "duration_s": 40.0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 2,
+    "PASS": 11,
+    "SKIP": 92
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:46:52+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-health",
+   "status": "PASS",
+   "duration_s": 5.0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 3,
+    "SKIP": 0
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:19:56+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-infra",
+   "status": "PASS",
+   "duration_s": 295.6,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:20:01+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-night",
+   "status": "PASS",
+   "duration_s": 1146.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 0,
+    "PASS": 139,
+    "SKIP": 47
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:27:33+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 1,
+   "step": "B0-stab",
+   "status": "PASS",
+   "duration_s": 140.1,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": null,
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T21:25:13+00:00"
+  },
+  {
+   "router": "main",
+   "pass": 2,
+   "step": "B0-eth",
+   "status": "FAIL",
+   "duration_s": 35.0,
+   "node": "bh-lb-120-a09u32",
+   "tree_sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+   "tests": {
+    "FAIL": 2,
+    "PASS": 11,
+    "SKIP": 92
+   },
+   "tt_fabric": null,
+   "metrics": null,
+   "reason": null,
+   "start": "2026-11-03T23:13:02+00:00"
+  }
+ ]
+}

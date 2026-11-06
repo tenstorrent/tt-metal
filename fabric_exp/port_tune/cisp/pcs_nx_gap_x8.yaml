@@ -1,0 +1,598 @@
+# cisp X7 (mk_order_yamls.py): NX write rows, L1/L2 alternation with an idle gap after each L2 block.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: NeighborExchangeUnicastR01S2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR01a
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR01S4096
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR01b
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR02S2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR02a
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR02S4096
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR02b
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR03S2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR03a
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR03S4096
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR03b
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR04S2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR04a
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR04S4096
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR04b
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR05S2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR05a
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR05S4096
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR05b
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR06S2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR06a
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR06S4096
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR06b
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR07S2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR07a
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR07S4096
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR07b
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR08S2048
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR08a
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10
+- name: NeighborExchangeUnicastR08S4096
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    ntype:
+    - unicast_write
+    size:
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 3
+- name: GapR08b
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 2048
+  defaults:
+    ftype: unicast
+    num_packets: 1
+  patterns:
+  - type: neighbor_exchange
+    iterations: 10

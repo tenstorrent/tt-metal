@@ -1,0 +1,3 @@
+# config	label	form	timeout_s	env	yaml
+16x4	b16_mesh_sanity	16x4	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_sanity_common.yaml
+16x4	b16_big_mesh	16x4	3600	-	tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_big_mesh_sanity_common.yaml
