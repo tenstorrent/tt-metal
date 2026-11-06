@@ -126,7 +126,8 @@ def read_time_embedder(weights_dir: Path) -> dict[str, np.ndarray]:
 def load_transformer(model, weights_dir: Path, only: tuple[str, ...] | None = None, verbose: bool = True) -> int:
     """Fill the ttml model from the HF `transformer/` shards; numpy only, one shard open at a time.
 
-    `only`: load just the parameters whose ttml name (after the root) starts with one of these prefixes."""
+    `only`: load just the parameters whose ttml name (after the root) starts with one of these prefixes.
+    Attentions whose q/k/v were loaded are fused at the end (`H3Attention.fuse_qkv`)."""
     import ttnn
     import ttml
     from safetensors import safe_open
@@ -146,6 +147,13 @@ def load_transformer(model, weights_dir: Path, only: tuple[str, ...] | None = No
     missing = [n for n in plan if n not in params]
     if missing:
         raise KeyError(f"model lacks {missing[:4]}... ; model has {sorted(params)[:4]}...")
+    to_fuse = []
+    for prefix, attn in model.attentions():
+        hits = sum(f"{root}/{prefix}{p}/weight" in plan for p in ("to_q", "to_k", "to_v"))
+        if hits and attn.is_fused:
+            raise RuntimeError(f"{prefix}: q/k/v already fused; build a new model to reload them")
+        if hits == 3:
+            to_fuse.append(attn)
 
     by_shard: dict[str, list] = {}
     for name, (hf_keys, tdim) in plan.items():
@@ -183,4 +191,6 @@ def load_transformer(model, weights_dir: Path, only: tuple[str, ...] | None = No
                 f"prepare {timing['prepare']:.0f} s upload {timing['upload']:.0f} s",
                 flush=True,
             )
+    for attn in to_fuse:
+        attn.fuse_qkv()
     return loaded

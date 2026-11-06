@@ -178,8 +178,8 @@ class GatedResidual(ttml.autograd.Function):
 class H3Attention(AbstractModuleBase):
     """Full bidirectional self-attention, per-head QK RMSNorm, optional rotary on q/k.
 
-    q, k, v (and their LoRA A) come from one fused matmul; the fused weight is built on the first forward, which
-    frees the separate to_q/to_k/to_v weights."""
+    q, k, v (and their LoRA A) come from one fused matmul. Call `fuse_qkv()` once the weights are loaded
+    (`load_transformer` does); it frees the separate to_q/to_k/to_v weights."""
 
     def __init__(self, config: H3Config) -> None:
         super().__init__()
@@ -219,14 +219,19 @@ class H3Attention(AbstractModuleBase):
     def _projections(self):
         return self.to_q, self.to_k, self.to_v
 
-    def _fused_qkv_weight(self) -> ttml.autograd.Tensor:
-        if self._qkv_weight is None:
-            parts = [p.weight.tensor.get_value() for p in self._projections()]
-            fused = ttnn.concat(parts, 2)  # per device: [q | k | v] rows of the local heads
-            for part in parts:
-                ttnn.deallocate(part)
-            object.__setattr__(self, "_qkv_weight", ttml.autograd.create_tensor(fused, False))
-        return self._qkv_weight
+    @property
+    def is_fused(self) -> bool:
+        return self._qkv_weight is not None
+
+    def fuse_qkv(self) -> None:
+        """Concatenate to_q/to_k/to_v into one weight and free them. Once only: their buffers are gone after."""
+        if self.is_fused:
+            raise RuntimeError("q/k/v are already fused; build a new model to reload weights")
+        parts = [p.weight.tensor.get_value() for p in self._projections()]
+        fused = ttnn.concat(parts, 2)  # per device: [q | k | v] rows of the local heads
+        for part in parts:
+            ttnn.deallocate(part)
+        object.__setattr__(self, "_qkv_weight", ttml.autograd.create_tensor(fused, False))
 
     def _sum_over_tp(self, lora_A):
         """Each device's grad of a replicated lora_A only carries its own lora_B shard; broadcast sums it."""
@@ -254,7 +259,9 @@ class H3Attention(AbstractModuleBase):
     def forward(self, x, mask, rope_params=None):
         if self.tp > 1:
             x = ttml.ops.distributed.broadcast(x, self.to_q.cluster_axis)
-        qkv = ttml.ops.linear.linear(x, self._fused_qkv_weight(), None)
+        if not self.is_fused:
+            raise RuntimeError("call fuse_qkv() after loading the weights")
+        qkv = ttml.ops.linear.linear(x, self._qkv_weight, None)
         q, k, v = Split.apply(qkv, (self.local_inner,) * 3, 3)
         updates = self._lora_updates(x)
         if updates is not None:
@@ -486,6 +493,13 @@ class H3Transformer(AbstractModuleBase):
             self.norm_out_linear = LinearLayer(config.time_embed_dim, 2 * D, True, weight_init=w_init, bias_init=b_init)
         self.proj_out = LinearLayer(D, config.video_in_channels, True)
         self.audio_proj_out = LinearLayer(D, config.audio_in_channels, True)
+
+    def attentions(self):
+        """(parameter-name prefix below the root, H3Attention) of every block."""
+        for i, block in enumerate(self.refiner_blocks):
+            yield f"refiner_blocks/{i}/attn/", block.attn
+        for i, block in enumerate(self.blocks):
+            yield f"blocks/{i}/attn/", block.attn
 
     def embed_text(self, inputs: H3Inputs):
         x = self.context_embedder(inputs.text_embeds)

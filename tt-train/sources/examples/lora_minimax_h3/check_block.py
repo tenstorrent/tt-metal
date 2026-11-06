@@ -178,6 +178,7 @@ def main() -> int:
     randomize(attn, rng)
     ref = NpAttention(attn, config)
     ref_rope = NpAttention(attn, config, cos.astype(np.float64), sin.astype(np.float64))
+    attn.fuse_qkv()  # after the references read to_q/to_k/to_v
     check("attention, full mask", lambda x: attn(x, mask_all), lambda x: ref(x, np.ones((S, S))), x_np, rng, ctx)
     check("attention, partial mask", lambda x: attn(x, mask), lambda x: ref(x, mask_np[0, 0]), x_np, rng, ctx)
     check(
@@ -202,6 +203,7 @@ def main() -> int:
     m = [host(t)[0, 0] for t in mods]
     n1, n2 = w(block, f"{root}/norm1/weight").reshape(-1), w(block, f"{root}/norm2/weight").reshape(-1)
     b_attn = NpAttention(block.attn, config, cos.astype(np.float64), sin.astype(np.float64))
+    block.attn.fuse_qkv()
     b_ff = NpFeedForward(block.ff)
 
     def np_block(x):
