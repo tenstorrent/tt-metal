@@ -375,22 +375,71 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.pad">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">pad</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.pad" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">pad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_multicore</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.pad" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.
-Any rank of tensor is supported. For rank &gt; 4, leading dimensions are padded via a reshape path before the 4D device kernel; tile layout still does not support front padding on device.</p>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: (ttnn.Tensor): the input tensor.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">padding</span></code>: (list[Tuple[int,int]]): padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">value</span></code>: (Union[float,int]): value to pad with.</p>
-<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">use_multicore</span></code>: (Optional[bool]) switch to use multicore implementation
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to <cite>None</cite>.
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code>: (Optional[ttnn.CoreRangeSet]): Sub core grids to run the operation on. Defaults to <cite>None</cite>.</p>
+<p>Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device. Padding on host needs ROW_MAJOR layout.
+Any rank of tensor is supported. For rank &gt; 4, leading dimensions are padded via a reshape path before the 4D device kernel; on host, a tensor of rank &gt; 4 can be padded only in its last 3 dimensions.</p>
+<p>A second overload pads to an explicit shape instead: <code class="docutils literal notranslate"><span class="pre">ttnn.pad(input_tensor,</span> <span class="pre">output_padded_shape,</span> <span class="pre">input_tensor_start,</span> <span class="pre">value)</span></code>,
+where <code class="docutils literal notranslate"><span class="pre">output_padded_shape</span></code> is the 4D output shape and <code class="docutils literal notranslate"><span class="pre">input_tensor_start</span></code> is the 4D position of the input inside it. The input must have rank 4.</p>
 <dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>padding</strong> (<em>List</em><em>[</em><em>Tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em><em>]</em>)</span><span class="tt-api-param-desc">padding to apply. Each element is a tuple of 2 integers: the number of values to add before and after the tensor in that dimension. A list shorter than the tensor’s rank applies to the trailing dimensions.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>value</strong> (<em>float</em>)</span><span class="tt-api-param-desc">value to pad with. Integer values are converted to float32, so <code class="docutils literal notranslate"><span class="pre">INT32</span></code> and <code class="docutils literal notranslate"><span class="pre">UINT32</span></code> values with a magnitude above 2^24 may be rounded.</span></p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>use_multicore</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">switch to use the multicore implementation. Defaults to <cite>True</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>, which uses the input tensor’s memory configuration.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Sub core grids to run the operation on. Defaults to <cite>None</cite>.</span></p></li>
+</ul>
+</dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><span class="tt-api-param-name"><em>List of ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, INT32, UINT32, UINT16</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p>TILE layout does not support front padding: every “before” value must be 0. Depending on the execution
+path, <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> input may be padded through a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> typecast.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; ROW_MAJOR HEIGHT_SHARDED and WIDTH_SHARDED inputs are also accepted in DRAM</p></li>
+<li><p>ND sharded: L1</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sub_core_grids</span></code> requires interleaved input and output, and <code class="docutils literal notranslate"><span class="pre">use_multicore=True</span></code></p></li>
+</ul>
 </dd>
 </dl>
 <div class="admonition-example admonition">
@@ -399,9 +448,9 @@ Any rank of tensor is supported. For rank &gt; 4, leading dimensions are padded 
 <div class="highlight"><pre><span></span><span class="c1"># Create a tensor to pad</span>
 <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
-<span class="c1"># Pad the tensor with 1 zero on all sides</span>
+<span class="c1"># Pad the last two dimensions with 12 zeros at the end</span>
 <span class="n">padded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">12</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">12</span><span class="p">)],</span> <span class="mi">0</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Padded Tensor Shape:"</span><span class="p">,</span> <span class="n">padded_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Padded Tensor Shape: Shape([1, 1, 16, 16])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Padded Tensor Shape: </span><span class="si">{</span><span class="n">padded_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 16, 16])</span>
 </pre></div>
 </div>
 </div>

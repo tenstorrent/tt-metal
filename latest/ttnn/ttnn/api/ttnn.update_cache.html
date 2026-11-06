@@ -343,7 +343,7 @@
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache</span></code>: ttnn.Tensor
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code>: The token tensor to be written to the cache.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code>: ttnn.Tensor
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">update_index</span></code>: The index into the cache tensor.
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">update_index</span></code>: The cache sequence position, less than <code class="docutils literal notranslate"><span class="pre">cache.padded_shape[-2]</span></code>.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">update_index</span></code>: int
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_offset</span></code>: The batch_offset into the cache tensor. Default = 0 .
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_offset</span></code>: int</p>

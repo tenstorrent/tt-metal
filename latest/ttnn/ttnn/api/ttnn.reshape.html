@@ -375,43 +375,90 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.reshape">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">reshape</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.reshape" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">reshape</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Shape</span> <span class="pre">or</span> <span class="pre">List[int]</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span> <span class="pre">or</span> <span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reshape_tile_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.TileReshapeMapMode</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">CACHE</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">skip_padding_fill</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.reshape" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p>Returns a tensor with the same data and number of elements as <cite>input_tensor</cite>, but with the given shape.</p>
+<p>If <cite>shape</cite> is a list or tuple, one dimension may be <cite>-1</cite>; its size is inferred from the other dimensions.
+A second overload takes both a logical and a padded shape: <code class="docutils literal notranslate"><span class="pre">ttnn.reshape(input_tensor,</span> <span class="pre">logical_shape,</span> <span class="pre">padded_shape)</span></code>.</p>
 <dl class="simple">
-<dt>Note: for a 0 cost view, the following conditions must be met:</dt>
+<dt>The reshape is a zero-cost view, with no data movement, when all of these hold:</dt>
 <dd>
 <ul class="simple">
-<li><p>the last dimension must not change</p></li>
-<li><p>In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension</p></li>
+<li><p>the last dimension does not change</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">memory_config</span></code>, if given, matches the input in being sharded or interleaved and in DRAM or L1 placement</p></li>
+<li><p>for TILE layout, the second-to-last dimension does not change, or it is a multiple of 32 in both the input and the new shape</p></li>
 </ul>
 </dd>
 </dl>
+<p>A view keeps the input’s memory configuration. ND sharded tensors are staged through DRAM instead, unless
+only the logical shape changes.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>*</em>)</span><span class="tt-api-param-desc">Input Tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>shape</strong> (<em>*</em>)</span><span class="tt-api-param-desc">Shape of tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>shape</strong> (<a class="reference internal" href="../tensor.html#ttnn.Shape" title="ttnn.Shape"><em>ttnn.Shape</em></a><em> or </em><em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">the new shape. As a list or tuple, one dimension may be <cite>-1</cite>.</span></p></li>
 </ul>
 </dd>
-</dl>
-<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensor. Default is to match input tensor memory config. If <code class="docutils literal notranslate"><span class="pre">memory_config</span></code> specifies a sharded layout without <code class="docutils literal notranslate"><span class="pre">shard_spec</span></code>, the input tensor’s <code class="docutils literal notranslate"><span class="pre">shard_spec</span></code> is used as the seed grid (layout should match the input).
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: Value to pad the output tensor. Default is 0
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: number
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>: Advanced option. Set to RECREATE to recompute and reallocate the mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE. This keyword is named <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code> on all overloads; the small-vector (tuple/list) shape overload previously used the name <code class="docutils literal notranslate"><span class="pre">recreate_mapping_tensor</span></code> for the same option—update callers to <code class="docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>.
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>: TileReshapeMapMode
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code>: Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code>: CoreRangeSet, optional
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">skip_padding_fill</span></code>: If False, <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> is applied to tile padding lanes. If True, <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> is ignored and tile padding is left as-is. Default is False. Note: this option is silently ignored for <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> outputs because the BF8 typecast computes a shared exponent across each 16-element sub-block, and unfilled padding would corrupt logical values in straddling sub-blocks; the fill always runs in that case.
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">skip_padding_fill</span></code>: bool</p>
-<p>Note: <code class="docutils literal notranslate"><span class="pre">UINT16</span></code> TILE input is supported only on the codegen path: input and output interleaved in DRAM or L1, with tiles padded only in the last two dims, and only when one of its TILE programs fits L1; otherwise the call fails. <code class="docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code> is ignored on that path.</p>
-<dl class="field-list simple">
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration of the output tensor. Defaults to <cite>None</cite>, which matches the input tensor’s memory configuration. If <code class="docutils literal notranslate"><span class="pre">memory_config</span></code> specifies a sharded layout without <code class="docutils literal notranslate"><span class="pre">shard_spec</span></code>, the input tensor’s <code class="docutils literal notranslate"><span class="pre">shard_spec</span></code> is used as the seed grid (layout should match the input).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>pad_value</strong> (<em>float</em><em> or </em><em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Value to fill the output tensor’s tile padding with when the reshape moves data. Defaults to <cite>None</cite>, which leaves the padding unspecified, except for <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> and <code class="docutils literal notranslate"><span class="pre">BFLOAT4_B</span></code> outputs, whose padding is filled with 0. For <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> tensors, pass a float: an int is taken as the float’s bit pattern.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>reshape_tile_mode</strong> (<em>ttnn.TileReshapeMapMode</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Currently has no effect: <code class="docutils literal notranslate"><span class="pre">RECREATE</span></code> behaves like <code class="docutils literal notranslate"><span class="pre">CACHE</span></code>. Defaults to <cite>CACHE</cite>. This keyword is named <code class="docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code> on all overloads; the small-vector (tuple/list) shape overload previously used the name <code class="docutils literal notranslate"><span class="pre">recreate_mapping_tensor</span></code> for the same option, so update callers to <code class="docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Specifies sub-core grid ranges for advanced core selection control. Defaults to <cite>None</cite>, which uses all the cores in the device.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>skip_padding_fill</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If <cite>True</cite>, <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> is ignored and tile padding is left as-is. Defaults to <cite>False</cite>, which applies <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> when one is given. This option is silently ignored for block-float (<code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code>, <code class="docutils literal notranslate"><span class="pre">BFLOAT4_B</span></code>) outputs, because the block-float typecast computes a shared exponent across each 16-element sub-block, and unfilled padding would corrupt logical values in straddling sub-blocks; the fill always runs in that case.</span></p></li>
+</ul>
+</dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor with the new shape.</span></p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, INT32, UINT32</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>BFLOAT8_B, BFLOAT4_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+<tr class="row-even">
+<td><p>UINT16</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p><code class="docutils literal notranslate"><span class="pre">UINT16</span></code> reshapes that move data run only on the codegen path, which is available on Wormhole B0 and
+Blackhole: input and output interleaved in DRAM or L1, TILE tiles padded only in the last two dims
+(ROW_MAJOR input unpadded), no explicit <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> on a padded TILE output, and only when one of its
+programs fits L1; otherwise the call fails.</p>
+<p><code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> and <code class="docutils literal notranslate"><span class="pre">BFLOAT4_B</span></code> reshapes that move data go through a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> typecast and do not
+support <code class="docutils literal notranslate"><span class="pre">sub_core_grids</span></code>.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output; <code class="docutils literal notranslate"><span class="pre">sub_core_grids</span></code> is not supported with sharded tensors</p></li>
+<li><p>ND sharded: supported through a DRAM-interleaved intermediate</p></li>
+</ul>
 </dd>
 </dl>
 <div class="admonition-example admonition">
@@ -423,7 +470,7 @@
 
 <span class="c1"># Reshape the tensor</span>
 <span class="n">reshaped_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">input_tensor_tt</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Reshaped Tensor Shape:"</span><span class="p">,</span> <span class="n">reshaped_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Reshaped Tensor Shape: Shape([1, 1, 2, 2])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Reshaped Tensor Shape: </span><span class="si">{</span><span class="n">reshaped_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 2, 2])</span>
 </pre></div>
 </div>
 </div>

@@ -346,7 +346,7 @@
 <ul class="simple">
 <li><p><span class="tt-api-param-name"><strong>cache</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the cache tensor to be written to.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>token</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the token tensor to be written to the cache.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>update_index</strong> (<em>int</em>)</span><span class="tt-api-param-desc">the index into the cache tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>update_index</strong> (<em>int</em>)</span><span class="tt-api-param-desc">the cache sequence position, less than <code class="docutils literal notranslate"><span class="pre">cache.padded_shape[-2]</span></code>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>batch_offset</strong> (<em>int</em>)</span><span class="tt-api-param-desc">the batch_offset into the cache tensor.</span></p></li>
 </ul>
 </dd>
