@@ -18,7 +18,9 @@
         "status": "running_retention_repair",
         "run_id": 42256121890,
         "projected_workflow_hours": 6.75,
-        "source": "runs/larger-gpqa20-c4-retained/manifest.json"
+        "source": "runs/larger-gpqa20-c4-retained/manifest.json",
+        "latest_censored_projection_hours": 5.242063492063492,
+        "progress_evidence": "runs/larger-gpqa20-c4-retained/progress-14.json"
       },
       "full_suite_decision": "stop",
       "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json"
@@ -40,7 +42,9 @@
         "run_id": 42247098210,
         "status": "running_retention_repair",
         "projected_workflow_hours": 8.544166666666667,
-        "source": "runs/nightly-swe-decode-retention/manifest.json"
+        "source": "runs/nightly-swe-decode-retention/manifest.json",
+        "latest_projection_hours": 8.89957597861111,
+        "progress_evidence": "runs/nightly-swe-decode-retention/eval-start-observation.json"
       }
     },
     "terminal_bench_2_1": {

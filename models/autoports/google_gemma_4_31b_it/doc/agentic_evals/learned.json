@@ -162,6 +162,10 @@
         "runs/gpqa-empty-response-replay/IDENTITY_CORRECTION.json",
         "runs/larger-gpqa20-c2-evals/ERRATUM.json"
       ]
+    },
+    {
+      "fact": "Two captured GPQA loop prefixes: HF and TT prefill support observed next token at all six checkpoints; this does not establish autonomousHF or serveddecode behavior.",
+      "evidence": "runs/gpqa-loop-logits-discriminator/RESULT.json"
     }
   ],
   "suite_timings": [

@@ -1,0 +1,16 @@
+{
+  "arm": "gpqa-decode-state-discriminator",
+  "device": "local",
+  "owner": "coordinator",
+  "status": "running",
+  "queued_at": "2026-11-06T17:35:21.728481+00:00",
+  "planned_clients": 2,
+  "batch": 8,
+  "batch_reason": "Match capturedB8 numerical regime; directforcedtoken diagnostic, not serving performance",
+  "predicted_hours": 0.12,
+  "box_hours": 0.25,
+  "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "started_at": "2026-11-06T17:37:01.379483+00:00",
+  "owner_check": [],
+  "regime": "serial_direct_incremental_forcedtokens_no_performanceclaim"
+}

@@ -1,0 +1,80 @@
+{
+  "run": {
+    "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "env": {},
+    "argv": [
+      "bash",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/launch.sh"
+    ]
+  },
+  "compare": [
+    {
+      "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+      "env": {},
+      "argv": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+        "compare",
+        "--case",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/case-0.json",
+        "--hf",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/hf-0/logits.pt",
+        "--tt",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/run/case-0/logits.pt",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/compare-hf-0"
+      ]
+    },
+    {
+      "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+      "env": {},
+      "argv": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+        "compare",
+        "--case",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/case-0.json",
+        "--hf",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/tt-0/logits.pt",
+        "--tt",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/run/case-0/logits.pt",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/compare-prefill-0"
+      ]
+    },
+    {
+      "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+      "env": {},
+      "argv": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+        "compare",
+        "--case",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/case-1.json",
+        "--hf",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/hf-1/logits.pt",
+        "--tt",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/run/case-1/logits.pt",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/compare-hf-1"
+      ]
+    },
+    {
+      "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+      "env": {},
+      "argv": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+        "compare",
+        "--case",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/case-1.json",
+        "--hf",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-logits-discriminator/tt-1/logits.pt",
+        "--tt",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/run/case-1/logits.pt",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-decode-state-discriminator/compare-prefill-1"
+      ]
+    }
+  ]
+}

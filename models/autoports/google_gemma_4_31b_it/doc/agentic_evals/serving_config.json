@@ -273,6 +273,11 @@
       "planned_clients": 1,
       "batch": 8,
       "batch_reason": "Match served B8 numerical regime on secondcapturedprefix; directconditionaldiagnostic, not throughput"
+    },
+    "gpqa-decode-state-discriminator": {
+      "planned_clients": 2,
+      "batch": 8,
+      "batch_reason": "Match capturedB8 numerical regime; directforcedtoken diagnostic, not serving performance"
     }
   },
   "release_limits": {

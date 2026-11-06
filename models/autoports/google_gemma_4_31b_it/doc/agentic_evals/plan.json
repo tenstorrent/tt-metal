@@ -1972,10 +1972,26 @@
       "started_at": "2026-11-06T17:28:34.668179+00:00",
       "owner_check": [],
       "case_sha256": "65d0d7b08d4a26a42ce142cee94e4520c834e952a427c7d5711da11f50b24f0a"
+    },
+    {
+      "arm": "gpqa-decode-state-discriminator",
+      "device": "local",
+      "owner": "coordinator",
+      "status": "running",
+      "queued_at": "2026-11-06T17:35:21.728481+00:00",
+      "planned_clients": 2,
+      "batch": 8,
+      "batch_reason": "Match capturedB8 numerical regime; directforcedtoken diagnostic, not serving performance",
+      "predicted_hours": 0.12,
+      "box_hours": 0.25,
+      "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+      "started_at": "2026-11-06T17:37:01.379483+00:00",
+      "owner_check": [],
+      "regime": "serial_direct_incremental_forcedtokens_no_performanceclaim"
     }
   ],
-  "status": "all_smokes_valid_three_larger_runs_executing",
-  "last_updated": "2026-11-06T17:33:15.300990+00:00",
+  "status": "retained_GPQA20_and_SWE5_running_before_freeze",
+  "last_updated": "2026-11-06T17:36:14.682072+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -2004,7 +2020,7 @@
     "job_limit_hours": 18,
     "run_limit_hours": 12
   },
-  "schedule_basis": "Conservative contingency after measured GPQA server-sized projection11.08496h for198 including4h request-tail and build/queue. Proposed completed rehearsal still requires operator approval; reserve two11.1h cycles plus1h fix and2.8h finaldispatch/queue by hour48. This does not authorize completed-score dry runs. Freeze targethour22; revise when full/nightly measurements or route decision arrive. Rungs proceed independently if projected tofinish before first dry; efforts cannot delay them.",
+  "schedule_basis": "First dry start no later than stagehour22; efforts and larger rungs must fit before it. Preserve two11.1h contingency windows,1hfix,2.8hdispatch/queue; this is reserved time, not stale full198 fit claim. Current measured full198 stop retained. Exact tool dry route remains unresolved; no completed-score rehearsal exception assumed.",
   "ci_queue_observations": [
     {
       "run_id": 42166117505,
@@ -2579,6 +2595,16 @@
       "workflow_wall_hours": 2.1352777777777776,
       "predicted_workflow_hours": 7.72125727234195,
       "workflow_conclusion": "success"
+    },
+    {
+      "arm": "gpqa-loop-logits-discriminator",
+      "planned_clients": 1,
+      "batch": 8,
+      "device_job_hours": 0.13982142225861832,
+      "predicted_device_hours": 0.08,
+      "conditional_replication_forecast_hours": 0.06,
+      "scope": "Two full60 conditional diagnostic cases; not performance",
+      "evidence": "runs/gpqa-loop-logits-discriminator/RESULT.json"
     }
   ],
   "local_idle_intervals": [
@@ -2632,6 +2658,11 @@
       "start": "2026-11-06T14:04:00Z",
       "reason": "Four-context GPQA envelope completed; local remaining informative checks require retained real failing histories or new task timing evidence. Three CI runs keep available permitted workload busy; no redundant local benchmark.",
       "next": "Exact failed native-history diagnostic or measured new serving gap when collected"
+    },
+    {
+      "start": "2026-11-06T17:31:21.034834+00:00",
+      "end": "2026-11-06T17:37:01.379483+00:00",
+      "reason": "Sequential HF reference and interpretation prerequisite, followed by host driver validation for one remaining incrementalKV test; both CI evaluations active"
     }
   ],
   "schedule_history": [
@@ -2680,7 +2711,7 @@
   "dry_route_contingency": {
     "authorization": "pending_operator_existing_question",
     "provisional_cycle_hours": 11.1,
-    "basis": "Current fullGPQA forecast11.084957716 roundedup; not measured completed198 or release admission",
+    "basis": "Conservative retained contingency windows from prior plan; full198 is now measured stop. Actual frozen lists/projections must replace this before admission.",
     "first_dry_start_hour": 22,
     "efforts_end_hour": 22,
     "fix_hours": 1,
@@ -2695,38 +2726,45 @@
     }
   },
   "next_ci_dispatch_image": {
-    "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
-    "condition": "TT439c/plugin ca7 unchanged; only model TTI cohort/concurrency/retention config changes with unchanged dependencies; still dispatch explicit implementation and refs",
-    "evidence": "runs/ci-image-reuse/result.json",
-    "live_confirmation": "pending normal next rung",
-    "forecast": "Do not claim measured speedup until run completes; recalculate build component with explicit estimated removal",
-    "live_confirmation_run_id": 42228448171
+    "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:b9d3be12a8eac85871beac53cd3ef3700656691efcb396ce04fb2f833907f2ca",
+    "condition": "TT11a387692d2b434198e79dd92fbb8ed308c3ca47/plugin ca7a18246e4111629ed6cb4a7d1192002749fccf unchanged; TTI config-only changes preserve image dependencies",
+    "live_confirmation": "Pulled by both current jobs, full60autoport registered",
+    "live_confirmation_run_ids": [
+      42247098210,
+      42256121890
+    ]
   },
   "active_runs": [
-    42228448171,
-    42234274300,
-    42237390829
+    42256121890,
+    42247098210
   ],
   "latest_live_progress": {
-    "gpqa_c4": {
-      "run_id": 42234229161,
-      "snapshot_at": "2026-11-06T14:39:29Z",
-      "reported_completed": 4,
-      "tasks": 10,
-      "reported_progress_elapsed_seconds": 150,
-      "note": "Progress display can be buffered; use final evaluator duration for timing acceptance. Correctevals route confirmed, numconcurrent4, same126976output/14400timeout."
+    "gpqa20_retained": {
+      "observed_at": "2026-11-06T17:33:15.300990+00:00",
+      "log_through": "2026-11-06T17:28:09Z",
+      "reported_completed": 14,
+      "tasks": 20,
+      "progress_elapsed_seconds": 1492,
+      "eval_projection_hours": 0.5920634920634921,
+      "full_request_tail_hours": 4,
+      "setup_allowance_hours": 0.15,
+      "queue_margin_hours": 0.5,
+      "projected_hours": 5.242063492063492,
+      "max_observed_active_rows": 4,
+      "decision": "continue",
+      "qualification": "Censored completion-rate projection; full4h tail retained. No score or loop classification claimed.",
+      "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
     },
-    "gpqa20": {
-      "run_id": 42234274300,
-      "eval_start": "2026-11-06T14:33:48Z",
-      "status": "stockcommonroute confirmed, inference active, exact20 cohort/C2"
-    },
-    "swe_repeat": {
-      "run_id": 42228448171,
-      "at": "2026-11-06T14:36:20Z",
-      "completed": 4,
-      "tasks": 5,
-      "eval_elapsed_hours": 0.7166666666666667
+    "swe5_retained": {
+      "observed_at": "2026-11-06T17:33:15.300990+00:00",
+      "eval_started_at": "2026-11-06T17:10:48.5545018Z",
+      "device_started_at": "2026-11-06T16:47:23Z",
+      "device_setup_hours": 0.39043180555555557,
+      "build_hours": 0.8863888888888889,
+      "projection_hours": 8.89957597861111,
+      "max_observed_active_rows": 2,
+      "evidence": "bringup/artifacts/stage12-swe-decode-current.log",
+      "qualification": "Harbor launch timestamp; subsequent decode proves serving active. Replaces premature cold-compilation-only description. Runtime clocks unmeasured; startup800MHz warning retained separately."
     }
   },
   "current_runtime_benchmark": {
