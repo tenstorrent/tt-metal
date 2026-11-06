@@ -88,7 +88,7 @@ int main(int argc, char** /*argv*/) {
             auto output_dram_buffer =
                 distributed::MeshBuffer::create(global_buffer_config, local_dram_config, device.get());
 
-            Program program = CreateProgram();
+            Program program = CreateProgram(*device);
             auto mesh_workload = distributed::MeshWorkload();
 
             constexpr CoreCoord core = {0, 0};

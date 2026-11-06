@@ -18,7 +18,7 @@ from models.tt_dit.layers.module import Module, ModuleList, Parameter
 from models.tt_dit.layers.normalization import DistributedGroupNorm, DistributedRMSNorm, GroupNorm, RMSNorm
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
-from models.tt_dit.utils.conv3d import get_conv3d_config
+from models.tt_dit.utils.conv3d import aligned_channels, get_conv3d_config
 from models.tt_dit.utils.substate import rename_substate
 from models.tt_dit.utils.tensor import local_device_to_torch
 
@@ -157,10 +157,9 @@ class VaeRmsNorm(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if not self._use_rms_workaround:
-            bs, h, w, c = x.shape
-            x = ttnn.reshape(x, [1, 1, bs * h * w, c])
-            x = self.inner.forward(x)
-            return _apply_activation_fn(ttnn.reshape(x, [bs, h, w, c]), self.activation_fn)
+            # Both norms take the 4D tensor as is. Flattening it would be a costly tiled reshape
+            # whenever w is not a multiple of the tile size.
+            return _apply_activation_fn(self.inner.forward(x), self.activation_fn)
 
         norm = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
 
@@ -190,16 +189,28 @@ class _VaeConv2dConv3d(Module):
         out_channels: int,
         *,
         kernel_size: int,
-        h_pad: int,
-        w_pad: int,
+        stride: int,
+        padding: tuple[int, int, int, int],
         ctx: VaeContext,
     ) -> None:
         super().__init__()
 
+        in_channels = aligned_channels(in_channels)
+        self._aligned_in_channels = in_channels
+
         self.out_channels = out_channels
         kernel_3d = (1, kernel_size, kernel_size)
         self._kernel_3d = kernel_3d
-        self._padding_3d = (0, h_pad, w_pad)
+        self._stride_3d = (1, stride, stride)
+
+        # conv3d pads symmetrically, so asymmetric padding is applied to the input instead.
+        top, bottom, left, right = padding
+        if top == bottom and left == right:
+            self._input_padding = None
+            self._padding_3d = (0, top, left)
+        else:
+            self._input_padding = [(0, 0), (top, bottom), (left, right), (0, 0)]
+            self._padding_3d = (0, 0, 0)
 
         self.conv_config = get_conv3d_config(
             in_channels,
@@ -218,7 +229,6 @@ class _VaeConv2dConv3d(Module):
         self.weight = Parameter(total_shape=[d, out_channels], device=ctx.device, pad_value=0)
         self.bias = Parameter(total_shape=[1, out_channels], device=ctx.device, pad_value=0)
 
-        self._tile_aligned = (in_channels % 32 == 0) and (out_channels % 32 == 0)
         self._ctx = ctx
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             ctx.device.arch(),
@@ -245,9 +255,16 @@ class _VaeConv2dConv3d(Module):
             state["bias"] = state["bias"].reshape(1, -1)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        n, h, w, c = x.shape
         if x.layout != ttnn.ROW_MAJOR_LAYOUT:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+        if self._input_padding is not None:
+            x = ttnn.pad(x, self._input_padding, value=0.0)
+
+        if x.shape[-1] != self._aligned_in_channels:
+            x = tensor.pad_single(x, dim=-1, back=self._aligned_in_channels - x.shape[-1])
+
+        n, h, w, c = x.shape
         x = ttnn.reshape(x, (n, 1, h, w, c))
 
         x = ttnn.experimental.conv3d(
@@ -258,7 +275,7 @@ class _VaeConv2dConv3d(Module):
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self._kernel_3d,
-            stride=(1, 1, 1),
+            stride=self._stride_3d,
             padding=self._padding_3d,
             padding_mode="zeros",
             dtype=ttnn.bfloat16,
@@ -268,10 +285,13 @@ class _VaeConv2dConv3d(Module):
         # [N, 1, H_out, W_out, C_out] → [N, H_out, W_out, C_out]
         # Tile-aligned channels: reshape is metadata-only (free). Non-aligned (e.g. C=3):
         # fall back to indexing which gathers into a fresh contiguous buffer.
-        if self._tile_aligned:
+        if self.out_channels % 32 == 0:
             _, _, h2, w2, c2 = x.shape
-            return ttnn.reshape(x, (n, h2, w2, c2))
-        return x[:, 0, :, :, :]
+            x = ttnn.reshape(x, (n, h2, w2, c2))
+        else:
+            x = x[:, 0, :, :, :]
+
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
 
 class VaeConv2d(Module):
@@ -303,31 +323,23 @@ class VaeConv2d(Module):
         self._needs_neighbor_pad = self._h_sharded or self._w_sharded
 
         if self._h_sharded:
-            top, bottom, self._h_halo = 0, 0, (top, bottom)
+            self._h_halo = (top, bottom)
+            top = bottom = 0
         if self._w_sharded:
-            left, right, self._w_halo = 0, 0, (left, right)
-
-        if top == bottom and left == right:
-            actual_padding = (top, left) if top != left else top
-        else:
-            actual_padding = (top, bottom, left, right)
+            self._w_halo = (left, right)
+            left = right = 0
 
         # Use conv3d when requested and no TP is in play for this conv.
         no_tp = ctx.tp_axis is None or not tensor_parallel
         self._use_conv3d = ctx.use_conv3d and no_tp
 
         if self._use_conv3d:
-            if stride != 1 or top != bottom or left != right:
-                msg = "the conv3d path supports neither strides nor asymmetric padding"
-                raise ValueError(msg)
-
-            h_pad, w_pad = top, left
             self.inner = _VaeConv2dConv3d(
                 in_channels,
                 out_channels,
                 kernel_size=kernel_size,
-                h_pad=h_pad,
-                w_pad=w_pad,
+                stride=stride,
+                padding=(top, bottom, left, right),
                 ctx=ctx,
             )
         else:
@@ -336,7 +348,7 @@ class VaeConv2d(Module):
                 out_channels,
                 kernel_size=kernel_size,
                 stride=stride,
-                padding=actual_padding,
+                padding=(top, bottom, left, right),
                 mesh_device=ctx.device,
                 in_mesh_axis=ctx.tp_axis if tensor_parallel and not out_is_greater else None,
                 out_mesh_axis=ctx.tp_axis if tensor_parallel and out_is_greater else None,
@@ -385,10 +397,7 @@ class VaeConv2d(Module):
             x = ttnn.squeeze(x, 0)  # back to [N, H_local+pad, W_local+pad, C]
 
         if self._use_conv3d:
-            result = self.inner.forward(x)
-            if result.layout != ttnn.TILE_LAYOUT:
-                result = ttnn.to_layout(result, ttnn.TILE_LAYOUT)
-            return result
+            return self.inner.forward(x)
         return self.inner.forward(x, use_persistent_buffer=False)
 
 
@@ -565,6 +574,11 @@ class VaeAttention(Module):
         # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
         x = _all_gather_hw(self._ctx, x)
 
+        n, h, w, _ = x.shape  # h, w are full-spatial after AG
+
+        # convert to 1d sequence and insert head dimension; there is only one head
+        x = x.reshape([n, 1, h * w, -1])
+
         x = self.norm.forward(x)
 
         # ColParallelLinear expects replicated input on K. AG manually here (rather than
@@ -584,13 +598,6 @@ class VaeAttention(Module):
             v = self._ccl_manager.all_gather(v, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         del x
-
-        n, h, w, c = q.shape  # h, w are full-spatial after AG
-
-        # convert to 1d sequence and insert head dimension; there is only one head
-        q = q.reshape([n, 1, h * w, c])
-        k = k.reshape([n, 1, h * w, c])
-        v = v.reshape([n, 1, h * w, c])
 
         x = ttnn.transformer.scaled_dot_product_attention(
             q,

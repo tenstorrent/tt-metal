@@ -8,7 +8,7 @@
 
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 
 /*
  * The expm1(x) code is derived from code by Norbert Juffa.
@@ -176,15 +176,17 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
     return r;
 }
 
-bool bf16_dest_expm1();
-template <int ITERATIONS>
-void calculate_expm1_bf16();
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_expm1_bf16.h"
+
+namespace ckernel::sfpu {
+
 // Whether BF16 DEST runs the generated expm1 kernel as one call over the whole tile.
 inline constexpr bool expm1_bf16_whole_tile = true;
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_expm1() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_expm1()) {
             calculate_expm1_bf16<ITERATIONS>();
             return;
@@ -201,8 +203,6 @@ inline void calculate_expm1() {
     }
 }
 
-void init_expm1_bf16();
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void expm1_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -214,11 +214,9 @@ void expm1_init() {
         sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
         sfpi::vConstFloatPrgm2 = 1.666259766e-01f;      // c1
     }
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         init_expm1_bf16();
     }
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_expm1_bf16.h"

@@ -14,7 +14,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
@@ -26,6 +25,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
 )
@@ -50,7 +50,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 INPUT_DIMENSIONS = [
     [512, 32],
@@ -67,10 +67,6 @@ REUSE_DEST_FORMATS = input_output_formats(
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
 TILE_DIMENSIONS = [32, 32]
-
-
-def reuse_dest_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
@@ -137,7 +133,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    dest_sync_mode=lambda: reuse_dest_dest_sync_modes(is_perf=False),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=[[PerfRunType.L1_TO_L1]],
@@ -390,12 +386,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     res_from_L1 = configuration.run().result
 
     # Verify results match golden
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

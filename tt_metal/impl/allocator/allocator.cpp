@@ -24,7 +24,7 @@
 #include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
@@ -428,6 +428,18 @@ size_t AllocatorImpl::get_num_allocated_buffers() const {
     return allocated_buffers_.size();
 }
 
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_dram_allocations() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_allocated_ranges();
+}
+
+bool AllocatorImpl::is_buffer_allocated_at(size_t unique_id, DeviceAddr address) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::any_of(allocated_buffers_.begin(), allocated_buffers_.end(), [&](const Buffer* buffer) {
+        return buffer->unique_id() == unique_id && buffer->address() == address;
+    });
+}
+
 uint32_t AllocatorImpl::get_num_banks(const BufferType& buffer_type) const {
     // Don't lock mutex_ because the number of banks is a constant and does not change.
     switch (buffer_type) {
@@ -454,6 +466,18 @@ DeviceAddr AllocatorImpl::get_bank_size(const BufferType& buffer_type) const {
         }
     }
     return 0;
+}
+
+// Reject reserved, misaligned and out-of-range SRAM before constructing addressed buffers.
+void AllocatorImpl::validate_l1_range(DeviceAddr address, DeviceAddr size, BufferType buffer_type) const {
+    TT_FATAL(
+        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
+        "SRAM range validation requires an L1 buffer type");
+    const DeviceAddr base =
+        buffer_type == BufferType::L1 ? config_->l1_unreserved_base : config_->worker_l1_size - config_->l1_small_size;
+    const DeviceAddr end = base + get_bank_size(buffer_type);
+    TT_FATAL(address % config_->l1_alignment == 0, "SRAM address must be aligned");
+    TT_FATAL(address >= base && address <= end && size <= end - address, "SRAM range is outside allocatable L1");
 }
 
 uint32_t AllocatorImpl::get_dram_channel_from_bank_id(uint32_t bank_id) const {
