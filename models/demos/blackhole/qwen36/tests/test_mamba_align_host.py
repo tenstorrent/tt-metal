@@ -201,7 +201,9 @@ class _Harness:
         # TTModelRunner order: zeroing, vLLM's copies, then the Mamba state copies of begin_step.
         self.ledger.zero(out.new_block_ids_to_zero or ())
         self.ledger.copy([(c.src_block_id, c.dst_block_id) for c in out.kv_cache_block_copies or ()])
-        self.ledger.copy(self.groups.begin_step(out, self.req_states, {}))
+        # the position of each scheduled row's first query token (synchronous scheduling: vLLM's computed tokens)
+        positions = {r: st.num_computed_tokens for r, st in self.req_states.items()}
+        self.ledger.copy(self.groups.begin_step(out, self.req_states, positions, {}))
         req_ids = list(out.num_scheduled_tokens)
         width = self.groups.max_num_blocks(self.max_model_len)
         tables = []
@@ -212,7 +214,7 @@ class _Harness:
                 t[row, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
             tables.append(t)
         inputs = self.groups.step_inputs(
-            tables, req_ids, self.req_states, out.num_scheduled_tokens, list(range(len(tables))), MAX_NUM_SEQS
+            tables, req_ids, positions, out.num_scheduled_tokens, list(range(len(tables))), MAX_NUM_SEQS
         )
         sampled = []
         for row, r in enumerate(req_ids):
