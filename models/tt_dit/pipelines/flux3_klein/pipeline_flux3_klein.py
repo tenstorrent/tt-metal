@@ -233,7 +233,10 @@ class Flux3KleinPipeline:
             tp_axis=tp_axis,
             h_axis=sp_axis,
         )
-        self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None
+        self._null_text = None
+        if "base" in snapshots:
+            null_rows = ttnn.core.roundup(self._prompt_encoder.tokenize("")[2], mesh_shape[sp_axis] * TILE)
+            self._null_text = self._prompt_encoder.encode("", null_rows)
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 
     @classmethod
@@ -315,6 +318,7 @@ class Flux3KleinPipeline:
         state, cached_steps = self._denoise(
             request.model, make_noise(seed, h, w), image_ids(h, w), text, image_cond, steps, guidance, request.cache
         )
+        ttnn.deallocate(text[0])
         timings["denoise"] = time.time() - t0
 
         t0 = time.time()
@@ -333,7 +337,11 @@ class Flux3KleinPipeline:
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
         return Flux3KleinResult(image=image, prompt=prompt, seed=seed, timings=timings, cached_steps=cached_steps)
 
-    def _upload_rows(self, rows: torch.Tensor, sp_factor: int) -> ttnn.Tensor:
+    def _upload_rows(self, rows: torch.Tensor | ttnn.Tensor, sp_factor: int) -> ttnn.Tensor:
+        if isinstance(rows, ttnn.Tensor):
+            if rows.shape[-2] % (sp_factor * TILE):
+                raise ValueError(f"{rows.shape[-2]} device rows are not a multiple of {sp_factor} tiles")
+            return ttnn.mesh_partition(rows, dim=1, cluster_axis=self._sp_axis)
         rows = pad_rows(rows.to(torch.bfloat16), ttnn.core.roundup(rows.shape[0], sp_factor * TILE))
         return tensor.from_torch(
             rows[None], device=self._device, dtype=ttnn.bfloat16, mesh_axes=[None, self._sp_axis, None]
@@ -363,8 +371,8 @@ class Flux3KleinPipeline:
             cond_embedded = transformer.embed_image_cond(tokens)
             ttnn.deallocate(tokens)
 
-        def sample(index: int, text_rows: torch.Tensor, text_ids: torch.Tensor, text_valid: int):
-            lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[0]}
+        def sample(index: int, text_rows: ttnn.Tensor, text_ids: torch.Tensor, text_valid: int):
+            lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[-2]}
             layout = Flux3KleinSequenceLayout(sp, lengths, text_valid, cond_valid)
             sample_ids = {"image": ids, "text": text_ids}
             if image_cond is not None:
@@ -452,6 +460,8 @@ class Flux3KleinPipeline:
         for module in (*self._transformers.values(), self._text_encoder):
             module.deallocate_weights()
         self._vae.deallocate_weights()
+        if self._null_text is not None:
+            ttnn.deallocate(self._null_text[0])
 
 
 def _load_dit_state(snapshot: Path) -> dict[str, torch.Tensor]:
