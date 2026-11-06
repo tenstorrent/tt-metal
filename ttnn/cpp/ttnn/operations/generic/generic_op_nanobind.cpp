@@ -68,7 +68,9 @@ void bind_generic_operation(nb::module_& mod) {
 
             Hashes kernel sources, compile-time args, core ranges, CB structure,
             and semaphores. Excludes runtime arg values and buffer addresses,
-            making it suitable as a cache key for structural equivalence.
+            making it suitable as a cache key for structural equivalence. The
+            one exception is a global CB's addresses, which are hashed because a
+            cache hit does not re-point them.
         )pbdoc");
 }
 

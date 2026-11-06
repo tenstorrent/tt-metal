@@ -77,7 +77,9 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             format_descriptor.buffer_index,
             format_descriptor.data_format,
             format_descriptor.page_size,
-            format_descriptor.tile);
+            format_descriptor.tile,
+            // Sets the CB's tile face layout, which the kernels compile against.
+            format_descriptor.face_geometry);
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
@@ -94,7 +96,17 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
         }
         ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
+        // A global CB's buffer and config addresses and its sender/receiver layout are baked into the
+        // program, and a cache hit does not re-point them (only tensor-backed CBs are), so key which
+        // global CB this is, not just whether there is one.
         ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
+        if (cb.global_circular_buffer != nullptr) {
+            const auto& global_cb = *cb.global_circular_buffer;
+            ttsl::hash::hash_combine(
+                hash,
+                ttsl::hash::hash_objects_with_default_seed(
+                    global_cb.buffer_address(), global_cb.config_address(), global_cb.attribute_values()));
+        }
         return hash;
     };
 
@@ -117,13 +129,27 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     return hash;
 }
 
+ttsl::hash::hash_t compute_io_tensors_hash(const std::vector<Tensor>& io_tensors) {
+    // Each io tensor's TensorLayout (dtype, page config, memory config, Alignment) and the io count.
+    // Metal 2.0 requires an exact layout match on every cache hit, so the key must cover each layout
+    // (#59915). Shapes stay out, so one program can serve tensors of different sizes (e.g. sequence
+    // lengths) when the descriptor itself does not change.
+    size_t hash = io_tensors.size();
+    for (const auto& tensor : io_tensors) {
+        ttsl::hash::hash_combine(
+            hash, ttsl::hash::hash_objects_with_default_seed(tensor.tensor_spec().tensor_layout()));
+    }
+    return hash;
+}
+
 ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     size_t hash = 0;
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
         ttsl::hash::hash_combine(hash, mesh_coord_range);
         ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(program_descriptor));
     }
+    ttsl::hash::hash_combine(hash, compute_io_tensors_hash(tensor_args.io_tensors));
     return hash;
 }
 
