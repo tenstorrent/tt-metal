@@ -39,20 +39,24 @@ The adapter is found through `EXTRA_MODELS_DIR=models/demos` and `vllm_metadata.
 The device sampler covers top_k 1..32, so the server caps the checkpoint's top_k 64 at 32. Requests it cannot serve
 (penalties, logprobs, top_k > 32) and prefill steps with an intermediate chunk sample on the host.
 
-## Results (CI release run, 32-slot server, vllm-tt-plugin main)
+## Results (CI release run 42036961299, 32-slot server, vllm-tt-plugin main)
+
+Runner p05t05, the slowest QB2 runner (about 15% slower decode than the others).
 
 | Point | TTFT | Decode |
 |---|---|---|
-| 1 user, 128/128 | 36 ms | 12.6 ms/token |
-| 32 users, 128/128 | 0.89 s | 1,499 tok/s total |
-| 1 user, 4096/128 | 212 ms | 15.9 ms/token |
-| 32 users, 4096/128 | 2.25 s | 466 tok/s total |
-| 1 user, 32768/128 | 2.36 s | 22.3 ms/token |
-| 1 user, 131072/128 | 20.2 s | 44.3 ms/token |
+| 1 user, 128/128 | 38 ms | 15.9 ms/token |
+| 32 users, 128/128 | 0.94 s | 1,272 tok/s total |
+| 1 user, 4096/128 | 220 ms | 19.1 ms/token |
+| 32 users, 4096/128 | 2.30 s | 433 tok/s total |
+| 1 user, 32768/128 | 2.44 s | 25.3 ms/token |
+| 1 user, 131072/128 | 20.4 s | 46.2 ms/token |
 
-GPQA Diamond 67.2 (198 questions, thinking on; card 78.8, TT reference 65). Earlier CI runs on the same model code:
-AIME 2026 71.7 (30 x 4; card 77.5), MMLU-Pro 73.1 (849 questions, 16K output cap; card 77.2). Accuracy against HF on
-the AIME24 chat reference (100 tokens): top-1 95-96%, top-5 / top-100 100%.
+Accuracy, CI (thinking on, T 1.0 / top-k 20 / top-p 0.95):
+- GPQA Diamond: **72.7** (198 questions; seeds 42 / 43 / 44: 69.7 / 75.3 / 73.2). Same-protocol GPU reference 74.24, card 78.8.
+- LiveCodeBench: **72.5** (GPU reference 73.28, card 72).
+
+Against HF bf16, teacher-forced on GPQA reasoning traces: top-1 agreement 97.6%, KL(HF || TT) x 1000 = 7.7.
 
 ## Known limitations
 
