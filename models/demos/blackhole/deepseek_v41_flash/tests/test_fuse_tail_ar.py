@@ -301,6 +301,9 @@ def test_fuse_tail_post(mesh_device):
         worst = min(worst, p)
         if p < 0.999:
             print(f"ft: chip {idx} post pcc {p:.5f}", flush=True)
+            if idx == 0:
+                rf = ref_for(gold[idx // 8])
+                print("ft: row pcc " + str([round(pcc(got[i], rf[i]), 4) for i in range(T)]), flush=True)
     res["post_pcc_min"] = worst
     if "time" in JOBS:
         for _ in range(3):

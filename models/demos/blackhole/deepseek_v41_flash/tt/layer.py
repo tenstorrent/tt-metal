@@ -283,7 +283,7 @@ class DSV41Layer:
             (not sbf)
             and (self.mhc_pool_tag == "main" or os.environ.get("DSV41_FUSE_TAIL_DRAFT", "0") == "1")
             and _FT.applies(self.mesh_device, T)
-            and int(xp.shape[0]) in (8, 12)
+            and int(xp.shape[0]) in _FT.supported_T()
             and (_flag("DSV41_MHC_EXPAND_VALID") or _flag("DSV41_MHC_LANEPAR"))
             and _flag("DSV41_MHC_EXPAND_V2", "1")
         )

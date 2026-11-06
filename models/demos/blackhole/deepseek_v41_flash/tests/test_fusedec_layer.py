@@ -177,6 +177,24 @@ def test_fusedec_layer(mesh_device):
                 rec_["pcc"] = min(_pcc(a, b) for a, b in zip(ref, outs))
                 rec_["maxabs"] = max(float((a - b).abs().max()) for a, b in zip(ref, outs))
                 rec_["bit_equal"] = all(torch.equal(a, b) for a, b in zip(ref, outs))
+                if (
+                    os.environ.get("FD_ROWPCC") == "1"
+                ):  # per token row (dim 0) PCC / max abs of chip 0 vs the first arm: which rows of the verify block differ
+                    a0, b0 = ref[0], outs[0]
+                    n0 = int(a0.shape[0])
+                    rec_["row_pcc"] = [round(_pcc(a0[i], b0[i]), 5) for i in range(n0)]
+                    rec_["row_maxabs"] = [round(float((a0[i] - b0[i]).abs().max()), 3) for i in range(n0)]
+                    rec_["out_shape"] = list(a0.shape)
+                    # where the worst rows differ: stream x 32-column tile index of |diff| > 1.0 (first 12 of them) and the count
+                    dd = (
+                        (a0 - b0).abs().reshape(n0, -1, int(a0.shape[-1]) // 32, 32).amax(dim=-1)
+                    )  # [row, stream, tile]
+                    bad = {}
+                    for i in range(n0):
+                        idx = (dd[i] > 1.0).nonzero().tolist()
+                        if idx:
+                            bad[str(i)] = dict(n=len(idx), first=idx[:12])
+                    rec_["bad_tiles"] = bad
             arms_out[name] = rec_
             print("LAYERARM " + json.dumps({name: rec_}), flush=True)
             json.dump(

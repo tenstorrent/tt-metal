@@ -47,7 +47,10 @@ def _ints(s, default):
 def want_attn_front_copy(U, env=None):
     if not guard_on(env):
         return True
-    af_t = _ints(_env(env).get("DSV41_COPY_GUARD_AF_T"), AF_T_DEFAULT)
+    default = AF_T_DEFAULT + (
+        (16,) if _env(env).get("DSV41_ATTN_FRONT_T16", "0") == "1" else ()
+    )  # the T=16 gate (B=16 k=3) declares its row count
+    af_t = _ints(_env(env).get("DSV41_COPY_GUARD_AF_T"), default)
     return any(t in af_t for t in verify_rows(U, env))
 
 

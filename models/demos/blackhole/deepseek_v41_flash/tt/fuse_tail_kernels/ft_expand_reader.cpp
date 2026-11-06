@@ -27,13 +27,15 @@ void kernel_main() {
         get_compile_time_arg_val(8);  // compact y tile bytes in the landing buffer: 512 (8 rows) or 1024 (16 rows)
     constexpr uint32_t PPL =
         get_compile_time_arg_val(9);  // reducers filling the landing buffer (semaphore increments per call)
-    constexpr auto x_args = TensorAccessorArgs<10>();
+    constexpr uint32_t P =
+        get_compile_time_arg_val(10);  // passes: this core serves token groups g, g + NGRP, ... (T > 12)
+    constexpr auto x_args = TensorAccessorArgs<11>();
     constexpr uint32_t TILE = 4096;
-    constexpr uint32_t G = 1;
+    constexpr uint32_t G = P;              // B tiles per column tile: one per pass
     constexpr uint32_t YR0 = 4 * TG - 16;  // first y row inside face 2 / 3 of the B tile (rows 4 TG ..)
 
     const uint32_t j0 = get_arg_val<uint32_t>(0);
-    const uint32_t tb = TG * get_arg_val<uint32_t>(1);  // first token of this core's group
+    const uint32_t g0 = get_arg_val<uint32_t>(1);  // this core's first token group
     const uint32_t role = get_arg_val<uint32_t>(2);
     const uint32_t partner_x = get_arg_val<uint32_t>(3);
     const uint32_t partner_y = get_arg_val<uint32_t>(4);
@@ -51,16 +53,26 @@ void kernel_main() {
     noc.async_write_zeros(cbb, G * NG * TILE, {.offset_bytes = 0});
     noc.write_zeros_l1_barrier();
 
-    const uint32_t nv = (T - tb) < TG ? (T - tb) : TG;
+    // pass p serves token group g0 + NGRP p (B tile gi * P + p); a group past the last token (nv = 0) leaves its zero
+    // tile
+    auto group_nv = [&](uint32_t p) -> uint32_t {
+        const uint32_t tb_p = TG * (g0 + NGRP * p);
+        return tb_p >= T ? 0 : ((T - tb_p) < TG ? (T - tb_p) : TG);
+    };
     for (uint32_t gi = 0; gi < NG; ++gi) {
         const uint32_t j = j0 + gi;
-        const uint32_t bt = gi * TILE;
-        for (uint32_t tl = 0; tl < nv; ++tl) {
-            const uint32_t t = tb + tl;
-            // token tl owns rows 4 tl .. 4 tl + 3 of the B tile: faces 0 / 1 for tl < 4, faces 2 / 3 above
-            const uint32_t o0 = bt + (tl >> 2) * 2048 + (tl & 3) * 256;
-            noc.async_read(x_acc, cbb, 256, {.page_id = t * NT + j, .offset_bytes = 0}, {.offset_bytes = o0});
-            noc.async_read(x_acc, cbb, 256, {.page_id = t * NT + j, .offset_bytes = 1024}, {.offset_bytes = o0 + 1024});
+        for (uint32_t p = 0; p < P; ++p) {
+            const uint32_t tb_p = TG * (g0 + NGRP * p);
+            const uint32_t nv_p = group_nv(p);
+            const uint32_t bt = (gi * P + p) * TILE;
+            for (uint32_t tl = 0; tl < nv_p; ++tl) {
+                const uint32_t t = tb_p + tl;
+                // token tl owns rows 4 tl .. 4 tl + 3 of the B tile: faces 0 / 1 for tl < 4, faces 2 / 3 above
+                const uint32_t o0 = bt + (tl >> 2) * 2048 + (tl & 3) * 256;
+                noc.async_read(x_acc, cbb, 256, {.page_id = t * NT + j, .offset_bytes = 0}, {.offset_bytes = o0});
+                noc.async_read(
+                    x_acc, cbb, 256, {.page_id = t * NT + j, .offset_bytes = 1024}, {.offset_bytes = o0 + 1024});
+            }
         }
     }
     noc.async_read_barrier();
@@ -90,17 +102,21 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbb.get_write_ptr());
         volatile tt_l1_ptr uint32_t* Y = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(y_l1);
         for (uint32_t gi = 0; gi < NG; ++gi) {
-            volatile tt_l1_ptr uint32_t* Bt = B + gi * (TILE / 4);
-            for (uint32_t h = 0; h < 2; ++h) {
-                volatile tt_l1_ptr uint32_t* src =
-                    Y + gi * (YB / 4) + h * (YB / 8) + tb * 8;  // YB B per tile, YB / 2 per face, 32 B per row
-                volatile tt_l1_ptr uint32_t* dst =
-                    Bt + 512 + 256 * h + YR0 * 16;  // y row m at row 4 TG + m (face 2 / 3, 64 B per row)
-                for (uint32_t m = 0; m < nv; ++m) {
-                    for (uint32_t e = 0; e < 8; ++e) {
-                        const uint32_t w = src[m * 8 + e];
-                        dst[m * 16 + 2 * e] = w << 16;
-                        dst[m * 16 + 2 * e + 1] = w & 0xFFFF0000u;
+            for (uint32_t p = 0; p < P; ++p) {
+                const uint32_t tb_p = TG * (g0 + NGRP * p);
+                const uint32_t nv_p = group_nv(p);
+                volatile tt_l1_ptr uint32_t* Bt = B + (gi * P + p) * (TILE / 4);
+                for (uint32_t h = 0; h < 2; ++h) {
+                    volatile tt_l1_ptr uint32_t* src =
+                        Y + gi * (YB / 4) + h * (YB / 8) + tb_p * 8;  // YB B per tile, YB / 2 per face, 32 B per row
+                    volatile tt_l1_ptr uint32_t* dst =
+                        Bt + 512 + 256 * h + YR0 * 16;  // y row m at row 4 TG + m (face 2 / 3, 64 B per row)
+                    for (uint32_t m = 0; m < nv_p; ++m) {
+                        for (uint32_t e = 0; e < 8; ++e) {
+                            const uint32_t w = src[m * 8 + e];
+                            dst[m * 16 + 2 * e] = w << 16;
+                            dst[m * 16 + 2 * e + 1] = w & 0xFFFF0000u;
+                        }
                     }
                 }
             }

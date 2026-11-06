@@ -43,8 +43,15 @@ def variant(T):
     """
     if T <= 8:
         return dict(NP=5, Q=4, TILEB=512, TG=4)
-    assert T <= 12, T
+    assert (
+        T <= 16
+    ), T  # the 16-row compact tile (faces 0 and 1 of the 32 x 32 tile) holds up to 16 token rows; T in 13..16 needs the 2-pass mHC post (DSV41_FUSE_TAIL_T16=1)
     return dict(NP=10, Q=2, TILEB=1024, TG=6)
+
+
+def supported_T():
+    """Verify row counts the fused tail runs at: 8 (k=3, B=8), 12 (k=5, B=8) and, with DSV41_FUSE_TAIL_T16=1, 16 (k=3 at B=16: the mHC post covers its 3 token groups of 6 in two passes of the 80 expand cores)."""
+    return (8, 12, 16) if os.environ.get("DSV41_FUSE_TAIL_T16", "0") == "1" else (8, 12)
 
 
 def _cores(lst):
@@ -183,12 +190,17 @@ class FuseTailAR:
         if fused:
             px = post_args
             T = px["T"]
-            assert 4 < T <= 12, "fused post: T in 5..12 (two token groups of 4 (T <= 8) or 6 (T <= 12))"
+            assert (
+                4 < T <= 16
+            ), "fused post: T in 5..16 (token groups of 4 (T <= 8) or 6 (T <= 16), two groups of cores, G > 2 groups in passes)"
             nt_total = RING * NT
             G = (T + TG - 1) // TG
-            csl = max(c for c in range(1, nt_total + 1) if nt_total % c == 0 and G * c <= 96)
+            GC = min(
+                G, 2
+            )  # core groups (40 landing / partner cores each); group g + 2 p of tokens is pass p of core group g
+            csl = max(c for c in range(1, nt_total + 1) if nt_total % c == 0 and GC * c <= 96)
             assert csl == NM and nt_total // csl == QL, (csl, NM, QL)
-            mcores = [(k % GRID_W, k // GRID_W) for k in range(G * csl)]
+            mcores = [(k % GRID_W, k // GRID_W) for k in range(GC * csl)]
             assert mcores[:NM] == self.land
             mset = _cores(mcores)
             gpc = QL
@@ -373,6 +385,8 @@ class FuseTailAR:
         nt = RING * NT
         TG = V["TG"]
         G = (T + TG - 1) // TG
+        GC = min(G, 2)  # core groups
+        P = (G + GC - 1) // GC  # passes per core (token group g + GC p in pass p)
         gpc = QL
         csl = NM
         CB_A, CB_B, CB_S, CB_O, CB_SA = 0, 1, 2, 3, 4
@@ -385,20 +399,20 @@ class FuseTailAR:
             )
 
         cbs += [
-            cb(CB_A, 1, 4096, ttnn.float32),
-            cb(CB_B, gpc, 4096, ttnn.float32),
+            cb(CB_A, P, 4096, ttnn.float32),
+            cb(CB_B, gpc * P, 4096, ttnn.float32),
             cb(CB_S, 1, 4096, ttnn.float32),
-            cb(CB_O, min(gpc, 8), 4096, ttnn.float32),
+            cb(CB_O, min(gpc, 8) * P, 4096, ttnn.float32),
             cb(CB_SA, max(1, (4 * 512 + 4095) // 4096), 4096, ttnn.float32),
         ]
         rt_rd, rt_wr, rt_cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for k, (cx, cy) in enumerate(mcores):
             g = k // csl
-            if G > 1 and g == 1:
+            if GC > 1 and g == 1:
                 px_, py_ = self._phys(*mcores[k - csl])  # partner = the landing core of the same column slice
                 role = 1
             else:
-                px_, py_ = self._phys(*mcores[k + csl]) if G > 1 else (0, 0)
+                px_, py_ = self._phys(*mcores[k + csl]) if GC > 1 else (0, 0)
                 role = 0
             rt_rd[cx][cy] = [(k % csl) * gpc, g, role, px_, py_]
             rt_wr[cx][cy] = [(k % csl) * gpc, g]
@@ -407,7 +421,7 @@ class FuseTailAR:
             kernel_source=f"{KDIR}/ft_expand_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=mset,
-            compile_time_args=[CB_B, CB_S, T, nt, G, gpc, sem_partner, TG, V["TILEB"], V["NP"] // NPL] + acc(x),
+            compile_time_args=[CB_B, CB_S, T, nt, GC, gpc, sem_partner, TG, V["TILEB"], V["NP"] // NPL, P] + acc(x),
             runtime_args=rt_rd,
             common_runtime_args=[x.buffer_address(), gsem_addr, land_addr],
             config=ttnn.ReaderConfigDescriptor(),
@@ -416,7 +430,7 @@ class FuseTailAR:
             kernel_source=f"{KDIR}/ft_expand_writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=mset,
-            compile_time_args=[CB_O, CB_A, CB_SA, T, nt, gpc, 0, TG] + acc(out) + acc(comb) + acc(post),
+            compile_time_args=[CB_O, CB_A, CB_SA, T, nt, gpc, 0, TG, GC, P] + acc(out) + acc(comb) + acc(post),
             runtime_args=rt_wr,
             common_runtime_args=[out.buffer_address(), comb.buffer_address(), post.buffer_address()],
             config=ttnn.WriterConfigDescriptor(),
@@ -425,7 +439,7 @@ class FuseTailAR:
             kernel_source=f"{MHC_KDIR}/mhc_expand4_compute.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=mset,
-            compile_time_args=[CB_A, CB_B, CB_O, T, 1, gpc],
+            compile_time_args=[CB_A, CB_B, CB_O, T, P, gpc],
             runtime_args=rt_cp,
             config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
         )
@@ -504,7 +518,7 @@ def shared(md):
 
 def applies(md, T, part=None):
     """True when the decode layer can use the fused all-reduce + mHC post: T = 8 token rows, 4x8 mesh, ring fabric, DRAM interleaved bf16 TILE partial."""
-    if not enabled() or T not in (8, 12) or tuple(md.shape) != (4, 8):
+    if not enabled() or T not in supported_T() or tuple(md.shape) != (4, 8):
         return False
     if part is not None:
         mc = part.memory_config()

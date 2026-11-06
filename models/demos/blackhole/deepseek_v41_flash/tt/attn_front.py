@@ -27,6 +27,14 @@ PN1 = 7
 PN2 = 16
 
 
+def af_rows_supported():
+    """Row counts the attention-front kernel is gated to: 8, 12 (B=8 k=3 / k=5) and, with DSV41_ATTN_FRONT_T16=1, 16 (B=16 k=3)."""
+    return (8, 12, 16) if os.environ.get("DSV41_ATTN_FRONT_T16", "0") == "1" else (8, 12)
+
+
+# The dead-copy guard of the unified stack (DSV41_DEAD_COPY_GUARD) was dropped in stack7: it duplicated DSV41_COPY_GUARD (tt/dram_levers.py), which is the one switch.
+
+
 def _page_geometry(arch_is_bh, sbk):
     """blaze get_max_page_size_and_num_pages (NoC max packet 16384 B on Blackhole)."""
     tile = TILE_BYTES_B8

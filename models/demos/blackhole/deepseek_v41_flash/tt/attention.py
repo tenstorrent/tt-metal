@@ -501,7 +501,7 @@ class DSV41Attention:
             os.environ.get("DSV41_ATTN_FRONT") == "1"
             and hasattr(self, "af_w1")
             and hasattr(self, "qk_gamma")
-            and T in (8, 12)
+            and (T in (8, 12) or (T == 16 and os.environ.get("DSV41_ATTN_FRONT_T16", "0") == "1"))
             and AF.flag("DSV41_ATTN_QKHEADS", "1")
         ):
             # persistent attention-front kernel (tt/attn_front.py): wqkv -> q/kv norm -> wq_b in one program, then the existing qk_heads
