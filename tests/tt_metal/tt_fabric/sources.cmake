@@ -8,6 +8,7 @@ set(UNIT_TESTS_FABRIC_SRC
     common/fabric_command_interface.cpp
     common/channel_trimming_test_utils.cpp
     fabric_router/test_routing_tables.cpp
+    keraunos/test_keraunos_eth_semaphore.cpp
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
     fabric_router/test_express_ring_topology.cpp
