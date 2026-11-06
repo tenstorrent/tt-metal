@@ -246,23 +246,10 @@ ttnn::Tensor ring_shift(
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
-    // No host synchronization around the transfer; this is safe only under the block-size invariant below. Each
-    // socket endpoint keeps its state (write/read pointers, bytes_sent/bytes_acked) in a config buffer in the L1 of
-    // its socket core, (0, 0) here, which lives as long as the cached socket. Each send/recv op resumes from that
-    // state and the peers update each other's counters over the fabric, so a device waits only for its ring
-    // neighbours rather than for the whole mesh, and the host keeps enqueuing while the data moves. The data itself
-    // goes through a FIFO in the receiver's DRAM.
-    // Deadlock freedom when a send blocks on FIFO space rests on every device issuing the same sequence of socket
-    // ops: per shift, exactly one send or recv per phase, phase 1 before phase 2. A sender can run several shifts
-    // ahead of its receiver on a socket, but every op it waits on is earlier in that global order, so no wait cycle
-    // can form. Any reordering of the sends and recvs below needs this re-checked.
-    // Block-size invariant: a sender can start the next shift on a socket while its receiver still holds unread data
-    // from this one. Each send/recv op aligns the socket's write/read pointer up to its block size and does not count
-    // the skipped bytes in bytes_sent/bytes_acked (set_*_socket_page_size in socket_api.h). If consecutive ops on a
-    // socket use different block sizes, the sender sees more free space than there is until the receiver's next recv
-    // makes the same skip; a sender that fills the FIFO in that window overwrites the oldest unread data. A block is
-    // as many whole pages as fit in the fabric max payload (send_async_op_program_factory.cpp): at the default 4352 B
-    // the bf16 and fp32 tile shifts of ring attention both use 4096 B, at 15232 B they would not (14336 vs 12288 B).
+    // No host synchronization: each send/recv waits only on its peer, through the socket's flow-control state on
+    // device. This stays deadlock-free because every device issues the same socket ops in the same order (per shift,
+    // one send or recv per phase, phase 1 before phase 2), so a blocked op only ever waits on an op that is earlier in
+    // that order. Re-check this if the sends and recvs below are reordered.
     // Phase 1: Even positions send, odd positions receive
     const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
