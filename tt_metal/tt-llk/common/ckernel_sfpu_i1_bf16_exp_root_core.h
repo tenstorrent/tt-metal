@@ -10,7 +10,7 @@ using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
 template <typename Held = void>
-inline vFloat exp_root_rsqrt(vFloat x)
+__attribute__((always_inline)) inline vFloat exp_root_rsqrt(vFloat x)
 {
     vInt i    = as<vInt>(as<vUInt>(x) >> 1);
     vFloat y  = as<vFloat>(vConstIntPrgm0 - i);
@@ -34,7 +34,7 @@ inline vFloat exp_root_rsqrt(vFloat x)
 }
 
 template <typename Config, bool Held = false>
-inline vFloat exp_root_eval(vFloat x)
+__attribute__((always_inline)) inline vFloat exp_root_eval(vFloat x)
 {
     static_assert(
         Config::kExpDegree == 2u && Config::kCoreDegree == 4u && Config::kCorrectionDegree == 1u && Config::kCorrectionCoefficients[0] == 1.0f,
@@ -56,8 +56,6 @@ inline vFloat exp_root_eval(vFloat x)
     }
     core = magnitude * core;
 
-    // Match the fitter's biased one-FMA exponent state exactly.  The fixed
-    // shift moves the large coefficient scale into an exact exponent add.
     constexpr float kLog2E        = 1.4426950408889634f;
     constexpr float kBiasedOffset = 127.0f - Config::kExponentShift * kLog2E;
     vFloat biased                 = magnitude * kLog2E + kBiasedOffset;
@@ -99,12 +97,6 @@ inline vFloat exp_root_eval(vFloat x)
     v_endif;
     result = copysgn(result, x);
     {
-        // The joint fitter may certify one x*P(x^2) origin cell whose final FP32
-        // product is flushed before destination BF16 RNE.  Compare its derived
-        // normal-domain image, then build signed FP32 MIN_NORMAL by clearing the
-        // original normal input's mantissa.  The certificate is bound to target
-        // policy, the ordinary joint product, and exact c0 bytes; no activation
-        // identity or raw-word fingerprint participates.
         vFloat origin_ftz_rne_key = addexp(magnitude, Config::kOriginShift);
         v_if (origin_ftz_rne_key == __builtin_bit_cast(float, Config::kOriginScaledBits))
         {

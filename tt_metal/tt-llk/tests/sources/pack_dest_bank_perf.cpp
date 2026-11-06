@@ -111,12 +111,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
-            4 /* num_faces */, formats.math);
+            ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
         for (std::uint32_t block_tile = 0; block_tile < TILE_CNT; block_tile++)
         {
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                block_tile, formats.math, formats.math, 4 /* num_faces */);
+                block_tile, formats.math, formats.math, ckernel::DEFAULT_TENSOR_SHAPE);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
@@ -147,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DstSync::SyncHalf,
                             is_fp32_dest_acc_en,
                             BroadcastType::NONE,
-                            unpack_to_dest>(block_tile, formats.math, formats.math, 4 /* num_faces */);
+                            unpack_to_dest>(block_tile, formats.math, formats.math, ckernel::DEFAULT_TENSOR_SHAPE);
                     }
                 }
             }
@@ -168,7 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DstSync::SyncHalf,
                             is_fp32_dest_acc_en,
                             BroadcastType::NONE,
-                            unpack_to_dest>(block_tile, formats.math, formats.math, 4 /* num_faces */);
+                            unpack_to_dest>(block_tile, formats.math, formats.math, ckernel::DEFAULT_TENSOR_SHAPE);
                     }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }

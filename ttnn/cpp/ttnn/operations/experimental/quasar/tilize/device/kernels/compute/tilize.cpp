@@ -19,6 +19,8 @@ void kernel_main() {
                                    ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
                                    : compute_kernel_lib::tilize_config::Fp32Mode::Fast;
 
+    DataflowBuffer in(dfb::in);
+    DataflowBuffer out(dfb::out);
     compute_kernel_lib::tilize<
         per_core_block_tile_cnt,
         dfb::in,
@@ -26,5 +28,5 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-        fp32_mode>(per_core_block_cnt);
+        fp32_mode>(in, out, per_core_block_cnt);
 }

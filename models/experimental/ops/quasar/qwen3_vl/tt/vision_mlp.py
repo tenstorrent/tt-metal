@@ -35,7 +35,7 @@ class MLP(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_name(f"{name}.weight"),
         )
 
         # Create bias tensors
@@ -46,17 +46,15 @@ class MLP(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_name(f"{name}.bias"),  # distinct from the weight: both are bf16 on Quasar
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Create weights with appropriate precision
-        self.linear_fc1_weight = as_weight_tensor(
-            "linear_fc1", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b
-        )
+        self.linear_fc1_weight = as_weight_tensor("linear_fc1", (-1, -2), args.vision_mlp_fc1_dtype)
         # self.linear_fc1_weight.shape = [4304, 1152] each device of N300 sharded on dim=0
-        self.linear_fc2_weight = as_weight_tensor("linear_fc2", (-2, -1), ttnn.bfloat8_b)
+        self.linear_fc2_weight = as_weight_tensor("linear_fc2", (-2, -1), args.vision_weight_dtype)
         # self.linear_fc2_weight.shape = [1152, 4304] each device of N300 sharded on dim=1
 
         # Create bias

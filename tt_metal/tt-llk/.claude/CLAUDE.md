@@ -20,7 +20,8 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | `tt_llk_wormhole_b0/` | Wormhole B0 — llk_lib, instructions, common headers |
 | `tt_llk_blackhole/` | Blackhole — same structure as WH |
 | `tt_llk_quasar/` | Quasar — different file naming (semantic, not letter-based) |
-| `tests/python_tests/` | Python test suite |
+| `tests/python_tests/` | Python test suite (card jobs collect this tree) |
+| `tests/hardware_free/` | Host-only tests; run with `tests/run_hardware_free.sh` |
 | `tests/sources/` | C++ test source files |
 | `tests/hw_specific/` | Architecture-specific test files |
 | `docs/` | Documentation |
@@ -89,6 +90,22 @@ When tests fail with `TENSIX TIMED OUT`, the device may be hung. Reset with:
 tt-smi -r  # reset device
 ```
 Only reset for runtime failures (TIMEOUT, runtime ASSERTION). Never reset for compile errors or reconfig escapes — resetting masks reconfig bugs.
+
+### The Fuser Is the Reference
+`tests/python_tests/fuser/` defines what a correct LLK result is. Do not change it to make a kernel pass. If a kernel change disagrees with the fuser, fix the kernel, or stop and report the disagreement to the fuser owners.
+
+Do not change:
+- The fuser framework: the `.py` files directly in `fuser/` (`config_parser`, `validator`, `sweep`, `kernel_generator`, `pipeline_plan`, `golden_check`, `operand`, `base_*`, `*_node`, ...)
+- `fuser/golden/`, the reference results
+- Validation rules in `fuser/<arch>/parser.py` (allowed tile shapes and formats, `reject(...)` and `require_*` rules) and existing op entries
+- Existing op generators in `fuser/<arch>/{fpu,sfpu,packer,unpacker}/`
+- Existing YAML configs in `fuser/tests/`: no edits, deletions or looser `atol`/`rtol`
+- The harness entry points `test_fused.py`, `quasar/test_fused_quasar.py`, `perf_fused.py` and `quasar/perf_fused_quasar.py`: add no tests there; fuser cases come from YAML configs
+
+Allowed:
+- New YAML configs in `fuser/tests/` for new coverage
+- Registering a new op: adding it to the op lists in `fuser/<arch>/parser.py` and adding a generator file, without changing existing entries
+- When the same change alters an LLK function's signature, the smallest edit to the generator call that passes the new argument; say so in the PR description
 
 ## Metal Integration
 

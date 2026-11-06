@@ -10,7 +10,7 @@ using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
 template <int CODE>
-inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
+__attribute__((always_inline)) inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
 {
     static_assert(CODE >= 0 && CODE <= 6, "unsupported raw terminal class");
     if constexpr (CODE == 0)
@@ -45,7 +45,7 @@ inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
 
 // Ordered actions on raw input classes. Callers choose their own early exits
 // and interleaving, and opt into the negative-tail narrowing.
-template <typename Config, std::uint32_t INDEX, bool NegativeTailFold = false, typename Float>
+template <typename Config, std::uint32_t INDEX, typename Float>
 inline void apply_raw_domain_record(Float x_raw, Float& result)
 {
     constexpr auto record = Config::kDomainActions[INDEX];
@@ -75,10 +75,6 @@ inline void apply_raw_domain_record(Float x_raw, Float& result)
     {
         vFloat magnitude = std::numeric_limits<float>::infinity();
         action_value     = copysgn(magnitude, x_raw);
-    }
-    if constexpr (NegativeTailFold && INDEX == 1)
-    {
-        action_value = x_raw * 0.0f;
     }
     if constexpr (record.direction == 0 && record.inclusive != 0)
     {
@@ -115,7 +111,7 @@ inline void apply_raw_domain_record(Float x_raw, Float& result)
 }
 
 template <typename Config, std::uint32_t INDEX>
-inline void apply_raw_domain_records(vFloat x_raw, vFloat& result)
+__attribute__((always_inline)) inline void apply_raw_domain_records(vFloat x_raw, vFloat& result)
 {
     apply_raw_domain_record<Config, INDEX>(x_raw, result);
     if constexpr (INDEX > 0)
