@@ -40,7 +40,7 @@ Initializing Metalium is almost the same as before. To recap, we need to
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t n_tiles = 64;
