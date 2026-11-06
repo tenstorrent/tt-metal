@@ -60,7 +60,8 @@ def _rebase(t, base_tok, pages_per_tok):
 def supported_T():
     """Verify row counts the fused tail runs at: 8 (k=3, B=8), 12 (k=5, B=8) and, with DSV41_FUSE_TAIL_T16=1, 16 (k=3 at B=16: the mHC post covers its 3 token groups of 6 in two passes of the 80 expand cores)."""
     ts = (
-        (8, 12)
+        ((4, 6) if os.environ.get("DSV41_FUSE_TAIL_SMALL", "0") == "1" else ())  # B=4: T = 4 (k=3) and 6 (k=5)
+        + (8, 12)
         + ((16,) if os.environ.get("DSV41_FUSE_TAIL_T16", "0") == "1" else ())
         + ((24,) if os.environ.get("DSV41_FUSE_TAIL_T24", "0") == "1" else ())
     )
@@ -204,14 +205,14 @@ class FuseTailAR:
             px = post_args
             T = px["T"]
             assert (
-                4 < T <= 16
+                1 <= T <= 16
             ), "fused post: T in 5..16 (token groups of 4 (T <= 8) or 6 (T <= 16), two groups of cores, G > 2 groups in passes)"
             nt_total = RING * NT
             G = (T + TG - 1) // TG
             GC = min(
                 G, 2
             )  # core groups (40 landing / partner cores each); group g + 2 p of tokens is pass p of core group g
-            csl = max(c for c in range(1, nt_total + 1) if nt_total % c == 0 and GC * c <= 96)
+            csl = NM  # the landing layout fixes NM cores per core group (GC = 1 at T <= 4 would give 80)
             assert csl == NM and nt_total // csl == QL, (csl, NM, QL)
             mcores = [(k % GRID_W, k // GRID_W) for k in range(GC * csl)]
             assert mcores[:NM] == self.land
