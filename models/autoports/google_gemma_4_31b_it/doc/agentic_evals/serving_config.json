@@ -302,6 +302,18 @@
       "planned_clients": 1,
       "max_num_seqs": 1,
       "batch_reason": "Exact headline and unchanged stage11 matrix each require one client"
+    },
+    "gpqa-b8-expanded-pool-local": {
+      "batch": 8,
+      "planned_clients": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest supported batch for8; exactness subwindowC2 uses sameB8 baseline"
+    },
+    "gpqa-b8-expanded-pool-benchmark": {
+      "batch": 1,
+      "planned_clients": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exactheadlineandunchangedstage11matrix eachC1; B1regressionrow"
     }
   },
   "release_limits": {
@@ -624,6 +636,25 @@
       "stream": true,
       "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json",
       "reason": "Preserve token-out streaming; response debugbuffersentireSSE, provenbyruns/response-logging-runtime-benchmark/RESULT.json"
+    }
+  },
+  "candidates": {
+    "expanded_b8_pool": {
+      "status": "local_exactness_and_capacity_confirmed_scored_comparison_pending",
+      "planned_clients": 8,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 20480,
+      "working_set_tokens": 131072,
+      "late_hit_fraction": 0.9973317088029241,
+      "preemptions": 0,
+      "pool_sizing": "fixed",
+      "pool_sizing_reason": "Opt-in bounded20480ID allocation chosen from measured post-weight/freeDRAM ledger and confirmed live. Stockworker asksbudgetbeforeweights, so no runtime postweight auto-sizing. Internal transient peaks unmeasured.",
+      "env": {
+        "GEMMA4_B8_KV_POOL_IDS": "20480"
+      },
+      "evidence": "runs/gpqa-b8-expanded-pool/local-confirmation.json",
+      "selected": false
     }
   }
 }

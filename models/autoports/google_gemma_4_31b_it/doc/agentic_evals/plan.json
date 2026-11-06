@@ -2339,10 +2339,72 @@
       "wrapper_completed_at": "2026-11-06T20:05:39.117413+00:00",
       "remaining_owners": [],
       "disposition": "Streaming response buffering invalidates token-emission decode characterization; loggerselectedonlyGPQA nonstreaming, benchmarkkeepspriorloggingdisabledconfiguration."
+    },
+    {
+      "arm": "gpqa-b8-expanded-pool-local",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "server_closed",
+      "started_at": "2026-11-06T20:24:47.132862+00:00",
+      "queued_at": "2026-11-06T20:24:47.132862+00:00",
+      "planned_clients": 8,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest supported batch for8; exactness subwindowC2 uses sameB8 baseline",
+      "predicted_hours": 0.42,
+      "box_hours": 0.72,
+      "runtime_execution_sha": "3a7704d65abc05d4d9d9b5c84e73fcc0136f22f3",
+      "source_snapshot": "bringup/artifacts/gpqa-b8-expanded-pool/source-launch.json",
+      "command": [
+        "bash",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-b8-expanded-pool/launch.sh",
+        "--stages",
+        "serve",
+        "--max-num-seqs",
+        "8",
+        "--enable-prefix-caching",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-b8-expanded-pool/server"
+      ],
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "diagnostic": "Full-limit synthetic streams, client disconnect after residency proof; exact3 historical bodies compared unchanged separately; not scored",
+      "wrapper_ended_at": "2026-11-06T20:39:20.160613+00:00",
+      "exit_status": 0,
+      "wrapper_hours": 0.24250629794528422,
+      "ended_at": "2026-11-06T20:39:17.150762+00:00",
+      "actual_device_hours": 0.2416716388888889,
+      "remaining_owners": [],
+      "capacity_result": "8independent131072histories; zero preemptions;latehit.9973317088; full-limit cancelleddiagnostics notscores",
+      "native_exact_pairs": 3
+    },
+    {
+      "arm": "gpqa-b8-expanded-pool-benchmark",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "server_closed",
+      "queued_at": "2026-11-06T20:35:22.131463+00:00",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exactheadlineandunchangedstage11matrix eachC1; B1regressionrow",
+      "predicted_hours": 0.07605465913249645,
+      "box_hours": 0.15,
+      "prerequisite": "Completed successfulcapacity pluscleanB8close",
+      "runtime_candidate_sha": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
+      "response_debug": false,
+      "source": "Newsource candidate regression, nottelemetryrepair; no selectedperformanceupdateuntilaccepted",
+      "started_at": "2026-11-06T20:39:32.873852+00:00",
+      "source_snapshot": "bringup/artifacts/stage12-expanded-pool-benchmark/source-launch.json",
+      "wrapper_ended_at": "2026-11-06T20:44:54.954801+00:00",
+      "exit_status": 0,
+      "ended_at": "2026-11-06T20:44:51.568246+00:00",
+      "actual_device_hours": 0.08852622055555555,
+      "remaining_owners": []
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-06T20:20:12.502148+00:00",
+  "last_updated": "2026-11-06T20:45:20.475790+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -3623,8 +3685,7 @@
     }
   ],
   "next_local_job": {
-    "status": "awaiting_frozen_dry_or_new_justified_effort",
-    "reason": "All required selectedruntimebenchmarks complete; lateststreamingloggerexperiment dropped, GPQAusesnonstreamingonly"
+    "status": "checking_existing_C4_capacity_evidence_before_any_replay"
   },
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T17:48:16.171357+00:00",
@@ -3675,5 +3736,11 @@
     "status": "prepared_not_published_not_dispatched",
     "evidence": "runs/gpqa80-preparation/logging-candidate.json",
     "admission": "Only after valid40 and measuredprojection"
+  },
+  "expanded_pool_local_confirmation": {
+    "device_hours": 0.2416716388888889,
+    "forecast_hours": 0.42,
+    "evidence": "runs/gpqa-b8-expanded-pool/local-confirmation.json",
+    "next": "Candidate B1 regression thensame20CIcomparison aftervalidbaseline; normal40 remainsab273/af1 andneverwaits"
   }
 }

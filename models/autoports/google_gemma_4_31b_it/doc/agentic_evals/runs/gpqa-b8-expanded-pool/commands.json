@@ -1,0 +1,45 @@
+{
+  "status": "ready_for_coordinator_queue",
+  "server": {
+    "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "env": {
+      "GEMMA4_BENCHMARK_PHASE_LOG": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-b8-expanded-pool/candidate/phases.jsonl",
+      "GEMMA4_PHASE_AUTOEXPORT_SECONDS": "1",
+      "GEMMA4_RETAIN_DECODE_TOKENS": "1",
+      "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "false",
+      "GEMMA4_B8_KV_POOL_IDS": "20480",
+      "HF_HUB_CACHE": "/home/bringup/.cache/huggingface/hub",
+      "TT_METAL_CACHE": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/cache-env-validation/tt-metal-jit"
+    },
+    "argv": [
+      "bash",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-b8-expanded-pool/launch.sh",
+      "--stages",
+      "serve",
+      "--max-num-seqs",
+      "8",
+      "--enable-prefix-caching",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-b8-expanded-pool/server"
+    ]
+  },
+  "exactness": {
+    "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "argv": [
+      "python_env/bin/python",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-b8-expanded-pool/exactness.py"
+    ]
+  },
+  "capacity": {
+    "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "argv": [
+      "timeout",
+      "--signal=TERM",
+      "2100",
+      "python_env/bin/python",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-b8-expanded-pool/capacity.py"
+    ],
+    "scope": "Timeout terminates only own HTTP client, never server; coordinator idle guard remains mandatory."
+  },
+  "coordinator_admission": "Exactness first, then full-limit C8 capacity with client-only disconnect; .72h combined local box, no scored claim"
+}

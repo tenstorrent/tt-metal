@@ -1,0 +1,509 @@
+{
+  "status": "local_capacity_and_exactness_confirmed_scored_acceptance_pending",
+  "execution_sha": "3a7704d65abc05d4d9d9b5c84e73fcc0136f22f3",
+  "publication_sha": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
+  "source_hashes_matched": 14,
+  "planned_clients": 8,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "pool_env": {
+    "GEMMA4_B8_KV_POOL_IDS": 20480
+  },
+  "full_layers": 60,
+  "exactness": {
+    "baseline": "phase-archive-idle-race/candidate at ab273",
+    "requests": 3,
+    "native_fields_exact": true,
+    "matched_decode_ids": 583,
+    "first_prefill_tokens_excluded": 3,
+    "missing_mismatched_duplicate_positions": 0,
+    "scope": "Original diagnostic request limits/sampling retained; not scored trajectory parity."
+  },
+  "capacity": {
+    "contexts": [
+      4096,
+      32768,
+      65536,
+      98304,
+      131072
+    ],
+    "independent_histories": 8,
+    "requests_admitted": 40,
+    "natural_completions_claimed": false,
+    "cancellation": "Own HTTP streams closed only after residency snapshot; fresh idle each round, no active engine kill",
+    "request_output_cap": 126976,
+    "request_timeout_seconds": 14400,
+    "ignore_eos": true,
+    "first_wave_hits": 0,
+    "late_hit_fraction": 0.9973317088029241,
+    "reuse_goal_pass": true,
+    "preemptions": 0,
+    "rounds": [
+      {
+        "context": 4096,
+        "elapsed_seconds": 10.647439556079917,
+        "proof": {
+          "metrics": {
+            "num_requests_running": 8.0,
+            "num_requests_waiting": 0.0,
+            "num_preemptions_total": 0.0,
+            "prefix_cache_hits_total": 0.0,
+            "prefix_cache_queries_total": 45401.0
+          },
+          "phase": {
+            "step_id": 532,
+            "positions": [
+              4211,
+              4212,
+              4213,
+              4214,
+              4215,
+              4216,
+              4217,
+              4218
+            ],
+            "boundary_ns": 940674647024010
+          },
+          "native_tokens_at_snapshot": [
+            137,
+            136,
+            135,
+            134,
+            133,
+            132,
+            131,
+            130
+          ]
+        },
+        "actual_prior_history_lengths": [
+          37,
+          37,
+          37,
+          37,
+          37,
+          37,
+          37,
+          37
+        ],
+        "native_tokens_received": [
+          137,
+          136,
+          135,
+          134,
+          133,
+          132,
+          131,
+          130
+        ],
+        "metrics_delta": {
+          "num_preemptions_total": 0.0,
+          "prefix_cache_hits_total": 0.0,
+          "prefix_cache_queries_total": 32768.0
+        },
+        "retained_prefix_ceiling_tokens": 0,
+        "full_block_prefix_ceiling_tokens": 0,
+        "hit_fraction_of_ceiling": null,
+        "hit_fraction_of_full_block_ceiling": null,
+        "distinct_prompt_sha256": [
+          "8486cdc508e1450a9a10fb52bf602c71550eef4d74281b35d2a9ea7eba9b9c6a",
+          "e26f1d53244d539a7ffdeb73071361156d8efcb7e5c7817b7e1f329dd5e98771",
+          "3ab6eb19ce78b7f290c13a4b90b62007018ed83ea82f9c274e92f3d9171004d6",
+          "3f33d12afedea623ed92c49e626012bc85684c1fbb3211924c35e4b2406669af",
+          "768448b86f58aea88bd55375bc2990e28d481ddc1ac6b581e7363dd763c2d71a",
+          "39ed8def3ab68e250b7a327435b8f528b2b70547e220f44731f0f5a9c518df78",
+          "813be9cf1bf9c8292744c7e9645a29a156d0be23d0dff916696d7c7c850e7cd5",
+          "cd275549ee73c90be08c40917ea16fc12d384b78a5d895dc1afd86775137c31d"
+        ]
+      },
+      {
+        "context": 32768,
+        "elapsed_seconds": 71.91714659100398,
+        "proof": {
+          "metrics": {
+            "num_requests_running": 8.0,
+            "num_requests_waiting": 0.0,
+            "num_preemptions_total": 0.0,
+            "prefix_cache_hits_total": 32256.0,
+            "prefix_cache_queries_total": 307545.0
+          },
+          "phase": {
+            "step_id": 816,
+            "positions": [
+              32873,
+              32880,
+              32887,
+              32894,
+              32901,
+              32908,
+              32915,
+              32922
+            ],
+            "boundary_ns": 940746150562523
+          },
+          "native_tokens_at_snapshot": [
+            177,
+            170,
+            156,
+            163,
+            142,
+            149,
+            135,
+            128
+          ]
+        },
+        "actual_prior_history_lengths": [
+          4233,
+          4232,
+          4231,
+          4230,
+          4229,
+          4228,
+          4227,
+          4226
+        ],
+        "native_tokens_received": [
+          177,
+          170,
+          156,
+          163,
+          142,
+          149,
+          135,
+          128
+        ],
+        "metrics_delta": {
+          "num_preemptions_total": 0.0,
+          "prefix_cache_hits_total": 32256.0,
+          "prefix_cache_queries_total": 262144.0
+        },
+        "retained_prefix_ceiling_tokens": 33828,
+        "full_block_prefix_ceiling_tokens": 33792,
+        "hit_fraction_of_ceiling": 0.9535296204327776,
+        "hit_fraction_of_full_block_ceiling": 0.9545454545454546,
+        "distinct_prompt_sha256": [
+          "e9b7477897face90c3fc4f1c52017557a8461464d0391f84214d926c68c299e7",
+          "24588091608c621f408d2b2177c57675278a4c05e068e90e47b689740f0528fe",
+          "5f7c7cfdfc29ea1e8762c325d72996a76b19a7b25ac2d121527451f91a47fc9f",
+          "719336c2e5dde2f85baddd6e83e2a64169124117dca7ef93bbd452ba7c2501a4",
+          "f323b33893b409c20b16d4859aa5f3c2befc53c2c6bfe350f9e0b93e2583bb18",
+          "770ce00edc8037dfe813dc19135e1dbb74ba8533f8d5b4bfcb0f3deb33270911",
+          "5599ce3a7413dba3f0738eb6c9a83430a5af4f7e0d8ecadcf293261ef5d5dbfe",
+          "d9dcfc4517486d1523166cfaedb01df9ef38eca8cbe730f8ab021e8257b6b1b1"
+        ]
+      },
+      {
+        "context": 65536,
+        "elapsed_seconds": 123.96411689301021,
+        "proof": {
+          "metrics": {
+            "num_requests_running": 8.0,
+            "num_requests_waiting": 0.0,
+            "num_preemptions_total": 0.0,
+            "prefix_cache_hits_total": 293888.0,
+            "prefix_cache_queries_total": 831833.0
+          },
+          "phase": {
+            "step_id": 1135,
+            "positions": [
+              65645,
+              65653,
+              65661,
+              65669,
+              65677,
+              65685,
+              65693,
+              65701
+            ],
+            "boundary_ns": 940870156022250
+          },
+          "native_tokens_at_snapshot": [
+            168,
+            184,
+            176,
+            144,
+            152,
+            160,
+            136,
+            128
+          ]
+        },
+        "actual_prior_history_lengths": [
+          32945,
+          32938,
+          32924,
+          32931,
+          32910,
+          32917,
+          32903,
+          32896
+        ],
+        "native_tokens_received": [
+          168,
+          184,
+          176,
+          144,
+          152,
+          160,
+          136,
+          128
+        ],
+        "metrics_delta": {
+          "num_preemptions_total": 0.0,
+          "prefix_cache_hits_total": 261632.0,
+          "prefix_cache_queries_total": 524288.0
+        },
+        "retained_prefix_ceiling_tokens": 263356,
+        "full_block_prefix_ceiling_tokens": 263104,
+        "hit_fraction_of_ceiling": 0.9934537280335364,
+        "hit_fraction_of_full_block_ceiling": 0.9944052541960594,
+        "distinct_prompt_sha256": [
+          "737733cf399a9a18262c279c3ada90faf6a9e253c78cf117bcbb1654417c3d4d",
+          "898f11361d68222313a95f0e8e5fed94af8da974cec72f8bd9f20a670a9df65f",
+          "fcfe86362cb621a36957b43c3673fef78b323d7b4473003d91c3961ddf6d04ad",
+          "0dbea8decf3bb3a20d1d1d360fea62caae8108562730af09601f7f00f7fcd031",
+          "770b7cba2264408c404a6461377b60d8d8405a548735de9aa7f63976063c678e",
+          "0b21c512e2a00d37136bb1a045df281715652743ab2e6c115d3427d2a4cc4ccd",
+          "ef175658c4a9f8a538e7e3dfb34446fbbb2619e2374a7390ea3cef03322c4dc1",
+          "df877ba12273c7c3db6829abd63a872ba40de93ca47aed7e8b17827187edde68"
+        ]
+      },
+      {
+        "context": 98304,
+        "elapsed_seconds": 170.03149045200553,
+        "proof": {
+          "metrics": {
+            "num_requests_running": 8.0,
+            "num_requests_waiting": 0.0,
+            "num_preemptions_total": 0.0,
+            "prefix_cache_hits_total": 817664.0,
+            "prefix_cache_queries_total": 1618265.0
+          },
+          "phase": {
+            "step_id": 1459,
+            "positions": [
+              98422,
+              98430,
+              98438,
+              98446,
+              98454,
+              98462,
+              98470,
+              98478
+            ],
+            "boundary_ns": 941040529419724
+          },
+          "native_tokens_at_snapshot": [
+            176,
+            184,
+            168,
+            160,
+            152,
+            144,
+            128,
+            136
+          ]
+        },
+        "actual_prior_history_lengths": [
+          65704,
+          65720,
+          65712,
+          65680,
+          65688,
+          65696,
+          65672,
+          65664
+        ],
+        "native_tokens_received": [
+          176,
+          184,
+          168,
+          160,
+          152,
+          144,
+          128,
+          136
+        ],
+        "metrics_delta": {
+          "num_preemptions_total": 0.0,
+          "prefix_cache_hits_total": 523776.0,
+          "prefix_cache_queries_total": 786432.0
+        },
+        "retained_prefix_ceiling_tokens": 525528,
+        "full_block_prefix_ceiling_tokens": 525248,
+        "hit_fraction_of_ceiling": 0.9966662099831027,
+        "hit_fraction_of_full_block_ceiling": 0.9971975143170464,
+        "distinct_prompt_sha256": [
+          "46742374d06bf02a78c8731c35f1a31a987bd28d7988cef27fad4e1b2da47e5c",
+          "49bf85b470f5d4b449cc3bc42e344eb960f32710c44d063ebda076ddd844cbdb",
+          "78446131b636f911f1613fabfcec2e351dcf952ecc62727432978ffe6a408d6e",
+          "c0d9b6615a62dae24350d6b5b24bfbbf3f4c98287cce5215e87960f320b83804",
+          "f0c72c3a8fc91609995dccfb4da4950b8c19e43722fb990e22585b6f98c1ea3a",
+          "8c28e8d762563bead85215cea6236f594ed914190305be6bbd836359874fc301",
+          "9aa84dde74be5731a057d7b32ff9c52a5f1a8094013762b5cf468cfdaa554232",
+          "de344dd8030b62eda7298da0b3008fd33f79f2306d64dad194547abd86f7eae5"
+        ]
+      },
+      {
+        "context": 131072,
+        "elapsed_seconds": 215.90393627202138,
+        "proof": {
+          "metrics": {
+            "num_requests_running": 8.0,
+            "num_requests_waiting": 0.0,
+            "num_preemptions_total": 0.0,
+            "prefix_cache_hits_total": 1603584.0,
+            "prefix_cache_queries_total": 2666841.0
+          },
+          "phase": {
+            "step_id": 1775,
+            "positions": [
+              131191,
+              131199,
+              131207,
+              131215,
+              131223,
+              131231,
+              131239,
+              131247
+            ],
+            "boundary_ns": 941256434022723
+          },
+          "native_tokens_at_snapshot": [
+            185,
+            169,
+            177,
+            161,
+            137,
+            153,
+            145,
+            129
+          ]
+        },
+        "actual_prior_history_lengths": [
+          98480,
+          98488,
+          98472,
+          98464,
+          98456,
+          98448,
+          98432,
+          98440
+        ],
+        "native_tokens_received": [
+          185,
+          169,
+          177,
+          161,
+          137,
+          153,
+          145,
+          129
+        ],
+        "metrics_delta": {
+          "num_preemptions_total": 0.0,
+          "prefix_cache_hits_total": 785920.0,
+          "prefix_cache_queries_total": 1048576.0
+        },
+        "retained_prefix_ceiling_tokens": 787672,
+        "full_block_prefix_ceiling_tokens": 787392,
+        "hit_fraction_of_ceiling": 0.9977757239053819,
+        "hit_fraction_of_full_block_ceiling": 0.9981305372673331,
+        "distinct_prompt_sha256": [
+          "1f4d5f0c68de2e75013737e78e6a7317a8b67b37d786c488af98c0489d8ac541",
+          "6d67eb03e869de5c6363553c834cf5c6095314ba7d429a9d37a637df38a34e9f",
+          "e66468bbaa93ae0e5141c35a1dc91dc6746ae5f8b474f441b24ab5fc35b8b27e",
+          "e98dfd9fa353ea5ca8c127b31d56daa9e6566d90cbe1a23fbfbe3457cbb5d749",
+          "1a1d78079a5a4053b428fbfdaf8cc2c7a8ac6e55c43afa305149e5b467266bd7",
+          "b774297c817c3481bc814347fa605e757fd0a89af5028b7de67039cfd7fa3df2",
+          "54c9d7584d5348a25c38e78a0f442c42a2819e1baf5a0f1d9e2ea799a30913d5",
+          "f1e49cecebdb15ea6634ae7ecf8fe49573cc552f864d46a940b64a9173d218f0"
+        ]
+      }
+    ]
+  },
+  "allocator": {
+    "normalized_ids": [
+      20480
+    ],
+    "unique_backing_buffers": 10,
+    "usable_bytes_per_device": 34044513280,
+    "after_prepare_allocated_bytes_per_device": 20817281024,
+    "max_sampled_prefill_boundary_allocated_bytes_per_device": 20817281024,
+    "min_sampled_free_bytes_per_device": 13227232256,
+    "min_sampled_largest_contiguous_free_bytes_per_bank": 1640962944,
+    "prefill_boundary_samples": 1048,
+    "limitation": "Before/after-prefill snapshots only; not internal transient high-water profiling. This evidence cannot bound unseen allocation peaks."
+  },
+  "traces": {
+    "captures_after_prepare": 3,
+    "captures_last": 3,
+    "new_postwarmup_captures": 0
+  },
+  "phase_integrity": {
+    "pid": 237022,
+    "frames": 577,
+    "windows": [
+      940576892969535,
+      940642587031746
+    ],
+    "events": 3572,
+    "paired_contiguous_steps": 1786,
+    "step_range": [
+      1,
+      1786
+    ],
+    "final_pending": 0,
+    "truncated": false,
+    "final_errors": [],
+    "final_retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    }
+  },
+  "cost": {
+    "start": "2026-11-06T20:24:47.132862+00:00",
+    "end": "2026-11-06T20:39:17.150762+00:00",
+    "actual_device_hours": 0.2416716388888889,
+    "forecast_device_hours": 0.42,
+    "combined_box_device_hours": 0.72,
+    "ratio_actual_forecast": 0.5754086640211641,
+    "capacity_client_seconds": 592.464129764121
+  },
+  "idle_shutdown": {
+    "at": "2026-11-06T20:39:15.144248+00:00",
+    "idle_metrics": [
+      [
+        "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+        "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+      ],
+      [
+        "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+        "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+      ]
+    ],
+    "owned_readiness_pid": 236748,
+    "signal": "SIGTERM to readiness idle hold handler only",
+    "device_closed_at": "2026-11-06T20:39:17.150762+00:00",
+    "remaining_owners": []
+  },
+  "limits": [
+    "No task score, sandbox-host admission or stochastic C8 parity claim. Same-cohort scored comparison remains required.",
+    "Eight131072-input histories at observed positions do not prove eight advertised262144 contexts or every GPQA198 input envelope.",
+    "Output IDs computed after client disconnect are not retained client history or API usage. First prefill and host-sampled tokens excluded from physical phase retention.",
+    "No device-time rooflines/profiler or release speed saving measured."
+  ]
+}

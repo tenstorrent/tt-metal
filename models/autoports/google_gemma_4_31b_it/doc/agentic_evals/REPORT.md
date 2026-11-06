@@ -26,6 +26,8 @@ Extended mode has48hours from2026-11-06T04:28:49UTC to2026-11-08T04:28:49UTC for
 
 Stock response logging is accepted after fresh AutoDebug found the built-in response middleware. All seven local server/client JSON bodies and request IDs matched, all three baseline outputs stayed exact, and all four reasoning-only probes were observable. Device hold0.06629hours versus0.06forecast/0.12box; matched call windows14.04492 and14.02217seconds are descriptive, not a causal speedup. This fixes local observability, not the remaining actual CI pre-score dry requirement. Full response logs stay private. See `runs/first-agent-reply-observability/confirmation.json`.
 
+The optional expanded batch-8 cache passed local capacity confirmation: eight independent 131,072-token histories were resident together, with no preemptions and 99.73% late-prefix reuse. Three native baseline responses and 583 retained decode IDs matched exactly. This used 0.24167 device hours against a 0.42-hour forecast. The new-source batch-1 regression also passed: eight exact 4096/128 requests, 753.41 ms TTFT and 35.31 tokens/s/user, with all eight outputs matching the prior benchmark. Its device cost was 0.08853 hours against 0.07605 predicted. These candidate values remain unselected pending the scored C8 comparison; no release speedup is credited. See `runs/gpqa-b8-expanded-pool/local-confirmation.json` and `benchmark-confirmation.json`.
+
 ## Effort predictions and results
 
 Device costs include the device job, not build/queue. Release savings are forecasts on the then-planned lists; guesses are marked. Later measured stops can retire those savings. Complete confirmations and their original scope remain in each result linked by efforts.json.

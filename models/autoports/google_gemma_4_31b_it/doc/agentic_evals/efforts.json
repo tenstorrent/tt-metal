@@ -3351,12 +3351,29 @@
 "unblocks": [],
 "confirm": {
 "method": "Model-only optional pool, hosttests, native3 exact pairs atC2/B8, independentC8 growing-history residency/allocator check, stock frozen20 scored candidate versus repaired20 currentbest",
-"success": "No lost validity, no preemptions or missing longcontext residency; actual faster completion. Report score intervals and generated-work differences; no controlled causal speed claim from reused baseline."
+"success": "No lost validity, no preemptions or missing longcontext residency; compare actual completion, aggregate work and95%score intervals. Capacity gain can be kept while speed remains open; no2x claim from concurrency alone."
 },
 "box_hours": 2.5,
 "status": "running",
 "admission": "Host implementation/client preparation admitted; root must queue each device run. Capacity subbox0.65h. Normal40 neverwaits.",
-"baseline_reuse": "Explicitly accepted repaired20 C4 baseline onab273; logging exactness-proven separately. If source/config incompatibility affects outputs, repeat appropriate baseline and reprice."
+"baseline_reuse": "Explicitly accepted repaired20 C4 baseline onab273; logging exactness-proven separately. If source/config incompatibility affects outputs, repeat appropriate baseline and reprice.",
+"prediction_correction_pending": false,
+"re_estimate": {
+"at": "2026-11-06T20:34:58.620304+00:00",
+"reason": "Two initialcap tails dominate20; sameB8 cannotassume2x per-user speed",
+"candidate20_eval_hours_guess": 1.52,
+"candidate20_device_hours_guess": 1.66,
+"local_capacity_hours_guess": 0.3,
+"b1_regression_device_hours_guess": 0.07605465913249645,
+"total_device_hours_guess": 2.0360546591324966,
+"release80_saving_hours_sensitivity": [
+0,
+2.193
+],
+"negative_saving_possible": true,
+"credited_saving_hours": 0,
+"evidence": "runs/gpqa-b8-expanded-pool/reprice-note.md"
+}
 }
 ],
 "rankings": [
@@ -20258,6 +20275,36 @@
 }
 ],
 "reason": "Validity first; optional speed work uses idle local device and never delays CI rungs. Savings/cost remain guesses; widened2.5h box includes uncertainty."
+},
+{
+"after": "expanded pool tail-aware reprice",
+"at": "2026-11-06T20:34:58.620316+00:00",
+"order": [
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"valid20 andnext40"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "frozen initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "gpqa-b8-expanded-pool",
+"unblocks": [],
+"saving_hours": 2.193,
+"device_hours": 2.0360546591324966,
+"basis": "optimisticguess; zero credited, negative possible"
+}
+],
+"reason": "Validity remainsfirst. Running capacityeffort not interrupted by reprice; admitted2.5hbox stillcovers revisedpoint. No rungdelay."
 }
 ],
 "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."
