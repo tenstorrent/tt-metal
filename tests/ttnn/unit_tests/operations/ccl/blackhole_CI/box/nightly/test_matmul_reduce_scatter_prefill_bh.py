@@ -333,7 +333,8 @@ def dram_width_sharded(mesh_device, K, N):
 
 
 # The caller's grid (grid=): every grid on a block that can take it, the folds also on blocks their callers would not
-# fold (prefill, a chunked block, a narrow N).
+# fold (prefill, a chunked block, a narrow N), and each fold scattering on M as well as on N (scatter on M keeps W
+# resident across the entries instead of A, and splits a fold's halves by core index).
 GRID = ttnn.MatmulReduceScatterPrefillGrid
 FORCED_GRID_CASES = [
     pytest.param(MODEL_CASES["kimi_k27_o_proj_decode"], GRID.GRID_2D, id="decode-grid_2d"),
@@ -345,6 +346,8 @@ FORCED_GRID_CASES = [
     pytest.param(((1, 1, 1792, 2048), (2048, 128), -1, ttnn.bfloat16, ttnn.bfloat8_b), GRID.GRID_2D, id="tall-grid_2d"),
     pytest.param(MODEL_CASES["glm5_indexer_wk_narrow_n"], GRID.FOLDED_M, id="glm5_indexer_wk-folded_m"),
     pytest.param(MODEL_CASES["chunked_n"], GRID.FOLDED_N, id="chunked_n-folded_n"),
+    pytest.param(MODEL_CASES["mimo_v2_o_proj"], GRID.FOLDED_N, id="mimo_v2_o_proj-folded_n"),
+    pytest.param(MODEL_CASES["mimo_v2_o_proj"], GRID.FOLDED_M, id="mimo_v2_o_proj-folded_m"),
 ]
 
 
@@ -366,6 +369,8 @@ def test_forced_grid(mesh_device, case, grid):
         num_links=2,
         grid=grid,
     )
+    flow = {GRID.GRID_2D: "grid_2d", GRID.FOLDED_N: "folded_n", GRID.FOLDED_M: "folded_m"}[grid]
+    assert last_plan()["flow"] == flow, f"expected a {flow} plan, got {last_plan()}"
 
 
 # W DRAM width-sharded (the layout of a model that keeps one weight copy for decode and prefill): every flow - unchunked
