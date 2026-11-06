@@ -371,7 +371,13 @@ class Qwen36DecoderLayer:
             )
             ttnn.deallocate(xs)
             out = ttnn.sharded_to_interleaved(
-                n, ttnn.DRAM_MEMORY_CONFIG, **({"output_dtype": dtype} if dtype is not None else {})
+                n,
+                (
+                    ttnn.L1_MEMORY_CONFIG
+                    if os.environ.get("QWEN36_TOKPAR_NORM_L1", "0") == "1"
+                    else ttnn.DRAM_MEMORY_CONFIG
+                ),
+                **({"output_dtype": dtype} if dtype is not None else {}),
             )
             ttnn.deallocate(n)
             return out
@@ -450,7 +456,17 @@ class Qwen36DecoderLayer:
             if cfg2
             else tpc.create_prefill_mlp_matmul_program_config(M, F, K, max_cols=12)
         )
-        out = ttnn.linear(hidden, w["w2"], compute_kernel_config=ck, memory_config=dram, program_config=pc_d)
+        out = ttnn.linear(
+            hidden,
+            w["w2"],
+            compute_kernel_config=ck,
+            memory_config=(
+                ttnn.L1_MEMORY_CONFIG
+                if os.environ.get("QWEN36_TOKPAR_MLP_OUT_L1", "0") == "1"
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+            program_config=pc_d,
+        )  # QWEN36_TOKPAR_MLP_OUT_L1: the MLP output in L1
         ttnn.deallocate(hidden)
         return out
 
@@ -516,7 +532,11 @@ class Qwen36DecoderLayer:
                 compute_kernel_config=(
                     tpc.COMPUTE_LOFI if os.environ.get("QWEN36_TOKPAR_OUT_LOFI", "0") == "1" else tpc.COMPUTE_HIFI2
                 ),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=(
+                    ttnn.L1_MEMORY_CONFIG
+                    if os.environ.get("QWEN36_TOKPAR_OUTP_L1", "0") == "1"
+                    else ttnn.DRAM_MEMORY_CONFIG
+                ),  # QWEN36_TOKPAR_OUTP_L1
                 program_config=_tokpar_pc(M, K, self._tokpar["wo"].shape[-1], 8),
             )
             ttnn.deallocate(a8)

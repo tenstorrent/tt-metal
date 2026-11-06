@@ -237,7 +237,9 @@ def kda_conv_prefill(
         # to the op and rows > 0 read predecessor_carry: aliasing the history gives every row the same zero-start conv
         # (rows are replicas without sequence parallelism; with it predecessor_fn supplies the real predecessor rows).
         predecessor_carry=hist if pred is None else pred,
-        memory_config=_dram,
+        memory_config=(
+            ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_GDN_CONV_L1", "0") == "1" else ttnn.DRAM_MEMORY_CONFIG
+        ),  # QWEN36_GDN_CONV_L1: q/k/v in L1
         **({} if pred is None else {"sequence_parallel_axis": 0}),
     )
     if hist is not history:
@@ -1948,7 +1950,11 @@ class TPGatedDeltaNet:
             qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
             # z (output gate) lives across the chunk kernel (gated = out_f * silu(z)); L1 z (6MB@S=2048)
             # clashes with the scan kernel CBs -> keep DRAM in chunk-prefill; decode (small S) keeps out_mc.
-            _z_mc = ttnn.DRAM_MEMORY_CONFIG if (self._fuse_agmm and S > tpc.TILE_SIZE) else out_mc
+            _z_mc = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if (self._fuse_agmm and S > tpc.TILE_SIZE and os.environ.get("QWEN36_GDN_Z_L1", "0") != "1")
+                else out_mc
+            )  # QWEN36_GDN_Z_L1=1: z in out_mc too
             z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az), memory_config=_z_mc)
             # a,b end mid-tile; slicing straight from qkvzab untilizes the full 4120-wide tensor.
             # Grab the enclosing tile-aligned block once (no untilize), then split a/b from it (test_gdn_slice_opt).
