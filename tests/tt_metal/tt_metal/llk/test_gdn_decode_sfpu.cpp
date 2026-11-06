@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// GDN decode (two-pass form), the SFPU side: the DEST-level helpers of fused_recurrent_gdn_sfpu.hpp on Blackhole,
-// one core, fp32 DEST in half-sync, HiFi4. In order of importance:
-//   DestRowMap      the sfpi (vector, lane) -> (row, col) map of an fp32 DEST tile, and the row moves built on it
+// GDN decode (two-pass form), the SFPU side: the compositions of fused_recurrent_gdn_sfpu.hpp over the compute API's
+// DEST ops, on Blackhole, one core, fp32 DEST in half-sync, HiFi4. (The ops themselves, the band broadcast, the parked
+// scalar, the rows forms of the binary and copy ops, fill rows and the row copies, have their own tests in
+// test_sfpu_binary_bcast.cpp, test_sfpu_compute.cpp and test_copy_dest_rows.cpp; the DEST lane-map probe lives in the
+// last.) In order of importance:
 //   DestPersistence does a DEST slot that is never packed keep its contents across acquires (both halves)?
-//   VectorPass      u = beta (v - e r_k), o = e r_q + c u for one V tile, vs a double reference; NaN in the padding
-//   ExpExact        exp in exact mode on a column tile vs std::exp, and what mul_col_bcast then applies
+//   VectorPass      u = beta (v - e r_k), o = e r_q + c u for one V tile, vs a double reference; NaN in the padding;
+//                   the kernel's one-constants-tile form bit-equal to the per-column-tile forms on every extent
+//   BuildEbc16      the constants tile the vector pass reads, built from three DEST slots
+//   ExpExact        exp in exact mode on a column tile vs std::exp, and what the column broadcast then applies
 // Cycle counts are the MATH thread's wall clock around REPS repetitions; the output CB holds every repetition so the
 // pack thread never waits for the test writer. The kernel is test_kernels/compute/gdn_decode_sfpu.cpp.
 
@@ -262,10 +266,6 @@ bool rows_are_pos_zero(const std::vector<float>& t, uint32_t cols, uint32_t r0, 
     return true;
 }
 
-std::vector<float> row_of(const std::vector<float>& t, uint32_t cols, uint32_t r) {
-    return {t.begin() + r * cols, t.begin() + (r + 1) * cols};
-}
-
 double max_rel_err(const std::vector<float>& got, const std::vector<double>& ref) {
     double num = 0, den = 0;
     for (size_t i = 0; i < ref.size(); i++) {
@@ -283,17 +283,6 @@ int32_t ulp_diff(float a, float b) {
     return std::abs(to_ord(a) - to_ord(b));
 }
 
-// value = 100 * row + col over a 16x32 tile (the probe input)
-std::vector<float> ramp_tile(SfpuTileSpec spec) {
-    std::vector<float> rm(spec.elems());
-    for (uint32_t r = 0; r < spec.r; r++) {
-        for (uint32_t c = 0; c < spec.c; c++) {
-            rm[r * spec.c + c] = float(100 * r + c);
-        }
-    }
-    return rm;
-}
-
 std::vector<float> const_tile(SfpuTileSpec spec, float v) { return std::vector<float>(spec.elems(), v); }
 
 std::vector<float> random_tile(SfpuTileSpec spec, std::mt19937& gen, float scale) {
@@ -303,99 +292,6 @@ std::vector<float> random_tile(SfpuTileSpec spec, std::mt19937& gen, float scale
         v = scale * nd(gen);
     }
     return rm;
-}
-
-// ---- (a) the DEST map and the row moves ----------------------------------------------------------------------------
-TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuDestRowMap) {
-    // 1. The raw (vector, lane) identity of every element, for a 32x32 and a 16x32 tile.
-    for (const SfpuTileSpec spec : {kT32, kT16x32}) {
-        auto res =
-            run(this->devices_.at(0),
-                {.variant = 1, .inputs = {one_tile(ramp_tile(spec), spec)}, .out_spec = spec, .out_tiles_per_rep = 1});
-        const auto& t = res.tiles.at(0);
-        // decode: value = 1000 * vector + 2 * lane
-        auto vec_of = [&](uint32_t r, uint32_t c) { return uint32_t(t[r * spec.c + c]) / 1000; };
-        auto lane_of = [&](uint32_t r, uint32_t c) { return (uint32_t(t[r * spec.c + c]) % 1000) / 2; };
-        // Hypothesis H (LLK column-broadcast geometry): face f = (r / 16) * (c_faces) + c / 16 at vectors 8f..8f+7;
-        // vector 8f + 2 * ((r % 16) / 4) + (c % 2); lane 8 * (r % 4) + (c % 16) / 2.
-        // Alternative A (the contract's): vector 8f + (r % 16) / 2; lane 16 * (r % 2) + c % 16.
-        uint32_t ok_h = 0, ok_a = 0;
-        const uint32_t c_faces = spec.c / 16;
-        for (uint32_t r = 0; r < spec.r; r++) {
-            for (uint32_t c = 0; c < spec.c; c++) {
-                const uint32_t f = (r / 16) * c_faces + c / 16;
-                const uint32_t vh = 8 * f + 2 * ((r % 16) / 4) + (c % 2), lh = 8 * (r % 4) + (c % 16) / 2;
-                const uint32_t va = 8 * f + (r % 16) / 2, la = 16 * (r % 2) + c % 16;
-                ok_h += (vec_of(r, c) == vh && lane_of(r, c) == lh);
-                ok_a += (vec_of(r, c) == va && lane_of(r, c) == la);
-            }
-        }
-        log_info(
-            tt::LogTest,
-            "DEST map, {}x{} fp32 tile: elements matching the 4-row-band / even-odd-column geometry {} / {}, matching "
-            "the contract's 2-rows-per-vector geometry {} / {}",
-            spec.r,
-            spec.c,
-            ok_h,
-            spec.elems(),
-            ok_a,
-            spec.elems());
-        // Print where rows 0..3 of face 0 live (vector, lane range per column parity) so the mapping is on record.
-        for (uint32_t r = 0; r < 4; r++) {
-            log_info(
-                tt::LogTest,
-                "  row {}: col 0 -> (vector {}, lane {}), col 1 -> (vector {}, lane {}), col 2 -> (vector {}, lane "
-                "{}), col 15 -> (vector {}, lane {}), col 16 -> (vector {}, lane {})",
-                r,
-                vec_of(r, 0),
-                lane_of(r, 0),
-                vec_of(r, 1),
-                lane_of(r, 1),
-                vec_of(r, 2),
-                lane_of(r, 2),
-                vec_of(r, 15),
-                lane_of(r, 15),
-                vec_of(r, 16),
-                lane_of(r, 16));
-        }
-        EXPECT_EQ(ok_h, spec.elems()) << "the fp32 DEST geometry is not the 4-row-band / even-odd-column one";
-    }
-
-    // 2. The row moves built on that map: 100 * row + col in a 16x32 tile.
-    const auto in = ramp_tile(kT16x32);
-    auto res =
-        run(this->devices_.at(0),
-            {.variant = 2, .inputs = {one_tile(in, kT16x32)}, .out_spec = kT16x32, .out_tiles_per_rep = 4});
-    ASSERT_EQ(res.tiles.size(), 4u);
-    const auto& moved = res.tiles[0];
-    const auto& z1 = res.tiles[1];
-    const auto& z2 = res.tiles[2];
-    const auto& copied = res.tiles[3];
-    const auto in_row2 = row_of(in, 32, 2), in_row0 = row_of(in, 32, 0), in_row1 = row_of(in, 32, 1);
-    EXPECT_TRUE(bits_equal(row_of(moved, 32, 0), in_row2)) << "move_row2_to_row0: row 0 is not the old row 2";
-    EXPECT_TRUE(rows_are_pos_zero(moved, 32, 1, 16)) << "move_row2_to_row0: rows 1..15 are not zero";
-    EXPECT_TRUE(bits_equal(row_of(z1, 32, 0), in_row0)) << "zero_rows_from_1: row 0 changed";
-    EXPECT_TRUE(rows_are_pos_zero(z1, 32, 1, 16)) << "zero_rows_from_1: rows 1..15 are not zero";
-    EXPECT_TRUE(bits_equal(row_of(z2, 32, 0), in_row0) && bits_equal(row_of(z2, 32, 1), in_row1))
-        << "zero_rows_from_2: rows 0, 1 changed";
-    EXPECT_TRUE(rows_are_pos_zero(z2, 32, 2, 16)) << "zero_rows_from_2: rows 2..15 are not zero";
-    EXPECT_TRUE(bits_equal(copied, in)) << "copy_dst<16> is not bit-exact";
-    EXPECT_TRUE(bits_equal(res.first, res.tiles)) << "row-move results differ between the first and the last rep";
-    log_info(
-        tt::LogTest,
-        "row moves on a 16x32 tile (value 100*row+col): move_row2_to_row0 row 0 = {} {} {} .. {}, rows 1..15 zero {}; "
-        "zero_rows_from_1 ok {}; zero_rows_from_2 ok {}; copy_dst bit-exact {}; cycles per acquire (3 copies + 4 "
-        "sfpi passes + 4 packs) {:.0f}",
-        moved[0],
-        moved[1],
-        moved[2],
-        moved[31],
-        rows_are_pos_zero(moved, 32, 1, 16),
-        bits_equal(row_of(z1, 32, 0), in_row0) && rows_are_pos_zero(z1, 32, 1, 16),
-        bits_equal(row_of(z2, 32, 0), in_row0) && bits_equal(row_of(z2, 32, 1), in_row1) &&
-            rows_are_pos_zero(z2, 32, 2, 16),
-        bits_equal(copied, in),
-        double(res.cycles) / kReps);
 }
 
 // ---- (b) DEST persistence ---------------------------------------------------------------------------------------
@@ -531,7 +427,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuVectorPass) {
     auto poisoned = run(this->devices_.at(0), vector_config(ops_nan, 0));
     ASSERT_EQ(per_j.tiles.size(), 2 * VT);
     EXPECT_TRUE(bits_equal(one_const.tiles, per_j.tiles))
-        << "the one-constants-tile variant (mul_col_bcast_band0) differs bitwise";
+        << "the kernel's one-constants-tile form (band broadcasts) differs bitwise";
 
     auto rows0 = [](const std::vector<std::vector<float>>& tiles, uint32_t parity) {
         std::vector<float> out;
@@ -543,7 +439,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuVectorPass) {
     };
     const auto u = rows0(per_j.tiles, 0), o = rows0(per_j.tiles, 1);
     const double err_u = max_rel_err(u, ref_u), err_o = max_rel_err(o, ref_o);
-    // the adopted form (section 8 of the contract: one constants tile ebc16, mul_col_bcast_band0, 4-row helpers)
+    // the kernel's form (one constants tile ebc16, band broadcasts, 2-iteration ops)
     // directly against the double reference as well
     const auto u3 = rows0(one_const.tiles, 0), o3 = rows0(one_const.tiles, 1);
     const double err_u3 = max_rel_err(u3, ref_u), err_o3 = max_rel_err(o3, ref_o);
@@ -557,7 +453,8 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuVectorPass) {
     EXPECT_TRUE(pad3) << "ebc16 form: u16 / out16 rows 1..15 are not exactly zero";
     log_info(
         tt::LogTest,
-        "vector pass, ebc16 + mul_col_bcast_band0 form (3 copy_tiles per tile): max rel err vs double u {:.2e} o "
+        "vector pass, the kernel's ebc16 + band broadcast form (3 copy_tiles per tile): max rel err vs double u {:.2e} "
+        "o "
         "{:.2e}; u16 and out16 rows 1..15 exactly zero {}",
         err_u3,
         err_o3,
@@ -579,15 +476,15 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuVectorPass) {
     EXPECT_LT(err_o, 5e-3);
     EXPECT_TRUE(u_pad_zero) << "u16 rows 1..15 are not exactly zero";
     EXPECT_TRUE(o_pad_zero) << "out16 rows 1..15 are not zero";
-    EXPECT_TRUE(bits_equal(full_tile.tiles, per_j.tiles)) << "16-row helpers differ bitwise from the full-tile API";
-    EXPECT_TRUE(bits_equal(band0.tiles, per_j.tiles)) << "4-row (band 0) helpers differ bitwise from the 16-row ones";
+    EXPECT_TRUE(bits_equal(full_tile.tiles, per_j.tiles)) << "the R forms differ bitwise from the whole-slot forms";
+    EXPECT_TRUE(bits_equal(band0.tiles, per_j.tiles)) << "the 2-iteration forms differ bitwise from the R forms";
     EXPECT_TRUE(bits_equal(per_j.first, per_j.tiles)) << "the vector pass is not repeatable across reps";
     EXPECT_TRUE(nan_u_row0_clean && nan_o_row0_clean) << "NaN in the padding rows of r16 / v16 reached row 0";
     EXPECT_TRUE(nan_pad_zero) << "NaN in the padding rows of r16 / v16 survived into the output padding";
     log_info(
         tt::LogTest,
         "vector pass, VT {}: max rel err vs double u {:.2e} o {:.2e}; u16 rows 1..15 exactly zero {}; out16 rows "
-        "1..15 zero {}; 16-row helpers bit-equal to the full-tile API {}; 4-row (band 0) helpers bit-equal {}; "
+        "1..15 zero {}; the R forms bit-equal to the whole-slot forms {}; the 2-iteration forms bit-equal {}; "
         "repeatable {}; NaN in rows 1, 3..15 of r16 and v16: u row 0 unchanged {}, o row 0 unchanged {}, output "
         "padding still zero {}",
         VT,
@@ -604,9 +501,9 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuVectorPass) {
     log_info(
         tt::LogTest,
         "vector pass cycles per token (VT {} tiles, 2 packs per tile; gate <= 2400): 5 copy_tiles per tile with "
-        "16-row helpers {:.0f} ({:.0f} per tile), with 4-row (band 0) helpers {:.0f} ({:.0f} per tile); 3 copy_tiles "
-        "per tile (one constants tile, mul_col_bcast_band0) {:.0f} ({:.0f} per tile); full-tile (32-row) compute-API "
-        "helpers {:.0f} ({:.0f} per tile)",
+        "the R forms {:.0f} ({:.0f} per tile), with the 2-iteration forms {:.0f} ({:.0f} per tile); 3 copy_tiles "
+        "per tile (one constants tile, band broadcasts) {:.0f} ({:.0f} per tile); the whole-slot forms {:.0f} ({:.0f} "
+        "per tile)",
         VT,
         double(per_j.cycles) / kReps,
         double(per_j.cycles) / (kReps * VT),
@@ -620,21 +517,34 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuVectorPass) {
 
 // ---- (c') the vector pass's single constants tile, built in DEST by the constants pass -----------------------------
 TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuBuildEbc16) {
+    // The composition copies whole 4-row bands, so only column 0 of rows 0..11 and all of rows 12..15 are specified
+    // (the consumers read column 0 of a band and mask the rest); those 44 + 128 elements are checked bit for bit.
+    auto specified_equal = [](const std::vector<float>& got, const std::vector<float>& want) {
+        uint32_t mism = 0;
+        for (uint32_t r = 0; r < 16; r++) {
+            for (uint32_t c = 0; c < 32; c++) {
+                if (r < 12 && c != 0) {
+                    continue;
+                }
+                mism += std::bit_cast<uint32_t>(got[r * 32 + c]) != std::bit_cast<uint32_t>(want[r * 32 + c]);
+            }
+        }
+        return mism;
+    };
     // A: the real tiles (ecol32 with exp(0) = 1 off column 0, bcol16 zero off column 0, ccol32 all c); the device-built
-    //    tile must equal the host-built ebc16 the vector-pass test consumes.
+    //    tile must equal the host-built ebc16 the vector-pass test consumes where that tile is specified.
     const VectorInputs x = make_vector_inputs(11);
     const auto ops = vector_operands(x, 0.0f);
     const auto expected_a = sfpu_untilize(ops.ebc16.data.data(), kT16x32);
     auto a = run(
         this->devices_.at(0),
-        {.variant = 6, .inputs = {ops.ecol32, ops.bcol16, ops.ccol32}, .out_spec = kT16x32, .out_tiles_per_rep = 2});
-    ASSERT_EQ(a.tiles.size(), 2u);
-    const bool a_free = bits_equal(a.tiles[0], expected_a), a_inplace = bits_equal(a.tiles[1], expected_a);
-    EXPECT_TRUE(a_free) << "build_ebc16 into a free slot differs from the host-built ebc16";
-    EXPECT_TRUE(a_inplace) << "build_ebc16 in place (slot_e) differs from the host-built ebc16";
+        {.variant = 6, .inputs = {ops.ecol32, ops.bcol16, ops.ccol32}, .out_spec = kT16x32, .out_tiles_per_rep = 1});
+    ASSERT_EQ(a.tiles.size(), 1u);
+    const uint32_t mism_a = specified_equal(a.tiles[0], expected_a);
+    EXPECT_EQ(mism_a, 0u) << "build_ebc16 differs from the host-built ebc16 where the tile is specified";
 
-    // B: random values everywhere the helper must not read (every element off column 0 and rows 4..31 of the
-    //    sources), a distinct value per row in column 0 rows 0..3 of each source: all 512 elements checked.
+    // B: random values everywhere the composition must not read (every element off column 0 and rows 4..31 of the
+    //    sources), a distinct value per row in column 0 rows 0..3 of each source.
     std::mt19937 gen(31);
     const auto e_t = random_tile(kT32, gen, 1.0f), b_t = random_tile(kT16x32, gen, 1.0f),
                c_t = random_tile(kT32, gen, 1.0f);
@@ -649,119 +559,21 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuBuildEbc16) {
             {.variant = 6,
              .inputs = {one_tile(e_t, kT32), one_tile(b_t, kT16x32), one_tile(c_t, kT32)},
              .out_spec = kT16x32,
-             .out_tiles_per_rep = 2});
-    ASSERT_EQ(b.tiles.size(), 2u);
-    uint32_t mism_free = 0, mism_inplace = 0;
-    for (uint32_t i = 0; i < kT16x32.elems(); i++) {
-        mism_free += std::bit_cast<uint32_t>(b.tiles[0][i]) != std::bit_cast<uint32_t>(expected_b[i]);
-        mism_inplace += std::bit_cast<uint32_t>(b.tiles[1][i]) != std::bit_cast<uint32_t>(expected_b[i]);
-    }
-    EXPECT_EQ(mism_free, 0u) << "build_ebc16 (free slot) read or left something it should not";
-    EXPECT_EQ(mism_inplace, 0u) << "build_ebc16 (in place) read or left something it should not";
+             .out_tiles_per_rep = 1});
+    ASSERT_EQ(b.tiles.size(), 1u);
+    const uint32_t mism_b = specified_equal(b.tiles[0], expected_b);
+    EXPECT_EQ(mism_b, 0u) << "build_ebc16 read or left something it should not";
     const bool repeatable = bits_equal(a.first, a.tiles) && bits_equal(b.first, b.tiles);
     EXPECT_TRUE(repeatable);
     log_info(
         tt::LogTest,
-        "build_ebc16: equals the host-built ebc16 of the vector pass (into a free slot {}, in place {}); with random "
-        "values off column 0 rows 0..3 of the sources, mismatching elements of 512: free slot {}, in place {}; "
-        "repeatable {}; cycles per rep (3 copies + 2 builds + 2 packs) {:.0f}",
-        a_free,
-        a_inplace,
-        mism_free,
-        mism_inplace,
+        "build_ebc16: mismatches against the host-built ebc16 of the vector pass where specified {}; with random "
+        "values off column 0 rows 0..3 of the sources {}; repeatable {}; cycles per rep (3 copies + 1 build + 1 pack) "
+        "{:.0f}",
+        mism_a,
+        mism_b,
         repeatable,
         double(b.cycles) / kReps);
-}
-
-// ---- (e) scalar times tile without a resident DEST slot (pass 2's decay, four S tiles per acquire) -----------------
-TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuScalarMul) {
-    std::mt19937 gen(41);
-    SfpuOperand data{kT32};
-    std::vector<std::vector<float>> rm(4);
-    for (uint32_t i = 0; i < 4; i++) {
-        rm[i] = random_tile(kT32, gen, 0.05f);  // S-like magnitudes
-        data.add(rm[i]);
-    }
-    auto host_product = [&](float e) {
-        std::vector<std::vector<float>> out(4);
-        for (uint32_t i = 0; i < 4; i++) {
-            out[i].resize(kT32.elems());
-            for (uint32_t k = 0; k < kT32.elems(); k++) {
-                out[i][k] = rm[i][k] * e;  // one fp32 multiply
-            }
-        }
-        return out;
-    };
-    const float e_mid = std::exp(-2.37f);
-    for (const float e : {std::exp(-6.0f), e_mid, 1.0f}) {
-        std::vector<float> col(kT32.elems(), 1.0f);  // ecol32: column 0 = e, exp(0) = 1 elsewhere
-        for (uint32_t r = 0; r < 32; r++) {
-            col[r * 32] = e;
-        }
-        SfpuRunConfig cfg{
-            .variant = 7, .mode = 0, .inputs = {one_tile(col, kT32), data}, .out_spec = kT32, .out_tiles_per_rep = 4};
-        auto bcast = run(this->devices_.at(0), cfg);
-        cfg.mode = 1;
-        auto loaded = run(this->devices_.at(0), cfg);
-        cfg.mode = 2;
-        auto copies = run(this->devices_.at(0), cfg);
-        cfg.mode = 3;
-        auto single = run(this->devices_.at(0), cfg);
-        ASSERT_EQ(bcast.tiles.size(), 4u);
-        const bool loaded_eq = bits_equal(loaded.tiles, bcast.tiles), single_eq = bits_equal(single.tiles, bcast.tiles);
-        const bool host_eq = bits_equal(bcast.tiles, host_product(e));
-        const bool repeatable = bits_equal(loaded.first, loaded.tiles) && bits_equal(bcast.first, bcast.tiles);
-        EXPECT_TRUE(loaded_eq) << "load_scalar + mul_loaded_scalar<32> differs bitwise from mul_col_bcast<32>, e = "
-                               << e;
-        EXPECT_TRUE(single_eq) << "mul_scalar_dst<32> differs bitwise from mul_col_bcast<32>, e = " << e;
-        EXPECT_TRUE(host_eq) << "mul_col_bcast<32> is not the fp32 product, e = " << e;
-        EXPECT_TRUE(repeatable);
-        log_info(
-            tt::LogTest,
-            "scalar x tile, e = {:.6f}: load_scalar + mul_loaded_scalar bit-equal to mul_col_bcast<32> {}; "
-            "mul_scalar_dst bit-equal {}; equal to the host fp32 product {}; repeatable {}. Cycles per rep (4 tiles): "
-            "mul_col_bcast form (2 acquires, 2 scalar copies, 4 data copies, 4 bcasts incl. init, 4 packs) {:.0f}; "
-            "load_scalar form (1 acquire, 1 scalar copy + load, 4 copies, 4 multiplies, 4 packs) {:.0f}; copies + "
-            "packs alone {:.0f} -> scalar copy + load + 4 multiplies {:.0f}, i.e. {:.0f} per tile; mul_scalar_dst "
-            "form (load + multiply per tile, 2 acquires) {:.0f}",
-            e,
-            loaded_eq,
-            single_eq,
-            host_eq,
-            repeatable,
-            double(bcast.cycles) / kReps,
-            double(loaded.cycles) / kReps,
-            double(copies.cycles) / kReps,
-            double(loaded.cycles - copies.cycles) / kReps,
-            double(loaded.cycles - copies.cycles) / (kReps * 4),
-            double(single.cycles) / kReps);
-    }
-    // [0, 0] semantics: a scalar tile full of random values with e at [0, 0] alone; the result must be the fp32
-    // product with e (the column broadcast would use a different value per row here, so it is not compared).
-    {
-        auto garbage = random_tile(kT32, gen, 1.0f);
-        garbage[0] = e_mid;
-        SfpuRunConfig cfg{
-            .variant = 7,
-            .mode = 1,
-            .inputs = {one_tile(garbage, kT32), data},
-            .out_spec = kT32,
-            .out_tiles_per_rep = 4};
-        auto loaded = run(this->devices_.at(0), cfg);
-        const auto want = host_product(e_mid);
-        uint32_t mism = 0;
-        for (uint32_t i = 0; i < 4; i++) {
-            for (uint32_t k = 0; k < kT32.elems(); k++) {
-                mism += std::bit_cast<uint32_t>(loaded.tiles[i][k]) != std::bit_cast<uint32_t>(want[i][k]);
-            }
-        }
-        EXPECT_EQ(mism, 0u) << "load_scalar read something other than element [0, 0]";
-        log_info(
-            tt::LogTest,
-            "scalar x tile, scalar tile random everywhere but [0, 0]: elements differing from the fp32 product with "
-            "[0, 0]: {} / 4096",
-            mism);
-    }
 }
 
 // ---- (d) exact exp on a column tile ------------------------------------------------------------------------------
