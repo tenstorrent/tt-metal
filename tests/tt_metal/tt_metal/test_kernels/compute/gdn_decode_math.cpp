@@ -37,7 +37,7 @@ constexpr bool EMIT_STATE = get_compile_time_arg_val(4) != 0;
 // 1: compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) (SrcA <- in1, SrcB <- in0, the matmul's mapping);
 // 0: the regular order today's op kernel uses. The passes must give the same bits either way.
 constexpr bool STARTUP_REVERSE = get_compile_time_arg_val(5) != 0;
-// Token variant: 1 = start up on the utd S (c_6) as today's op kernel does, 0 = on its plain alias (c_19).
+// Token variant: 1 = start up on the utd S (c_6) as today's op kernel does, 0 = on its matmul view (c_20).
 constexpr bool STARTUP_ON_UTD = get_compile_time_arg_val(6) != 0;
 constexpr uint32_t KV = KT * VT;
 
@@ -54,8 +54,8 @@ namespace cb {
 constexpr uint32_t qk16 = 0, kT16 = 1, qcol32 = 2, v16 = 3, gcol32 = 4, bcol16 = 5, S = 6, ones32 = 7, zero32 = 8;
 constexpr uint32_t ecol32 = 9, r16 = 10, craw16 = 11, ccol32 = 12, u16 = 13, s2 = 14, s3 = 15, out16 = 16;
 constexpr uint32_t state_out = 17;
-// The vector pass's constants tile, and the plain (non-utd) aliases of S and s2 over the same L1 memory for the
-// read-pass matmul (the ids of the op's fused_recurrent_gdn_cb.hpp).
+// The vector pass's constants tile, and the matmul views of S and s2 (second ids over the same L1 memory, never
+// pushed; the ids of the op's fused_recurrent_gdn_cb.hpp).
 constexpr uint32_t ebc16 = 19, S_mm = 20, s2_mm = 21;
 }  // namespace cb
 
@@ -96,12 +96,13 @@ void kernel_main() {
 #endif
 
     if constexpr (VARIANT == 1 || VARIANT == 17) {
-        // 17: S arrives utd under c_6 and the matmul reads it through the plain alias c_20 (the token's form).
-        constexpr uint32_t s_mm = (VARIANT == 17) ? cb::S_mm : cb::S;
-        startup<cb::qk16, s_mm, cb::out16>();
+        // 17: S arrives utd under c_6 and the matmul reads it through its view c_20 (the token's form).
+        constexpr gdn_decode::StateCb s_cur =
+            (VARIANT == 17) ? gdn_decode::StateCb{cb::S, cb::S_mm} : gdn_decode::StateCb::single(cb::S);
+        startup<cb::qk16, s_cur.mm, cb::out16>();
         stamp(0);
         for (uint32_t r = 0; r < REPS; r++) {
-            gdn_decode::read_pass<KT, VT>(cb::qk16, s_mm, cb::out16);
+            gdn_decode::read_pass<KT, VT>(cb::qk16, s_cur, cb::out16);
         }
         stamp(1);
     } else if constexpr (VARIANT == 2) {
@@ -111,9 +112,9 @@ void kernel_main() {
             gdn_decode::update_pass<KT, VT>(
                 cb::kT16,
                 cb::u16,
-                cb::S,
+                gdn_decode::StateCb::single(cb::S),
                 cb::ecol32,
-                gdn_decode::StateCbs{cb::out16, cb::out16},
+                gdn_decode::StateCb::single(cb::out16),
                 cb::state_out,
                 EMIT_STATE);
         }
@@ -196,18 +197,17 @@ void kernel_main() {
             .out16 = cb::out16,
             .state_out = cb::state_out,
             .ebc16 = cb::ebc16};
-        constexpr gdn_decode::StateCbs s_cur{cb::S, cb::S_mm}, s_next{cb::s2, cb::s2_mm};
-        CircularBuffer sn(cb::s2), sn_mm(cb::s2_mm);
+        constexpr gdn_decode::StateCb s_cur{cb::S, cb::S_mm}, s_next{cb::s2, cb::s2_mm};
+        CircularBuffer sn(cb::s2);
         stamp(0);
         for (uint32_t r = 0; r < REPS; r++) {
             pass_clock_start();
             gdn_decode::decode_token<KT, VT, (VARIANT == 7)>(
                 cbs, s_cur, s_next, EMIT_STATE, /*pop_inputs=*/false, StampHook{});
-            // Every repetition starts from the same S (c_6): recycle the ring slot the token wrote (both ids).
+            // Every repetition starts from the same S (c_6): recycle the ring slot the token wrote (its utd id; the
+            // matmul view is never pushed or popped).
             sn.wait_front(KV);
             sn.pop_front(KV);
-            sn_mm.wait_front(KV);
-            sn_mm.pop_front(KV);
         }
         stamp(1);
     }

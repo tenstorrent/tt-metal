@@ -102,7 +102,8 @@ constexpr uint32_t kNoAlias = 0xFFFFFFFFu;
 // One circular buffer of the program. `data` (tilized tiles, concatenated) is fed by the reader when non-empty;
 // `count` tiles are allocated. l1_backed CBs sit on a host-known L1 buffer and are read back after the run. A spec
 // with `alias_of` set is a second id over the memory of that CB (one CircularBufferConfig with two buffer indices,
-// each with its own utd flag and bookkeeping); its `data` makes the reader push the same tiles under that id too.
+// each with its own utd flag). An alias is a format view and is never pushed: the op's state CBs rely on that (see
+// fused_recurrent_gdn_cb.hpp), so an alias carries no `data`.
 struct GdmCb {
     uint32_t id;
     GdmTileSpec tile;
@@ -294,6 +295,7 @@ GdmRunResult run(const std::shared_ptr<distributed::MeshDevice>& mesh_device, co
     uint32_t num_in = 0;
     for (const GdmCb& s : c.cbs) {
         tile_of[s.id] = s.tile;
+        TT_FATAL(s.alias_of == kNoAlias || s.data.empty(), "alias CB {} is a format view and is never pushed", s.id);
         if (s.utd) {
             utd[s.id] = UnpackToDestMode::UnpackToDestFp32;
         }
@@ -562,7 +564,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathReadPass) {
                  {.id = cbid::out16, .tile = out_spec, .count = VT * reps}},
             .outs = {{.id = cbid::out16, .ntiles = VT * reps}}};
         if (s_mode == 2) {
-            c.cbs.push_back({.id = cbid::S_mm, .tile = T32, .count = KV, .data = s_tiles(x), .alias_of = cbid::S});
+            c.cbs.push_back({.id = cbid::S_mm, .tile = T32, .count = KV, .alias_of = cbid::S});
             c.variant = kRead + 16;  // the kernel reads S through c_20
         }
         return c;
@@ -791,7 +793,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathToken) {
                  {.id = cbid::gcol32, .tile = T32, .count = 1, .utd = true, .data = col_tile(x.g, 32)},
                  {.id = cbid::bcol16, .tile = T16x32, .count = 1, .utd = true, .data = col_tile(x.beta, 16)},
                  {.id = cbid::S, .tile = T32, .count = KV, .utd = true, .data = s_tiles(x)},
-                 {.id = cbid::S_mm, .tile = T32, .count = KV, .data = s_tiles(x), .alias_of = cbid::S},
+                 {.id = cbid::S_mm, .tile = T32, .count = KV, .alias_of = cbid::S},
                  {.id = cbid::ones32, .tile = T32, .count = 1, .data = const_tile(1.0f)},
                  {.id = cbid::zero32, .tile = T32, .count = 1, .utd = true, .data = const_tile(0.0f)},
                  {.id = cbid::ecol32, .tile = T32, .count = 1, .utd = true},
