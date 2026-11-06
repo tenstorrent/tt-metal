@@ -24,19 +24,21 @@
 //   c_7   ones32     32x32  1         all 1.0, written once at kernel start           reader -> constants pass in0
 //   c_8   zero32     32x32  1         zeros, written once                             reader -> compute (utd)
 //   c_9   ecol32     32x32  1         exp(gcol32): column 0 = e, elsewhere 1          compute -> vector pass, pass 2 (utd)
-//   c_10  (freed)    -      -         was r16; the fused read+vector pass keeps r in DEST, so no CB is allocated
+//   c_10  obf16      n/a    1 page    the writer's bf16 rows of o, Vt x 2 x 32 B       writer scratch (bf16 output only)
 //   c_11  craw16     16x32  1         [0, 0] = c = q_tilde . k_hat                    compute -> constants pass
-//   c_12  (freed)    -      -         was ccol32; c goes from DEST straight into ebc16, so no CB is allocated
+//   c_12  raw64      n/a    1 page    the 64-byte DRAM-aligned chunks of bf16 rows      reader scratch (bf16 inputs only)
 //   c_13  u16        16x32  Vt        row 0 = u, rows 1-15 exactly zero               compute -> pass 2 in1
 //   c_14  s2         32x32  kv        state ring (ping)                               compute -> compute (utd); c_21 is its matmul view
 //   c_15  s3         32x32  kv        state ring (pong)                               compute -> compute (utd); c_22 is its matmul view
-//   c_16  out16      16x32  Vt x 2    row 0 = o                                       compute -> writer (2048 B per V tile)
+//   c_16  out16      16x32  Vt x 2    row 0 = o (fp32; the writer rounds to bf16)      compute -> writer
 //   c_17  state_out  32x32  kv x 2    per-token or final state                        compute -> writer
 //   c_18  blkidx     n/a    1 page    ring-mode block-index scratch (uint32 [BH])     reader
 //   c_19  ebc16      16x32  1         column 0: rows 0-3 = e, 4-7 = beta, 8-11 = c    compute constants pass -> vector pass (utd)
 //   c_20  S_mm       32x32  kv        matmul view of c_6 (same L1, never pushed)      pass 1 in1
 //   c_21  s2_mm      32x32  kv        matmul view of c_14 (same L1, never pushed)     pass 1 in1
 //   c_22  s3_mm      32x32  kv        matmul view of c_15 (same L1, never pushed)     pass 1 in1
+//   c_23  qk16_utd   16x32  Kt x 2    utd view of c_0 (same L1; read pointer synced)  constants pass copies (the norm)
+//   c_24  ncol16     16x32  1         column 0 rows 0-3 = ik, 0, s_q, 0               compute constants pass -> ebc16 (utd)
 // clang-format on
 // "utd": the factory lists the CB with UnpackToDestMode::UnpackToDestFp32 (it is only ever read by copy_tile into
 // DEST). Every CB sized exactly `count` tiles cycles through the same L1 slots token after token, so the reader writes
@@ -49,6 +51,8 @@
 // and is never reserved, pushed, waited on or popped. That is sound because a state CB holds exactly one state (kv
 // tiles, single-buffered) and every token produces and consumes it whole: the read and write pointers of both ids
 // start at the CB base and wrap back to it after kv tiles, so tile i sits at base + i tiles for every id, every token.
+// (The reader pushes the t = 0 state in column groups of Kt tiles as the columns land and the read pass waits for it
+// column by column; the pushes move the write pointer only, and it has wrapped to the base after the last group.)
 // The unpack thread waits on the utd id before it unpacks through the mm view, and that wait is the only ordering the
 // view needs. The factory checks the one-state sizing (add_state_cb); the compute passes check the pointers under LLK
 // asserts (gdn_decode::check_state_views). Double-buffering a state CB would break the invariant; the view would then
@@ -70,9 +74,11 @@ constexpr uint32_t S = 6;
 constexpr uint32_t ones32 = 7;
 constexpr uint32_t zero32 = 8;
 constexpr uint32_t ecol32 = 9;
-constexpr uint32_t freed_r16 = 10;  // not allocated; the math header's TokenCbs still names the field
+constexpr uint32_t obf16 = 10;         // the writer's bf16 landing for o's rows (bf16 output only; was r16)
+constexpr uint32_t freed_r16 = obf16;  // the name the math header's TokenCbs still uses; never touched by the compute
 constexpr uint32_t craw16 = 11;
-constexpr uint32_t freed_ccol32 = 12;  // not allocated; the math header's TokenCbs still names the field
+constexpr uint32_t raw64 = 12;  // the reader's bf16 landing zone (64 B chunks), allocated only with bf16 inputs
+constexpr uint32_t freed_ccol32 = raw64;  // the name the math header's TokenCbs still uses; never read by the compute
 constexpr uint32_t u16 = 13;
 constexpr uint32_t s2 = 14;
 constexpr uint32_t s3 = 15;
@@ -84,7 +90,9 @@ constexpr uint32_t S_mm = 20;   // matmul-operand id of S (same L1 as c_6)
 constexpr uint32_t s2_mm = 21;  // matmul-operand id of s2 (same L1 as c_14)
 constexpr uint32_t s3_mm = 22;  // matmul-operand id of s3 (same L1 as c_15)
 
-constexpr uint32_t num_cbs = 23;  // c_0 .. c_22 (blkidx is only allocated in ring mode)
+constexpr uint32_t qk16_utd = 23;  // the exact-copy view of qk16 for the norm's squares (never pushed; pointer synced)
+constexpr uint32_t ncol16 = 24;    // the norm scalars ik, 0, s_q, 0 in column 0 rows 0-3, compute-internal
+constexpr uint32_t num_cbs = 25;   // c_0 .. c_24 (blkidx only in ring mode, raw64 only with bf16 inputs)
 // A state CB under its two ids (see the note above). single(id) is the degenerate pair for a CB that is only ever
 // copied, never a matmul operand (a test's output CB).
 struct StateCb {
@@ -122,9 +130,9 @@ constexpr std::array<std::array<uint32_t, 2>, num_cbs> tile_dims = {{
     tile_32x32,  // c_7  ones32
     tile_32x32,  // c_8  zero32
     tile_32x32,  // c_9  ecol32
-    tile_16x32,  // c_10 (freed, was r16)
+    tile_16x32,  // c_10 obf16 (placeholder: 32 B rows, writer-private)
     tile_16x32,  // c_11 craw16
-    tile_32x32,  // c_12 (freed, was ccol32)
+    tile_32x32,  // c_12 raw64 (placeholder: 64 B pages, reader-private)
     tile_16x32,  // c_13 u16
     tile_32x32,  // c_14 s2
     tile_32x32,  // c_15 s3
@@ -135,6 +143,8 @@ constexpr std::array<std::array<uint32_t, 2>, num_cbs> tile_dims = {{
     tile_32x32,  // c_20 S_mm
     tile_32x32,  // c_21 s2_mm
     tile_32x32,  // c_22 s3_mm
+    tile_16x32,  // c_23 qk16_utd
+    tile_16x32,  // c_24 ncol16
 }};
 
 // CBs read only by copy_tile into DEST: the factory lists them with UnpackToDestMode::UnpackToDestFp32.
@@ -149,9 +159,9 @@ constexpr std::array<bool, num_cbs> unpack_to_dest_fp32 = {{
     false,  // c_7  ones32    (bcast-scalar in0)
     true,   // c_8  zero32
     true,   // c_9  ecol32
-    false,  // c_10 (freed, was r16)
+    false,  // c_10 obf16     (writer-private)
     false,  // c_11 craw16    (bcast-scalar in1)
-    false,  // c_12 (freed, was ccol32)
+    false,  // c_12 raw64     (reader-private)
     false,  // c_13 u16       (matmul in1)
     true,   // c_14 s2
     true,   // c_15 s3
@@ -162,6 +172,8 @@ constexpr std::array<bool, num_cbs> unpack_to_dest_fp32 = {{
     false,  // c_20 S_mm      (matmul view of c_6)
     false,  // c_21 s2_mm     (matmul view of c_14)
     false,  // c_22 s3_mm     (matmul view of c_15)
+    true,   // c_23 qk16_utd  (the utd view of c_0)
+    true,   // c_24 ncol16
 }};
 // Every state CB: the utd id unpacks to DEST, its matmul view does not, and the two share the tile dims.
 constexpr bool state_views_consistent() {

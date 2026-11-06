@@ -53,6 +53,7 @@ constexpr uint32_t qk16 = 0, kT16 = 1, qcol32 = 2, v16 = 3, gcol32 = 4, bcol16 =
 constexpr uint32_t ecol32 = 9, r16 = 10, craw16 = 11, ccol32 = 12, u16 = 13, s2 = 14, s3 = 15, out16 = 16;
 constexpr uint32_t state_out = 17;
 constexpr uint32_t ebc16 = 19, S_mm = 20, s2_mm = 21;  // section 8 and the op's fused_recurrent_gdn_cb.hpp
+constexpr uint32_t qk16_utd = 23, ncol16 = 24;         // the norm's tiles (the op's ids)
 }  // namespace cbid
 
 enum Variant : uint32_t { kRead = 1, kUpdate = 2, kConstants = 3, kToken = 4 };
@@ -698,12 +699,14 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathConstantsPass) {
         .reps = reps,
         .cbs =
             {{.id = cbid::qk16, .tile = T16x32, .count = KT, .data = qk_tiles(x, 16, 0.0f)},
+             {.id = cbid::qk16_utd, .tile = T16x32, .count = KT, .utd = true, .alias_of = cbid::qk16},
              {.id = cbid::qcol32, .tile = T32, .count = KT, .data = qcol_tiles(x)},
              {.id = cbid::gcol32, .tile = T32, .count = 1, .utd = true, .data = col_tile(x.g, 32)},
              {.id = cbid::bcol16, .tile = T16x32, .count = 1, .utd = true, .data = col_tile(x.beta, 16)},
              {.id = cbid::ones32, .tile = T32, .count = 1, .data = const_tile(1.0f)},
              {.id = cbid::ecol32, .tile = T32, .count = 1, .utd = true, .l1_backed = true},
              {.id = cbid::craw16, .tile = T16x32, .count = 1},
+             {.id = cbid::ncol16, .tile = T16x32, .count = 1, .utd = true},
              {.id = cbid::out16, .tile = T16x32, .count = reps}},
         .outs = {{.id = cbid::out16, .ntiles = reps}}};
     auto res = run(this->devices_.at(0), c);
@@ -725,9 +728,13 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathConstantsPass) {
                 b_rows &= bits == std::bit_cast<uint32_t>(x.beta);
             } else if (col == 0 && r < 12) {
                 c_rows &= bits == std::bit_cast<uint32_t>(c_dev);
+            } else if (col == 0 && r < 16) {
+                // band 3: the norm scalars (ik, 0, s_q, 0); the gtests run without the norm at scale 1.0
+                rest_zero &= bits == ((r == 12 || r == 14) ? std::bit_cast<uint32_t>(1.0f) : 0u);
             } else if (r >= 12) {
-                // rows 12..15 are zero; the other columns of rows 0..11 carry the sources' columns (the band copies
-                // of build_ebc16), which no consumer reads: the band broadcast takes column 0 and masks the rest
+                // the other columns of rows 12..15 are the norm tile's, zero; those of rows 0..11 carry the sources'
+                // columns (the band copies of build_ebcn16), which no consumer reads: the band broadcast takes column
+                // 0 and masks the rest
                 rest_zero &= bits == 0u;
             }
         }
@@ -789,6 +796,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathToken) {
             .startup_on_utd = startup_on_utd,
             .cbs =
                 {{.id = cbid::qk16, .tile = T16x32, .count = KT, .data = qk_tiles(x, 16, 0.0f)},
+                 {.id = cbid::qk16_utd, .tile = T16x32, .count = KT, .utd = true, .alias_of = cbid::qk16},
                  {.id = cbid::kT16, .tile = T32x16, .count = KT, .data = kT_tiles(x, false)},
                  {.id = cbid::qcol32, .tile = T32, .count = KT, .data = qcol_tiles(x)},
                  {.id = cbid::v16, .tile = T16x32, .count = VT, .utd = true, .data = row_tiles(x.v, false)},
@@ -799,6 +807,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathToken) {
                  {.id = cbid::ones32, .tile = T32, .count = 1, .data = const_tile(1.0f)},
                  {.id = cbid::zero32, .tile = T32, .count = 1, .utd = true, .data = const_tile(0.0f)},
                  {.id = cbid::ecol32, .tile = T32, .count = 1, .utd = true},
+                 {.id = cbid::ncol16, .tile = T16x32, .count = 1, .utd = true},
                  {.id = cbid::r16, .tile = T16x32, .count = VT, .utd = true},
                  {.id = cbid::craw16, .tile = T16x32, .count = 1},
                  {.id = cbid::ebc16, .tile = T16x32, .count = 1, .utd = true},

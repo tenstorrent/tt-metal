@@ -22,24 +22,35 @@
 namespace ttnn::prim {
 
 struct FusedRecurrentGatedDeltaRuleParams {
+    uint32_t B;        // batch rows of the call
+    uint32_t H;        // key heads; value head hv reads key head hv / (HV / H)
+    uint32_t HV;       // value heads
     uint32_t BH;       // B * HV  (one Tensix core per head)
     uint32_t T;        // number of tokens processed sequentially per head
     uint32_t key_dim;  // K (multiple of 32)
     uint32_t val_dim;  // V (multiple of 32)
     bool output_final_state;
     bool output_per_token_state;  // emit S after EVERY token (spec-decode verify slots)
+    // The state output IS initial_state, written in place: a [Bs, HV, K, V] tensor whose rows [0:B] are the batch.
+    // Head h's tiles are its pages h*kv .. h*kv + kv - 1 in either rank, so the kernels address it as [BH, K, V].
+    bool inplace_final_state;
+    bool use_qk_l2norm_in_kernel;  // raw q, k rows in; the kernel folds 1/|k| and scale/|q| into its passes
+    float scale;                   // the query scale, folded into the kernel with the norm
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-// All device-op input tensors are fp32, TILE layout, interleaved (DRAM or L1).
-// Head-split, L2-norm, q-scale and the per-token tile layout are done host-side; the compute kernel
-// does the recurrence, exp(g) included.
-//   q, k : [BH*T, 1, K]   (q already scaled by `scale`; both already L2-normalized over K)
-//   v    : [BH*T, 1, V]
-//   g    : [BH*T, 1, 1]   (the log decay g_t, one scalar per (head, token) in tile element [0,0])
-//   beta : [BH*T, 1, 1]
-//   initial_state: [BH, K, V] or absent (zeros).
+// The input tensors are the layer's own: TILE layout, 32x32 tiles, interleaved (DRAM or L1), bf16 or fp32 (q, k and
+// v of one dtype; g and beta each bf16 or fp32). The reader gathers each core's rows and does the GQA mapping; the
+// compute kernel does the recurrence, exp(g), the optional L2 norm and the q-scale included.
+//   q, k : [B, T, H, K]   (raw with use_qk_l2norm_in_kernel, else L2-normalized over K by the caller; never scaled)
+//   v    : [B, T, HV, V]
+//   g    : [B, T, HV]     (the log decay g_t)
+//   beta : [B, T, HV]
+//   initial_state: the caller's [Bs, HV, K, V] fp32 with Bs*HV >= BH (head h's tiles are its pages h*kv..), or
+//                  absent (zeros built in-kernel); with inplace_final_state it is also the state output.
+// Outputs: o [B, T, HV, V] in the input dtype (the caller's output_tensor when given); the state [B, HV, K, V] (final),
+// [B, T, HV, K, V] (per token), the ring (ring mode) or initial_state itself (in place).
 //
 // "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the state output;
 // see the Python binding for the contract.
@@ -51,6 +62,7 @@ struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor beta;
     std::optional<Tensor> initial_state;
     std::optional<Tensor> initial_state_block_idx;
+    std::optional<Tensor> output_tensor;  // the caller's o, [B, T, HV, V] in the input dtype; the output aliases it
 };
 
 }  // namespace ttnn::prim
