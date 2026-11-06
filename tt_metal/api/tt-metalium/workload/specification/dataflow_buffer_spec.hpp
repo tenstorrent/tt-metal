@@ -9,7 +9,7 @@
 #include <string>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 #include <tt_stl/strong_type.hpp>
@@ -62,7 +62,7 @@
 //
 // ============================================================================
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
@@ -116,7 +116,7 @@ struct DataflowBufferSpec {
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////
-    DFBAdvancedOptions advanced_options;
+    experimental::DFBAdvancedOptions advanced_options;
 };
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

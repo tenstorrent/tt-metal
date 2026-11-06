@@ -6,16 +6,16 @@
 
 #include <string>
 
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/scratchpad_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/utils/group.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 //  ProgramSpec API
@@ -96,7 +96,7 @@ struct ProgramSpec {
 
     // Advanced options (see advanced_options.hpp)
     // Experimental PrefetcherPipe parameter declarations live here.
-    ProgramAdvancedOptions advanced_options;
+    experimental::ProgramAdvancedOptions advanced_options;
 };
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -6,7 +6,7 @@
 
 #include <vector>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // A Group<T> is an unordered collection of T: "here is a bunch of these", where the
 // element order carries no meaning (unlike a std::vector, whose order is semantic).
@@ -19,4 +19,4 @@ namespace tt::tt_metal::experimental {
 template <typename T>
 using Group = std::vector<T>;
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

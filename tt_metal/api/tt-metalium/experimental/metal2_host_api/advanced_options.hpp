@@ -9,21 +9,21 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/workload/utils/group.hpp>
+#include <tt-metalium/workload/utils/table.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // The PrefetcherPipe host handle (tt-metalium/experimental/prefetcher_pipe.hpp). Only referenced
 // here, so the pipe implementation is not a dependency of the core Metal 2.0 spec headers.
-// NOTE: PrefetcherPipe stays experimental when the Metal 2.0 host API graduates. This declaration
-//       and its fully qualified use in AdvancedProgramRunArgs must keep the experimental namespace.
+// NOTE: PrefetcherPipe remains experimental independently of the stable Metal 2.0 specification API.
+//       This declaration and its use in AdvancedProgramRunArgs must keep the experimental namespace.
 namespace tt::tt_metal::experimental {
 class PrefetcherPipe;
 }  // namespace tt::tt_metal::experimental
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 // Advanced options for Metal 2.0 specs
@@ -51,6 +51,10 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 // NOTE: DFBSpecName is also declared at the top of dataflow_buffer_spec.hpp, but is
 //       re-declared here for use in AdvancedOptions to avoid circular dependency.
 //       This is legal so long as the declarations are identical, which is compiler-enforced.
+
+}  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -362,7 +366,7 @@ struct AdvancedProgramRunArgs {
 
     // The actual PrefetcherPipe argument.
     // (Non-owning reference. Non-const: binding a Program records program-side state on the pipe.)
-    using PrefetcherPipeArgument = std::reference_wrapper<tt::tt_metal::experimental::PrefetcherPipe>;
+    using PrefetcherPipeArgument = std::reference_wrapper<PrefetcherPipe>;
 
     // A PrefetcherPipeArgument must be specified:
     //  For EVERY PrefetcherPipeParameter in the ProgramSpec that is not yet bound, when calling
