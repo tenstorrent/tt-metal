@@ -155,3 +155,21 @@ def test_pad_to_tile_shape_removed():
         "Use ttnn.to_layout(tensor, ttnn.TILE_LAYOUT) or "
         "models.common.tensor_utils.align_shape_to_tile instead."
     )
+
+
+def test_deallocate_buffers_clears_program_cache(device):
+    torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16) + 0.5
+
+    def run(op):
+        input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.to_torch(op(input_tensor))
+
+    relu_before = run(ttnn.relu)
+    assert device.num_program_cache_entries() > 0
+
+    ttnn.device.DeallocateBuffers(device)
+    assert device.num_program_cache_entries() == 0
+
+    run(ttnn.sqrt)
+    relu_after = run(ttnn.relu)
+    assert torch.equal(relu_before, relu_after)

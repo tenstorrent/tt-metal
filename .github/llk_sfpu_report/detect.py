@@ -29,7 +29,7 @@ MODULES = {
 #: The kernel sources each module compiles; their artefacts live under sources/<name>/.
 SOURCES = {
     "unary": ["eltwise_unary_sfpu_test.cpp"],
-    "typecast": ["eltwise_unary_typecast_perf.cpp"],
+    "typecast": ["eltwise_unary_typecast_test.cpp"],
     # Shared with the functional tests; only the perf module is compiled here. The
     # Dest-broadcast variants (test_perf_eltwise_binary_sfpu_bcast) have their own kernel.
     "binary": ["sfpu_binary_test.cpp", "sfpu_binary_bcast_test.cpp"],
@@ -80,7 +80,7 @@ def compiled_variants(side, family):
     return out
 
 
-def compile_all(side, arch, family, log, jobs=8, only_ops=()):
+def compile_all(side, arch, family, log, jobs=8, only_ops=(), extra_pytest_args=()):
     """Compile (never run) every variant of the family's perf module, math only.
 
     Returns pytest's exit code: 0 when everything built, 1 when some variant did not,
@@ -98,6 +98,7 @@ def compile_all(side, arch, family, log, jobs=8, only_ops=()):
             "perf",
             "--speed-of-light",
             *op_args,
+            *extra_pytest_args,
             MODULES[family],
         ],
         env={"LLK_PERF_RUN_TYPES": "MATH_ISOLATE"},

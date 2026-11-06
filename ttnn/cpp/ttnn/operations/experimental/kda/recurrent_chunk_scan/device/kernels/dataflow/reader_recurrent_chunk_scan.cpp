@@ -160,10 +160,10 @@ TT_KERNEL void reader(
         for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
             const uint32_t head_chunk = head * num_chunks + chunk;
             // Publish the restart seed just in time, never before the loop. The state
-            // DFB holds one kv payload and compute frees it only via pop_front at the
-            // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
-            // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
-            // whenever it is non-zero, so chunk 0 has always been consumed by now.
+            // DFB holds one kv payload and compute frees it only after seeding its ring
+            // and carry from it; pushing it here reuses the same capacity as a queue and
+            // costs no extra L1. reset_chunk is >= 1 whenever it is non-zero, so the
+            // initial seed has always been consumed by now.
             if constexpr (summary) {
                 if (reset_chunk != 0 && chunk == reset_chunk) {
                     seed_summary_pair<Kt, Vt>(state, noc, value_block);
