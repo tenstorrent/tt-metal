@@ -371,7 +371,8 @@ def _golden_function_acosh_bw_torch(grad_tensor, input_tensor, *args, device, **
     the parameters the spec covers, this returns torch's result: its own at its special inputs and the exact
     1/sqrt(x^2 - 1) elsewhere, in float64, rounded once to BF16, NaN included and stored as +inf, as the fused program's BF16 output holds it.
     Every other call keeps ``_golden_function_acosh``, as does a call the fused program does not
-    serve: operands of two shapes, or a sharded ``memory_config`` (the composite runs there).
+    serve: operands of two shapes, or a sharded ``memory_config`` without a shard spec (the composite
+    runs there). A sharded ``memory_config`` that carries a shard spec runs the fused program.
     """
     import math
 
@@ -383,7 +384,12 @@ def _golden_function_acosh_bw_torch(grad_tensor, input_tensor, *args, device, **
         and input_tensor.dtype == torch.bfloat16
         and not args
         and grad_tensor.shape == input_tensor.shape
-        and (memory_config is None or not memory_config.is_sharded())
+        and (
+            memory_config is None
+            or not memory_config.is_sharded()
+            or memory_config.shard_spec is not None
+            or memory_config.nd_shard_spec is not None
+        )
     ):
         return _golden_function_acosh(grad_tensor, input_tensor, *args, device=device, **kwargs)
     x = input_tensor.detach().to(torch.float64)
