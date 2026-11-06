@@ -102,13 +102,23 @@ def scalar(t: ttml.autograd.Tensor) -> float:
     return float(gather(t).reshape(-1)[0])
 
 
+def resume_folder(folder: Path) -> Path:
+    """`raw/` if present: with EMA on, the folder root holds the EMA weights."""
+    raw = folder / "raw"
+    return raw if raw.is_dir() else folder
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--cache", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--weights", default=str(DEFAULT_WEIGHTS))
     p.add_argument("--mesh", default="1,8", help="dp,tp")
-    p.add_argument("--resume", default=None, help="adapter folder to warm-start from")
+    p.add_argument(
+        "--resume",
+        default=None,
+        help="adapter folder to warm-start from (uses raw/ if present); optimizer, EMA, step and warmup start over",
+    )
     p.add_argument("--steps", type=int, default=1000)
     p.add_argument("--grad-accum", type=int, default=4)
     p.add_argument("--lr", type=float, default=1e-4)
@@ -149,7 +159,8 @@ def main(argv=None) -> int:
     load_transformer(model, Path(args.weights))
     lora = inject(model, args.rank, args.alpha or args.rank)
     if args.resume:
-        log.info("resumed %d adapter tensors from %s", load_adapter(lora, config, Path(args.resume)), args.resume)
+        resume = resume_folder(Path(args.resume))
+        log.info("resumed %d adapter tensors from %s", load_adapter(lora, config, resume), resume)
     else:
         init_lora_A_gaussian(lora, args.rank, args.seed)
     trainable = lora_params(lora)
