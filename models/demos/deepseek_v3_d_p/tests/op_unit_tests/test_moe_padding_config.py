@@ -11,10 +11,12 @@ The host builder (``TtMoEGatePrefill.build_padding_config``, via ``rotated_chip_
 is the reference: these tests assert the device op reproduces it EXACTLY (integer counts, so exact
 equality, not PCC) across the rotated and sequential layouts.
 
-Also covers the two properties the trace path depends on:
+Also covers the properties program-cache reuse depends on:
   * one cached program serves every chunk (the per-chunk values are read on-device, so they must not
     enter the program hash) — otherwise a capture could not replay across chunks;
-  * refreshing the metadata tensors in place and re-running yields the new chunk's config.
+  * refreshing the metadata tensors in place and re-running yields the new chunk's config;
+  * passing NEW metadata tensors (new addresses) on a cache hit yields the new chunk's config, i.e. the
+    cached program's metadata buffer bindings are re-pointed rather than left stale.
 """
 
 import pytest
@@ -150,76 +152,23 @@ def test_moe_padding_config_left_padding(mesh_device):
     _run_case(mesh_device, 0, 2592, padding_side="left")
 
 
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-2x4",
-        )
-    ],
-    indirect=True,
-)
-def test_moe_padding_config_one_program_across_chunks(mesh_device):
-    """The per-chunk values must stay OUT of the program hash, and refreshing the metadata tensors in
-    place must change the result — together these are exactly what lets one capture replay across
-    chunks. Asserts a single cached program serves a sequence of different chunks, each still correct."""
-    sp_factor = int(mesh_device.shape[0])
-    tokens_per_chip = PREFILL_CHUNK_TOKENS_PER_CHIP
-
-    config = _alloc_config(mesh_device, sp_factor)
-    start_t = _meta1(mesh_device, 0)
-    end_t = _meta1(mesh_device, 0)
-
-    mesh_device.enable_program_cache()
-    entries_before = mesh_device.num_program_cache_entries()
-
-    chunks = [(0, 640), (640, 1280), (1280, 300), (2592, 1568)]
-    for actual_start, actual_isl in chunks:
-        # Refresh the SAME metadata buffers in place — the trace path's mechanism.
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                torch.tensor([actual_start], dtype=torch.int64).reshape(1, 1, 1, 1),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            ),
-            start_t,
-        )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                torch.tensor([actual_start + actual_isl], dtype=torch.int64).reshape(1, 1, 1, 1),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            ),
-            end_t,
-        )
-        ttnn.experimental.deepseek_prefill.moe_padding_config(
-            config,
-            start_t,
-            end_t,
-            tokens_per_chip=tokens_per_chip,
-            pad_side=0,
-            cluster_axis=0,
-        )
-        ttnn.synchronize_device(mesh_device)
-
-        got_counts, _ = _read_counts(config, mesh_device, sp_factor)
-        expected = rotated_chip_real_token_counts(actual_start, actual_isl, sp_factor, tokens_per_chip)
-        assert got_counts == expected, (
-            f"chunk (start={actual_start}, isl={actual_isl}): device={got_counts} host={expected} "
-            "-- the op read stale metadata (missing L1-cache invalidate?) or the config went unrefreshed"
-        )
-
-    # Exactly ONE program for all four chunks: the per-chunk values are read on-device, so they must
-    # not be hashed. More than one entry means a capture could not replay across chunks.
-    assert mesh_device.num_program_cache_entries() == entries_before + 1, (
-        f"expected 1 cached program for {len(chunks)} chunks, got "
-        f"{mesh_device.num_program_cache_entries() - entries_before}"
+def _write_meta1(meta: ttnn.Tensor, mesh_device, val: int):
+    """Overwrite a 1-element metadata tensor in place (same buffer, same address)."""
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        ),
+        meta,
     )
+
+
+# Every consecutive pair gives a different expected config on both 1 and 2 chips along the SP axis, so a
+# call that read the previous chunk's metadata always fails the count check. (740, 300) and (1040, 50)
+# start mid-slab on the 2x4 mesh, covering the boundary-chip split.
+_CACHE_CHUNKS = [(0, 100), (100, 640), (740, 300), (1040, 0), (1040, 50)]
 
 
 @pytest.mark.parametrize(
@@ -231,33 +180,49 @@ def test_moe_padding_config_one_program_across_chunks(mesh_device):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
+        # Single-card coverage for local runs. CI's op-unit-test job keeps only the 2x4 case.
         pytest.param((1, 1), {}, id="1x1"),
     ],
     indirect=True,
 )
-def test_moe_padding_config_new_metadata_tensors_on_cache_hit(mesh_device):
-    """A cache hit with DIFFERENT metadata tensors (new allocations, so new addresses) must read the new
-    tensors. The metadata addresses are buffer bindings the framework re-points on a hit; if they were
-    left stale the kernel would read the first call's tensors and produce the first chunk's config."""
+@pytest.mark.parametrize("metadata", ["refreshed_in_place", "new_tensors"])
+def test_moe_padding_config_one_program_across_chunks(mesh_device, metadata):
+    """One cached program must serve a sequence of different chunks, each still correct.
+
+    * refreshed_in_place: the SAME metadata buffers are overwritten between calls (the trace path's
+      mechanism). Checks the per-chunk values stay out of the program hash and are re-read on device.
+    * new_tensors: each call gets freshly allocated metadata tensors (new addresses). Checks the cache
+      hit re-points the metadata buffer bindings rather than reading the first call's tensors.
+    """
     sp_factor = int(mesh_device.shape[0])
     tokens_per_chip = PREFILL_CHUNK_TOKENS_PER_CHIP
 
     config = _alloc_config(mesh_device, sp_factor)
+    start_t = _meta1(mesh_device, 0)
+    end_t = _meta1(mesh_device, 0)
 
     mesh_device.enable_program_cache()
     entries_before = mesh_device.num_program_cache_entries()
 
-    # Keep every metadata tensor alive so no allocation can reuse an earlier one's address.
+    # new_tensors: keep every metadata tensor alive so no allocation can reuse an earlier one's address.
     live_tensors = []
     seen_addresses = set()
-    chunks = [(0, 640), (640, 1280), (1280, 300), (2592, 1568)]
-    for actual_start, actual_isl in chunks:
-        start_t = _meta1(mesh_device, actual_start)
-        end_t = _meta1(mesh_device, actual_start + actual_isl)
-        live_tensors += [start_t, end_t]
-        addresses = (start_t.buffer_address(), end_t.buffer_address())
-        assert not seen_addresses.intersection(addresses), "metadata tensors reused an earlier address"
-        seen_addresses.update(addresses)
+    previous_expected = None
+    for actual_start, actual_isl in _CACHE_CHUNKS:
+        if metadata == "refreshed_in_place":
+            _write_meta1(start_t, mesh_device, actual_start)
+            _write_meta1(end_t, mesh_device, actual_start + actual_isl)
+        else:
+            start_t = _meta1(mesh_device, actual_start)
+            end_t = _meta1(mesh_device, actual_start + actual_isl)
+            live_tensors += [start_t, end_t]
+            addresses = (start_t.buffer_address(), end_t.buffer_address())
+            assert not seen_addresses.intersection(addresses), "metadata tensors reused an earlier address"
+            seen_addresses.update(addresses)
+
+        expected = rotated_chip_real_token_counts(actual_start, actual_isl, sp_factor, tokens_per_chip)
+        assert expected != previous_expected, "test chunks must change the expected config every call"
+        previous_expected = expected
 
         ttnn.experimental.deepseek_prefill.moe_padding_config(
             config,
@@ -270,14 +235,15 @@ def test_moe_padding_config_new_metadata_tensors_on_cache_hit(mesh_device):
         ttnn.synchronize_device(mesh_device)
 
         got_counts, got_sides = _read_counts(config, mesh_device, sp_factor)
-        expected = rotated_chip_real_token_counts(actual_start, actual_isl, sp_factor, tokens_per_chip)
         assert got_counts == expected, (
             f"chunk (start={actual_start}, isl={actual_isl}): device={got_counts} host={expected} "
-            "-- the cached program read a previous call's metadata tensors"
+            "-- the op read a previous chunk's metadata (stale buffer binding or missing L1-cache invalidate?)"
         )
         assert got_sides == [0] * sp_factor, f"pad_side mismatch: {got_sides}"
 
+    # Exactly ONE program for every chunk: the per-chunk values are read on-device, so they must not be
+    # hashed. More than one entry means a capture could not replay across chunks.
     assert mesh_device.num_program_cache_entries() == entries_before + 1, (
-        f"expected 1 cached program for {len(chunks)} chunks, got "
+        f"expected 1 cached program for {len(_CACHE_CHUNKS)} chunks, got "
         f"{mesh_device.num_program_cache_entries() - entries_before}"
     )

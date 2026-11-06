@@ -44,7 +44,7 @@ struct MoePaddingConfigDeviceOperation {
 
     // One program per mesh coordinate (each chip's program differs only in its SP position). Every
     // tensor address reaches the kernel as a Buffer* binding, so the framework re-points all of them
-    // on a cache hit without rebuilding the descriptor.
+    // on a cache hit.
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& args,

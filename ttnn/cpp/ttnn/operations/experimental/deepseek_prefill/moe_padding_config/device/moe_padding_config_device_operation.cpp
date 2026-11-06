@@ -8,7 +8,6 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -199,8 +198,9 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
 
     // Common rt-args: [0..2] structural (this chip's mesh position + the rotation period), [3..4] the
     // per-call metadata tensors. All tensor addresses (the metadata tensors here, the config buffer
-    // below) are passed as Buffer* bindings, so cache hits take the fast path that patches every
-    // address and skips create_descriptor.
+    // below) are passed as Buffer* bindings, which the framework re-points on every cache hit. (If the
+    // cache-populating call passes one tensor as both actual_start and actual_end, the framework can't
+    // tell the two slots apart and rebuilds the descriptor on each hit instead: slower, still correct.)
     writer_kernel.emplace_common_runtime_args({
         my_sp_coord,
         sp_factor,

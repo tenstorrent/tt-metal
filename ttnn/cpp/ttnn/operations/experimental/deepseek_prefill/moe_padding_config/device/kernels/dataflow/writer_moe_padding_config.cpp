@@ -74,10 +74,10 @@ void kernel_main() {
     const auto s_start = TensorAccessor(meta_args, actual_start_addr);
     noc.async_read(s_start, cb_meta, kMetadataReadBytes, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    // The metadata tensors sit at FIXED DRAM addresses reused every chunk, so the RISC data cache may
-    // still hold the previous chunk's value for this L1 line (the barrier orders the DMA; volatile
-    // still reads through the cache). Force a refetch, else a stale read silently produces the prior
-    // chunk's config.
+    // Every call lands the metadata in the same L1 scratch slot, so the RISC data cache may still hold
+    // the previous call's value for this line (the barrier orders the DMA; volatile still reads through
+    // the cache). This matters most on the trace path, where the same metadata tensors are refreshed in
+    // place every chunk. Force a refetch, else a stale read silently produces the prior chunk's config.
     invalidate_l1_cache();
     const uint32_t actual_start = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
 
