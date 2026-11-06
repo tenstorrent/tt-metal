@@ -92,6 +92,7 @@ std::vector<std::array<uint32_t, 2>> spot_tiles(const Shape& s, uint32_t ring_si
     const uint32_t stripe_tiles = s.N / tt::constants::TILE_WIDTH / ring_size;
     std::vector<std::array<uint32_t, 2>> tiles;
     const uint32_t columns = std::min<uint32_t>(stripe_tiles, 12);
+    tiles.reserve(static_cast<size_t>(ring_size) * columns * 3);
     for (uint32_t stripe = 0; stripe < ring_size; ++stripe) {
         for (uint32_t j = 0; j < columns; ++j) {
             const uint32_t n = (stripe * stripe_tiles) + (((2 * j) + 1) * stripe_tiles / (2 * columns));
@@ -158,10 +159,32 @@ std::vector<tt::tt_metal::GlobalSemaphore> make_semaphores(ttnn::distributed::Me
     const auto grid = device->compute_with_storage_grid_size();
     const tt::tt_metal::CoreRangeSet cores(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
+    semaphores.reserve(device->shape()[kClusterAxis]);
     for (uint32_t i = 0; i < device->shape()[kClusterAxis]; ++i) {
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(device, cores, 0));
     }
     return semaphores;
+}
+
+// Calls that reuse a buffer get a different weight: call i multiplies it by kCallScales[i % 4]. Powers of two and -1
+// are exact in bf16, so the reference is the same factor times the CPU result, and a call that read a stripe an
+// earlier call left in its buffer would not match it.
+constexpr std::array<float, 4> kCallScales = {1.0F, -2.0F, 0.5F, -1.0F};
+
+float call_scale(uint32_t call) {
+    return kCallScales[call % kCallScales.size()];
+}
+
+ttnn::Tensor scaled_weight(const Problem& p, bool transpose_b, float scale) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto& s = p.shape;
+    std::vector<float> w = transpose_b ? p.w_nk : p.w_kn;
+    for (float& v : w) {
+        v *= scale;
+    }
+    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, transpose_b ? 0 : 1, kClusterAxis);
+    const ttnn::Shape shape = transpose_b ? ttnn::Shape({s.N, s.K}) : ttnn::Shape({s.K, s.N});
+    return ttml::core::from_vector(w, shape, device, ttnn::Layout::TILE, shard.get());
 }
 
 void run_fabric_gather(
@@ -191,12 +214,18 @@ void run_fabric_gather(
     const std::array<ttnn::Tensor, 2> buffers = {
         ttml::core::zeros(w_shape, device), ttml::core::zeros(w_shape, device)};
     const auto semaphores = make_semaphores(device);
+    std::vector<ttnn::Tensor> weights;
+    weights.reserve(num_calls);
+    for (uint32_t i = 0; i < num_calls; ++i) {
+        weights.push_back(call_scale(i) == 1.0F ? w : scaled_weight(p, transpose_b, call_scale(i)));
+    }
 
     std::vector<ttnn::Tensor> outputs;
+    outputs.reserve(num_calls);
     for (uint32_t i = 0; i < num_calls; ++i) {
         outputs.push_back(ttml::metal::all_gather_weight_minimal_matmul_async(
             x,
-            w,
+            weights[i],
             buffers[i % 2],
             semaphores,
             kClusterAxis,
@@ -213,7 +242,8 @@ void run_fabric_gather(
             SCOPED_TRACE(testing::Message() << "call " << i);
             xt::xarray<float> y = ttml::core::to_xtensor(device_y);
             y.reshape({p.shape.M, p.shape.N});
-            expect_close(p.y, checked_part(p, y));
+            const xt::xarray<float> ref = p.y * call_scale(i);
+            expect_close(ref, checked_part(p, y));
         }
     }
 }
@@ -250,19 +280,23 @@ void sweep(const Shape& s) {
 TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
     auto* device = &ttml::autograd::ctx().get_device();
     const std::array<Shape, 3> shapes = {{{256, 512, 1024}, {256, 1024, 512}, {256, 512, 2048}}};
+    constexpr uint32_t kRounds = 3;
     struct Layer {
         Problem p;
         ttnn::Tensor x;
-        ttnn::Tensor w;
+        std::array<ttnn::Tensor, kRounds> w;
         std::array<ttnn::Tensor, 2> buffers;
     };
     std::vector<Layer> layers;
+    layers.reserve(shapes.size());
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
-    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
     for (const auto& s : shapes) {
         Problem p = make_problem(s);
         auto x = ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
-        auto w = ttml::core::from_vector(p.w_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+        std::array<ttnn::Tensor, kRounds> w = {
+            scaled_weight(p, true, call_scale(0)),
+            scaled_weight(p, true, call_scale(1)),
+            scaled_weight(p, true, call_scale(2))};
         const ttnn::Shape full({s.N, s.K});
         layers.push_back(
             {std::move(p),
@@ -274,15 +308,15 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
 
     for (const uint32_t num_links : {2U, 1U}) {
         SCOPED_TRACE(testing::Message() << "links=" << num_links);
-        constexpr uint32_t kRounds = 3;
         std::vector<std::pair<uint32_t, ttnn::Tensor>> outputs;
+        outputs.reserve(kRounds * layers.size());
         for (uint32_t round = 0; round < kRounds; ++round) {
             for (uint32_t l = 0; l < layers.size(); ++l) {
                 outputs.emplace_back(
                     l,
                     ttml::metal::all_gather_weight_minimal_matmul_async(
                         layers[l].x,
-                        layers[l].w,
+                        layers[l].w[round],
                         layers[l].buffers[round % 2],
                         semaphores,
                         kClusterAxis,
@@ -296,9 +330,10 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, SharedSemaphoresAcrossShapes) {
         }
         for (uint32_t i = 0; i < outputs.size(); ++i) {
             const auto& [l, y] = outputs[i];
+            const xt::xarray<float> ref = layers[l].p.y * call_scale(static_cast<uint32_t>(i / layers.size()));
             for (const auto& device_y : ttnn::distributed::get_device_tensors(y)) {
                 SCOPED_TRACE(testing::Message() << "call " << i << " layer " << l);
-                expect_close(layers[l].p.y, ttml::core::to_xtensor(device_y));
+                expect_close(ref, ttml::core::to_xtensor(device_y));
             }
         }
     }

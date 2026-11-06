@@ -31,6 +31,9 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
     check_device_tensor(x, kOp, "input", req);
     check_device_tensor(w, kOp, "weight", req);
     check_device_tensor(pwb, kOp, "persistent_weight_buffer", req);
+    check_tile_padding(x, kOp, "input");
+    check_tile_padding(w, kOp, "weight");
+    check_tile_padding(pwb, kOp, "persistent_weight_buffer");
     check_same_device(w, x, kOp, "weight", "input");
     check_same_device(pwb, x, kOp, "persistent_weight_buffer", "input");
 
@@ -104,6 +107,7 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
     const ttnn::CoreCoord device_grid = x.device()->compute_with_storage_grid_size();
     const ttnn::CoreRange all_cores({0, 0}, {device_grid.x - 1, device_grid.y - 1});
     for (const auto& sem : attrs.semaphores) {
+        TT_FATAL(sem.device() == x.device(), "multi_device_global_semaphore must belong to the input mesh device");
         TT_FATAL(
             std::get<0>(sem.attribute_values()).contains(all_cores),
             "multi_device_global_semaphore must be created on the whole compute grid {}",

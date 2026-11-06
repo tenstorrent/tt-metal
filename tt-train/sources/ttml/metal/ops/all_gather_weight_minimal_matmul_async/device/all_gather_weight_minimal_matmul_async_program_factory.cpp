@@ -378,6 +378,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args =
                 {K_blocks,
@@ -401,6 +402,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     std::vector<shared_variables_t::CoreKernels> core_kernel_list;
     core_kernel_list.reserve(cores.size());
     std::vector<uint32_t> stripe_sem_addrs;
+    stripe_sem_addrs.reserve(operation_attributes.semaphores.size());
     for (const auto& sem : operation_attributes.semaphores) {
         stripe_sem_addrs.push_back(static_cast<uint32_t>(sem.address()));
     }
@@ -489,8 +491,9 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         core_kernel_list.push_back(core_kernels);
     }
 
-    std::vector<shared_variables_t::Sender> senders;
     const uint32_t num_links = operation_attributes.num_links;
+    std::vector<shared_variables_t::Sender> senders;
+    senders.reserve(2 * num_links);
     // parity_unit = num_links: each run of num_links chains (one per link) sends the far stripe the same way, so
     // every link splits it evenly between the two directions.
     const RelayPlan plan = make_relay_plan(layout, ring_index, ring, num_links);
