@@ -7,6 +7,10 @@ The complete four-chip QuietBox or eight-chip LoudBox is used as one TP ring.  P
 volume matches production, while the output shard scales with the physical ring size.  Both
 reshard directions run in one test so a passing performance result also proves bit-exact data
 movement through the same traced command stream.
+
+The folded-view cases open a LoudBox as 4x2, whose 2-wide axis 1 runs North/South on the fabric (not East/West), at
+the production payload, so the 2-wide axis takes the compact schedule. They check ttMLA's sparse head <-> sequence
+reshards at TP=2 bit-exactly; before the op took the fabric's directions they hung.
 """
 
 import math
@@ -211,3 +215,103 @@ def test_all_to_all_async_generic_production_perf_and_accuracy(mesh_device):
 
     for case in _reshard_cases(mesh_device.shape[0]):
         _run_reshard(mesh_device, case)
+
+
+_FOLDED_DEVICE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+    "fabric_router_config": _fabric_router_config(),
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+}
+
+
+def _shard_2d(mesh_device, x, dims, layout):
+    return ttnn.from_torch(
+        x,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+    )
+
+
+def _check_shards(out, expected_for):
+    for idx, shard in enumerate(ttnn.get_device_tensors(out)):
+        expected, got = expected_for(idx), ttnn.to_torch(shard)
+        assert tuple(got.shape) == tuple(expected.shape), f"device {idx}: {tuple(got.shape)} != {tuple(expected.shape)}"
+        passed, msg = comp_equal(expected, got)
+        assert passed, f"device {idx}: {msg}"
+
+
+def _folded_head_to_sequence(mesh_device, heads_local, rows_local, width, cluster_axis, num_links):
+    """Head-sharded [1, H/tp, S/sp, W] -> sequence-sharded [1, H, S/(sp*tp), W] over cluster_axis."""
+    rows, cols = mesh_device.shape
+    group, other = (cols, rows) if cluster_axis == 1 else (rows, cols)
+    torch.manual_seed(0)
+    x = torch.randn(1, heads_local * group, rows_local * other, width, dtype=torch.bfloat16)
+    tt = _shard_2d(mesh_device, x, (2, 1) if cluster_axis == 1 else (1, 2), ttnn.TILE_LAYOUT)
+    out = ttnn.experimental.all_to_all_async_generic(
+        tt, in_dim=1, out_dim=2, num_links=num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=cluster_axis
+    )
+    ttnn.synchronize_device(mesh_device)
+    rows_out = rows_local // group
+
+    def expected(idx):
+        r, c = divmod(idx, cols)
+        g, o = (c, r) if cluster_axis == 1 else (r, c)  # position along / across the collective axis
+        start = o * rows_local + g * rows_out
+        return x[:, :, start : start + rows_out, :]
+
+    _check_shards(out, expected)
+
+
+def _folded_sequence_to_head(mesh_device, heads, rows_local, width, num_links):
+    """Row-major sequence-sharded [1, H, S/(sp*tp), W] -> head-sharded [1, H/tp, S/sp, W] over axis 1: the return
+    after sparse_sdpa."""
+    rows, cols = mesh_device.shape
+    rows_out = rows_local // cols
+    torch.manual_seed(1)
+    # dim 0 = position along axis 1, so each chip starts with every head of its own sequence slice.
+    x = torch.randn(cols, heads, rows * rows_out, width, dtype=torch.bfloat16)
+    tt = _shard_2d(mesh_device, x, (2, 0), ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.experimental.all_to_all_async_generic(
+        tt, in_dim=2, out_dim=1, num_links=num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
+    )
+    ttnn.synchronize_device(mesh_device)
+    heads_out = heads // cols
+
+    def expected(idx):
+        r, g = divmod(idx, cols)
+        blocks = [
+            x[src : src + 1, g * heads_out : (g + 1) * heads_out, r * rows_out : (r + 1) * rows_out]
+            for src in range(cols)
+        ]
+        return torch.cat(blocks, dim=2)
+
+    _check_shards(out, expected)
+
+
+@run_for_blackhole("the folded 4x2 view is a LoudBox mesh")
+@pytest.mark.parametrize("mesh_device", [(4, 2)], ids=["loudbox_4x2_folded"], indirect=True)
+@pytest.mark.parametrize("device_params", [_FOLDED_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        # Kimi-K3.1's q at TP=2: 48 heads per chip, 1280 rows per SP chip.
+        pytest.param(("head_to_sequence", 1, dict(heads_local=48, rows_local=1280, width=576), 1), id="axis1-1link"),
+        pytest.param(("head_to_sequence", 1, dict(heads_local=48, rows_local=1280, width=576), 2), id="axis1-2link"),
+        # The 4-chip axis 0 runs East/West on the folded view.
+        pytest.param(("head_to_sequence", 0, dict(heads_local=16, rows_local=1280, width=576), 2), id="axis0-2link"),
+        pytest.param(
+            ("sequence_to_head", 1, dict(heads=96, rows_local=1280, width=512), 2), id="axis1-return-row_major"
+        ),
+    ],
+)
+def test_all_to_all_async_generic_folded_view(mesh_device, case):
+    if mesh_device.get_num_devices() != 8:
+        pytest.skip("LoudBox-only: the 4x2 view must cover the whole 8-chip box")
+    direction, cluster_axis, shape, num_links = case
+    if direction == "head_to_sequence":
+        _folded_head_to_sequence(mesh_device, **shape, cluster_axis=cluster_axis, num_links=num_links)
+    else:
+        _folded_sequence_to_head(mesh_device, **shape, num_links=num_links)
