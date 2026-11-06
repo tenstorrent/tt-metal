@@ -10,6 +10,7 @@ target_sources(
         fabric_capture.cpp
         fabric_capture_files.cpp
         fabric_capture_json.cpp
+        fabric_capture_load.cpp
         fabric_capture_manifest.cpp
         fabric_capture_reads.cpp
         fabric_capture_record.cpp

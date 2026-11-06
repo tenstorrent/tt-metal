@@ -15,7 +15,9 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +25,7 @@
 #include <regex>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -38,9 +41,13 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_device.hpp"
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_load.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_manifest.hpp"
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_record.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_targets.hpp"
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_published_chips.hpp"
@@ -997,6 +1004,66 @@ void check_capture_plan(
     }
 }
 
+// ============ Capture, end to end ============
+//
+// Mock clusters drop device reads, so these capture the run's real manifest through a reader that serves made-up bytes:
+// every L1 byte and register value is worked out from its chip, core and address.
+
+std::byte get_fake_l1_byte(int32_t chip, capture::CoreXY core, uint64_t address) {
+    return static_cast<std::byte>((address + static_cast<uint64_t>(chip) + core.x) & 0xff);
+}
+
+uint32_t get_fake_register(int32_t chip, capture::CoreXY core, uint64_t address) {
+    return static_cast<uint32_t>(address) ^ (static_cast<uint32_t>(chip) << 24) ^ (core.x << 16) ^ (core.y << 8);
+}
+
+// The bytes FakeDeviceReader gives for one recorded read.
+std::vector<std::byte> make_fake_read_bytes(int32_t chip, capture::CoreXY core, const capture::ReadRecord& read) {
+    if (read.step == capture::ReadStep::L1) {
+        std::vector<std::byte> bytes(read.size_bytes);
+        for (uint32_t i = 0; i < read.size_bytes; ++i) {
+            bytes[i] = get_fake_l1_byte(chip, core, read.address + i);
+        }
+        return bytes;
+    }
+    const auto value =
+        std::bit_cast<std::array<std::byte, sizeof(uint32_t)>>(get_fake_register(chip, core, read.address));
+    return {value.begin(), value.end()};
+}
+
+// A DeviceReader that serves the made-up bytes above, and fails the full L1 read of one core when told to.
+class FakeDeviceReader final : public capture::DeviceReader {
+public:
+    void read_l1(int32_t chip, capture::CoreXY core, uint64_t address, std::span<std::byte> out) override {
+        if (out.size() > sizeof(uint32_t) && failing_l1_ == std::pair(chip, core)) {
+            throw std::runtime_error("fake L1 read failure");
+        }
+        for (size_t i = 0; i < out.size(); ++i) {
+            out[i] = get_fake_l1_byte(chip, core, address + i);
+        }
+    }
+
+    uint32_t read_register(int32_t chip, capture::CoreXY core, uint64_t address) override {
+        return get_fake_register(chip, core, address);
+    }
+
+    // Fails `core`'s full L1 read. Its liveness reads, a word at a time, still work.
+    void fail_l1_read_at(int32_t chip, capture::CoreXY core) { failing_l1_ = std::pair(chip, core); }
+
+private:
+    std::optional<std::pair<int32_t, capture::CoreXY>> failing_l1_;
+};
+
+capture::CaptureRequest make_capture_request(
+    const std::filesystem::path& manifest_path, const std::string& capture_id) {
+    return capture::CaptureRequest{
+        .manifest_path = manifest_path,
+        .capture_id = capture_id,
+        .liveness_options = {.num_rounds = 2, .interval = std::chrono::milliseconds(1)},
+        .capture_git_sha = "0123456789abcdef0123456789abcdef01234567",
+    };
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -1101,5 +1168,98 @@ TEST_MANIFEST_CHECKS(ManifestTorusXFixture)
 TEST_MANIFEST_CHECKS(ManifestTorusYFixture)
 TEST_MANIFEST_CHECKS(ManifestTorusXYFixture)
 TEST_MANIFEST_CHECKS(ManifestMuxFixture)
+
+// Captures the run's real manifest end to end, then loads it back: every router's reads give back exactly the bytes the
+// reader returned, and the record names the run and the capture. Loading checks the .bin is the one the record names.
+// Only on a 1D T3K: on a galaxy, the .bin is hundreds of MB.
+TEST_F(Manifest1DFixture, CaptureRankWritesEveryRoutersReadsWhereTheRecordSays) {
+    FakeDeviceReader reader;
+    capture::SteadyCaptureClock clock;
+    const capture::CaptureResult result = capture::capture_rank(
+        make_capture_request(manifest_path_, "complete"), reader, collect_cluster_facts(manifest_), clock);
+
+    EXPECT_EQ(result.outcome, capture::CaptureOutcome::COMPLETE);
+    EXPECT_EQ(result.paths.record_path.parent_path(), manifest_path_.parent_path() / "captures" / "complete");
+    const capture::LoadedCapture loaded = capture::load_capture(result.paths.record_path);
+    const capture::CaptureRecord& record = loaded.get_record();
+    EXPECT_EQ(record.manifest.run_id, manifest_.at("run").at("run_id").get<std::string>());
+    EXPECT_EQ(record.capture_id, "complete");
+
+    size_t num_routers = 0;
+    for (const capture::ChipRecord& chip : record.chips) {
+        ASSERT_EQ(chip.location, capture::ChipLocation::FOUND) << chip.path;
+        for (const capture::RouterRecord& router : chip.routers) {
+            SCOPED_TRACE(router.target.router.path);
+            ++num_routers;
+            EXPECT_EQ(router.liveness.size(), 2u);
+            ASSERT_FALSE(router.reads.empty());
+            for (const capture::ReadRecord& read : router.reads) {
+                const std::span<const std::byte> bytes = loaded.get_read_bytes(read);
+                EXPECT_EQ(
+                    std::vector<std::byte>(bytes.begin(), bytes.end()),
+                    make_fake_read_bytes(*chip.chip, *router.target.reader_core, read));
+            }
+        }
+    }
+    EXPECT_EQ(num_routers, routers_.size());
+}
+
+// A chip the reader didn't find and a core whose L1 read failed are recorded, not fatal: the files are still written,
+// and the outcome says something is missing.
+TEST_F(Manifest1DFixture, CaptureRankRecordsWhatItCouldNotRead) {
+    capture::ClusterFacts facts = collect_cluster_facts(manifest_);
+    ASSERT_GE(facts.chips.size(), 2u);
+    const uint64_t missing_asic_id = facts.chips.back().asic_id;
+    facts.chips.pop_back();
+    // The first router on the first chip the reader still finds fails its L1 read.
+    const int32_t failing_chip = facts.chips.front().chip;
+    const auto failing_entry =
+        std::ranges::find(routers_, static_cast<ChipId>(failing_chip), &RouterEntry::physical_chip_id);
+    ASSERT_NE(failing_entry, routers_.end());
+    const json& failing_core_json = failing_entry->router->at("identity").at("virtual_core");
+    const capture::CoreXY failing_core{
+        failing_core_json.at(0).get<uint32_t>(), failing_core_json.at(1).get<uint32_t>()};
+    FakeDeviceReader reader;
+    reader.fail_l1_read_at(failing_chip, failing_core);
+    capture::SteadyCaptureClock clock;
+
+    const capture::CaptureResult result =
+        capture::capture_rank(make_capture_request(manifest_path_, "problems"), reader, facts, clock);
+
+    EXPECT_EQ(result.outcome, capture::CaptureOutcome::PROBLEMS_RECORDED);
+    const capture::LoadedCapture loaded = capture::load_capture(result.paths.record_path);
+    const capture::CaptureRecord& record = loaded.get_record();
+    size_t num_missing_chips = 0;
+    size_t num_failed_routers = 0;
+    for (const capture::ChipRecord& chip : record.chips) {
+        if (chip.asic_id == missing_asic_id) {
+            ++num_missing_chips;
+            EXPECT_EQ(chip.location, capture::ChipLocation::MISSING);
+            for (const capture::RouterRecord& router : chip.routers) {
+                EXPECT_TRUE(router.reads.empty() && router.liveness.empty()) << router.target.router.path;
+            }
+            continue;
+        }
+        for (const capture::RouterRecord& router : chip.routers) {
+            SCOPED_TRACE(router.target.router.path);
+            const bool is_failing = chip.chip == failing_chip && router.target.reader_core == failing_core;
+            if (!is_failing) {
+                EXPECT_TRUE(std::ranges::none_of(
+                    router.reads, [](const capture::ReadRecord& read) { return read.error.has_value(); }));
+                continue;
+            }
+            // The failed L1 read is the core's last: it has no offset, and no register is read after it.
+            ++num_failed_routers;
+            ASSERT_FALSE(router.reads.empty());
+            const capture::ReadRecord& last = router.reads.back();
+            EXPECT_EQ(last.step, capture::ReadStep::L1);
+            EXPECT_TRUE(last.error.has_value());
+            EXPECT_FALSE(last.bin_offset.has_value());
+            EXPECT_ANY_THROW(loaded.get_read_bytes(last));
+        }
+    }
+    EXPECT_EQ(num_missing_chips, 1u);
+    EXPECT_EQ(num_failed_routers, 1u);
+}
 
 }  // namespace tt::tt_fabric::fabric_router_tests
