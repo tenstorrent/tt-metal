@@ -357,6 +357,11 @@ def test_vadv2_transformer(
     ttnn_model = TtVADPerceptionTransformer(
         params=parameter,
         device=device,
+        bev_h=bev_h,
+        bev_w=bev_w,
+        feat_hw=(12, 20),
+        lidar2img=img_metas[0]["lidar2img"],
+        img_shape=img_metas[0]["img_shape"][0][:2],
         rotate_prev_bev=True,
         use_shift=True,
         use_can_bus=True,

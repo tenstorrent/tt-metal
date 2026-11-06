@@ -62,6 +62,9 @@ class TtVADHead:
         *args,
         params,
         device,
+        feat_hw,
+        lidar2img,
+        img_shape,
         with_box_refine=False,
         as_two_stage=False,
         bbox_coder=None,
@@ -131,6 +134,11 @@ class TtVADHead:
             params=params.head.transformer,
             params_branches=params.head.branches,
             device=device,
+            bev_h=bev_h,
+            bev_w=bev_w,
+            feat_hw=feat_hw,
+            lidar2img=lidar2img,
+            img_shape=img_shape,
             rotate_prev_bev=True,
             use_shift=True,
             use_can_bus=True,
@@ -219,12 +227,11 @@ class TtVADHead:
         self._sap_use_cache = False
         self._sap_sel_cache = None
 
-        # bev_mask / bev_pos depend only on (bs, bev_h, bev_w) which are static.
-        # `ttnn.zeros` does a host->device write of the zero-fill, which is
-        # forbidden inside trace capture; cache the device tensors so the
-        # zeros/embedding chain only runs on the cold pass.
-        self._bev_mask_cache = {}
-        self._bev_pos_cache = {}
+        # The BEV positional encoding depends only on the BEV grid (bs=1).
+        bev_mask = ttnn.zeros((1, self.bev_h, self.bev_w), device=self.device, dtype=ttnn.bfloat16)
+        bev_pos = ttnn.to_layout(self.positional_encoding(bev_mask), layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.bev_pos = ttnn.to_memory_config(bev_pos, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(bev_mask)
 
         # Constant device tensors (zeros/ones/arange) that recur on every warm
         # call with fixed shapes. Materialising them fresh each call does a
@@ -302,17 +309,8 @@ class TtVADHead:
             )
 
         bev_queries = self.bev_embedding.weight
-        bev_key = (bs, self.bev_h, self.bev_w)
-        cached_bev_pos = self._bev_pos_cache.get(bev_key)
-        if cached_bev_pos is None:
-            bev_mask = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device, dtype=ttnn.bfloat16)
-            bev_pos = self.positional_encoding(bev_mask)
-            bev_pos = ttnn.to_layout(bev_pos, layout=ttnn.ROW_MAJOR_LAYOUT)
-            self._bev_mask_cache[bev_key] = bev_mask
-            self._bev_pos_cache[bev_key] = bev_pos
-        else:
-            bev_mask = self._bev_mask_cache[bev_key]
-            bev_pos = cached_bev_pos
+        assert bs == 1, "the BEV positional encoding is built for bs=1"
+        bev_pos = self.bev_pos
 
         if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
             return self.transformer.get_bev_features(
@@ -342,7 +340,6 @@ class TtVADHead:
                 img_metas=img_metas,
                 prev_bev=prev_bev,
             )
-        # bev_mask / bev_pos stay alive in self._bev_*_cache for the next call.
         (
             bev_embed,
             hs,
