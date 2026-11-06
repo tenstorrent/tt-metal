@@ -153,6 +153,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         kv_only: bool = False,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         """
         Build TTNN cache for this block (norms + MLA + FFN/MoE) without device copy.
@@ -181,6 +182,8 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # Build MLA cache
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole()
         ttMLA.build_ttnn_cache(
             state_dict=state_dict.get("mla_weights", {}),
             cache_path=cache_path,
@@ -191,6 +194,7 @@ class TtPrefillBlock(LightweightModule):
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             kv_only=kv_only,
+            use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
         if kv_only:

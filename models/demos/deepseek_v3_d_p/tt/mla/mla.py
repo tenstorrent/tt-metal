@@ -62,6 +62,29 @@ class ttMLA:
         return has_indexer and not getattr(config, "mla_use_nope", False) and thin_head_shard
 
     @staticmethod
+    def merges_qkv_a(config, tp_factor: int, kv_only: bool, has_indexer: bool) -> bool:
+        """True when q_a and kv_a run as one merged projection with a TP all-reduce."""
+        return (
+            bool(getattr(config, "mla_merge_qkv_a", False))
+            and tp_factor > 1
+            and not kv_only
+            and not has_indexer
+            and not getattr(config, "mla_use_output_gate", False)
+        )
+
+    @staticmethod
+    def uses_q_distnorm(config, tp_factor: int, kv_only: bool, has_indexer: bool, use_fused_rmsnorm: bool) -> bool:
+        """True when each chip normalizes its q_a slice with the fused distributed RMSNorm before the TP gather."""
+        rope_scaling = getattr(config, "rope_scaling", None) or {}
+        return (
+            tp_factor > 1
+            and not kv_only
+            and not ttMLA.merges_qkv_a(config, tp_factor, kv_only, has_indexer)
+            and rope_scaling.get("llama_4_scaling_beta") is None
+            and use_fused_rmsnorm
+        )
+
+    @staticmethod
     def check_cache_complete(
         cache_path: Path, cache_name_prefix: str, has_indexer: bool = False, has_output_gate: bool = False
     ) -> bool:
@@ -200,7 +223,8 @@ class ttMLA:
         def _q_a_layernorm_tp(replicated):
             tp_name = _cache_name("q_a_layernorm", "mla_tp")
             tp_file = tp_name and Path(f"{tp_name}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
-            if device is None or has_host_weights or (tp_file and tp_file.exists()):
+            cached = device is None or (tp_file and tp_file.exists())
+            if cached or has_host_weights:
                 return ttnn.as_tensor(
                     q_a_ln.reshape(1, 1, 1, q_lora_rank),
                     device=device,
@@ -208,7 +232,7 @@ class ttMLA:
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=mem,
                     mesh_mapper=mapper_tp3,
-                    cache_file_name=tp_name,
+                    cache_file_name=tp_name if cached else None,
                 )
             local = ttnn.mesh_partition(replicated, dim=2, cluster_axis=tp_axis)
             row = ttnn.reshape(local, (1, 1, 1, q_lora_rank // mesh_device.shape[tp_axis]))
@@ -323,6 +347,7 @@ class ttMLA:
         tp_axis: int = 1,
         kv_only: bool = False,
         has_indexer: bool | None = None,
+        use_fused_rmsnorm: bool = False,
     ):
         """Build TTNN cache for MLA weights using device=None (no device copy). For DSA-sparse
         variants also writes the indexer tensorbins. Fails fast if sparse mode is resolved but the
@@ -339,7 +364,9 @@ class ttMLA:
             device=None,
             kv_only=kv_only,
             replicate_wkv_b1=ttMLA.replicates_wkv_b1(config, mesh_device.shape[tp_axis], resolved_has_indexer),
-            tp_shard_q_a_norm=mesh_device.shape[tp_axis] > 1,
+            tp_shard_q_a_norm=ttMLA.uses_q_distnorm(
+                config, mesh_device.shape[tp_axis], kv_only, resolved_has_indexer, use_fused_rmsnorm
+            ),
         )
         # GLM-5.3 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
         # top-k) -> build the MLA cache only, skip the indexer tensorbins.
@@ -550,13 +577,7 @@ class ttMLA:
         self._kv_stem_gather_output = None
         self._output_gate_gather_output = None
         # q_a and kv_a as one matmul + one all-reduce over [q_a_proj | kv_a_proj_with_mqa | pad].
-        self._merge_qkv_a = (
-            bool(getattr(config, "mla_merge_qkv_a", False))
-            and self.tp_factor > 1
-            and not self.kv_only
-            and not self._has_indexer
-            and not self._use_gate
-        )
+        self._merge_qkv_a = ttMLA.merges_qkv_a(config, self.tp_factor, self.kv_only, self._has_indexer)
         if self._merge_qkv_a:
             qkv_a_width = self.q_lora_rank + self.kv_lora_rank + self.qk_rope_head_dim
             self._qkv_a_pad = -qkv_a_width % (self.tp_factor * ttnn.TILE_SIZE)
@@ -647,13 +668,7 @@ class ttMLA:
         # norms use it (use_fused_rmsnorm). This needs q_a split over TP: TP > 1, a Q path (not kv_only), and q_a
         # apart from kv_a (not _merge_qkv_a). _llama4_beta is Mistral's query temperature (rope_scaling): _q_stem
         # frees the latent after it scales it, and on this path the latent is the persistent gather buffer.
-        self._q_distnorm = (
-            self.tp_factor > 1
-            and not kv_only
-            and not self._merge_qkv_a
-            and self._llama4_beta is None
-            and use_fused_rmsnorm
-        )
+        self._q_distnorm = ttMLA.uses_q_distnorm(config, self.tp_factor, kv_only, self._has_indexer, use_fused_rmsnorm)
 
         # Load weights to TT device. In kv_only mode the returned dict only
         # contains kv_a_layernorm / kv_a_proj_with_mqa; the Q-side / V / wo
