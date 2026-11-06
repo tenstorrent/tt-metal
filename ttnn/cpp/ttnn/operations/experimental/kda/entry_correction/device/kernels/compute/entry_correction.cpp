@@ -30,14 +30,15 @@ TT_KERNEL void compute() {
     DataflowBuffer out(dfb::out);
     DataflowBuffer e(dfb::e);
     DataflowBuffer b(dfb::b);
-    DataflowBuffer seed_row(dfb::seed_row);
+    // The same seeds again, unpacked straight to DST (FP32, exact) for the final state.
+    DataflowBuffer seed_group_exact(dfb::seed_exact);
+    DataflowBuffer seed_tail_exact(dfb::tail_exact);
     DataflowBuffer final_rows(dfb::final_rows);
     const uint32_t terms_id = terms.get_id();
     const uint32_t diff_id = diff.get_id();
     const uint32_t out_id = out.get_id();
     const uint32_t e_id = e.get_id();
     const uint32_t b_id = b.get_id();
-    const uint32_t seed_row_id = seed_row.get_id();
     const uint32_t final_id = final_rows.get_id();
     compute_kernel_hw_startup<SrcOrder::Reverse>(terms_id, seed_group.get_id(), out_id);
 
@@ -92,9 +93,11 @@ TT_KERNEL void compute() {
     }
     if (need_group) {
         seed_group.wait_front(state_tiles);
+        seed_group_exact.wait_front(state_tiles);
     }
     if (need_tail) {
         seed_tail.wait_front(state_tiles);
+        seed_tail_exact.wait_front(state_tiles);
     }
     const uint32_t group_id = seed_group.get_id();
     const uint32_t tail_id = seed_tail.get_id();
@@ -147,11 +150,11 @@ TT_KERNEL void compute() {
             ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
         constexpr uint32_t columns = kda::largest_divisor_at_most(kt, dst_tiles / 2);
         const uint32_t seed = final_tail ? tail_id : group_id;
+        const uint32_t seed_exact = final_tail ? seed_tail_exact.get_id() : seed_group_exact.get_id();
         pack_reconfig_data_format(final_id);
         for (uint32_t row = first_row; row < kt; row += row_stride) {
             e.wait_front(kt);
             b.wait_front(kt);
-            seed_row.wait_front(kt);
             final_rows.reserve_back(kt);
             for (uint32_t first_column = 0; first_column < kt; first_column += columns) {
                 tile_regs_acquire();
@@ -160,10 +163,10 @@ TT_KERNEL void compute() {
                 for (uint32_t c = 0; c < columns; ++c) {
                     copy_tile(b_id, first_column + c, c);
                 }
-                reconfig_data_format_srca(seed_row_id);
-                copy_init(seed_row_id);
+                reconfig_data_format_srca(seed_exact);
+                copy_init(seed_exact);
                 for (uint32_t c = 0; c < columns; ++c) {
-                    copy_tile(seed_row_id, first_column + c, columns + c);
+                    copy_tile(seed_exact, row * kt + first_column + c, columns + c);
                 }
                 add_binary_tile_init();
                 for (uint32_t c = 0; c < columns; ++c) {
@@ -184,13 +187,14 @@ TT_KERNEL void compute() {
             final_rows.push_back(kt);
             e.pop_front(kt);
             b.pop_front(kt);
-            seed_row.pop_front(kt);
         }
     }
     if (need_group) {
         seed_group.pop_front(state_tiles);
+        seed_group_exact.pop_front(state_tiles);
     }
     if (need_tail) {
         seed_tail.pop_front(state_tiles);
+        seed_tail_exact.pop_front(state_tiles);
     }
 }

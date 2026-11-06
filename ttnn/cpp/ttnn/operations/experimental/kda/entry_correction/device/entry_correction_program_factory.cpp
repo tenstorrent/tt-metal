@@ -55,7 +55,8 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     const m2::DFBSpecName out_dfb{"out"};
     const m2::DFBSpecName e_dfb{"e"};
     const m2::DFBSpecName b_dfb{"b"};
-    const m2::DFBSpecName seed_row_dfb{"seed_row"};
+    const m2::DFBSpecName seed_exact_dfb{"seed_exact"};
+    const m2::DFBSpecName tail_exact_dfb{"tail_exact"};
     const m2::DFBSpecName final_dfb{"final_rows"};
     const m2::DFBSpecName ctl_dfb{"ctl"};
     const m2::DFBSpecName ctl_writer_dfb{"ctl_writer"};
@@ -87,15 +88,23 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         return m2::DataflowBufferSpec{
             .unique_id = name, .entry_size = 64, .num_entries = 1, .data_format_metadata = tt::DataFormat::UInt32};
     };
+    // Each seed again as a second DFB on the same storage, which compute unpacks straight to DST (FP32, exact) for
+    // the final state's seed + (E @ seed + B).
+    const auto aliased = [&](const m2::DFBSpecName& name, const m2::DFBSpecName& other) {
+        auto dfb = make_dfb(name, state_tiles, fp32);
+        dfb.advanced_options.alias_with = {other};
+        return dfb;
+    };
     m2::Group<m2::DataflowBufferSpec> dfbs = {
-        make_dfb(seed_dfb, state_tiles, fp32),
-        make_dfb(tail_dfb, state_tiles, fp32),
+        aliased(seed_dfb, seed_exact_dfb),
+        aliased(seed_exact_dfb, seed_dfb),
+        aliased(tail_dfb, tail_exact_dfb),
+        aliased(tail_exact_dfb, tail_dfb),
         std::move(terms_buffer),
         make_dfb(diff_dfb, (streamed ? 2 : per_core) * kt, fp32),
         make_dfb(out_dfb, 2 * kt, tt::DataFormat::Float16_b),
         make_dfb(e_dfb, kt, fp32),
         make_dfb(b_dfb, kt, fp32),
-        make_dfb(seed_row_dfb, kt, fp32),
         make_dfb(final_dfb, 2 * kt, fp32),
         control(ctl_dfb),
         control(ctl_writer_dfb),
@@ -113,7 +122,8 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ProducerOf(terms_dfb, "terms"),
                 m2::ProducerOf(e_dfb, "e"),
                 m2::ProducerOf(b_dfb, "b"),
-                m2::ProducerOf(seed_row_dfb, "seed_row"),
+                m2::ProducerOf(seed_exact_dfb, "seed_exact"),
+                m2::ProducerOf(tail_exact_dfb, "tail_exact"),
                 m2::ProducerOf(ctl_dfb, "ctl"),
                 m2::ProducerOf(ctl_writer_dfb, "ctl_writer"),
             },
@@ -161,9 +171,8 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     for (const auto& name : {seed_dfb, tail_dfb, terms_dfb, diff_dfb, e_dfb}) {
         compute_hw.unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
-    // The final state's B and seed row are only copied into DST, exactly: only E @ seed passes through a source
-    // register.
-    for (const auto& name : {b_dfb, seed_row_dfb}) {
+    // The final state's B and seed are only copied into DST, exactly: only E @ seed passes through a source register.
+    for (const auto& name : {b_dfb, seed_exact_dfb, tail_exact_dfb}) {
         compute_hw.unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToDest;
     }
     m2::KernelSpec compute{
@@ -182,7 +191,8 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ProducerOf(out_dfb, "out"),
                 m2::ConsumerOf(e_dfb, "e"),
                 m2::ConsumerOf(b_dfb, "b"),
-                m2::ConsumerOf(seed_row_dfb, "seed_row"),
+                m2::ConsumerOf(seed_exact_dfb, "seed_exact"),
+                m2::ConsumerOf(tail_exact_dfb, "tail_exact"),
                 m2::ProducerOf(final_dfb, "final_rows"),
                 m2::ConsumerOf(ctl_dfb, "ctl"),
             },
