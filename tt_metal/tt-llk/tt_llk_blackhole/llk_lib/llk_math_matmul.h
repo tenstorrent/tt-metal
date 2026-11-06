@@ -584,6 +584,7 @@ inline constexpr bool matmul_throttle_drives_phases()
 namespace ckernel::math
 {
 // Throttle level of the MOP the last _llk_math_matmul_init_ programmed; 0 when it programmed the unthrottled MOP.
+// Only that init programs the matmul MOP, so an op that reprograms the MOP needs a fresh init before _llk_math_matmul_.
 static std::uint32_t matmul_mop_throttle_level = 0;
 } // namespace ckernel::math
 

@@ -239,8 +239,17 @@ def test_matmul_tiny_tiles_throttled(device, tile_h, tile_w, math_fidelity, thro
     )
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output, 0.999)
-    assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
+    # PCC is blind to a uniform scale (fidelity phases rerun math_fidelity times); the Frobenius bound catches it at
+    # a relative error of 1.0 or more (2x at HiFi2, 4x at HiFi4), against ~0.004 from bf16 rounding.
+    for result in (output, optional_output_tensor):
+        assert_numeric_metrics(
+            torch_output_tensor,
+            result,
+            frobenius_threshold=0.02,
+            pcc_threshold=0.999,
+            check_allclose=False,
+            check_ulp=False,
+        )
 
 
 @pytest.mark.parametrize(
