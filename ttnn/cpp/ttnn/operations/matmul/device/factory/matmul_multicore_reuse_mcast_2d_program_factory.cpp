@@ -589,7 +589,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     if (in1_is_sharded and in1_is_dram) {
         num_dram_banks = device.num_dram_channels();
         if (in1_is_width_sharded) {
-            per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+            // The physical bank width may include reader-alignment padding.
+            const auto physical_shard_width = in1_tensor.shard_spec()->shape[1];
+            TT_FATAL(physical_shard_width % in1_tile.get_width() == 0, "DRAM B shard must contain whole tiles");
+            per_core_N_storage = physical_shard_width / in1_tile.get_width();
         } else {
             // Height sharded: batches are distributed across DRAM banks
             uint32_t in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
