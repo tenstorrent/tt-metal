@@ -115,6 +115,10 @@ class Gemma4Model:
         # All owners and their native views exist before cache allocation/tracing.
         for layer in self.layers:
             layer._prepare_prefill_norm_stats()
+        self.runtime_final_tile = None
+        if os.environ.get("GEMMA_PREFILL_RUNTIME_FINAL_TILE", "0") == "1":
+            from models.demos.gemma4_31b_qb2.tt.runtime_final_tile import RuntimeFinalTile
+            self.runtime_final_tile = RuntimeFinalTile(self.mesh)
         logger.info("Gemma4 model loaded")
 
     def tensor(self, x, *, dim=None, dtype=None, layout=ttnn.TILE_LAYOUT):
@@ -194,7 +198,8 @@ class Gemma4Model:
         return logits
 
     def prefill_device(
-        self, tokens, *, sequence_length, page_tables, kv_cache, all_logits=False, start_pos=0, histories=None
+        self, tokens, *, sequence_length, page_tables, kv_cache, all_logits=False, start_pos=0, histories=None,
+        serial_fill_tables=None
     ):
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
@@ -210,6 +215,9 @@ class Gemma4Model:
                 start_pos=start_pos,
                 history=histories[i] if histories is not None else None,
                 return_history=histories is not None,
+                tail_descriptor=getattr(histories, "normalized_tail_publication", False),
+                fill_tables=(serial_fill_tables[i] if i in serial_fill_tables else serial_fill_tables[layer.kind])
+                            if serial_fill_tables is not None else None,
             )
             if histories is not None:
                 x, histories[i] = x
@@ -217,15 +225,128 @@ class Gemma4Model:
             # An unaligned slice begin untilizes its entire input. Copy
             # the aligned final tile first, then select its logical row.
             tile_start = (sequence_length - 1) // 32 * 32
-            x = x[:, :, tile_start:sequence_length, :]
+            x = (self.runtime_final_tile.select(x, tile_start)
+                 if self.runtime_final_tile is not None else x[:, :, tile_start:sequence_length, :])
             last_row = sequence_length - 1 - tile_start
             x = x[:, :, last_row : last_row + 1, :]
         return self.terminal(x)
 
-    def decode_device(self, tokens, positions, *, page_tables, kv_cache, batch, rope_positions=None):
+    def prefill_batched_device(
+        self,
+        tokens,
+        *,
+        batch,
+        sequence_length,
+        page_tables,
+        kv_cache,
+        logical_lengths=None,
+        start_positions=None,
+        histories=None,
+        retain_histories=None,
+        fill_page_tables=None,
+        batch_indices=None,
+    ):
+        """Run independent padded request rows through shared layer computation."""
+        if len(kv_cache) != len(self.layers):
+            raise ValueError("Expected one cache pair per loaded layer")
+        total = batch * sequence_length
+        lengths = [sequence_length] * batch if logical_lengths is None else list(logical_lengths)
+        starts = [0] * batch if start_positions is None else list(start_positions)
+        retain = [True] * batch if retain_histories is None else list(retain_histories)
+        if (
+            not 2 <= batch <= 32
+            or sequence_length <= 0
+            or sequence_length % 128
+            or total > 8192
+            or len(lengths) != batch
+            or len(starts) != batch
+            or len(retain) != batch
+            or any(
+                not 0 < length <= sequence_length
+                or start < 0
+                or start % 128
+                or start + length > self.layers[0].max_context
+                for start, length in zip(starts, lengths)
+            )
+            or (
+                histories is not None
+                and (len(histories) != batch or any(len(history) != len(self.layers) for history in histories))
+            )
+        ):
+            raise ValueError("Invalid batched prefill request metadata")
+        keep = histories is not None and any(retain)
+        x = self.embed(ttnn.reshape(tokens, [1, total]), sequence_length=total)
+        if sequence_length <= 128:
+            x = self.gather_hidden(x)
+        for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
+            result = layer.prefill_batched(
+                x,
+                batch=batch,
+                page_table=page_tables[i] if i in page_tables else page_tables[layer.kind],
+                kv_cache=cache,
+                start_pos=starts,
+                logical_lengths=lengths,
+                histories=[h[i] for h in histories] if histories is not None else None,
+                return_history=keep,
+                tail_descriptors=[getattr(h, "normalized_tail_publication", False)
+                                  for h in histories]
+                if histories is not None else None,
+                fill_page_table=(fill_page_tables[i] if i in fill_page_tables else fill_page_tables[layer.kind])
+                if fill_page_tables is not None
+                else None,
+                batch_indices=batch_indices,
+            )
+            if keep:
+                x, tails = result
+            else:
+                x, tails = result, [None] * batch
+            if histories is not None:
+                for row in range(batch):
+                    histories[row][i] = tails[row] if retain[row] else None
+                if histories and hasattr(histories[0], "bank"):
+                    del tails, result
+        last = []
+        for row, length in enumerate(lengths):
+            index = row * sequence_length + length - 1
+            tile_start = index // 32 * 32
+            tile = (self.runtime_final_tile.select(x, tile_start)
+                    if self.runtime_final_tile is not None else x[:, :, tile_start : tile_start + 32, :])
+            last.append(tile[:, :, index - tile_start : index - tile_start + 1, :])
+        return self.terminal(ttnn.concat(last, dim=2))
+
+    def decode_device_wide(self, tokens_a, tokens_b, *, halves, page_tables, kv_cache):
+        """64-row verify (decoder.decode_forward_wide): rows 0-31 committed tokens, rows 32-63 drafts of the same
+        slots. The LM head runs per 32-row half so logits use exactly the plain decode ops. Returns two logits
+        tensors [1,1,32,V/4]."""
+        layer0 = self.layers[0]
+        parts = [ttnn.to_memory_config(self.embed(t, batch=32), ttnn.DRAM_MEMORY_CONFIG) for t in (tokens_a, tokens_b)]
+        x = ttnn.to_memory_config(ttnn.concat(parts, dim=2), layer0._mem(5376, 28, rows=64))
+        for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
+            x = layer.decode_forward_wide(
+                x, halves=halves, page_table=page_tables[i] if i in page_tables else page_tables[layer.kind],
+                kv_cache=cache, cyclic_cache=i not in page_tables)
+        flat = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        shape = ttnn.Shape([1, 1, 32, self.config.vocab_size // 4])
+        outs = []
+        for h in range(2):
+            part = ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, 5376])
+            part = ttnn.to_memory_config(part, layer0._mem(5376, 28))
+            outs.append(ttnn.reshape(self.terminal(part), shape, shape))
+        return outs
+
+    def decode_device(
+        self, tokens, positions, *, page_tables, kv_cache, batch, rope_positions=None, update_positions=None
+    ):
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
         x = self.embed(tokens, batch=batch)
+        # RoPE cos/sin rows depend only on the positions and the layer kind: look them up once per step.
+        rope = {}
+        for layer in self.layers:
+            if layer.kind not in rope:
+                rope[layer.kind] = layer.decode_rope_tables(
+                    positions if rope_positions is None else rope_positions, batch
+                )
         for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
             x = layer.decode_forward(
                 x,
@@ -234,6 +355,8 @@ class Gemma4Model:
                 kv_cache=cache,
                 rope_positions=rope_positions,
                 cyclic_cache=i not in page_tables,
+                update_positions=update_positions,
+                rope=rope[layer.kind],
             )
         logits = self.terminal(x)
         # Common samplers own a 32-row tile; inactive padding stays internal.
