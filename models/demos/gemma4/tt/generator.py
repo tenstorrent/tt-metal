@@ -1283,6 +1283,18 @@ class ChunkedPrefillPageTableGuardMixin:
         # The row of the 32-row last-token tile this user's logits land on (the shared loop reads
         # ``(last_token_idx - num_cached_tokens) % 32``); ``_append_prefill_result`` slices it on device.
         self._g4_pf_row = self._g4_prefill_row_record(kwargs.get("last_token_idx"), kwargs.get("num_cached_tokens", 0))
+        # GEMMA4_PREFILL_TAIL_IN_TRACE: the capture and every replay slice the last-token tile at the persistent
+        # bounds, so they take this call's tile before the forward (a pending bucket's compile pass is a real
+        # result too); without a row record (no index) the first tile keeps the capture in range.
+        if int(kwargs.get("batch_size", 1) or 1) == 1:
+            tile_start = (
+                ((self._g4_pf_row[0] - int(kwargs.get("num_cached_tokens", 0) or 0)) // 32) * 32
+                if self._g4_pf_row is not None
+                else 0
+            )
+            for m in self.model:
+                if getattr(m, "_prefill_tail_in_trace", False):
+                    m._write_prefill_tail_bounds(tile_start)
         t0 = time.perf_counter()
         try:
             if force_chunk_pt:

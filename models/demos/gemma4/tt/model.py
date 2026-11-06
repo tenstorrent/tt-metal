@@ -367,6 +367,34 @@ def share_page_tables_default(mesh_device, mesh_config=None, *, bounded_sliding=
     return shape in SHARE_PAGE_TABLES_DEFAULT_SHAPES
 
 
+PREFILL_TAIL_TRACE_ENV = "GEMMA4_PREFILL_TAIL_IN_TRACE"
+# Mesh shapes where the traced prefill tail is the default (measured: see prefill_tail_in_trace_default).
+PREFILL_TAIL_TRACE_DEFAULT_SHAPES = ()
+
+
+def prefill_tail_in_trace_default(mesh_device, mesh_config=None) -> bool:
+    """Whether a single-user prefill capture ends with the last-token tile, the lm_head and the softcap (item 4 of
+    the gemma4_12b_qb2 port) instead of returning the hidden states for an eager tail after every replay. The tile
+    is sliced at persistent device bounds the generator rewrites before the replay (one program per bucket), the
+    logits stay TP-sharded on their chips: the host reads one row per chip and concatenates the vocabulary
+    (``process_output_prefill``), the device sampler takes the shards as it does for decode. The eager tail stays
+    for the batched form, the traced chunk walk and bounded sliding (``_prefill_tail_in_trace_applies``).
+    ``GEMMA4_PREFILL_TAIL_IN_TRACE=1|0`` overrides. Policy when unset: on for the mesh shapes in
+    ``PREFILL_TAIL_TRACE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact; the
+    12B 1x4 QB2 block is the measured basis), off elsewhere. Never on the lane engine or a fractured mesh (the
+    owner-lane readback and the fracture-aware sampler read the gathered tile), whatever the env says.
+    """
+    if mesh_config is not None and (
+        getattr(mesh_config, "lane_sharded", False) or getattr(mesh_config, "weight_fracture", False)
+    ):
+        return False
+    env = os.environ.get(PREFILL_TAIL_TRACE_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    return shape in PREFILL_TAIL_TRACE_DEFAULT_SHAPES
+
+
 class Gemma4Model:
     # Generator-interface flag. PLI models (E2B/E4B) recompute host per-layer
     # inputs from the token every step, so their decode-trace input buffers
@@ -806,6 +834,14 @@ class Gemma4Model:
         self._tt_disable_sampling_trace = not (
             sampling_trace_default(mesh_device, mesh_config) and not self._tt_vllm_always_refresh_decode_trace_inputs
         )
+        # GEMMA4_PREFILL_TAIL_IN_TRACE: the single-user prefill capture ends with the last-token tile, the lm_head and
+        # the softcap (prefill_tail_in_trace_default); the host reads one row of the TP shards per chip, so the
+        # vocabulary must split evenly over the shards (no per-shard padding to concatenate around).
+        _vocab_splits_evenly = tp <= 1 or (
+            hf_config.vocab_size % tp == 0
+            and _compute_per_device_vocab(hf_config.vocab_size, tp) == hf_config.vocab_size // tp
+        )
+        self._prefill_tail_in_trace = prefill_tail_in_trace_default(mesh_device, mesh_config) and _vocab_splits_evenly
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
         if is_mesh and tp > 1:
@@ -1507,10 +1543,15 @@ class Gemma4Model:
         # process_logits_after_prefill_trace). The lm_head over the full padded
         # sequence (262k vocab) dwarfs the entire model body — ~40x the body at
         # 4k tokens — so baking it into the trace makes traced prefill far
-        # SLOWER than non-traced. The last-token slice can't be baked into the
-        # trace (the index varies per prompt), so the whole lm_head is deferred
-        # to host-side post-processing on a 32-row slice of these hidden states.
+        # SLOWER than non-traced. The last-token slice is a literal index per
+        # prompt, so the whole lm_head is deferred to host-side post-processing
+        # on a 32-row slice of these hidden states -- unless the tile is sliced
+        # at persistent device bounds (GEMMA4_PREFILL_TAIL_IN_TRACE): then the
+        # tile, the lm_head and the softcap are part of the capture and the
+        # trace's output is the TP-sharded last-token logits.
         if not is_decode and getattr(self, "_prefill_trace_mode", False):
+            if self._prefill_tail_in_trace_applies(batch_size, chunk_page_table):
+                return self._prefill_tail_sharded(hidden_states)
             return hidden_states
 
         # Speculative decoding: logits and the returned drafter seed both come
@@ -2637,10 +2678,15 @@ class Gemma4Model:
         try:
             if int(tt_out.shape[-2]) == 1:
                 try:
-                    first = ttnn.get_device_tensors(tt_out)[0]
+                    shards = ttnn.get_device_tensors(tt_out)
                 except Exception:  # noqa: BLE001 - a single-shard host tensor
-                    first = tt_out
-                return ttnn.to_torch(first)[..., 0, : self.vocab_size]
+                    shards = [tt_out]
+                if len(shards) > 1 and int(shards[0].shape[-1]) < self.vocab_size:
+                    # One row of the TP-sharded logits per chip (the traced tail keeps the shards on their chips,
+                    # GEMMA4_PREFILL_TAIL_IN_TRACE): the vocabulary is concatenated here, not all-gathered on the
+                    # device.
+                    return torch.cat([ttnn.to_torch(s) for s in shards], dim=-1)[..., 0, : self.vocab_size]
+                return ttnn.to_torch(shards[0])[..., 0, : self.vocab_size]
             if self._lane_sharded:
                 try:
                     shards = ttnn.get_device_tensors(tt_out)
@@ -2652,7 +2698,12 @@ class Gemma4Model:
                     owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
                     torch_output = ttnn.to_torch(shards[self.lane_device_indices()[owner]])
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
-                torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+                shards = ttnn.get_device_tensors(tt_out)
+                if len(shards) > 1 and int(shards[0].shape[-1]) < self.vocab_size:
+                    # the traced tail's TP-sharded tile read back whole (GEMMA4_PREFILL_ROW_READBACK=0)
+                    torch_output = torch.cat([ttnn.to_torch(s) for s in shards], dim=-1)
+                else:
+                    torch_output = ttnn.to_torch(shards[0])
             else:
                 torch_output = ttnn.to_torch(tt_out)
             return torch_output[..., last_token_idx, : self.vocab_size]
@@ -2689,6 +2740,52 @@ class Gemma4Model:
             self._g4_retired_dev_tensors = lst
         lst.append(t)
 
+    def _prefill_tail_in_trace_applies(self, batch_size, chunk_page_table) -> bool:
+        """Whether this prefill capture ends with the last-token tile, the lm_head and the softcap
+        (``prefill_tail_in_trace_default``): the single-user, single-chunk form only. The batched form's consumer
+        reads its own rows of the hidden states, the traced chunk walk's chunks keep the eager tail on the last one,
+        and a bounded-sliding prefill commits its deferred ring fills after the eager lm_head."""
+        return (
+            bool(getattr(self, "_prefill_tail_in_trace", False))
+            and int(batch_size) == 1
+            and chunk_page_table is None
+            and not getattr(self, "bounded_sliding_kv_cache", False)
+        )
+
+    def _write_prefill_tail_bounds(self, tile_start: int, width=None) -> None:
+        """Rewrite the persistent bounds of the last-token tile: rows ``tile_start`` .. +32 of the padded prefill,
+        ``width`` columns (the hidden size). Out of any trace: the capture and every replay read the buffers."""
+        width = int(self.hidden_size if width is None else width)
+        for device_tensor, values in (
+            (self._tail_slice_start, [0, 0, int(tile_start), 0]),
+            (self._tail_slice_end, [1, 1, int(tile_start) + 32, width]),
+        ):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    mesh_mapper=self._replicate_to_mesh_mapper(),
+                ),
+                device_tensor,
+            )
+
+    def _slice_prefill_tail_tile(self, hidden_states):
+        """The 32-row tile of ``hidden_states`` the persistent bounds name (one program for every prompt length of a
+        bucket: the bounds are runtime data)."""
+        return ttnn.slice(
+            input_tensor=hidden_states,
+            starts=self._tail_slice_start,
+            ends=self._tail_slice_end,
+            slice_dim=2,
+            num_devices=int(hidden_states.shape[-2]) // 32,
+        )
+
+    def _prefill_tail_sharded(self, hidden_states):
+        """The traced prefill tail: the last-token tile through the lm_head and the softcap, TP-sharded
+        ``[1, 1, 32, vocab / TP]`` (no vocabulary all-gather: the host concatenates one row per chip, the device
+        sampler consumes the shards)."""
+        sliced = self._slice_prefill_tail_tile(hidden_states)
+        return self._apply_lm_head(sliced, is_decode=False, keep_sharded_for_sampling=True)
+
     def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
         """Deferred lm_head for traced prefill (timed; see :meth:`_process_logits_after_prefill_trace`)."""
         t0 = time.perf_counter()
@@ -2723,27 +2820,15 @@ class Gemma4Model:
         # into the next replay via a batched-only gate (single-user prefill or
         # decode may be the next call).
         self._g4_retire_scavenge()
-        get_last_token = (last_token_idx // 32) * 32
-        for device_tensor, values in (
-            (self._tail_slice_start, [0, 0, get_last_token, 0]),
-            (self._tail_slice_end, [1, 1, get_last_token + 32, int(hidden_states.shape[-1])]),
-        ):
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    torch.tensor(values, dtype=torch.int32),
-                    mesh_mapper=self._replicate_to_mesh_mapper(),
-                ),
-                device_tensor,
-            )
-        sliced = ttnn.slice(
-            input_tensor=hidden_states,
-            starts=self._tail_slice_start,
-            ends=self._tail_slice_end,
-            slice_dim=2,
-            num_devices=int(hidden_states.shape[-2]) // 32,
-        )
-        if batched and hidden_states is not sliced:
-            hidden_states.deallocate(True)
+        if int(hidden_states.shape[-2]) == 32 and int(hidden_states.shape[-1]) != self.hidden_size:
+            # The traced tail's output (GEMMA4_PREFILL_TAIL_IN_TRACE): the last-token tile is already through the
+            # lm_head and the softcap, TP-sharded, and it is the trace's persistent output buffer.
+            sliced = hidden_states
+        else:
+            self._write_prefill_tail_bounds((last_token_idx // 32) * 32, width=int(hidden_states.shape[-1]))
+            sliced = self._slice_prefill_tail_tile(hidden_states)
+            if batched and hidden_states is not sliced:
+                hidden_states.deallocate(True)
         if sliced.shape[-1] == self.hidden_size:
             logits = self._apply_lm_head(sliced, is_decode=False)
             if batched and logits is not sliced:
