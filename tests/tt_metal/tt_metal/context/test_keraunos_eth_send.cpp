@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "dev_mem_map.h"
 #include "env_lib.hpp"
@@ -69,7 +70,7 @@ class Session {
 public:
     Session() {
         mesh_ = distributed::MeshDevice::create_unit_mesh(0);
-        device_ = mesh_->get_device(distributed::MeshCoordinate::zero_coordinate(mesh_->shape().dims()));
+        device_ = &slow_dispatch::physical_device_from_unit_mesh(*mesh_);
         const auto& hal = MetalContext::instance().hal();
         sram_noc_base_ = hal.get_dev_noc_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
         // Above the Ethernet-link slot, which sits inside IDLE_ETH's unreserved region.
