@@ -104,9 +104,9 @@ def test_int32_value_ops(device, ttnn_op):
 
 INT_MIN_WRONG = [ttnn.gtz, ttnn.lez] if is_blackhole() else [ttnn.eqz, ttnn.nez, ttnn.ltz, ttnn.gez]
 INT_MIN_WRONG_REASON = (
-    "int32 gtz and lez read INT32_MIN (0x80000000) as positive"
+    "#58138: int32 gtz and lez read INT32_MIN (0x80000000) as positive"
     if is_blackhole()
-    else "int32 eqz, nez, ltz and gez read INT32_MIN (0x80000000) as zero"
+    else "#60985: int32 eqz, nez, ltz and gez read INT32_MIN (0x80000000) as zero"
 )
 
 

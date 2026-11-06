@@ -134,7 +134,7 @@ def test_clamp_int_bounds(device, min_val, max_val):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="int32 clamp with one int bound defaults the other to ±16775716 instead of the int32 limit",
+    reason="#51498: int32 clamp with one int bound defaults the other to ±16775716 instead of the int32 limit",
 )
 @pytest.mark.parametrize("min_val, max_val", [(5, None), (None, 5)], ids=["min_only", "max_only"])
 def test_clamp_one_int_bound(device, min_val, max_val):
@@ -187,7 +187,7 @@ def test_clamp_clip_float_bounds(device, ttnn_op, min_val, max_val):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="ttnn.clip has only float bounds, so int32 input is clipped in float32 instead of int32",
+    reason="#64582: ttnn.clip has only float bounds, so int32 input is clipped in float32 instead of int32",
 )
 def test_clip_int_bounds(device):
     """clip(x, INT32_MIN, INT32_MAX) on int32 must return x unchanged as int32.
@@ -331,7 +331,7 @@ def test_bitcast_to_uint32(device):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="bitcast int32 -> float32 does not keep the bits: float32 subnormal patterns become 0, NaN "
+    reason="#61975: bitcast int32 -> float32 does not keep the bits: float32 subnormal patterns become 0, NaN "
     "patterns become inf and normal patterns keep only the top 10 mantissa bits",
 )
 def test_bitcast_to_float32(device):
