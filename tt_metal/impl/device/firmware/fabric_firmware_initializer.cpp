@@ -311,8 +311,8 @@ void FabricFirmwareInitializer::init(
         return;
     }
 
-    // Mock: compile and finalize only, to warm the erisc kernel cache and catch a router that overflows its kernel
-    // config buffer, as configure_fabric would on silicon. Everything past that is device I/O that MockChip discards.
+    // Mock: compile only, to warm the erisc kernel cache. Everything past the compile is device
+    // I/O that MockChip discards.
     if (descriptor_->is_mock_device()) {
         const auto fabric_manager = descriptor_->fabric_manager();
         if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
@@ -470,15 +470,17 @@ std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) 
     if (!fabric_program) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+        return fabric_program;
     }
+    // Lay out the kernel config buffer here, on the host, so a router that overflows it fails before configure_fabric
+    // writes to this device, and also on a mock cluster, which never configures.
+    fabric_program->impl().finalize_offsets(dev);
     return fabric_program;
 }
 
 void FabricFirmwareInitializer::configure_fabric(Device* dev, Program& fabric_program) const {
     MetalEnvImpl& env_impl = descriptor_->env_impl();
     tt::tt_fabric::configure_fabric_cores(env_impl, dev);
-
-    fabric_program.impl().finalize_offsets(dev);
 
     const bool using_fast_dispatch = rtoptions_.get_fast_dispatch();
     slow_dispatch::WriteRuntimeArgsToDevice(*dev, fabric_program, /*force_slow_dispatch=*/using_fast_dispatch);
@@ -565,9 +567,6 @@ void FabricFirmwareInitializer::compile_fabric_only() {
     fabric_programs_.resize(devices_.size());
     for (size_t i = 0; i < devices_.size(); ++i) {
         fabric_programs_[i] = compile_fabric(devices_[i]);
-        if (fabric_programs_[i]) {
-            fabric_programs_[i]->impl().finalize_offsets(devices_[i]);
-        }
     }
 }
 
