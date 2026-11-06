@@ -37,7 +37,6 @@ struct TensorParameter {
     TensorParamName unique_id;
 
     // Single-device tensor layout
-    // invariant: For an MX data type, the tensor's tile contains a multiple of 32 elements.
     tt::tt_metal::TensorSpec spec;
 
     ////////////////////////////////////////////////
