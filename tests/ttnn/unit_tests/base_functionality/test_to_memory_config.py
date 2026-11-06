@@ -55,7 +55,7 @@ def test_to_memory_config_uint16(shape, device):
 @pytest.mark.parametrize(
     "input_dtype, output_dtype, make_input",
     [
-        (ttnn.int32, ttnn.uint32, lambda shape: torch.randint(0, 100, shape, dtype=torch.int32)),
+        (ttnn.int32, ttnn.float32, lambda shape: torch.randint(0, 100, shape, dtype=torch.int32)),
         (ttnn.bfloat16, ttnn.float32, lambda shape: torch.randn(shape, dtype=torch.bfloat16)),
     ],
 )
@@ -67,7 +67,7 @@ def test_to_memory_config_same_config_dtype_change(device, input_dtype, output_d
 
     output_tensor = ttnn.to_memory_config(input_tensor, input_tensor.memory_config(), dtype=output_dtype)
     assert output_tensor.dtype == output_dtype
-    assert_equal(torch_input, ttnn.to_torch(output_tensor))
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor).to(torch.float32))
 
 
 def test_to_memory_config_same_config_dtype_unchanged(device):

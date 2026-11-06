@@ -17,6 +17,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/types.hpp"
 
@@ -65,7 +66,21 @@ Tensor to_layout_impl(
             if (ttnn::is_device_tensor(tensor_arg)) {
                 // The tensor is already in the requested layout, so honour the dtype (and any requested
                 // memory config) by typecasting instead of silently dropping them.
-                return ttnn::typecast(tensor_arg, dtype.value(), memory_config);
+                // Typecast requires matching input and output memory layouts, so a different layout is
+                // converted afterwards.
+                const auto current_mem_config = tensor_arg.memory_config();
+                const bool same_memory_layout =
+                    !memory_config.has_value() || memory_config->memory_layout() == current_mem_config.memory_layout();
+                // sub_core_grids is only supported by typecast for TILE inputs.
+                const auto typecast_cores = tensor_arg.layout() == ttnn::TILE_LAYOUT
+                                                ? sub_core_grids
+                                                : std::optional<CoreRangeSet>(std::nullopt);
+                if (same_memory_layout) {
+                    return ttnn::typecast(tensor_arg, dtype.value(), memory_config, std::nullopt, typecast_cores);
+                }
+                auto casted =
+                    ttnn::typecast(tensor_arg, dtype.value(), current_mem_config, std::nullopt, typecast_cores);
+                return ttnn::to_memory_config(casted, memory_config.value());
             }
             // A host tensor does not support a dtype override (see the host path below), so keep the
             // previous behaviour and leave the dtype unchanged.

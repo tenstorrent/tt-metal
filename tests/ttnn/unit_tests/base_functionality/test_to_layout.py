@@ -470,7 +470,7 @@ def test_to_layout_host_same_layout_with_memory_config():
 @pytest.mark.parametrize(
     "input_dtype, output_dtype, make_input",
     [
-        (ttnn.int32, ttnn.uint32, lambda shape: torch.randint(0, 100, shape, dtype=torch.int32)),
+        (ttnn.int32, ttnn.float32, lambda shape: torch.randint(0, 100, shape, dtype=torch.int32)),
         (ttnn.bfloat16, ttnn.float32, lambda shape: torch.randn(shape, dtype=torch.bfloat16)),
     ],
 )
@@ -484,7 +484,61 @@ def test_to_layout_same_layout_dtype_change(device, input_dtype, output_dtype, m
     output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=output_dtype)
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     assert output_tensor.dtype == output_dtype
-    assert_equal(torch_input, ttnn.to_torch(output_tensor))
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor).to(torch.float32))
+
+
+def _same_layout_height_sharded_config(shape):
+    return ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def test_to_layout_same_layout_dtype_change_interleaved_to_sharded(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sharded_config = _same_layout_height_sharded_config(shape)
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=sharded_config)
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_change_sharded_to_interleaved(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_same_layout_height_sharded_config(shape),
+    )
+
+    output_tensor = ttnn.to_layout(
+        input_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_change_sub_core_grids(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0))])
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.float32, sub_core_grids=sub_core_grids)
+    assert output_tensor.dtype == ttnn.float32
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
 
 
 def test_to_layout_same_layout_dtype_unchanged(device):
