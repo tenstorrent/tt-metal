@@ -19,7 +19,7 @@ Device hours below are recorded effort costs, not end-to-end CI build/queue time
 | Effort | Predicted device hours | Used device hours | Change / problem | Confirmed result |
 |---|---:|---:|---|---|
 | local-sandbox-runtime | 0.0000 | 0.0000 | none / solved | success: False; result: Backend unavailable; host-side provisioning required.; resolution: Operator decision8 removes local Docker requirement by authorizingCI; environment remains unchanged, no runtime repair claimed. |
-| gpqa-local-credential | Unknown | Unknown | — / not_run | Operator decision8 authorizes gated dataset on qb2-ci; smoke job42166117505 building. No local credential requested. |
+| gpqa-local-credential | Unknown | Unknown | — / not_run | Official dataset access confirmed by valid CI smoke; local credential provisioning excluded by operator. |
 | agent-capacity-and-contention | Unknown | Unknown | — / not_run | Validity first; no real task timings for ranking speed. |
 | source-only-packaging | 0.0000 | 0.0000 | kept / solved | policy: byte-identical selected policy; generator: complete class AST unchanged; host_checks: 4 packaging checks,7 precision tests,existing host contract passed; boundary: Device-dependent imports stubbed; no native live CI/serving validation |
 | harness-registration | 0.0000 | 0.0000 | kept / open | host_tests_passed: 110; live_validation: False |
@@ -30,10 +30,21 @@ Device hours below are recorded effort costs, not end-to-end CI build/queue time
 | nightly-registration-preparation | 0.0000 | 0.0000 | none / solved | source_patches_prepared: 3; tests_per_candidate: 23; ruff: pass; published: False; dispatch: requires valid smoke first |
 | local-long-context | 0.1500 | 0.2540 | none / solved | success: True; phase_seconds: [140.41494534397498, 443.72461584897246]; max_prompt_tokens: 262136; generated_tokens: 8; concurrency: 2; preemptions: 0; new_trace_captures: 0; quality: not measured; deterministic continuation stress |
 | parser-protocol | 0.1000 | 0.1058 | kept / solved | swe_baseline_http: 400; candidate_http: 200; actual_mini_parser: pass; actual_terminal_parser: pass; exact_generated_token_pairs: [168, 168]; focused_tests: 30; full_host_hooks: pass; ci_score_validity: pending |
-| ci-fabric-topology | 0.2167 | 0.0000 | none / open | Host diagnosis excludes mesh alias error; physical channel deficit observed; recovery pending retry42175367781 |
+| ci-fabric-topology | 0.2167 | 0.0000 | none / open | Host diagnosis excludes mesh alias error; physical channel deficit observed; corrected retry42182632490 is executing on a different runner; topology result pending |
 | native-tool-roundtrip | 0.0028 | 0.0005 | none / solved | HTTP200 and valid parsed submissionaction, no commands executed |
 | ci-cache-routing | 0.0833 | 0.0528 | kept / open | Pinned cache files identical; full60healthy;2x168tokenIDs exact. CIstartup saving still unmeasured. |
-| immutable-harbor-release-source | 0.0000 | 0.0000 | kept / open | Fullhosthooks pass; generic optionalpin locallyintegrated. Modelpin/actualCIcheckout confirmation pending. |
+| immutable-harbor-release-source | 0.0000 | 0.0000 | kept / open | Fullhosthooks pass; generic optionalpin locallyintegrated. Model pin published at8a3c949; live pin-hook confirmation awaits next normal rung. |
+
+| nightly-current-base-preparation | 0 | 0 | none / solved | Frozen SWE5/TB10 patches preserve current parser/cache/pins; host checks passed. |
+| real-history-capacity-preparation | 0 | 0 | none / open | Two single-turn GPQA histories cannot establish multi-turn C8 capacity. |
+| stage12-zero-cost-checker | 0 | 0 | none / open | Seven regression tests pass for prepared repair; installed package remains read-only pending operator decision. |
+| explicit-autoport-dispatch | 0 | 0 | none / open | Host resolver proves explicit implementation fixes selection; corrected CI confirmations pending. |
+| harbor-model-pin-confirmation | 0 | 0 | kept / open |58 focused tests/full hooks;8a3c949 published, live pin hook pending. |
+| gpqa-server-sized-preparation | 0 | 0 | none / solved | Same10 tasks/C8/B8 patch;32 focused tests/full hooks; live admission pending. |
+| nightly-resource-preparation | 0 | 0 | none / solved |15 task definition hashes checked; actual assigned-runner admission still pending. |
+| prefill-under-load | 0.1500 | 0.1528 | none / solved | Six requests complete;84Ki prefill35.41s, decoder maximum delivery gap2.43s; no speedup claimed. |
+
+Missing original prediction fields are retained explicitly in `efforts.json`; current conservative planning credit is not a retroactive forecast. No unmeasured savings are reported as results.
 
 ## Current configuration and measured limits
 
@@ -42,6 +53,8 @@ Full60-layer fresh autoport, HF/tokenizer revision842da3794eaa0b77d5f08bae87a174
 Smoke and current nightly runs use planned_clients2 and the smallest supported batch at or above it,8. Validated batches are1/8/16/32. Prefix caching, chunked prefill and asynchronous scheduling remain enabled. Decode and all-final prefill use the canonical device sampler; mixed/intermediate prefill may use the accepted stock host sampler. GPQA smoke observed5480 device-decode submissions and2 device-prefill submissions, no host sampling; submissions are not emitted-token counts. Exact real-agent working sets and fastest concurrency remain unmeasured. The GPQA saved histories are single-turn and unsuitable for a multi-turn capacity replay.
 
 Local synthetic C2 traffic reached262136prompt+8output tokens without preemptions or new captures. This establishes a physical envelope, not real-agent capacity or long-context accuracy. Host CPU contention reduced synthetic C32 delivery from985.55 to645.03tokens/s; release hours saved by a remedy cannot yet be priced because real tool generation/CPU shares are pending.
+
+Local synthetic prefill interference is measured in `runs/prefill-under-load/RESULT.md`:4K/32K/84Ki probes took1.43/9.52/35.41seconds to first token while an anchor decoded. Longer probes coincided with up to2.43second stream-event gaps. Short sequential baselines and HTTP event coalescing limit attribution; release cost remains unknown until actual task overlap is available.
 
 The unchanged stage11 TTI benchmark matrix completed8/8 requests in27.121seconds after parser registration. Fresh full-model vLLM headline4096input/128output/B1/C1 completed8/8: mean TTFT752.844ms and decode35.304tokens/s/user. These are separate from agent-suite scores. Device time and rooflines are unknown: live vLLM profiling is prohibited, and host-wall phase estimates are not device measurements. Evidence: `runs/parser-tti-benchmark/result.json`.
 

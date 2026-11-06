@@ -1,0 +1,21 @@
+{
+  "arm": "prefill-under-load",
+  "device": "local",
+  "owner": "coordinator",
+  "status": "completed",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_seconds": 540,
+  "box_device_hours": 0.35,
+  "start": "2026-11-06T08:24:11.191302+00:00",
+  "purpose": "Missing prefill-under-load survey measurement; controlled streaming arrival gaps; no score or capacity claim",
+  "measurement_end": "2026-11-06T08:33:21.429436+00:00",
+  "actual_seconds": 550.238134,
+  "client_seconds": 278.58576828590594,
+  "exit_status": 0,
+  "used_device_hours": 0.15284392611111108,
+  "end": "2026-11-06T08:34:27.914089+00:00",
+  "server_exit_status": 0,
+  "measurement_end_basis": "Final result JSON write mtime, immediately after client completed; excludes later idle server"
+}

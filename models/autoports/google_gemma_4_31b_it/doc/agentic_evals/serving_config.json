@@ -87,6 +87,12 @@
       "planned_clients": 2,
       "max_num_seqs": 8,
       "implementation": "gemma4-31b-autoport-v3"
+    },
+    "prefill-under-load": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "regime": "local serving diagnostic; no scored evaluation"
     }
   },
   "release_limits": {

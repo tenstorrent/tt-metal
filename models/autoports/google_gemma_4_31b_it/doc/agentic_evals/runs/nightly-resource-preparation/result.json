@@ -1,0 +1,176 @@
+{
+  "status": "definitions_verified_runtime_admission_pending",
+  "used_device_hours": 0,
+  "speed_saving_hours": 0,
+  "unblocks": [
+    "swe_bench_verified",
+    "terminal_bench_2_1"
+  ],
+  "suites": {
+    "swe_bench_verified": {
+      "catalog_source": "Harbor registry@e76c762fca5267dfb36e1f900f0a7724ed72e735; swebench-verified1.0 task refs@86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "tasks": [
+        {
+          "task_id": "pylint-dev__pylint-7080",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/swebench-task-metadata/datasets/swebench-verified/pylint-dev__pylint-7080/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 4096,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "django__django-11265",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/swebench-task-metadata/datasets/swebench-verified/django__django-11265/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 4096,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "psf__requests-1766",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/swebench-task-metadata/datasets/swebench-verified/psf__requests-1766/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 4096,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "pydata__xarray-4966",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/swebench-task-metadata/datasets/swebench-verified/pydata__xarray-4966/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 4096,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "astropy__astropy-14598",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/swebench-task-metadata/datasets/swebench-verified/astropy__astropy-14598/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 4096,
+          "storage_mib": 10240
+        }
+      ],
+      "planned_clients": 2,
+      "total_storage_mib": 51200,
+      "worst_simultaneous_c2": {
+        "cpus": 2,
+        "memory_mib": 8192,
+        "storage_mib": 20480
+      }
+    },
+    "terminal_bench_2_1": {
+      "catalog_source": "harbor-framework/terminal-bench-2-1@12b7565679ce5006230b820666353673a133db93 task.toml metadata",
+      "tasks": [
+        {
+          "task_id": "terminal-bench/llm-inference-batching-scheduler",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/llm-inference-batching-scheduler/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/mailman",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/mailman/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/db-wal-recovery",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/db-wal-recovery/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/winning-avg-corewars",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/winning-avg-corewars/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/feal-linear-cryptanalysis",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/feal-linear-cryptanalysis/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/fix-code-vulnerability",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/fix-code-vulnerability/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/constraints-scheduling",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/constraints-scheduling/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/sparql-university",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/sparql-university/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/dna-insert",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/dna-insert/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 4096,
+          "storage_mib": 10240
+        },
+        {
+          "task_id": "terminal-bench/video-processing",
+          "source": "/home/mvasiljevic/gemma4-31b-pipeline-v3/terminal-bench-2-1-metadata/tasks/video-processing/task.toml",
+          "definition_hash": "../../setup/task_resources.json",
+          "cpus": 1,
+          "memory_mib": 2048,
+          "storage_mib": 10240
+        }
+      ],
+      "planned_clients": 2,
+      "total_storage_mib": 102400,
+      "worst_simultaneous_c2": {
+        "cpus": 2,
+        "memory_mib": 6144,
+        "storage_mib": 20480
+      }
+    }
+  },
+  "verification": "All15 original task.toml hashes and inventoried environment fields match; Terminal definitions additionally contain empty mcp_servers/env fields. Existing hashes reused, not duplicated.",
+  "task_admission_reserve_gib": null,
+  "runtime_runner_disk_free_bytes": null,
+  "runtime_admitted": null,
+  "historical_disk_reports": [
+    {
+      "source": "bringup/artifacts/stage12-terminal-retry-job.log:2522",
+      "free_gb": 2045,
+      "time_utc": "2026-11-06T07:37:46Z"
+    },
+    {
+      "source": "bringup/artifacts/stage12-swe-live-0814.log:580",
+      "free_gb": 1000,
+      "time_utc": "2026-11-06T07:12:15Z"
+    }
+  ],
+  "comparison": "Historical disk reports exceed50/100GiB cohort storage alone; storage plus admission reserve cannot be established. Report GB label lacks exact bytes/filesystem basis. Historical reports cannot admit future runners.",
+  "missing_reasons": [
+    "No task admission reserve defined in preflight, inputs, or inspected stock Harbor runner. TTI build_docker_images.py DISK_RESERVE_GB20 is build concurrency accounting, not demonstrated task admission reserve.",
+    "Actual selected-runner CPU, RAM, disk, Docker network occupancy and retained image/build overhead remain unknown."
+  ]
+}

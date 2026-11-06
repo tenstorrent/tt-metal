@@ -1,0 +1,5 @@
+# Offline Harbor replay extraction
+
+Goal: prepare faithful request-context reconstruction for installed agent_replay.py from native mini2.2.8 saved trajectories, without changing task execution. Zero device hours. Inspect pinned Harbor e76c762f and mini2.2.8 generic serialization and formatter code. Preserve exact recorded message/tool content privately; compact evidence contains only metadata and digests.
+
+Native mini trajectory is preferable to ATIF conversion, which changes representation. Reconstruct each query from messages preceding a recorded assistant response, using the stock message-preparation method and bash tool schema. Fail closed on other model/agent classes, absent response metadata, count mismatches or unknown request settings. Mark payloads reconstructed at the LiteLLM input boundary: provider transformations, retries and hidden transport defaults cannot be recovered as exact HTTP bodies. Validate determinism and tool/message preservation on a minimal invented schema fixture; do not call it real history evidence. Real-artifact confirmation remains required before replay.

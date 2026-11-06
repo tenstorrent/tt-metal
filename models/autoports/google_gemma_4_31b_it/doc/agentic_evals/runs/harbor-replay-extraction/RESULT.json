@@ -1,0 +1,43 @@
+{
+  "status": "prepared_pending_real_artifact",
+  "used_device_hours": 0,
+  "confirmation": {
+    "fixture": "Invented minimal two-query native mini trajectory; no real task data",
+    "deterministic": true,
+    "tool_calls_and_observations_preserved": true,
+    "extra_removed_by_stock_formatter": true,
+    "transport_credentials_omitted": true,
+    "missing_call_count_rejected": true
+  },
+  "schemas": {
+    "harbor_commit": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+    "mini_version": "v2.2.8",
+    "mini_commit": "58ad92fc1385be3f8f2326b7a42320bb3655e169",
+    "native_file": "agent/mini-swe-agent.trajectory.json (Harbor logs_dir filename)",
+    "converted_file": "agent/trajectory.json ATIF; do not reverse-convert",
+    "sources": [
+      "src/harbor/agents/installed/mini_swe_agent.py:804",
+      "src/minisweagent/agents/default.py:103",
+      "src/minisweagent/agents/default.py:124",
+      "src/minisweagent/models/litellm_model.py:63",
+      "src/minisweagent/models/litellm_model.py:75",
+      "src/minisweagent/models/litellm_model.py:139"
+    ]
+  },
+  "method": "Invoke unmodified stock _prepare_messages_for_api AST with stock helper modules and BASH_TOOL literal from pinned local source; no LiteLLM networking/dependency required. Construct query prefixes before each recorded assistant response.",
+  "payload_status": "Reconstructed LiteLLM input; not exact wire payload. LiteLLM provider normalization/retries/defaults not captured.",
+  "fail_closed": [
+    "Only native mini2.2.8 DefaultAgent/LitellmModel accepted",
+    "Assistant response metadata and exact api_calls count required",
+    "Unknown kwargs/model classes/multimodal preprocessing rejected",
+    "Output path restricted to bringup/artifacts"
+  ],
+  "command": "python extract.py <native-mini-trajectory.json> bringup/artifacts/stage12-real-histories/<suite>/<task_id>.jsonl",
+  "not_yet_confirmed": [
+    "Actual SWE artifact schema and saved config",
+    "Actual distinct multi-turn histories and observed working sets",
+    "Provider wire-body equivalence; unavailable without recorded HTTP requests"
+  ],
+  "terminus_note": "Terminus supports trajectory summarization/continuations (trajectory.cont-N.json and trajectory.summarization-*.json). No extractor offered for ATIF or reconstructed summarized histories; actual request capture/schema needs separate proof.",
+  "next_action": "When SWE collection arrives, apply extractor to native trajectory, verify call count and preserved tool linkage, review compact metadata, then coordinator decides replay admission. Do not clone histories or assert capacity from fixture."
+}

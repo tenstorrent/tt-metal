@@ -1,0 +1,35 @@
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index f12e543..68a967a 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -11954,7 +11954,7 @@ _eval_config_list = [
+                 workflow_venv_type=WorkflowVenvType.EVALS_COMMON,
+                 use_chat_api=True,
+                 thinking=True,
+-                max_concurrent=2,
++                max_concurrent=8,
+                 model_kwargs={
+                     "max_length": 262144,
+                     "timeout": 14400,
+diff --git a/tests/workflows/test_gemma4_autoport_smoke_suites.py b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+index 0a2dd85..8bd5ded 100644
+--- a/tests/workflows/test_gemma4_autoport_smoke_suites.py
++++ b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+@@ -41,7 +41,7 @@ def test_stock_common_route_exact_gpqa_cohort(tmp_path, monkeypatch, mode):
+         model_name="gemma-4-31B-it",
+         hf_model_repo=MODEL,
+         device_model_spec=SimpleNamespace(
+-            max_context=262144, max_concurrency=2, eval_max_retries=0
++            max_context=262144, max_concurrency=8, eval_max_retries=0
+         ),
+     )
+     command = build_eval_command(
+@@ -60,7 +60,7 @@ def test_stock_common_route_exact_gpqa_cohort(tmp_path, monkeypatch, mode):
+     assert "--limit" not in command
+     args = command[command.index("--model_args") + 1]
+     for expected in (
+-        "num_concurrent=2",
++        "num_concurrent=8",
+         "timeout=14400",
+         "max_length=262080",
+         "revision=842da3794eaa0b77d5f08bae87a17459d91ff475",

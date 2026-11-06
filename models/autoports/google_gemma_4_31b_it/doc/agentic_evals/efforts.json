@@ -6,9 +6,14 @@
       "goal": "Restore stock local Harbor runtime prerequisites",
       "plan": "runs/local-runtime-repair/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
-        "basis": "calculated"
+        "basis": "calculated",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact."
       },
       "unblocks": [
         "swe_bench_verified",
@@ -29,16 +34,29 @@
       },
       "used_device_hours": 0,
       "evidence": "runs/local-runtime-repair/result.json; setup/AUTOFIX.md",
-      "confirmation_result": "unavailable backend / problem open; not a model failure"
+      "confirmation_result": "unavailable backend / problem open; not a model failure",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {}
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "gpqa-local-credential",
       "owner": "coordinator",
       "goal": "Valid official gated dataset access on authorized secondary route",
       "predicted": {
-        "saving_hours": {},
-        "device_hours": null,
-        "basis": "guess"
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "guess",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
+        "device_cost_reason": "Current planning estimate only; .25h short replay box, or0 for operator-excluded local credential provisioning."
       },
       "unblocks": [
         "r1_gpqa_diamond"
@@ -46,19 +64,49 @@
       "status": "not_run",
       "reason": "Operator keeps local credential unavailable; valid GPQA smoke on authorized CI resolves dataset access for this stage. No local credential effort needed.",
       "problem_status": "solved",
-      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json"
+      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {},
+          "device_hours": null
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      },
+      "confirm": {
+        "method": "Official gated dataset loads on authorized CI",
+        "success": "Valid scored GPQA smoke using exact frozen document IDs"
+      }
     },
     {
       "problem": "agent-capacity-and-contention",
       "owner": "coordinator",
       "goal": "Choose agents/batch that finishes release fastest",
       "predicted": {
-        "saving_hours": {},
-        "device_hours": null,
-        "basis": "guess"
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0.25,
+        "basis": "guess",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
+        "device_cost_reason": "Current planning estimate only; .25h short replay box, or0 for operator-excluded local credential provisioning."
       },
       "status": "not_run",
-      "reason": "Validity first; no real task timings for ranking speed."
+      "reason": "Validity first; no real task timings for ranking speed.",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {},
+          "device_hours": null
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      },
+      "confirm": {
+        "method": "Distinct real histories replayed with pool counters and measured per-user call time, then normal rung",
+        "success": "Choose concurrency fitting pool/host and reduce projected release time without changed outputs"
+      }
     },
     {
       "problem": "source-only-packaging",
@@ -175,9 +223,14 @@
         "terminal_bench_2_1"
       ],
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
-        "basis": "calculated"
+        "basis": "calculated",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact."
       },
       "confirm": {
         "method": "Source-backed route and host command resolution; identify limitations without generic changes",
@@ -193,7 +246,14 @@
         "eval_route": "Stock per-suite CI workflows omit spec tests",
         "remaining": "CI exact early-stop dry-run control/artifact retention not exposed; no route change made"
       },
-      "evidence": "runs/ci-release-route/RESULT.md"
+      "evidence": "runs/ci-release-route/RESULT.md",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {}
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "local-serving-check",
@@ -206,9 +266,14 @@
         "terminal_bench_2_1"
       ],
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.2,
-        "basis": "guess"
+        "basis": "guess",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact."
       },
       "confirm": {
         "method": "Exact autoport registration/full60, successful requests, cache and capture metrics; no real-agent capacity claim",
@@ -228,7 +293,14 @@
         "client_wall_seconds": 76.469,
         "real_agent_capacity": "not yet measured"
       },
-      "evidence": "runs/local-serving-check/RESULT.md"
+      "evidence": "runs/local-serving-check/RESULT.md",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {}
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "local-host-contention",
@@ -236,9 +308,14 @@
       "goal": "Confirm published full60 runtime at B32 and quantify CPU contention in current16CPU environment; synthetic only",
       "plan": "runs/local-host-contention/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.1,
-        "basis": "guess"
+        "basis": "guess",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact."
       },
       "confirm": {
         "method": "Two32-client waves, idle and16busyprocesses; complete outputs and valid active_rows32 CPUwindow",
@@ -259,7 +336,14 @@
         "busy_tokens_per_second": 645.0344483642087,
         "host_metric": "process CPU/step, not wall/device time"
       },
-      "evidence": "runs/local-host-contention/RESULT.md"
+      "evidence": "runs/local-host-contention/RESULT.md",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {}
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "nightly-registration-preparation",
@@ -267,9 +351,14 @@
       "goal": "Immediate next-rung dispatch after valid smoke using exact frozen nightly lists",
       "plan": "runs/nightly-preparation/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
-        "basis": "calculated"
+        "basis": "calculated",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact."
       },
       "unblocks": [
         "r1_gpqa_diamond",
@@ -292,7 +381,14 @@
         "published": false,
         "dispatch": "requires valid smoke first"
       },
-      "evidence": "runs/nightly-preparation/RESULT.md"
+      "evidence": "runs/nightly-preparation/RESULT.md",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {}
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "local-long-context",
@@ -300,9 +396,14 @@
       "goal": "Verify synthetic smoke2 cache reuse/pool admission through131072 tokens per history",
       "plan": "runs/local-long-context/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.15,
-        "basis": "guess"
+        "basis": "guess",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact."
       },
       "unblocks": [
         "r1_gpqa_diamond"
@@ -329,7 +430,14 @@
         "new_trace_captures": 0,
         "quality": "not measured; deterministic continuation stress"
       },
-      "evidence": "runs/local-long-context/RESULT.md"
+      "evidence": "runs/local-long-context/RESULT.md",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {}
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "parser-protocol",
@@ -337,9 +445,14 @@
       "goal": "Establish whether dispatched suite protocols require parser flags absent inmodelentry",
       "plan": "runs/parser-protocol/plan.md",
       "predicted": {
-        "saving_hours": {},
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.1,
-        "basis": "guess"
+        "basis": "guess",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact."
       },
       "unblocks": [
         "swe_bench_verified",
@@ -368,7 +481,14 @@
         "full_host_hooks": "pass",
         "ci_score_validity": "pending"
       },
-      "evidence": "runs/parser-protocol/RESULT.md; runs/parser-protocol/AUTOFIX.md"
+      "evidence": "runs/parser-protocol/RESULT.md; runs/parser-protocol/AUTOFIX.md",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": {}
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "ci-fabric-topology",
@@ -376,9 +496,15 @@
       "goal": "Identify supported recovery for premodel fabric mapping failure",
       "plan": "runs/ci-topology/plan.md",
       "predicted": {
-        "saving_hours": null,
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.2167,
-        "basis": "measured failed devicejob; successful evaluation runtime unknown"
+        "basis": "measured",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
+        "basis_detail": "measured failed devicejob; successful evaluation runtime unknown"
       },
       "unblocks": [
         "terminal_bench_2_1"
@@ -393,7 +519,15 @@
       "change": "none",
       "problem_status": "open",
       "confirmed": "Host diagnosis excludes mesh alias error; physical channel deficit observed; recovery pending retry42175367781",
-      "evidence": "runs/ci-topology/result.json"
+      "evidence": "runs/ci-topology/result.json",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": null,
+          "basis": "measured failed devicejob; successful evaluation runtime unknown"
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "native-tool-roundtrip",
@@ -401,9 +535,14 @@
       "goal": "Accept actualmini tool-result secondturn",
       "plan": "runs/native-tool-roundtrip/plan.md",
       "predicted": {
-        "saving_hours": null,
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.002777777777777778,
-        "basis": "guess"
+        "basis": "guess",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact."
       },
       "unblocks": [
         "swe_bench_verified"
@@ -418,7 +557,14 @@
       "change": "none",
       "problem_status": "solved",
       "confirmed": "HTTP200 and valid parsed submissionaction, no commands executed",
-      "evidence": "runs/native-tool-roundtrip/result.json"
+      "evidence": "runs/native-tool-roundtrip/result.json",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": null
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "ci-cache-routing",
@@ -426,9 +572,15 @@
       "goal": "Route model cache lookups through existing mounted files without changing outputs",
       "plan": "runs/ci-startup-analysis/local-confirmation.md",
       "predicted": {
-        "saving_hours": null,
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0.08333333333333333,
-        "basis": "guess; CI saving unmeasured"
+        "basis": "guess",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
+        "basis_detail": "guess; CI saving unmeasured"
       },
       "confirm": {
         "method": "Same inode for pinned shards; fullB8server with both cache aliases; two exact168-token comparisons",
@@ -441,7 +593,15 @@
       "change": "kept",
       "problem_status": "open",
       "confirmed": "Pinned cache files identical; full60healthy;2x168tokenIDs exact. CIstartup saving still unmeasured.",
-      "evidence": "runs/ci-startup-analysis/paired-audit.json"
+      "evidence": "runs/ci-startup-analysis/paired-audit.json",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": null,
+          "basis": "guess; CI saving unmeasured"
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "immutable-harbor-release-source",
@@ -449,9 +609,15 @@
       "goal": "Freeze exact clientharness source for dry/release without changing default runner",
       "plan": "runs/release-dependency-pins/plan.md",
       "predicted": {
-        "saving_hours": null,
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
-        "basis": "calculated host-only sourcefix"
+        "basis": "calculated",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
+        "basis_detail": "calculated host-only sourcefix"
       },
       "unblocks": [
         "swe_bench_verified",
@@ -468,7 +634,15 @@
       "used_device_hours": 0,
       "change": "kept",
       "problem_status": "open",
-      "confirmed": "Fullhosthooks pass; generic optionalpin locallyintegrated. Modelpin/actualCIcheckout confirmation pending."
+      "confirmed": "Fullhosthooks pass; generic optionalpin locallyintegrated. Modelpin/actualCIcheckout confirmation pending.",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": null,
+          "basis": "calculated host-only sourcefix"
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "nightly-current-base-preparation",
@@ -476,9 +650,15 @@
       "goal": "Prepare exact next nightly tool lists on current best without delaying valid-smoke advancement",
       "plan": "runs/nightly-refreshed-preparation/plan.md",
       "predicted": {
-        "saving_hours": null,
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
-        "basis": "calculated host-only preparation"
+        "basis": "calculated",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
+        "basis_detail": "calculated host-only preparation"
       },
       "unblocks": [
         "swe_bench_verified",
@@ -494,7 +674,15 @@
       "change": "none",
       "problem_status": "solved",
       "confirmed": "Each independent candidate passed10 host tests on eac7465; no publication edits or dispatch",
-      "evidence": "runs/nightly-refreshed-preparation/result.json"
+      "evidence": "runs/nightly-refreshed-preparation/result.json",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": null,
+          "basis": "calculated host-only preparation"
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "real-history-capacity-preparation",
@@ -502,9 +690,15 @@
       "goal": "Choose a meaningful recorded-history capacity check before spending device time",
       "plan": "runs/real-history-capacity/plan.md",
       "predicted": {
-        "saving_hours": null,
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
         "device_hours": 0,
-        "basis": "calculated host-only preparation"
+        "basis": "calculated",
+        "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
+        "basis_detail": "calculated host-only preparation"
       },
       "unblocks": [],
       "confirm": {
@@ -517,7 +711,15 @@
       "change": "none",
       "problem_status": "open",
       "confirmed": "GPQA each single-turn; reconstructed counts differ from API, so no meaningful multi-turn replay. Tool history extraction requirements prepared; capacity remains open",
-      "evidence": "runs/real-history-capacity/RESULT.json"
+      "evidence": "runs/real-history-capacity/RESULT.json",
+      "prediction_reconciliation": {
+        "at": "2026-11-06T08:19:21.396893+00:00",
+        "original_unavailable_fields": {
+          "saving_hours": null,
+          "basis": "calculated host-only preparation"
+        },
+        "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
+      }
     },
     {
       "problem": "stage12-zero-cost-checker",
@@ -608,6 +810,128 @@
       "problem_status": "open",
       "confirmed": "58focusedtests andfullhooks passed; source-only dedicatedbranch publication8a3c949. Livepin verification remains fornextnormalrung.",
       "evidence": "runs/harbor-model-pin/RESULT.md"
+    },
+    {
+      "problem": "gpqa-server-sized-preparation",
+      "owner": "suite_registration",
+      "goal": "Prepare exact nested10-task C8/B8 candidate pending actual nightly validity and pool admission",
+      "plan": "runs/gpqa-server-sized-preparation/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond"
+      ],
+      "confirm": {
+        "method": "Stock resolver and focused host tests on isolated8a3-based candidate",
+        "success": "Exact10 frozenIDs,C8/B8,unchanged limits and runtime registration"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "live_admission": "Not authorized by preparation; coordinator must validate nightly histories first",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "host_tests": 32,
+        "full_hooks": "pass",
+        "prepared_only": true,
+        "live_admission": "pending actual nightly and measured capacity"
+      },
+      "evidence": "runs/gpqa-server-sized-preparation/RESULT.md"
+    },
+    {
+      "problem": "nightly-resource-preparation",
+      "owner": "harness_registration",
+      "goal": "Exact task-defined resource demands for frozen nightly cohorts before dispatch",
+      "plan": "runs/nightly-resource-preparation/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Pinned task definitions and stock defaults; hashes and C2/total demand calculations",
+        "success": "Exact cohort resource inventory without overrides; runner free-space gap explicit"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "definition_hashes_checked": 15,
+        "swe_storage_gib": 50,
+        "terminal_storage_gib": 100,
+        "runner_admission": "Unknown until assigned runner reports free space; no extra admission hook"
+      },
+      "evidence": "runs/nightly-resource-preparation/result.json"
+    },
+    {
+      "problem": "prefill-under-load",
+      "owner": "local_serving_check",
+      "goal": "Measure streaming decode interference during prefills at observed tool context lengths",
+      "plan": "runs/prefill-under-load/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0.15,
+        "basis": "guess",
+        "reason": "Measurement only; no release speed credit before actual generation share. Startup plus four bounded diagnostic arms."
+      },
+      "confirm": {
+        "method": "Controlled solo streaming baseline and simultaneous long-prefill C2 arms on full60/B8, host timestamps only",
+        "success": "Completed requests and measured token-gap/pre-fill windows at4K/32K/84K; no capacity or quality claim"
+      },
+      "box_hours": 0.35,
+      "status": "done",
+      "used_device_hours": 0.15284392611111108,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "completed_requests": 6,
+        "client_seconds": 278.58576828590594,
+        "longest_prompt_tokens": 86016,
+        "longest_prefill_host_seconds": 35.41071608196944,
+        "max_stream_gap_ms": 2427.0438690437004,
+        "release_hours_saved": "not measured; no optimization change"
+      },
+      "evidence": "runs/prefill-under-load/RESULT.md"
+    },
+    {
+      "problem": "long-prefill-decode-interference",
+      "owner": "coordinator",
+      "goal": "Assess whether reducing observed prefill-induced gaps improves release completion time",
+      "predicted": {
+        "saving_hours": {
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0.25,
+        "basis": "guess",
+        "reason": "No numerical benefit credited until task overlap and generation share measured; .25h trial budget estimate"
+      },
+      "confirm": {
+        "method": "Actual task timing projection plus controlled paired serving check if a candidate is selected",
+        "success": "Measured reduction in projected release hours with paired exactness or required scored pair"
+      },
+      "status": "not_run",
+      "reason": "Observed diagnostic stalls only; real overlap, return lengths and release projection pending. No scheduler change justified yet.",
+      "evidence": "runs/prefill-under-load/RESULT.md"
     }
   ],
   "rankings": [
@@ -1436,6 +1760,201 @@
         }
       ],
       "reason": "Validity still first; live pinconfirmation rides next normalrung, noextraevaljob or rungdelay. All measuredspeed claims unchanged."
+    },
+    {
+      "after": "gpqa-server-sized-candidate-prepared",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "nightly-resource-preparation",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "unblocks": [],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "ci-cache-routing",
+          "unblocks": [],
+          "saving_hours": 0,
+          "device_hours": 0.08333333333333333
+        }
+      ],
+      "basis": "Current planning guesses; zero speed credit until measured release projection. Live validity confirmation rides normal rungs. Device costs are planned effort costs, not retrospective measured use.",
+      "reason": "Validity precedes speed. Active rungs continue; zero-cost host prerequisites do not delay them. No claimed speed savings yet."
+    },
+    {
+      "after": "nightly-resources-confirmed-prefill-survey-planned",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "prefill-under-load",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        },
+        {
+          "problem": "ci-cache-routing",
+          "saving_hours": 0,
+          "device_hours": 0.08333333333333333
+        }
+      ],
+      "basis": "guess; zero unconfirmed speed credit",
+      "reason": "CI validity rungs already active. Spare local device measures previously missing prefill interference while real histories are unavailable; no rung delayed."
+    },
+    {
+      "after": "nightly-resource-definition-confirmation",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "prefill-under-load",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "ci-cache-routing",
+          "saving_hours": 0,
+          "device_hours": 0.08333333333333333
+        }
+      ],
+      "basis": "guess for unmeasured future costs; no speed credit yet",
+      "reason": "Task resource definition preparation is complete. Actual runner admission will be read from normal rung evidence; no additional wrapper. Local prefill effort already running is not interrupted."
+    },
+    {
+      "after": "prefill-under-load-measured",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "ci-cache-routing",
+          "saving_hours": 0,
+          "device_hours": 0.08333333333333333
+        }
+      ],
+      "basis": "guess; no credited release savings without measured agent overlap",
+      "reason": "Measured long-prefill stalls become a speed candidate; validity rungs continue first. Capacity replay still waits for real distinct histories."
     }
-  ]
+  ],
+  "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."
 }

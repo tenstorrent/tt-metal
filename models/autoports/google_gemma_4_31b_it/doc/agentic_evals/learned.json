@@ -79,6 +79,11 @@
     {
       "fact": "Manual dispatch impl-of-model defaults to default, resolving stock tt-transformers. Always pass explicit gemma4-31b-autoport-v3 and verify emitted runtime model ID/class; pinned source SHAs alone do not select implementation.",
       "evidence": "runs/ci-implementation-selection/result.json; Terminal42175367781 failed stock import beforetasks; saved GPQAnightly command also omittedimpl"
+    },
+    {
+      "fact": "Long prefills can materially stall client-visible decode delivery even with chunked prefill and async scheduling enabled. Isolated decode rate alone does not project agent completion.",
+      "measurement": "Synthetic C2/B8:84Ki prefill35.41s and maximum decoder event gap2.43s; no device-time claim, short sequential baselines.",
+      "evidence": "runs/prefill-under-load/RESULT.md"
     }
   ],
   "suite_timings": [

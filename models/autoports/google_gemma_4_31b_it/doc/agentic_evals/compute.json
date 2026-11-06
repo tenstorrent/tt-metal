@@ -253,6 +253,27 @@
           "used_device_hours": 0.05277675944444444,
           "actual_seconds": 189.996334,
           "confirmation": "Same pinnedfiles,livecacheenv aliases,2x168tokenIDs identical,healthyfull60; noCIstartupgain claimed"
+        },
+        {
+          "arm": "prefill-under-load",
+          "device": "local",
+          "owner": "coordinator",
+          "status": "completed",
+          "planned_clients": 2,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "predicted_seconds": 540,
+          "box_device_hours": 0.35,
+          "start": "2026-11-06T08:24:11.191302+00:00",
+          "purpose": "Missing prefill-under-load survey measurement; controlled streaming arrival gaps; no score or capacity claim",
+          "measurement_end": "2026-11-06T08:33:21.429436+00:00",
+          "actual_seconds": 550.238134,
+          "client_seconds": 278.58576828590594,
+          "exit_status": 0,
+          "used_device_hours": 0.15284392611111108,
+          "end": "2026-11-06T08:34:27.914089+00:00",
+          "server_exit_status": 0,
+          "measurement_end_basis": "Final result JSON write mtime, immediately after client completed; excludes later idle server"
         }
       ]
     },
@@ -416,7 +437,7 @@
           "reason": "Native-tool registration repaired: baselineHTTP400,candidate200actualminiparser;paired2x168tokenIDs exact;hosthooks pass",
           "submitted_at": "2026-11-06T06:18:22Z",
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42173587147",
-          "last_observed_at": "2026-11-06T07:47:00.893618+00:00",
+          "last_observed_at": "2026-11-06T08:35:43.867727+00:00",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-pf57w",
@@ -541,7 +562,7 @@
           "arm": "smoke2-terminal-explicit-autoport",
           "device": "qb2-ci",
           "owner": "coordinator",
-          "status": "building_or_queued",
+          "status": "device_job_in_progress",
           "eval": "terminal_bench_2_1",
           "tasks": 2,
           "planned_clients": 2,
@@ -565,10 +586,15 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42182632490",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T07:46:25.836043+00:00",
+          "last_observed_at": "2026-11-06T08:35:04.138290+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-rg2d9",
           "build_started_at": "2026-11-06T07:42:41Z",
-          "build_completed_at": null
+          "build_completed_at": "2026-11-06T08:34:19Z",
+          "runner": "120-qb2-p05t01",
+          "device_job_id": 127794890089,
+          "device_job_started_at": "2026-11-06T08:34:21Z",
+          "device_job_completed_at": null,
+          "start": "2026-11-06T08:34:21Z"
         },
         {
           "arm": "nightly-gpqa-explicit-autoport",
@@ -598,7 +624,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42182664252",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T07:46:25.839462+00:00",
+          "last_observed_at": "2026-11-06T08:35:04.106397+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-7c7mw",
           "build_started_at": "2026-11-06T07:42:59Z",
           "build_completed_at": null

@@ -111,8 +111,26 @@
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "prefill_under_load": {
-      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "value": {
+        "prompt_tokens": [
+          4096,
+          32768,
+          86016
+        ],
+        "first_token_host_seconds": [
+          1.4261628499953076,
+          9.517013245029375,
+          35.41071608196944
+        ],
+        "during_prefill_max_stream_gap_ms": [
+          81.66198001708835,
+          1343.8602610258386,
+          2427.0438690437004
+        ]
+      },
+      "healthy": false,
+      "reason": "Long-prefill windows coincide with decoder delivery stalls; synthetic C2/B8 sequential observation, not isolated causal effect or device time. Release cost pending real overlap.",
+      "evidence": "runs/prefill-under-load/RESULT.md"
     },
     "host_contention": {
       "evidence": "../agentic_serving.json serving.host_contention",
@@ -196,7 +214,13 @@
       "hours": 0,
       "reason": "GPQA smoke observed no host-sampled steps; zero observed cost for this rung only. Tool-suite/release mixed-prefill frequency pending.",
       "evidence": "runs/gpqa-workload/RESULT.json"
+    },
+    {
+      "problem": "long-prefill-decode-interference",
+      "hours": null,
+      "reason": "Observed synthetic86K prefill35.4s with2.43smax decoder deliverygap; actual task overlap and release counts not yet measured.",
+      "evidence": "runs/prefill-under-load/RESULT.md"
     }
   ],
-  "last_updated": "2026-11-06T07:19:19.897569+00:00"
+  "last_updated": "2026-11-06T08:35:46.657708+00:00"
 }
