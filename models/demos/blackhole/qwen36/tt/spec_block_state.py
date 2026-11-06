@@ -1016,20 +1016,35 @@ class SpecGdnBlockState:
             self.book.forget_block(b)
         return True
 
-    def capture_write_trace(self):
-        """QWEN36_MAMBA_WRITE_TRACE: capture the prefill block write (_WriteTrace) on the bound scratch. Call after every
-        other trace is captured (MTPSpecEngine.capture_decode), so no buffer allocated later can sit where the replay
-        writes its intermediates. A failed capture leaves the eager write in charge."""
+    def _prepare_block_traces(self):
+        """QWEN36_MAMBA_WRITE_TRACE / QWEN36_MAMBA_COPY_TRACE: allocate the traces' control tensors in the eager warmup,
+        before any trace exists. A buffer allocated after a trace's capture can sit where that trace's replay writes
+        its intermediates (seen: verify replays overwrote copy-trace controls allocated at capture time). The traces
+        are captured last (capture_write_trace, capture_copy_traces)."""
         from loguru import logger
 
-        from models.demos.blackhole.qwen36.tt.tp_common import mamba_write_trace_enabled
+        from models.demos.blackhole.qwen36.tt.tp_common import mamba_copy_trace_enabled, mamba_write_trace_enabled
 
-        if getattr(self, "_write_trace", None) is not None or not mamba_write_trace_enabled():
+        try:
+            if mamba_write_trace_enabled() and getattr(self, "_wt_pending", None) is None:
+                self._wt_pending = _WriteTrace(self)
+            if mamba_copy_trace_enabled() and getattr(self, "_ct_pending", None) is None:
+                self._ct_pending = _CopyTraces(self)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[mamba_spec] block trace buffers not allocated ({e!r}): eager block operations")
+
+    def capture_write_trace(self):
+        """QWEN36_MAMBA_WRITE_TRACE: capture the prefill block write (_WriteTrace, its tables allocated in warmup) on the
+        bound scratch. Call after every other trace is captured (MTPSpecEngine.capture_decode). A failed capture
+        leaves the eager write in charge."""
+        from loguru import logger
+
+        wt = getattr(self, "_wt_pending", None)
+        if getattr(self, "_write_trace", None) is not None or wt is None:
             return
         model = self.model
         prev = model._bind_gdn_prefill_scratch()
         try:
-            wt = _WriteTrace(self)
             wt.capture()
             self._write_trace = wt
             logger.info(f"[mamba_spec] prefill block write trace captured ({len(self.layers)} GDN layers)")
@@ -1039,17 +1054,15 @@ class SpecGdnBlockState:
             model._unbind_gdn_prefill_scratch(prev)
 
     def capture_copy_traces(self):
-        """QWEN36_MAMBA_COPY_TRACE: capture the block copy, page copy and conv write traces (_CopyTraces). Call after
-        every other trace is captured (MTPSpecEngine.capture_decode). A failed capture leaves the eager ops in charge.
-        """
+        """QWEN36_MAMBA_COPY_TRACE: capture the block copy, page copy, conv write and restore traces (_CopyTraces, its
+        controls allocated in warmup). Call after every other trace is captured (MTPSpecEngine.capture_decode). A
+        failed capture leaves the eager ops in charge."""
         from loguru import logger
 
-        from models.demos.blackhole.qwen36.tt.tp_common import mamba_copy_trace_enabled
-
-        if getattr(self, "_copy_traces", None) is not None or not mamba_copy_trace_enabled():
+        ct = getattr(self, "_ct_pending", None)
+        if getattr(self, "_copy_traces", None) is not None or ct is None:
             return
         try:
-            ct = _CopyTraces(self)
             ct.capture()
             prev = self.model._bind_gdn_prefill_scratch()
             try:
@@ -1096,6 +1109,7 @@ class SpecGdnBlockState:
         ttnn.deallocate(pt)
         zero_kv_blocks(model, [0])
         self._zero_now([0])
+        self._prepare_block_traces()
 
     # ---------------------------------------------------------------- block hooks
     def copy_blocks(self, copies):
