@@ -10,6 +10,8 @@ Stages, each loading only the weights it needs:
   refiner  context_embedder + token refiner on the text rows      -> text_refined
   block0   transformer block 0 on the dumped packed input          -> h_block0
   full     all 50 blocks + heads                                   -> h_block_last, video_out, audio_out
+
+Each output is checked against the dump (PCC_MIN, RTOL, ATOL_FRAC); any FAIL makes the script fail.
 """
 
 from __future__ import annotations
@@ -37,7 +39,13 @@ from ttml.models.minimax_h3 import (
     upload,
 )
 
+from compare import Checks
+
 log = logging.getLogger("minimax_h3.check")
+
+# bf16 device vs the GPU dump
+PCC_MIN, RTOL, ATOL_FRAC = 0.99, 0.1, 0.05
+checks = Checks()
 
 MODEL_REVISION = "42ed227ee7df40d41602854ae760620d6eb651fe"
 DEFAULT_WEIGHTS = (
@@ -72,13 +80,14 @@ def report(name: str, got: np.ndarray, ref: np.ndarray) -> None:
     else:
         rows = ""
     log.info(
-        "%s: pcc %.6f | rel L2 %.4f | max|d| %.3g (ref max %.3g)%s",
+        "%s: pcc %.6f | rel L2 %.4f | max|d| %.3g (ref max %.3g)%s | %s",
         name,
         pcc,
         rel,
         np.abs(got - ref).max(),
         np.abs(ref).max(),
         rows,
+        checks(name, got, ref, pcc=PCC_MIN, rtol=RTOL, atol_frac=ATOL_FRAC),
     )
 
 
@@ -175,6 +184,7 @@ def main(argv=None) -> int:
         log.info("forward %.1f s", time.perf_counter() - t0)
     finally:
         ttml.close_device_mesh()
+    checks.assert_all()
     return 0
 
 

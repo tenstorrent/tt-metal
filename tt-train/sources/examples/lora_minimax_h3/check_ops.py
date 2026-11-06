@@ -6,7 +6,7 @@
 
     python check_ops.py
 
-Each case prints the ratio |grad_tt| / |grad_ref| and the pcc; a wrong scale shows as a ratio far from 1."""
+Each case prints the ratio |grad_tt| / |grad_ref|, the pcc and PASS/FAIL; any FAIL makes the script fail."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ import ttml
 
 from ttml.models.minimax_h3.transformer import Split, const
 from ttml.models.qwen3 import Qwen3RMSNorm
+
+from compare import Checks
 
 S, D, C = 64, 128, 96  # rows, hidden, out channels
 EPS = 1e-5
@@ -45,12 +47,15 @@ def bf16(a: np.ndarray) -> np.ndarray:
     return a.astype(ml_dtypes.bfloat16).astype(np.float32)
 
 
+checks = Checks()
+
+
 def report(name: str, got: np.ndarray, ref: np.ndarray) -> None:
-    got, ref = got.reshape(-1).astype(np.float64), ref.reshape(-1).astype(np.float64)
-    ratio = np.linalg.norm(got) / (np.linalg.norm(ref) + 1e-30)
-    pcc = np.corrcoef(got, ref)[0, 1] if ref.std() > 0 else float("nan")
-    flag = "" if 0.9 < ratio < 1.1 else "   <-- SCALE"
-    print(f"{name:34s} |tt|/|ref| {ratio:8.4f}   pcc {pcc:.5f}{flag}")
+    g, r = got.reshape(-1).astype(np.float64), ref.reshape(-1).astype(np.float64)
+    ratio = np.linalg.norm(g) / (np.linalg.norm(r) + 1e-30)
+    pcc = np.corrcoef(g, r)[0, 1] if g.size == r.size and r.std() > 0 and g.std() > 0 else float("nan")
+    status = checks(name, g, r)
+    print(f"{name:34s} |tt|/|ref| {ratio:8.4f}   pcc {pcc:.5f}   {status}")
 
 
 def rmsnorm_backward(x, w, g, eps):
@@ -169,6 +174,7 @@ def main() -> int:
     ctx.reset_graph()
 
     close()
+    checks.assert_all()
     return 0
 
 

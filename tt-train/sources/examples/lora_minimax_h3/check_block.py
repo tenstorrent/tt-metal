@@ -8,7 +8,7 @@
 
 The numpy forward reimplements each module with the device's own (bf16) weights; its full gradient comes from
 per-element central differences in fp64, so the reference carries no bf16 noise. The device gradient is
-compared elementwise: |tt|/|ref| and pcc."""
+compared elementwise: |tt|/|ref|, pcc and PASS/FAIL; any FAIL makes the script fail."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ import ttml
 
 from ttml.models.minimax_h3.packing import attention_mask, rope_tables, rope_trans_mat, selection_matrix
 from ttml.models.minimax_h3.transformer import H3Attention, H3Block, H3Config, H3FeedForward, upload
+
+from compare import Checks
 
 S, D, H, HD, F, TE = 32, 128, 2, 64, 128, 64
 VALID = 24
@@ -122,6 +124,9 @@ def fd_gradient(f, x, g_weight):
     return grad
 
 
+checks = Checks()
+
+
 def check(name, dev_fn, np_fn, x_np, rng, ctx):
     out_shape = dev_fn(tensor(x_np)).shape()
     g_np = bf16(rng.standard_normal(out_shape, dtype=np.float32))
@@ -133,8 +138,8 @@ def check(name, dev_fn, np_fn, x_np, rng, ctx):
     ref = fd_gradient(np_fn, x_np[0, 0], g_np[0, 0].astype(np.float64) * g_np.size)
     ratio = np.linalg.norm(got) / np.linalg.norm(ref)
     pcc = np.corrcoef(got.ravel(), ref.ravel())[0, 1]
-    flag = "" if abs(ratio - 1) < 0.1 and pcc > 0.98 else "   <-- MISMATCH"
-    print(f"{name:28s} |tt|/|ref| {ratio:7.4f}   pcc {pcc:.5f}{flag}", flush=True)
+    status = checks(name, got, ref, pcc=0.98, rtol=0.1, atol_frac=0.05)
+    print(f"{name:28s} |tt|/|ref| {ratio:7.4f}   pcc {pcc:.5f}   {status}", flush=True)
 
 
 def main() -> int:
@@ -214,6 +219,7 @@ def main() -> int:
 
     check("block", lambda x: block(x, mods, mask, params), np_block, x_np, rng, ctx)
     close()
+    checks.assert_all()
     return 0
 
 

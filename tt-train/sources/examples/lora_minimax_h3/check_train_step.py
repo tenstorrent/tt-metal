@@ -8,7 +8,7 @@
         --train-dump /localdev/bmijanovic/parity/train_step --mesh 1,8
 
 Loads the GPU's initial adapter (gaussian A, zero B), computes the masked MSE at the dumped (x_t, noise, t) and
-compares loss, global grad norm and the per-tensor grad norms of block 0.
+compares loss, global grad norm and the per-tensor grad norms of block 0; any FAIL makes the script fail.
 """
 
 from __future__ import annotations
@@ -34,9 +34,14 @@ from ttml.models.minimax_h3 import (
     upload,
 )
 from check_transformer import DEFAULT_WEIGHTS, open_mesh
+from compare import Checks
 from lora_utils import gather, grad_norms, inject, load_adapter, lora_params, masked_mse, to_diffusers_key
 
 log = logging.getLogger("minimax_h3.check_train")
+
+# bf16 device vs the GPU dump
+LOSS_RTOL, GRAD_RTOL, PCC_MIN = 0.02, 0.1, 0.99
+checks = Checks()
 
 
 def main(argv=None) -> int:
@@ -112,22 +117,37 @@ def main(argv=None) -> int:
         log.info("forward+backward %.1f s", time.perf_counter() - t0)
         total, per = grad_norms(lora)
         log.info(
-            "loss %.5f (gpu %.5f, rel %.3f) | grad_norm %.5f (gpu %.5f, rel %.3f)",
+            "loss %.5f (gpu %.5f, rel %.3f) %s | grad_norm %.5f (gpu %.5f, rel %.3f) %s",
             loss_value,
             summary["loss"],
             loss_value / summary["loss"] - 1,
+            checks("loss", [loss_value], [summary["loss"]], rtol=LOSS_RTOL, atol_frac=0.0),
             total,
             summary["grad_norm"],
             total / summary["grad_norm"] - 1,
+            checks("grad_norm", [total], [summary["grad_norm"]], rtol=GRAD_RTOL, atol_frac=0.0),
         )
         gpu = summary["per_tensor_grad_norm"]
+        got_norms, ref_norms = [], []
         for name, value in per.items():
             if ".blocks.0." in f".{name}" or name.startswith("blocks.0."):
                 key = to_diffusers_key(name).replace(".weight", ".default.weight")
                 ref = gpu.get(key)
                 log.info("  %-28s tt %.5f gpu %s", name, value, f"{ref:.5f}" if ref is not None else "missing " + key)
+                checks.expect(f"gpu norm for {name}", ref is not None, key)
+                if ref is not None:
+                    got_norms.append(value)
+                    ref_norms.append(ref)
+        log.info(
+            "block 0 per-tensor grad norms: %s",
+            checks("block 0 grad norms", got_norms, ref_norms, pcc=PCC_MIN, rtol=GRAD_RTOL, atol_frac=0.0),
+        )
         zero_a = sum(1 for k, v in per.items() if k.endswith("lora_A") and v > 0)
-        log.info("lora_A tensors with non-zero grad: %d (expected 0 while B = 0)", zero_a)
+        log.info(
+            "lora_A tensors with non-zero grad: %d (expected 0 while B = 0) %s",
+            zero_a,
+            checks.expect("lora_A grads zero", zero_a == 0),
+        )
         if args.save_grads:
             Path(args.save_grads).write_text(
                 json.dumps(
@@ -144,6 +164,7 @@ def main(argv=None) -> int:
             log.info("per-tensor norms -> %s", args.save_grads)
     finally:
         ttml.close_device_mesh()
+    checks.assert_all()
     return 0
 
 
