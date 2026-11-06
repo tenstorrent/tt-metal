@@ -38,7 +38,12 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params, torus_y_device_params
+from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload, model_l1_small_with_block
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -85,6 +90,32 @@ class DeepSeekV41FlashConfig:
             shared_expert_activation=act,
         )
         return dims, "clamped_silu"
+
+
+class MiniMaxM3BlockConfig(MiniMaxM3Config):
+    """MiniMax-M3's MoE as the block runs it (M3.1 has the same MoE: they differ in attention and checkpoint format
+    only): 128 experts, top-4 of sigmoid scores + correction bias, renormalized x 2.0, no groups; the routed experts and
+    the one shared expert (I 3072) clamped swigluoai (alpha 1.702, limit 7 - the kernels' fixed values)."""
+
+    SWIGLU_ALPHA = 1.702
+    SWIGLU_LIMIT = 7.0
+
+    @staticmethod
+    def moe_block_dims():
+        mb = ttnn.experimental.moe_block
+        K = MiniMaxM3BlockConfig
+        act = mb.ExpertActivation(kind=mb.ExpertActivationKind.SwigluOai, limit=K.SWIGLU_LIMIT, alpha=K.SWIGLU_ALPHA)
+        dims = mb.MoEModelDims(
+            num_experts=K.NUM_ROUTED_EXPERTS,
+            top_k=K.NUM_EXPERTS_PER_TOKEN,
+            emb_dim=K.EMB_SIZE,
+            routed_expert_hidden_dim=K.MOE_INTERMEDIATE_SIZE,
+            routed_expert_activation=act,
+            router=mb.RouterSpec(score_func=mb.RouterScoreFunc.Sigmoid, route_scale=K.ROUTE_SCALE),
+            shared_expert_hidden_dim=K.SHARED_INTERMEDIATE_SIZE,
+            shared_expert_activation=act,
+        )
+        return dims, "swigluoai"
 
 
 def _bf16_experts(n, hidden, inter, g):
@@ -214,6 +245,42 @@ def _dsv41_reference(x, sd):
     return acc + glu(x @ shared["gate_proj"].float().T, x @ shared["up_proj"].float().T) @ shared["down_proj"].float().T
 
 
+def _m3_weights(chips):
+    """128 distinct experts (bf16 ~14 GB on the host, less than GLM-5.3's 256)."""
+    K = MiniMaxM3BlockConfig
+    g = torch.Generator().manual_seed(13)
+    gate = _bf16_gate(K.NUM_ROUTED_EXPERTS, K.EMB_SIZE, g)
+    routed = _bf16_experts(K.NUM_ROUTED_EXPERTS, K.EMB_SIZE, K.MOE_INTERMEDIATE_SIZE, g)
+    shared = _bf16_experts(1, K.EMB_SIZE, K.SHARED_INTERMEDIATE_SIZE, g)[0]
+    return {"gate_weights": gate, "routed_expert_weights": routed, "shared_expert_weights": shared}
+
+
+def _m3_reference(x, sd):
+    """MiniMax-M3's MoE in fp32 (minimax_m3/reference/model.py's sparse MoE): scores sigmoid(logits), top-4 of scores +
+    bias, the scores renormalized x 2.0; experts down(swiglu_oai(gate, up)), swiglu_oai(g, u) = (clamp(u, +-7) + 1) *
+    g' sigmoid(1.702 g'), g' = min(g, 7); plus the shared expert the same."""
+    K = MiniMaxM3BlockConfig
+    a, L = K.SWIGLU_ALPHA, K.SWIGLU_LIMIT
+
+    def glu(g, u):
+        g = g.clamp(max=L)
+        return (u.clamp(-L, L) + 1.0) * g * torch.sigmoid(a * g)
+
+    gate, routed, shared = sd["gate_weights"], sd["routed_expert_weights"], sd["shared_expert_weights"]
+    x = x.float()
+    scores = torch.sigmoid(x @ gate["weight"].float().T)
+    ids = (scores + gate["e_score_correction_bias"].float()).topk(K.NUM_EXPERTS_PER_TOKEN, dim=-1).indices
+    w = scores.gather(-1, ids)
+    w = w / w.sum(-1, keepdim=True) * K.ROUTE_SCALE
+    acc = torch.zeros_like(x)
+    for e in torch.unique(ids).tolist():
+        tok, kk = (ids == e).nonzero(as_tuple=True)
+        r = routed[e]
+        h = glu(x[tok] @ r["gate_proj"].float().T, x[tok] @ r["up_proj"].float().T)
+        acc.index_add_(0, tok, (h @ r["down_proj"].float().T) * w[tok, kk].unsqueeze(1))
+    return acc + glu(x @ shared["gate_proj"].float().T, x @ shared["up_proj"].float().T) @ shared["down_proj"].float().T
+
+
 BARRIER_L1_SMALL = 4096  # (test_moe_block_perf's barrier: L1_SMALL a bank for its all-gathers)
 
 
@@ -246,6 +313,7 @@ MODELS = {
     "glm53": BlockModel("glm53", GLM53Config, _glm_weights, _glm_reference, pcc=0.982, layer=6, x_scale=0.5),
     "kimi_k3": BlockModel("kimi_k3", KimiK3Config, _k3_weights, _k3_reference, pcc=0.965, weka=True),
     "dsv41_flash": BlockModel("dsv41_flash", DeepSeekV41FlashConfig, _dsv41_weights, _dsv41_reference, pcc=0.98),
+    "minimax_m3": BlockModel("minimax_m3", MiniMaxM3BlockConfig, _m3_weights, _m3_reference, pcc=0.98, layer=3),
 }
 
 
@@ -254,6 +322,10 @@ MESHES = {  # id -> (mesh shape, device params maker, requires_mesh_topology's t
     "8x4": ((8, 4), torus_xy_device_params, "mesh-8x4"),
     "4x4-y": ((4, 4), torus_y_device_params, "mesh-4x4"),  # (SP ring, TP line)
     "4x4-xy": ((4, 4), torus_xy_device_params, "mesh-4x4"),  # (both rings)
+    # MiniMax-M3's production stage: one tray, SP 2 x TP 4, plain Fabric2D - no wrap on either axis (run with
+    # TT_MESH_GRAPH_DESC_PATH = experimental_descriptors/single_bh_galaxy_sub_2x4_graph_descriptor.textproto and
+    # TT_VISIBLE_DEVICES = one tray's 8 chips, e.g. 0-7)
+    "2x4": ((2, 4), fabric2d_device_params, "mesh-2x4"),
 }
 
 
@@ -270,12 +342,44 @@ class BlockCase:
     perf_us: dict = field(default_factory=dict)  # op -> expected traced device us (slowest chip); empty: report only
     perf_margin: float = 0.05
     calls: int = 10
+    # a padded chunk (actual_start, actual_end): main's chunked-prefill metadata - the chunk's real tokens, in main's
+    # rotated layout over the SP rows (chunk_layout.rotated_chunk_positions); None: every row real
+    pad: Optional[tuple] = None
+    packing: str = ""  # (the id's label of the production packing the chunk stands for)
 
     @property
     def id(self) -> str:
         w = "" if self.weights == "random" else f"-weka-L{self.layer}"
-        return f"{self.model}-{self.mesh}-{self.chunk}{w}"
+        p = f"-{self.packing}" if self.packing else ""
+        pad = f"-real{self.pad[1] - self.pad[0]}@{self.pad[0]}" if self.pad else ""
+        return f"{self.model}-{self.mesh}-{self.chunk}{w}{p}{pad}"
 
+
+# MiniMax-M3 / M3.1 in production: the 16-stage pipeline (4 Galaxies) / 4-stage intra-Galaxy pipeline, every stage a
+# [2, 4] tray (SP 2 x TP 4, Fabric2D, no wrap). The packings its runner runs (models/demos/minimax_m3:
+# scripts/prefill_matrix, tt/runners/manifests):
+# - one 5120-token chunk a forward (every binding and the perf matrix: PREFILL_CHUNK_SIZE 5120), full;
+# - 5120 with the last chunk partial: the perf matrix's new-token sizes 640 / 1600 / 3072 (p25 / p50 / p75) and
+#   6900's (p90) second chunk 1780, after a chunk-aligned cached prefix (61440, its p25);
+# - a multi-turn resume mid-chunk (any 32-token boundary: PREFILL_PRODUCER_MULTI_TURN_PROB) - the chunk starts mid-slab,
+#   its tokens rotated over the SP rows: full and partial;
+# - four 1024-token chunks packed in one 4096-token forward (manifests/*_packed_*: PREFILL_FORWARD_TOKENS_BUDGET 4096),
+#   all real (each SP row holds every chunk's 512 rows back to back - for the MoE one 4096-token chunk). A packed forward
+#   with a partial chunk is not expressible: the block takes one padded range a call;
+# - 2048-token chunks (the perf matrix's smallest CHUNK).
+M3_PREFIX = 61440
+M3_RESUME = M3_PREFIX + 1600  # (a resume after the p50 request: mid-slab, 32-aligned)
+M3_PRODUCTION = [
+    BlockCase("minimax_m3", "2x4", 5120, packing="c5120"),
+    *(
+        BlockCase("minimax_m3", "2x4", 5120, packing="c5120", pad=(M3_PREFIX, M3_PREFIX + n))
+        for n in (640, 1600, 3072, 1780)
+    ),
+    BlockCase("minimax_m3", "2x4", 5120, packing="c5120-resume", pad=(M3_RESUME, M3_RESUME + 5120)),
+    BlockCase("minimax_m3", "2x4", 5120, packing="c5120-resume", pad=(M3_RESUME, M3_RESUME + 1780)),
+    BlockCase("minimax_m3", "2x4", 4096, packing="4xc1024"),
+    BlockCase("minimax_m3", "2x4", 2048, packing="c2048"),
+]
 
 CASES = [
     BlockCase("glm53", "8x4", 5120),
@@ -291,6 +395,7 @@ CASES = [
     BlockCase("kimi_k3", "4x4-y", 2560),
     BlockCase("kimi_k3", "8x4", 5120, weights="weka", layer=1),
     BlockCase("dsv41_flash", "8x4", 5120),
+    *M3_PRODUCTION,
 ]
 
 
@@ -333,6 +438,28 @@ class _Run:
     x_tt: object
     want: Optional[torch.Tensor]  # [S, H] fp32: the reference or the golden output
     pcc: float
+    pad_words: Optional[tuple] = None  # (a padded chunk: the block's actual_start / actual_end device words)
+
+    def __call__(self):
+        """One block call on the case's input (a padded chunk with its metadata words: traceable)."""
+        if self.pad_words is None:
+            return self.ffn(self.x_tt)
+        block = self.ffn._block(int(self.x_tt.shape[-2]) * tuple(self.ffn.mesh.shape)[0])
+        return block(self.x_tt, self.ffn._weights(block), actual_start=self.pad_words[0], actual_end=self.pad_words[1])
+
+
+def _real_rows(case: BlockCase, R: int) -> torch.Tensor:
+    """[S] bool: the case's real rows in the host x's order (SP row r's rows r S/R ..: a prefix of each, as main's
+    rotated layout puts them)."""
+    from models.demos.common.prefill.chunk_layout import rotated_chunk_real_counts
+
+    local = case.chunk // R
+    real = torch.ones(case.chunk, dtype=torch.bool)
+    if case.pad is not None:
+        start, end = case.pad
+        for r, n in enumerate(rotated_chunk_real_counts(start, end - start, R, local)):
+            real[r * local + n : (r + 1) * local] = False
+    return real
 
 
 def _setup(case: BlockCase, mesh_device, combine_snap: Optional[float] = None) -> _Run:
@@ -378,7 +505,12 @@ def _setup(case: BlockCase, mesh_device, combine_snap: Optional[float] = None) -
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3)),
     )
     ffn._test_x = x
-    return _Run(ffn, x_tt, want, pcc)
+    run = _Run(ffn, x_tt, want, pcc)
+    if case.pad is not None:
+        assert case.weights == "random", "padded cases: random weights only"
+        block = ffn._block(case.chunk)
+        run.pad_words = block.chunk_scalars(*case.pad)  # (written now, before any trace: replays read them)
+    return run
 
 
 def _to_host(y_tt, mesh_device, chunk, H):
@@ -395,10 +527,15 @@ def test_moe_block_accuracy(case, mesh_device, device_params):
     m = MODELS[case.model]
     run = _setup(case, mesh_device)
     H = m.cfg.EMB_SIZE
-    y = _to_host(run.ffn(run.x_tt), mesh_device, case.chunk, H)
-    want = run.want if run.want is not None else m.reference(run.ffn._test_x, run.ffn._test_sd)
-    ok, msg = comp_pcc(want.reshape(-1, H), y, run.pcc)
-    logger.info(f"ACCURACY {case.id}: {msg} (floor {run.pcc})")
+    y = _to_host(run(), mesh_device, case.chunk, H)
+    # (a padded chunk: its real rows against the reference; the padding rows carry the shared expert's output only and
+    # are discarded by the model - finite is all they need be)
+    real = _real_rows(case, tuple(mesh_device.shape)[0])
+    assert torch.isfinite(y).all(), f"{case.id}: non-finite outputs"
+    x = run.ffn._test_x if run.want is None else None
+    want = run.want[real] if run.want is not None else m.reference(x[real], run.ffn._test_sd)
+    ok, msg = comp_pcc(want.reshape(-1, H), y[real], run.pcc)
+    logger.info(f"ACCURACY {case.id}: {msg} over {int(real.sum())} real rows (floor {run.pcc})")
     assert ok, f"{case.id}: the block vs the reference: {msg} (need {run.pcc})"
 
 
@@ -409,14 +546,14 @@ def test_moe_block_determinism(case, mesh_device, device_params):
     # (with the combine's snap: every routed term rounded to a multiple of q, so its fp32 sums do not depend on the order
     # the rows land in - without it they do, and runs differ in the last bits)
     run = _setup(case, mesh_device, combine_snap=COMBINE_SNAP)
-    ttnn.deallocate(run.ffn(run.x_tt))  # (weights, programs)
+    ttnn.deallocate(run())  # (weights, programs)
     det = DeterminismMarker(mesh_device)
     for _ in range(case.calls):
-        y = run.ffn(run.x_tt)
+        y = run()
         det.add({"y": y})
         ttnn.deallocate(y)
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    y_tr = run.ffn(run.x_tt)
+    y_tr = run()
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     for _ in range(case.calls):
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
@@ -439,11 +576,11 @@ def _spread(t):
 @pytest.mark.timeout(1800)
 def test_moe_block_perf(case, mesh_device, device_params):
     run = _setup(case, mesh_device)
-    ttnn.deallocate(run.ffn(run.x_tt))  # (weights, programs)
+    ttnn.deallocate(run())  # (weights, programs)
 
     def eager():
         for _ in range(case.calls):
-            ttnn.deallocate(run.ffn(run.x_tt))
+            ttnn.deallocate(run())
 
     # (eager, logged only: a chip's program that starts late on host dispatch shows the wait as device time)
     te = op_device_times(mesh_device, eager)
@@ -460,7 +597,7 @@ def test_moe_block_perf(case, mesh_device, device_params):
     ttnn.synchronize_device(mesh_device)
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     sync()
-    run.ffn(run.x_tt)
+    run()
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)  # (a warm replay)
     t = traced_op_device_times(mesh_device, tid, case.calls)

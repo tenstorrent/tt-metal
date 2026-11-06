@@ -61,6 +61,11 @@ CASES = [
     Case("dsv41_flash", "8x4", 5120),
     Case("glm53", "4x4-y", 5120),
     Case("kimi_k3", "4x4-y", 2560),
+    # MiniMax-M3 / M3.1's production stage (one [2, 4] tray, Fabric2D, no wrap: test_moe_block_models.M3_PRODUCTION):
+    # one 5120-token chunk a forward, four 1024-token chunks packed in a 4096-token forward, 2048-token chunks
+    Case("minimax_m3", "2x4", 5120),
+    Case("minimax_m3", "2x4", 4096),
+    Case("minimax_m3", "2x4", 2048),
 ]
 
 
