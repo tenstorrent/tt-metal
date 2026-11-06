@@ -36,7 +36,7 @@ void unpack_dest_bank_init(const FormatConfig& formats, std::uint32_t num_faces,
     }
     else
     {
-        _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, FACE_R_DIM, false /* narrow_tile */, num_faces);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, FACE_R_DIM, false /* narrow_tile */, num_faces);
     }
 }
 
@@ -67,7 +67,7 @@ void unpack_dest_bank_tiles(
                     L1_ADDRESS(buffer_A[read_offset]),
                     column,
                     formats.unpack_A_src,
-                    0 /* unpack_dst_format */,
+                    formats.unpack_A_dst,
                     block_ct_dim,
                     FACE_R_DIM,
                     num_faces,
