@@ -949,6 +949,7 @@ class TtMoe(LightweightModule):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
+        assert residual is None or not return_intermediates, "residual is not supported with return_intermediates"
         # Preserve profiler region labels without duplicating them through Python logging.
         ttnn.tracy_message("`TT_SIGNPOST: MoE_START`")
         if DEBUG_LOGGING_ENABLED:
@@ -1148,7 +1149,6 @@ class TtMoe(LightweightModule):
         shared_output = self.shared_expert(x)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
-        assert residual is None or not return_intermediates, "residual is not supported with return_intermediates"
         fold_residual = residual is not None
         if fold_residual:
             shared_rs_output = shared_output
