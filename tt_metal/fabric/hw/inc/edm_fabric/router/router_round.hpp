@@ -135,15 +135,17 @@ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_atte
     return false;
 }
 
-// Router commands (master only): PAUSE parks the router until RUN, running DRAIN and RETRAIN when asked.
-void run_drain(tt_l1_ptr RouterStateManager* state) {
+// Router commands (master only): PAUSE parks the router until RUN, running DRAIN and RETRAIN when asked. DRAIN and
+// RETRAIN wait for the host's next command through a volatile pointer: their loops call nothing, so a plain load would
+// be read once before the loop.
+void run_drain(volatile tt_l1_ptr RouterStateManager* state) {
     state->state = RouterState::DRAINING;
     ASSERT(false);  // not implemented
     while (state->command == RouterCommand::DRAIN && !terminating()) {
     }
 }
 
-void run_retrain(tt_l1_ptr RouterStateManager* state) {
+void run_retrain(volatile tt_l1_ptr RouterStateManager* state) {
     state->state = RouterState::RETRAINING;
     run_routing_without_noc_sync();
     while (state->command == RouterCommand::RETRAIN && !terminating()) {
