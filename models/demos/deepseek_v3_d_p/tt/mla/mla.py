@@ -92,6 +92,7 @@ class ttMLA:
         device: ttnn.MeshDevice | None = None,
         kv_only: bool = False,
         replicate_wkv_b1: bool = False,
+        tp_shard_q_a_norm: bool = False,
     ) -> dict | None:
         """
         Shared logic for converting MLA weights to ttnn with caching.
@@ -107,6 +108,7 @@ class ttMLA:
             device: None for cache-only (build cache), mesh_device for load to device
             replicate_wkv_b1: every head's wkv_b1 on every chip (see replicates_wkv_b1), cached as
                 ``layer_{i}.mla_repl.wkv_b1``. A cache build writes it beside the TP-sharded file.
+            tp_shard_q_a_norm: add each chip's TP slice of q_a_layernorm, cached as ``layer_{i}.mla_tp.q_a_layernorm``.
 
         Returns:
             Dict of ttnn.Tensor if device is not None, else None
@@ -156,8 +158,12 @@ class ttMLA:
         shard_dims_tp1[tp_axis] = 1
         shard_dims_tp1[sp_axis] = None
         mapper_tp1 = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims_tp1)
+        shard_dims_tp3 = [None, None]
+        shard_dims_tp3[tp_axis] = 3
+        mapper_tp3 = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims_tp3)
 
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
+        has_host_weights = bool(state_dict) and "q_a_layernorm.weight" in state_dict
 
         def _wkv_b1_as(mapper, name):
             return ttnn.as_tensor(
@@ -177,7 +183,6 @@ class ttMLA:
             repl_file = repl_name and Path(
                 f"{repl_name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
             )
-            has_host_weights = bool(state_dict) and "q_a_layernorm.weight" in state_dict
             if device is None or has_host_weights or (repl_file and repl_file.exists()):
                 if device is None:
                     # A cache build keeps the TP-sharded file too: check_cache_complete looks for it.
@@ -189,6 +194,23 @@ class ttMLA:
             full = ttnn.all_gather(shard, dim=1, cluster_axis=tp_axis, memory_config=mem)
             ttnn.deallocate(shard)
             return full
+
+        def _q_a_layernorm_tp(replicated):
+            tp_name = _cache_name("q_a_layernorm", "mla_tp")
+            tp_file = tp_name and Path(f"{tp_name}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
+            if device is None or has_host_weights or (tp_file and tp_file.exists()):
+                return ttnn.as_tensor(
+                    q_a_ln.reshape(1, 1, 1, q_lora_rank),
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=mem,
+                    mesh_mapper=mapper_tp3,
+                    cache_file_name=tp_name,
+                )
+            local = ttnn.mesh_partition(replicated, dim=2, cluster_axis=tp_axis)
+            row = ttnn.reshape(local, (1, 1, 1, q_lora_rank // mesh_device.shape[tp_axis]))
+            return ttnn.to_layout(row, ttnn.TILE_LAYOUT)
 
         # KV-branch weights (always loaded). The kv-only forward path only
         # needs these; the rest are gated below on `kv_only`.
@@ -275,6 +297,8 @@ class ttMLA:
                     mesh_mapper=mapper_tp1,
                     cache_file_name=_cache_name("g_proj"),
                 )
+            if tp_shard_q_a_norm:
+                result["q_a_layernorm_tp"] = _q_a_layernorm_tp(result["q_a_layernorm"])
 
         if device is None:
             for v in result.values():
@@ -310,6 +334,7 @@ class ttMLA:
             device=None,
             kv_only=kv_only,
             replicate_wkv_b1=ttMLA.replicates_wkv_b1(config, mesh_device.shape[tp_axis], resolved_has_indexer),
+            tp_shard_q_a_norm=mesh_device.shape[tp_axis] > 1,
         )
         # GLM-5.3 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
         # top-k) -> build the MLA cache only, skip the indexer tensorbins.
@@ -611,6 +636,14 @@ class ttMLA:
             self.joint_kv = ring_buffers["joint_kv"]
             self.joint_v = ring_buffers["joint_v"]
 
+        self._q_distnorm = (
+            self.tp_factor > 1
+            and not kv_only
+            and not self._merge_qkv_a
+            and self._llama4_beta is None
+            and use_fused_rmsnorm
+        )
+
         # Load weights to TT device. In kv_only mode the returned dict only
         # contains kv_a_layernorm / kv_a_proj_with_mqa; the Q-side / V / wo
         # weights are skipped entirely (saves DRAM + cache reads).
@@ -625,6 +658,7 @@ class ttMLA:
             device=mesh_device,
             kv_only=kv_only,
             replicate_wkv_b1=ttMLA.replicates_wkv_b1(config, self.tp_factor, self._has_indexer),
+            tp_shard_q_a_norm=self._q_distnorm,
         )
         self.kv_a_layernorm_weight = weights["kv_a_layernorm"]
         self.kv_a_proj_with_mqa_weight = weights["kv_a_proj_with_mqa"]
@@ -637,19 +671,11 @@ class ttMLA:
             self.o_proj_weight = weights["o_proj"]
             if self._use_gate:
                 self.g_proj_weight = weights["g_proj"]
+            if self._q_distnorm:
+                self._q_a_norm_weight_tp = weights["q_a_layernorm_tp"]
         logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
         if self._merge_qkv_a:
             self.qkv_a_proj_weight = self._concat_qkv_a_weight()
-
-        self._q_distnorm = (
-            self.tp_factor > 1
-            and not kv_only
-            and not self._merge_qkv_a
-            and self._llama4_beta is None
-            and use_fused_rmsnorm
-        )
-        if self._q_distnorm:
-            self._q_a_norm_weight_tp = self._tp_shard_norm_weight(self.q_a_layernorm_weight, self.q_lora_rank)
 
         # DSA indexer (v3.2 / GLM): self._has_indexer was resolved above (before the buffer alloc). The
         # TtIndexer owns the indexer stems / RoPE tables / device key-cache and reuses this MLA's q_a stem
@@ -1258,20 +1284,6 @@ class ttMLA:
             cluster_axis=self.tp_axis,
             num_links=self.ccl_num_links,
             **self._tp_gather_semaphores,
-        )
-
-    def _tp_shard_norm_weight(self, weight: ttnn.Tensor, width: int) -> ttnn.Tensor:
-        """TP-shard a replicated norm weight into the TILE row the fused distributed RMSNorm takes."""
-        host = ttnn.to_torch(ttnn.get_device_tensors(weight)[0]).reshape(1, 1, 1, width)
-        dims = [None, None]
-        dims[self.tp_axis] = 3
-        return ttnn.from_torch(
-            host,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims),
         )
 
     def _q_a_latent_distnorm(self, x: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
