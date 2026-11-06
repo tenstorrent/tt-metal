@@ -136,7 +136,11 @@ _LINE_OPT_IN = pytest.mark.skipif(
 # Blackhole meshes use leaves too little for the DiT's static circular buffers. Its fabric also caps
 # the router payload below 8 KB (conftest skips an 8 KB request on wormhole_b0), hence 4 KB.
 _L1_SMALL_WH = 32768
-_ring_4k = {**ring_params_4k_req_exact_devices, "l1_small_size": _L1_SMALL_WH}
+# 2 KB below the Wormhole default (1393056), which grows the kernel-config ring from 69 to 71 KB: the vision
+# tower's ring attention sits within ~2 KB of the default ring and has overflowed it (tt-metal#56754).
+# Serving on Wormhole must open with the same value. test_kernel_config_minimax_h3.py checks the margin.
+_WORKER_L1_SIZE_WH = 1391008
+_ring_4k = {**ring_params_4k_req_exact_devices, "l1_small_size": _L1_SMALL_WH, "worker_l1_size": _WORKER_L1_SIZE_WH}
 
 # Both 4x8 rows ask for 32 devices, so `require_exact_physical_num_devices` cannot tell them apart the
 # way it separates 4x8 from 4x32 -- only the arch can. Without these marks a Wormhole cluster would also
