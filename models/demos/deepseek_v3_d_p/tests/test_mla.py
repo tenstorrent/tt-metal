@@ -69,6 +69,15 @@ def _shards_by_device(mesh_device, tt_out):
     }
 
 
+# Per-device ND lines in the di/dt tests' format (tests/didt/op_test_base.py), so ND triage can name the chip.
+def _log_nd_per_device(mesh_device, det_nd_per_device):
+    locations = chip_locations()
+    for device_id in sorted(mesh_device.get_device_ids()):
+        logger.info(f"Chip map device {device_id}: {locations.get(device_id, 'unknown')}")
+    for device_id in sorted(mesh_device.get_device_ids()):
+        logger.info(f"Number of non-deterministic outputs on device {device_id} is {det_nd_per_device.get(device_id, 0)}")
+
+
 def run_mla_inference(
     config,
     weights,
@@ -919,6 +928,10 @@ def _run_chunked_prefill(
                 for meta_tensor in kv_pad_metadata.scalars:
                     ttnn.deallocate(meta_tensor)
 
+            if determinism_check and not torch.isfinite(out_flat).all():
+                # The assert below ends the test; report the per-device ND counts so far first, or they are lost
+                # exactly when the corruption is worst (seen on bh-glx6u-41: Inf/NaN after 49 ND reps).
+                _log_nd_per_device(mesh_device, det_nd_per_device)
             assert torch.isfinite(out_flat).all(), f"user {u} iter {i}: non-finite output"
             valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < valid_end]
             src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
@@ -940,14 +953,7 @@ def _run_chunked_prefill(
         return profiled_ns
 
     if determinism_check:
-        # Same per-device lines as the di/dt tests (tests/didt/op_test_base.py), so ND triage can name the chip.
-        locations = chip_locations()
-        for device_id in sorted(mesh_device.get_device_ids()):
-            logger.info(f"Chip map device {device_id}: {locations.get(device_id, 'unknown')}")
-        for device_id in sorted(mesh_device.get_device_ids()):
-            logger.info(
-                f"Number of non-deterministic outputs on device {device_id} is {det_nd_per_device.get(device_id, 0)}"
-            )
+        _log_nd_per_device(mesh_device, det_nd_per_device)
         if det_failures:
             pytest.fail(
                 "chunked prefill is not deterministic: "
