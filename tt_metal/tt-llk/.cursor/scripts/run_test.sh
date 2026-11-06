@@ -38,6 +38,22 @@
 #   --sim-path PATH   Override TT_UMD_SIMULATOR_PATH
 #                     (default: /proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-<arch>-1x3)
 #   --speed-of-light  Pass pytest --speed-of-light (compile-time formats / SOL path).
+#   --perf            Perf sweep, built and run the way CI runs it: selects
+#                     -m perf (and --mode perf for SFPU sweep modules), sets
+#                     TT_LLK_DISABLE_ASSERTS=1 for both phases, and on silicon
+#                     runs the consumer with --dist loadgroup -n <consumer-jobs>.
+#                     Prints the report directory in a RUN_LLK_TESTS_PERF_REPORT line.
+#   --run-tag  TAG    Perf report directory name, perf_data/runs/<TAG>
+#                     (sets PERF_RUN_TAG; default local-<utc timestamp>)
+#   --keep-runs N     Perf run directories to retain (sets PERF_KEEP_RUNS;
+#                     default 10). Raise it for A/B or repeat series.
+#   --consumer-jobs N Silicon consumer parallelism in --perf mode (default: 15,
+#                     as CI). 0 runs the consumer serially.
+#   --perf-counters   Pass --enable-perf-counters (a separate report kind).
+#   --dump-perf-counters
+#                     Also write raw counter values (<module>.counters.csv).
+#   --keep-asserts    In --perf mode, keep LLK_ASSERT compiled in. The numbers
+#                     are then not comparable with CI.
 #   --no-split        Skip compile-producer step; run pytest --run-simulator without
 #                     --compile-consumer (combined compile+run in one pytest invocation).
 #                     Use for issue-solver tests that don't pre-build ELFs.
@@ -98,6 +114,13 @@ LOCK_TIMEOUT="900"
 SIM_PATH=""
 NO_SPLIT="false"
 SPEED_OF_LIGHT="false"
+PERF="false"
+RUN_TAG=""
+KEEP_RUNS=""
+CONSUMER_JOBS="15"
+PERF_COUNTERS="false"
+DUMP_PERF_COUNTERS="false"
+KEEP_ASSERTS="false"
 LOG_DIR=""
 VERBOSE="false"
 
@@ -117,6 +140,13 @@ while [[ $# -gt 0 ]]; do
     --sim-path)      SIM_PATH="$2";      shift 2 ;;
     --log-dir)       LOG_DIR="$2";       shift 2 ;;
     --speed-of-light) SPEED_OF_LIGHT="true"; shift ;;
+    --perf)          PERF="true";        shift   ;;
+    --run-tag)       RUN_TAG="$2";       shift 2 ;;
+    --keep-runs)     KEEP_RUNS="$2";     shift 2 ;;
+    --consumer-jobs) CONSUMER_JOBS="$2"; shift 2 ;;
+    --perf-counters) PERF_COUNTERS="true"; shift ;;
+    --dump-perf-counters) DUMP_PERF_COUNTERS="true"; shift ;;
+    --keep-asserts)  KEEP_ASSERTS="true"; shift  ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
     --help|-h)
@@ -217,6 +247,43 @@ _validate() {
     blackhole|wormhole)  MODE="hardware"  ;;
     *)                   MODE="simulator" ;;
   esac
+
+  if [[ "$PERF" == "true" ]]; then
+    if [[ -z "$RUN_TAG" ]]; then
+      RUN_TAG="local-$(date -u +%Y%m%dT%H%M%SZ)"
+    fi
+    if [[ -n "$KEEP_RUNS" && ! "$KEEP_RUNS" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: --keep-runs must be a non-negative integer, got '${KEEP_RUNS}'" >&2
+      exit 4
+    fi
+    if [[ ! "$CONSUMER_JOBS" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: --consumer-jobs must be a non-negative integer, got '${CONSUMER_JOBS}'" >&2
+      exit 4
+    fi
+  elif [[ -n "$RUN_TAG$KEEP_RUNS" || "$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
+    echo "ERROR: --run-tag, --keep-runs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
+    exit 4
+  fi
+}
+
+# pytest selection and report flags shared by every phase of a --perf run, so
+# count, compile and simulate select the same variants.
+_perf_pytest_args() {
+  PERF_PYTEST_ARGS=()
+  [[ "$PERF" == "true" ]] || return 0
+  PERF_PYTEST_ARGS=(-m perf --mode perf)
+  [[ "$PERF_COUNTERS" == "true" ]] && PERF_PYTEST_ARGS+=(--enable-perf-counters)
+  [[ "$DUMP_PERF_COUNTERS" == "true" ]] && PERF_PYTEST_ARGS+=(--dump-perf-counters)
+  return 0
+}
+
+# Environment for a --perf build. CI compiles perf without LLK_ASSERT, so a
+# local build with asserts measures different code.
+_perf_env_prefix() {
+  PERF_ENV=()
+  [[ "$PERF" == "true" ]] || return 0
+  [[ "$KEEP_ASSERTS" == "true" ]] || PERF_ENV+=(TT_LLK_DISABLE_ASSERTS=1)
+  return 0
 }
 
 # ── count ─────────────────────────────────────────────────────────────────────
@@ -228,13 +295,15 @@ _do_count() {
   _validate
   _vlog "count: $(_test_label) (arch=${ARCH})"
 
+  _perf_pytest_args
   local output exit_code
   exit_code=0
   output=$(
     # shellcheck disable=SC1091
     source "${VENV}/bin/activate"
     cd "${TEST_DIR}"
-    CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q "${TEST_FILES[@]}" 2>&1
+    CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q \
+      ${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"} "${TEST_FILES[@]}" 2>&1
   ) || exit_code=$?
 
   # Show collection log to the agent (stderr stays visible in Bash tool output)
@@ -266,6 +335,9 @@ _do_compile() {
   local -a kflag=()
   local -a solflag=()
   [[ "$SPEED_OF_LIGHT" == "true" ]] && solflag=(--speed-of-light)
+  _perf_pytest_args
+  _perf_env_prefix
+  solflag+=(${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"})
   local -a pytest_targets=("${TEST_FILES[@]}")
   local target_label="$(_test_label)"
   if [[ -n "$TEST_ID" ]]; then
@@ -283,14 +355,16 @@ _do_compile() {
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${pytest_targets[@]}"
+      env ${PERF_ENV+"${PERF_ENV[@]}"} CHIP_ARCH="${ARCH}" \
+        pytest --compile-producer -n "${JOBS}" ${solflag+"${solflag[@]}"} ${kflag+"${kflag[@]}"} "${pytest_targets[@]}"
     ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2)
   else
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${pytest_targets[@]}"
+      env ${PERF_ENV+"${PERF_ENV[@]}"} CHIP_ARCH="${ARCH}" \
+        pytest --compile-producer -n "${JOBS}" ${solflag+"${solflag[@]}"} ${kflag+"${kflag[@]}"} "${pytest_targets[@]}"
     )
   fi
 }
@@ -331,6 +405,14 @@ _do_simulate() {
   [[ "$NO_SPLIT" == "false" ]] && pytest_flags="${pytest_flags} --compile-consumer"
   [[ "$SPEED_OF_LIGHT" == "true" ]] && pytest_flags="${pytest_flags} --speed-of-light"
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
+  _perf_pytest_args
+  _perf_env_prefix
+  if [[ "$PERF" == "true" ]]; then
+    pytest_flags="${pytest_flags} ${PERF_PYTEST_ARGS[*]}"
+    if [[ "$MODE" == "hardware" && "$CONSUMER_JOBS" -gt 0 ]]; then
+      pytest_flags="${pytest_flags} --dist loadgroup -n ${CONSUMER_JOBS}"
+    fi
+  fi
 
   # Determine the test target (file, -k filter, or single variant by ID)
   local pytest_target
@@ -357,6 +439,14 @@ _do_simulate() {
     printf 'cd %q\n\n' "${TEST_DIR}"
     if [[ "$MODE" == "simulator" ]]; then
       printf 'TT_UMD_SIMULATOR_PATH=%q \\\n' "${SIM_PATH}"
+    fi
+    if [[ "$PERF" == "true" ]]; then
+      local perf_var
+      for perf_var in ${PERF_ENV+"${PERF_ENV[@]}"}; do
+        printf '  %s \\\n' "${perf_var}"
+      done
+      printf '  PERF_RUN_TAG=%q \\\n' "${RUN_TAG}"
+      [[ -n "$KEEP_RUNS" ]] && printf '  PERF_KEEP_RUNS=%q \\\n' "${KEEP_RUNS}"
     fi
     printf '  CHIP_ARCH=%q \\\n' "${ARCH}"
     printf '  pytest %s %s\n' "${pytest_flags}" "${pytest_target}"
@@ -397,6 +487,15 @@ _do_simulate() {
 
   rm -f "${sim_script}"
   trap - EXIT INT TERM
+
+  if [[ "$PERF" == "true" ]]; then
+    local report_dir="${WORKTREE}/perf_data/runs/${RUN_TAG}"
+    if [[ -d "$report_dir" ]]; then
+      echo "=== RUN_LLK_TESTS_PERF_REPORT === ${report_dir}" >&2
+    else
+      echo "=== RUN_LLK_TESTS_PERF_REPORT === none (expected ${report_dir}; every case deselected or the consumer never finished)" >&2
+    fi
+  fi
 
   return "$sim_exit"
 }

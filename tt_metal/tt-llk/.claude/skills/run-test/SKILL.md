@@ -6,7 +6,9 @@ user_invocable: true
 
 # /run-test — Run LLK Tests
 
-Wraps `.claude/scripts/run_test.sh`, which serialises simulator access (flock), sets `TT_UMD_SIMULATOR_PATH`, and exposes `count` / `compile` / `simulate` / `run` subcommands. Agents and Claude must never call `pytest` directly.
+Wraps `.claude/scripts/run_test.sh`, which serialises simulator and silicon access (flock), sets `TT_UMD_SIMULATOR_PATH`, and exposes `count` / `compile` / `simulate` / `run` subcommands. Agents and Claude must never call `pytest` directly for tests that build kernels or use a device or simulator, functional or perf.
+
+Host-only work is outside this rule: `tests/run_hardware_free.sh` for the hardware-free suite, and `compare_test_and_perf.py`, which only reads `@parametrize`.
 
 ## Usage
 
@@ -23,6 +25,8 @@ Examples:
 /run-test test_sfpu_square_quasar.py --arch quasar --no-split
 /run-test test_eltwise_binary_quasar.py --arch quasar --maxfail 5
 /run-test test_matmul_quasar.py --arch quasar --test-id 'test_matmul_quasar.py::test_matmul[math_fidelity:LoFi-...-format:Float16->Float16-...]'
+/run-test perf_pack_dest_bank.py --arch wormhole --perf --speed-of-light --run-tag pack-dest-bank-sol
+/run-test perf_matmul_quasar.py --arch quasar --perf --perf-counters
 ```
 
 ## Arguments
@@ -36,6 +40,12 @@ Examples:
 - `--compile-only` — compile-producer only, no simulate
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
+- `--speed-of-light` — compile runtime parameters as constants (the build CI perf gates on)
+- `--perf` — perf sweep built and run as CI does: `-m perf` (plus `--mode perf` for SFPU sweep modules), `TT_LLK_DISABLE_ASSERTS=1`, no default `--maxfail`, and `--dist loadgroup -n 15` for the silicon consumer. Ends with a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`. See `perf-report` for validating the result
+- `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`); need `--perf`
+- `--consumer-jobs <N>` — silicon consumer parallelism with `--perf` (default 15; 0 is serial)
+- `--perf-counters` / `--dump-perf-counters` — counter report (a separate report kind); need `--perf`
+- `--keep-asserts` — keep `LLK_ASSERT` in a `--perf` build (numbers then differ from CI)
 - `--progress` — manual-debug aid: emit a `[progress] <phase>: elapsed=Ns, last_output=Ns ago` line to stderr every 30s during compile and simulate. Off by default; pass when you suspect a hang and want to see whether a phase is alive but slow vs. truly stuck. Pair with `--progress-interval <secs>` to tune.
 
 ## Arch Inference
@@ -65,10 +75,12 @@ If `--arch` is not provided, infer in this order:
        test_file: {test_file}
        arch:      {arch}
        command:   {compile|simulate|run|count}
-       options:   {whatever applies from --k / --test-id / --maxfail / --no-split / --timeout}
+       options:   {whatever applies from --k / --test-id / --maxfail / --no-split / --timeout /
+                   --speed-of-light / --perf / --run-tag / --keep-runs / --consumer-jobs /
+                   --perf-counters / --dump-perf-counters / --keep-asserts}
    ```
 
-4. **Relay** the agent's verdict to the user. On FAIL or COMPILE_FAIL, suggest `/debug-kernel`. On ENV_ERROR or HANG, surface the agent's diagnosis and stop — don't auto-retry (the same hang will reappear, and env errors need a human fix).
+4. **Relay** the agent's verdict to the user. For `--perf`, include the report directory; a PASS says nothing about whether the numbers are plausible, so hand off to `perf-report` validation. On FAIL or COMPILE_FAIL, suggest `/debug-kernel`. On ENV_ERROR or HANG, surface the agent's diagnosis and stop — don't auto-retry (the same hang will reappear, and env errors need a human fix).
 
 ## LLK Triage on Hang
 

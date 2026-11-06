@@ -21,7 +21,7 @@ The skill passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`)
+- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`, `--speed-of-light`, and the perf options `--perf`, `--run-tag`, `--keep-runs`, `--consumer-jobs`, `--perf-counters`, `--dump-perf-counters`, `--keep-asserts`)
 
 ## Mandatory Pre-Flight (do this every run)
 
@@ -48,8 +48,12 @@ bash .claude/scripts/run_test.sh <command> \
     --arch <arch> \
     --test <test_file> \
     [--maxfail N] [--k EXPR] [--test-id ID] \
-    [--no-split] [--timeout SECS]
+    [--no-split] [--timeout SECS] [--speed-of-light] \
+    [--perf [--run-tag TAG] [--keep-runs N] [--consumer-jobs N] \
+            [--perf-counters] [--dump-perf-counters] [--keep-asserts]]
 ```
+
+With `--perf`, the script ends with `=== RUN_LLK_TESTS_PERF_REPORT === <dir>` (or `none`). Report that directory. `count --perf` counts only perf-marked variants; a functional module gives 0.
 
 Use `timeout: 1800000` (30 min) on the Bash tool call — synchronous, never `run_in_background`.
 
@@ -100,6 +104,12 @@ PASS — test_eltwise_binary_quasar.py (arch=quasar, command=run)
 - 47 variants collected, 47 passed
 - Compile: OK
 - Simulate: OK
+```
+
+```
+PASS — perf_pack_dest_bank.py (arch=wormhole, command=run, perf, speed-of-light)
+- 20 variants collected, 20 passed
+- Report: <tt-llk>/perf_data/runs/pack-dest-bank-sol
 ```
 
 ```

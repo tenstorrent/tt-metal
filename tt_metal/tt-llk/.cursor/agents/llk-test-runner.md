@@ -22,7 +22,7 @@ The rule passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`)
+- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`, `--speed-of-light`, and the perf options `--perf`, `--run-tag`, `--keep-runs`, `--consumer-jobs`, `--perf-counters`, `--dump-perf-counters`, `--keep-asserts`)
 
 ## Mandatory Pre-Flight (do this every run)
 
@@ -57,8 +57,12 @@ bash .cursor/scripts/run_test.sh <command> \
     --arch <arch> \
     --test <test_file> \
     [--maxfail N] [-k EXPR] [--test-id ID] \
-    [--no-split] [--timeout SECS]
+    [--no-split] [--timeout SECS] [--speed-of-light] \
+    [--perf [--run-tag TAG] [--keep-runs N] [--consumer-jobs N] \
+            [--perf-counters] [--dump-perf-counters] [--keep-asserts]]
 ```
+
+With `--perf`, the script ends with `=== RUN_LLK_TESTS_PERF_REPORT === <dir>` (or `none`). Report that directory. `count --perf` counts only perf-marked variants; a functional module gives 0.
 
 Use a blocking shell invocation with a sufficiently high timeout (~30 minutes) so the command finishes before any terminal read. Synchronous, never run in background. If a retry is needed, re-run with a higher timeout rather than polling.
 
