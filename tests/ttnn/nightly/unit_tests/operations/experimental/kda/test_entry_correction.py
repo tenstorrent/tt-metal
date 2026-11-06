@@ -68,23 +68,23 @@ def _cores(device) -> list:
     return [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:_MAX_CORES]
 
 
-def _correction(device, math_fidelity: ttnn.MathFidelity) -> EntryCorrection:
+def _correction(device, math_fidelity: ttnn.MathFidelity, rows: int = _ROWS) -> EntryCorrection:
     return EntryCorrection(
         device,
         sequence_parallel_axis=0,
         batch_heads=_HEADS,
-        num_chunks=_CHUNKS,
+        num_chunks=rows // _CHUNK,
         key_dim=_KEY,
-        local_rows=_ROWS,
+        local_rows=rows,
         cores=_cores(device),
         math_fidelity=math_fidelity,
     )
 
 
-def _host_inputs(seed: int) -> tuple[torch.Tensor, ...]:
+def _host_inputs(seed: int, chunks: int = _CHUNKS) -> tuple[torch.Tensor, ...]:
     generator = torch.Generator().manual_seed(seed)
-    zero = 0.1 * torch.randn(_HEADS, _CHUNKS, _CHUNK, _KEY, generator=generator)
-    identity = 0.1 * torch.randn(_HEADS, _CHUNKS, _CHUNK, _KEY, generator=generator)
+    zero = 0.1 * torch.randn(_HEADS, chunks, _CHUNK, _KEY, generator=generator)
+    identity = 0.1 * torch.randn(_HEADS, chunks, _CHUNK, _KEY, generator=generator)
     final_a, final_b, entry, tail = (0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator) for _ in range(4))
     return zero, identity, final_a, final_b, entry, tail
 
@@ -168,6 +168,27 @@ def test_entry_correction_accuracy_and_determinism(
     for repeat, (output, final) in enumerate(results[1:], start=1):
         assert_bit_identical(got_output, output, name=f"{interval_id} output repeat {repeat}")
         assert_bit_identical(got_final, final, name=f"{interval_id} final repeat {repeat}")
+
+
+def test_entry_correction_streams_terms_over_the_l1_budget(device: ttnn.Device) -> None:
+    """2560 rows of 24 heads (SP2xTP4 at 5k tokens) exceed a core's L1 budget: the terms stay in DRAM and stream."""
+    rows = 2560
+    correction = _correction(device, ttnn.MathFidelity.HiFi4, rows)
+    assert correction.terms_memory_config.buffer_type == ttnn.BufferType.DRAM
+    host = _host_inputs(seed=rows, chunks=rows // _CHUNK)
+    inputs = _device_inputs(device, correction, host)
+    zero, identity, final_a, final_b, entry, _ = (tensor.double() for tensor in host)
+    expected = (zero + (identity - zero) @ entry.unsqueeze(1)).float(), (final_a @ entry + final_b).float()
+
+    results = []
+    for _ in range(2):
+        output, final = correction(*inputs, make_actual_start(device, 0), None)
+        results.append((ttnn.to_torch(output).float(), ttnn.to_torch(final)))
+        ttnn.deallocate(output)
+        ttnn.deallocate(final)
+    _assert_matches(expected, results[0], "streamed")
+    assert_bit_identical(results[0][0], results[1][0], name="streamed output repeat")
+    assert_bit_identical(results[0][1], results[1][1], name="streamed final repeat")
 
 
 def test_entry_correction_cache_hit_reads_new_interval(device: ttnn.Device, isolated_program_cache: None) -> None:
