@@ -355,10 +355,13 @@ public:
     std::vector<uint32_t> tables(const Coord& coord) const;
     // ---- router_stream ----
     std::vector<uint32_t> port_layout(uint32_t l) const;
-    // HeadSE3.logits_priority: the ports send the logits ahead of the x gather
+    // HeadSE3.logits_priority: the ports send the logits ahead of the x gather (meshes of up to 8 chips: x first only
+    // with one router iteration - with several, every iteration's logits wait behind the whole gather's sends and the
+    // matmul cores' router phase stalls; traced head, x first vs logits first: M3 2x4 5120 (4 iterations) 1179 vs
+    // 1050 us, M3 2560 (2) 623 vs 527, GLM-5.3 5120 (4) 1075 vs 1047)
     bool logits_first() const {
         if (R * C <= 8) {
-            return false;
+            return NIT > 1;
         }
         if (cfg.shape.latent && ring) {
             return false;
