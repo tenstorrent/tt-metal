@@ -1,0 +1,133 @@
+---
+# Throwaway diagnostic for tenstorrent/torrentci#2517: test whether a guest
+# without a usable /dev/shm makes `tt-smi -r --eth_train_skip` fail with
+# "Error when re-initializing chips!". Runs a control reset, then the same
+# reset with /dev/shm hidden in a private mount namespace (default logger
+# level, then TT_LOGGER_LEVEL=info), then `tt-smi -s`. Every step runs under
+# `set +e` and exits 0 so the whole sequence always runs. No trigger; run it
+# by name. Copied from 90-diag-tt-smi-reset.yaml (same runs-on and image).
+jobs:
+  - id: diag-tt-smi-reset-noshm
+    checkout: false
+    description: "diag torrentci#2517: tt-smi -r with /dev/shm hidden vs a control reset, in an n150 card VM (manual)"
+    timeout: 45m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+          limits: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_SMI_VERSION, value: 6.7.0}
+      - {name: TT_SMI_SHA256, value: 13ba3d41c77254c733b8dd70a53323fcc6da20f7869b2326b04be180f23f7942}
+    steps:
+      - id: capabilities
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              mkdir -p "$HOME"
+              echo "=== capabilities at $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              uname -a
+              echo "--- id"; id
+              echo "--- userns sysctls"
+              cat /proc/sys/kernel/unprivileged_userns_clone /proc/sys/user/max_user_namespaces 2>&1
+              echo "--- /dev/shm"; ls -ld /dev/shm; echo "ls rc=$?"; ls -la /dev/shm
+              echo "--- mount | grep shm"; mount | grep shm; echo "grep rc=$?"
+              echo "--- unshare"; command -v unshare; echo "command -v rc=$?"; unshare --version 2>&1
+              echo "--- /dev/tenstorrent"; ls -l /dev/tenstorrent/
+              exit 0
+      - id: fetch-tt-smi
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== fetch at $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              curl -fsSL --proto =https -o /tmp/tt-smi "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-24.04"
+              echo "curl rc=$?"
+              echo "${TT_SMI_SHA256}  /tmp/tt-smi" | sha256sum -c -
+              echo "sha256 rc=$?"
+              chmod +x /tmp/tt-smi
+              /tmp/tt-smi --version
+              echo "version rc=$?"
+              exit 0
+      - id: control-reset
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== CONTROL tt-smi -r --eth_train_skip start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              timeout 600 /tmp/tt-smi -r --eth_train_skip
+              echo "=== CONTROL rc=$? end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              ls -la /dev/shm
+              exit 0
+      - id: noshm-reset
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== TEST method selection at $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              method=none
+              if ! command -v unshare >/dev/null 2>&1; then
+                echo "unshare not found; TEST skipped"
+              else
+                echo "--- probe method A: unshare -rm + read-only tmpfs over /dev/shm"
+                out=$(unshare -rm sh -c 'mount -t tmpfs -o ro none /dev/shm && ls -ld /dev/shm && mount | grep shm && touch /dev/shm/probe; echo touch_rc=$?' 2>&1)
+                arc=$?
+                echo "$out"; echo "probe A rc=$arc"
+                if [ $arc -eq 0 ] && echo "$out" | grep -q 'touch_rc=1'; then
+                  method=A
+                else
+                  echo "--- probe method B: unshare -rm + umount -l /dev/shm"
+                  out=$(unshare -rm sh -c 'umount -l /dev/shm; echo umount_rc=$?; ls -la /dev/shm; mount | grep shm; touch /dev/shm/probe; echo touch_rc=$?' 2>&1)
+                  brc=$?
+                  echo "$out"; echo "probe B rc=$brc"
+                  if [ $brc -eq 0 ] && echo "$out" | grep -q 'umount_rc=0'; then
+                    method=B
+                  else
+                    echo "both unshare methods failed; TEST skipped"
+                  fi
+                fi
+              fi
+              echo "=== TEST method=$method"
+              run_test() {
+                lvl="$1"
+                echo "=== TEST method=$method TT_LOGGER_LEVEL=${lvl:-unset} start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+                if [ "$method" = A ]; then
+                  env ${lvl:+TT_LOGGER_LEVEL=$lvl} timeout 600 unshare -rm sh -c 'mount -t tmpfs -o ro none /dev/shm && timeout 590 /tmp/tt-smi -r --eth_train_skip; echo rc=$?'
+                else
+                  env ${lvl:+TT_LOGGER_LEVEL=$lvl} timeout 600 unshare -rm sh -c 'umount -l /dev/shm; timeout 590 /tmp/tt-smi -r --eth_train_skip; echo rc=$?'
+                fi
+                echo "=== TEST outer rc=$? end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              }
+              if [ "$method" != none ]; then
+                run_test ""
+                sleep 5
+                run_test info
+              fi
+              exit 0
+      - id: smi-snapshot-after
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== tt-smi -s (after) start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              timeout 300 /tmp/tt-smi -s
+              echo "=== tt-smi -s (after) rc=$? end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              ls -l /dev/tenstorrent/
+              dmesg 2>&1 | tail -40
+              exit 0
