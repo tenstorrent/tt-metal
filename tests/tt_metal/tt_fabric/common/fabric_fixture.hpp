@@ -269,7 +269,7 @@ public:
     }
 
     // Polls `router`'s EDM status once a second until it is TERMINATED or `timeout` has passed, and returns the last
-    // status read. Blocks for up to `timeout`.
+    // status read. Blocks for up to `timeout` plus one poll.
     static uint32_t wait_for_router_terminated(const MasterRouter& router, std::chrono::seconds timeout) {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
         uint32_t status = read_edm_status(router);

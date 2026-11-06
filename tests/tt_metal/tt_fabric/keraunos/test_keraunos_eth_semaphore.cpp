@@ -36,8 +36,6 @@
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "fabric_fixture.hpp"
-#include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_metal {
 namespace {
