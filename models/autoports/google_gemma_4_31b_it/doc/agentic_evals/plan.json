@@ -826,7 +826,7 @@
       "eval": "terminal_bench_2_1",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "device_job_in_progress",
+      "status": "cancelled",
       "queued_at": "2026-11-06T10:54:39.812689+00:00",
       "planned_clients": 2,
       "batch": 8,
@@ -862,17 +862,22 @@
       "run_id": 42206258311,
       "submitted_at": "2026-11-06T10:54:49Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T14:15:33.824976+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "cancelled",
+      "last_observed_at": "2026-11-06T14:19:37.600347+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
       "build_started_at": "2026-11-06T10:55:05Z",
       "build_completed_at": "2026-11-06T11:47:58Z",
       "runner": "qb2-120-p05t06",
       "device_job_id": 127875630165,
       "device_job_started_at": "2026-11-06T11:48:00Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-06T11:48:00Z"
+      "device_job_completed_at": "2026-11-06T14:19:34Z",
+      "start": "2026-11-06T11:48:00Z",
+      "end": "2026-11-06T14:19:34Z",
+      "exit_status": 1,
+      "actual_hours": 2.526111111111111,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 3.4130555555555557
     },
     {
       "arm": "full-gpqa-observable",
@@ -1051,7 +1056,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42228448171",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T14:15:03.748707+00:00",
+      "last_observed_at": "2026-11-06T14:26:12.590155+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 127927949769,
       "device_job_started_at": "2026-11-06T13:48:32Z",
@@ -1063,7 +1068,7 @@
       "eval": "r1_gpqa_diamond",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "device_job_in_progress",
+      "status": "failed_awaiting_diagnosis",
       "queued_at": "2026-11-06T14:13:57.794633+00:00",
       "planned_clients": 4,
       "batch": 8,
@@ -1105,18 +1110,89 @@
       "run_id": 42232104462,
       "submitted_at": "2026-11-06T14:14:10Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42232104462",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T14:14:41.587431+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "failure",
+      "last_observed_at": "2026-11-06T14:22:48.124758+00:00",
       "runner": "120-qb2-p05t01",
       "device_job_id": 127940429269,
       "device_job_started_at": "2026-11-06T14:14:27Z",
+      "device_job_completed_at": "2026-11-06T14:21:47Z",
+      "start": "2026-11-06T14:14:27Z",
+      "end": "2026-11-06T14:21:47Z",
+      "exit_status": 1,
+      "actual_hours": 0.12222222222222222,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 0.1272222222222222
+    },
+    {
+      "arm": "larger-gpqa20-c2",
+      "eval": "r1_gpqa_diamond",
+      "device": "qb2-ci",
+      "owner": "coordinator",
+      "status": "device_job_in_progress",
+      "queued_at": "2026-11-06T14:20:45.445393+00:00",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+      "tti_sha": "82569bf17497585555a5710929a8e2f78ea47f1b",
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "task_count": 20,
+      "tasks": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187,
+        153,
+        135,
+        81,
+        93,
+        7,
+        42,
+        24,
+        168,
+        20,
+        28
+      ],
+      "predicted_hours": 7.72125727234195,
+      "projection_components_hours": {
+        "censored_full_rung_rate_scaled20": 2.9754276,
+        "observed_C2_device_overhead": 0.24582967234194958,
+        "full_request_tail_allowance": 4,
+        "queue_margin": 0.5
+      },
+      "prediction_basis": "Use slower observed full198 censored completed-throughput rate for20, not favorable banked10 rate; different deterministic cohort makes this uncertain. Add full4h request tail plus measured setup and guessed queue; stop if observed progress no longer fits.",
+      "run_timeout_hours": 12,
+      "job_timeout_hours": 18,
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "batch_reason": "Smallest validated batch >=2; accepted C2, no pending C4 speed benefit",
+      "host_limit_basis": "HTTP-only GPQA; no Docker task sandboxes; same normal CI route",
+      "capacity_evidence": "runs/server-sized-gpqa-c2/audit.json",
+      "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
+      "scope": "Next nested larger rung at accepted C2; full198 stop retained; independent of scored C4 effort",
+      "run_id": 42233126698,
+      "submitted_at": "2026-11-06T14:21:02Z",
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42233126698",
+      "workflow_status": "in_progress",
+      "workflow_conclusion": null,
+      "last_observed_at": "2026-11-06T14:25:37.409995+00:00",
+      "runner": "qb2-120-p05t05",
+      "device_job_id": 127943914083,
+      "device_job_started_at": "2026-11-06T14:21:21Z",
       "device_job_completed_at": null,
-      "start": "2026-11-06T14:14:27Z"
+      "start": "2026-11-06T14:21:21Z"
     }
   ],
   "status": "all_smokes_valid_three_larger_runs_executing",
-  "last_updated": "2026-11-06T14:15:39.698482+00:00",
+  "last_updated": "2026-11-06T14:26:23.285634+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1560,6 +1636,26 @@
       "predicted_hours": 0.18,
       "device_job_hours": 0.14046206916666668,
       "result": "Capacity prerequisite confirmed; C4 acceptance pending scored10"
+    },
+    {
+      "arm": "nightly-terminal-observable",
+      "run_id": 42206258311,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 2.526111111111111,
+      "workflow_wall_hours": 3.4130555555555557,
+      "predicted_workflow_hours": 6.25,
+      "workflow_conclusion": "cancelled"
+    },
+    {
+      "arm": "gpqa-c4-scored10",
+      "run_id": 42232104462,
+      "planned_clients": 4,
+      "batch": 8,
+      "device_job_hours": 0.12222222222222222,
+      "workflow_wall_hours": 0.1272222222222222,
+      "predicted_workflow_hours": 5.0088888888888885,
+      "workflow_conclusion": "failure"
     }
   ],
   "local_idle_intervals": [
@@ -1667,7 +1763,13 @@
     "fix_hours": 1,
     "second_cycle_reserved": true,
     "release_queue_margin_hours": 2.8,
-    "exact_early_stop_route": "If operator provides supported exact dry route, recalculate its measured shorter duration and release reserve; do not assume it exists."
+    "exact_early_stop_route": "If operator provides supported exact dry route, recalculate its measured shorter duration and release reserve; do not assume it exists.",
+    "gpqa_only_exact_route": {
+      "status": "available_conditional_on_no_tool_suites",
+      "evidence": "runs/gpqa-only-dry-route/RESULT.md",
+      "proof": "Frozenconfig + actualC active rows + successful partial replies k>=C,k<N, persisted before cancel/no final scores; localbenchmark reachability separately",
+      "not_yet_clean_dry_run": true
+    }
   },
   "next_ci_dispatch_image": {
     "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
@@ -1678,61 +1780,7 @@
     "live_confirmation_run_id": 42228448171
   },
   "active_runs": [
-    {
-      "arm": "current-runtime-benchmark",
-      "owner": "coordinator",
-      "device": "local",
-      "status": "completed",
-      "planned_clients": 1,
-      "batch": 1,
-      "max_num_seqs": 1,
-      "predicted_hours": 0.169,
-      "box_device_hours": 0.2,
-      "runtime_publication_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
-      "tti_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
-      "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
-      "prediction_basis": "Conservative prior queue .0952942889h + current observed startup226s/3600 + headline35s and one warmup5s/3600 = .1691831778h. Prior queue already included startup; additive estimate intentionally overcounts rather than claiming isolated client cost. Current B1 startup remains unmeasured.",
-      "phases": [
-        {
-          "name": "tti-release-matrix",
-          "input_tokens": 128,
-          "output_tokens": 128,
-          "num_prompts": 8,
-          "planned_clients": 1,
-          "predicted_seconds": 27.120889400946908
-        },
-        {
-          "name": "headline-warmup",
-          "input_tokens": 4096,
-          "output_tokens": 128,
-          "num_prompts": 1,
-          "planned_clients": 1,
-          "predicted_seconds": 5
-        },
-        {
-          "name": "headline",
-          "input_tokens": 4096,
-          "output_tokens": 128,
-          "num_prompts": 8,
-          "planned_clients": 1,
-          "predicted_seconds": 34.80392373201903
-        }
-      ],
-      "commands": "commands.json",
-      "release": false,
-      "queued_at": "2026-11-06T12:38:26.091009+00:00",
-      "start": "2026-11-06T12:38:26.091009+00:00",
-      "timeout_seconds": 720,
-      "execution_sha": "8c49bb3fe33ad8530ab70559f8d99274355bf12c",
-      "owner_check": [],
-      "regime": "serial TT mesh1x4; no HF CPU workload; ordinary coordinator activity",
-      "end": "2026-11-06T12:43:40.562401+00:00",
-      "exit_status": 0,
-      "wrapper_exit_status": 1,
-      "exit_reason": "Clients0; intentional idle API SIGINT; no device owners",
-      "owner_check_after": [],
-      "actual_hours": 0.08735316444444444
-    }
+    42228448171
   ],
   "latest_live_progress": [
     {
@@ -1883,6 +1931,61 @@
       "batch_reason": "Smallest supported measured batch>=2",
       "publication_pending": true,
       "scope": "Conditional next normal rung; no dispatch before valid nightly, measured projection and source publication verification"
+    },
+    {
+      "arm": "larger-gpqa20-c2",
+      "eval": "r1_gpqa_diamond",
+      "device": "qb2-ci",
+      "owner": "coordinator",
+      "status": "prepared",
+      "queued_at": "2026-11-06T14:20:45.445393+00:00",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+      "tti_sha": "82569bf17497585555a5710929a8e2f78ea47f1b",
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "task_count": 20,
+      "tasks": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187,
+        153,
+        135,
+        81,
+        93,
+        7,
+        42,
+        24,
+        168,
+        20,
+        28
+      ],
+      "predicted_hours": 7.72125727234195,
+      "projection_components_hours": {
+        "censored_full_rung_rate_scaled20": 2.9754276,
+        "observed_C2_device_overhead": 0.24582967234194958,
+        "full_request_tail_allowance": 4,
+        "queue_margin": 0.5
+      },
+      "prediction_basis": "Use slower observed full198 censored completed-throughput rate for20, not favorable banked10 rate; different deterministic cohort makes this uncertain. Add full4h request tail plus measured setup and guessed queue; stop if observed progress no longer fits.",
+      "run_timeout_hours": 12,
+      "job_timeout_hours": 18,
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "batch_reason": "Smallest validated batch >=2; accepted C2, no pending C4 speed benefit",
+      "host_limit_basis": "HTTP-only GPQA; no Docker task sandboxes; same normal CI route",
+      "capacity_evidence": "runs/server-sized-gpqa-c2/audit.json",
+      "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
+      "scope": "Next nested larger rung at accepted C2; full198 stop retained; independent of scored C4 effort"
     }
   ],
   "current_accepted_tti_sha": "f12b2682cb03e84555ba122dd647262ae399815f",
@@ -1901,6 +2004,40 @@
       "source": "cohorts.json r1_gpqa_diamond.rungs.server-sized-gpqa-c2",
       "reason": "Full198 C2measuredprogressstop; C4capacityeffortcannotestablishfullfit",
       "frozen": false
+    },
+    "terminal_bench_2_1": {
+      "decision": "stop",
+      "functional_at": 2,
+      "reason": "Nightly10 progress projection nonfit; no release cohort frozen"
     }
+  },
+  "latest_terminal_stop": {
+    "run_id": 42206258311,
+    "stopped_at": "2026-11-06T14:18:58.613726+00:00",
+    "reason": "Measured completed-task throughput projects beyond12h including observed run setup/queue; no margin for tail. Stop under stage progress rule, not hardware stall or score gate.",
+    "progress": {
+      "at": "2026-11-06T14:15:44.505623Z",
+      "completed_tasks": 2,
+      "total_tasks": 10,
+      "running_tasks": 2,
+      "eval_elapsed_hours": 2.2
+    },
+    "projection": {
+      "method": "2.2h *10/2 + observed submit-to-eval overhead1.148611h",
+      "eval_hours": 11,
+      "workflow_hours": 12.14861111111111,
+      "limit_hours": 12,
+      "uncertainty": "Only2 completions with2 right-censored active tasks; empirical extrapolation is uncertain and not a proof that completion before12h is impossible. No claim of a confirmed loop or scoring loss at a limit."
+    },
+    "last_activity": "Continued model decoding and fresh prefills; no device stall",
+    "score": null,
+    "functional_at": 2,
+    "partial_artifacts": "Live console snapshot and run/job metadata retained before cancellation; completed trial artifacts may not upload on stock cancellation. No partial score invented.",
+    "evidence": [
+      "bringup/artifacts/stage12-terminal-stop-check.log",
+      "bringup/artifacts/stage12-terminal-stop-run.json",
+      "bringup/artifacts/stage12-terminal-stop-jobs.json",
+      "../terminal-nightly-tail-diagnosis/RESULT.json"
+    ]
   }
 }

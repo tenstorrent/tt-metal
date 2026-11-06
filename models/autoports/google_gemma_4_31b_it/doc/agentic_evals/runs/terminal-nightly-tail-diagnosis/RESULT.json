@@ -1,0 +1,64 @@
+{
+  "effort": "terminal-nightly-tail-diagnosis",
+  "used_device_hours": 0,
+  "change": "none",
+  "problem_status": "open",
+  "unblocks": "terminal_bench_2_1",
+  "evidence": "bringup/artifacts/stage12-terminal-live-1414.log",
+  "snapshot_last_timestamp": "2026-11-06T14:09:50.906252Z",
+  "progress": {
+    "timestamp": "2026-11-06T14:09:44.503575Z",
+    "completed_tasks": 2,
+    "total_tasks": 10,
+    "running_tasks": 2,
+    "elapsed_eval_hours": 2.1,
+    "first_observed_completion": "2026-11-06T12:26:44.470934Z",
+    "second_observed_completion": "2026-11-06T12:33:44.473094Z",
+    "minutes_since_second_completion_observed": 96
+  },
+  "activity": {
+    "sampling_prefill_step_events": 120,
+    "sampling_decode_step_events": 180820,
+    "last_10_minutes_decode_events": 13202,
+    "largest_observed_gap_between_decode_events_seconds": 1.958658,
+    "last_prefill_timestamp": "2026-11-06T14:09:01.355141Z",
+    "last_prefill_end_tokens": 46040,
+    "other_recent_prefill_timestamp": "2026-11-06T14:08:32.552251Z",
+    "other_recent_prefill_end_tokens": 66251,
+    "decode_steps_after_last_prefill": 1140,
+    "active_rows_all_those_steps": 2,
+    "seconds_after_last_prefill": 49.551111,
+    "interpretation": "Repeated new prefills and uninterrupted decode activity show active model work; no hardware stall or prolonged absence of model calls. Prefill chunks are not one-to-one API calls, request IDs absent, and counters increment padded rows rather than useful generated token totals."
+  },
+  "projection": {
+    "method": "Naive completed-throughput extrapolation: elapsed_eval_hours *10/2. Right-censored active tasks and only2 completions make this highly uncertain, not a release admission projection.",
+    "eval_hours": 10.5,
+    "observed_submit_to_eval_start_hours": 1.148611111111111,
+    "workflow_hours_including_observed_queue_setup": 11.64861111111111,
+    "margin_to_12h_hours": 0.351388888888889,
+    "prior_forecast_workflow_hours": 6.25,
+    "prior_smoke_eval_hours": 0.6375568233333334,
+    "prior_smoke_scaled10_with_1p5_margin_eval_hours": 4.781676175000001,
+    "same_two_completions_projection_crosses12_at_eval_hours": 2.1702777777777778,
+    "same_two_completions_projection_crosses12_at_utc": "2026-11-06T14:13:57Z",
+    "harness_remaining_bound_hours": 25.333333333333332,
+    "harness_max_allowed_hours": 31.833333333333332,
+    "harness_bound_basis": "4 remaining waves times6h20 per-task budget; conservative configuration bound, not observed speed. Harness maximum exceeds user12h and cannot govern stage admission."
+  },
+  "loop_assessment": {
+    "confirmed_loop": null,
+    "finish_reason": null,
+    "per_call_output_tokens": null,
+    "reason": "Snapshot has sampling events and progress but no complete response text/token IDs or per-request completion usage. Growing contexts and many decode steps are insufficient to classify looping. Prior smoke47calls/70620outputtokens/140.17smax request do not identify this run's tasks."
+  },
+  "recommendation": {
+    "at_snapshot": "Watch only for a short bounded interval; do not stop solely on harness25h20 bound or call it a hardware stall. Near-zero workflow margin requires coordinator re-evaluation now. If no further task finishes by14:13:57UTC, this simple measured-throughput estimate crosses12h; seek current task evidence and stop/preserve partials when defensible empirical projection no longer fits. Do not let harness31h50 budget substitute for12h.",
+    "release_admission": "Not proven. Cannot price slow tail from two right-censored active tasks; larger rung/release requires valid completed evidence.",
+    "remaining_uncertainty": [
+      "Completed-task identities, grades and validity not available here.",
+      "Current task start times, per-call output lengths, response content and terminal actions unknown.",
+      "No evidence that active tasks are near completion; no rigorous confidence interval on time forecast.",
+      "Cancellation artifact retention is route-dependent; coordinator must preserve available partial evidence before authorized stop."
+    ]
+  }
+}

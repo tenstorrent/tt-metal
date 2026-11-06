@@ -29,7 +29,7 @@
     "Stage gate pass"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T14:14:40.828016+00:00",
+  "updated_at": "2026-11-06T14:18:58.613726+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -37,11 +37,9 @@
   ],
   "live_wait": {
     "run_ids": [
-      42206258311,
-      42228448171,
-      42232104462
+      42228448171
     ],
-    "status": "Terminal nightly10, SWE nightly5 repeat, and GPQA C4 same10 comparison active; full GPQA198 stopped on measured nonfit"
+    "status": "SWE repeat5 active; two GPQA dispatches used wrong workflow before scoring, AutoFix correcting to evals with identical SHAs/cohorts"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -79,7 +77,8 @@
     "proposal": "Complete frozen task lists and benchmark rehearsal, ignore scores, then separate identical-SHA/settings release",
     "reason": "Stock workflow lacks readiness-stop; cancellation skips complete task evidence upload",
     "source": "runs/ci-release-route/RESULT.md",
-    "permission_required": "Exception to stop-after-start/no-score dry run; no generic route alteration assumed"
+    "permission_required": "Exception to stop-after-start/no-score dry run; no generic route alteration assumed",
+    "conditional_resolution": "If all tool suites have measured stop, HTTP-only GPQA scope can use exact early-stop dry run with preserved live progress; see runs/gpqa-only-dry-route/RESULT.md. No exception assumed for tool suites."
   },
   "release_dependency_freeze": {
     "status": "Harbor_pin_live_confirmed",

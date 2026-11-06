@@ -1,0 +1,3 @@
+# Terminal nightly tail diagnosis
+
+Coordinator goal: explain the running nightly10 slow tail using the preserved live snapshot, not new polling or device work. Confirmation: extract timestamped completion count and model-call activity/gaps/lengths only where present; calculate an empirical total-time projection with uncertainty; distinguish it from configured worst-case task/request limits; recommend watch or stop against12h. Device estimate/box0h; savings0; validity work unblocks a representative Terminal score. Read local snapshot and prior smoke analysis, then write one compact RESULT.json. No hardware, network, dispatch, central edits or ongoing evidence maintenance.

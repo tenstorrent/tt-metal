@@ -1,0 +1,72 @@
+{
+  "status": "prepared_not_published",
+  "candidate": "82569bf17497585555a5710929a8e2f78ea47f1b",
+  "base": "82da396ef63bbe95cedbe254bb5433d905cd0491",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa-larger20-c2",
+  "branch": "prep/gpqa-larger20-c2",
+  "cohort": {
+    "source": "default_rule",
+    "seed": "gemma4-goal12-v3-842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "rule": "Sort document indices 0..197 by SHA256(seed + NUL + str(doc_id)); first20",
+    "catalog_source": "Pinned lm-eval r1_gpqa_diamond document indices,198 documents; no dataset contents accessed.",
+    "doc_ids": [
+      152,
+      189,
+      46,
+      87,
+      52,
+      181,
+      31,
+      185,
+      50,
+      187,
+      153,
+      135,
+      81,
+      93,
+      7,
+      42,
+      24,
+      168,
+      20,
+      28
+    ],
+    "first10_exactly_matches_registered_nightly": true,
+    "score_independent": true,
+    "harness_commit": "af401ef3dd3d2d90e55680990ed1f0c9f7892448",
+    "harness_pin_source": "requirements/evals-common.txt and workflows/workflow_venvs.py:EVALS_COMMON_LM_EVAL_COMMIT at TTI base82da396",
+    "catalog_size_source": "Existing frozen cohorts.json r1_gpqa_diamond catalog_source and full198 declaration; pinned eval_config reference also records full(198)",
+    "dataset_contents_accessed": false
+  },
+  "planned_clients": 2,
+  "server_batch": 8,
+  "nightly_sizes": [
+    20,
+    0,
+    0
+  ],
+  "device_hours": 0,
+  "checks": {
+    "hash_rule_reproduces_frozen10": "pass",
+    "unique_nested20": "pass",
+    "production_ast_equality": "all fields unchanged except GPQA concurrency4to2/doc_ids/nightly10to20; verified after formatting",
+    "focused": "24 passed in0.53s",
+    "runtime_assertions": "C2/20/peers0/retention/pin pass",
+    "ruff": "pass",
+    "format": "pass",
+    "full_pytest_hook": "pass",
+    "copyright": "pass",
+    "diff_check": "pass"
+  },
+  "initial_corrections": "One stale10-ID test assertion updated to20; formatter expanded lists. No runtime corrections.",
+  "hook_environment": "TT_METAL_HOME and tt_metal_home unset; writable PRE_COMMIT_HOME; all hooks passed before commit",
+  "publication_or_dispatch": false,
+  "next": "Coordinator must register cohort centrally and authorize projected run before dispatch. No claim of valid20 or acceptance ofC4.",
+  "evidence": [
+    "plan.md",
+    "cohort.json",
+    "candidate.patch",
+    "hooks.log",
+    "hooks-final.log"
+  ]
+}

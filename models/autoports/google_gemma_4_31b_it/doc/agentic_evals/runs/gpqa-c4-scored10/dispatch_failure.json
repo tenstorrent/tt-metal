@@ -1,0 +1,8 @@
+{
+  "run_id": 42232104462,
+  "error": "coordinator selected workflow=agentic, which skips non-agentic GPQA and with peers0 yields no_blocks",
+  "model_score": null,
+  "repair": "workflow=evals, identical SHAs/cohort/limits; pending AutoFix/source confirmation",
+  "evidence": "bringup/artifacts/stage12-gpqa-c4-live-1424.log",
+  "cancel_reason": null
+}

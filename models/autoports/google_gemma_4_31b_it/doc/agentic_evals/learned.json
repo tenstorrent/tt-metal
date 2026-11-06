@@ -136,6 +136,17 @@
     {
       "fact": "Harbor aggregate tokenusage counts retained native responseusage only; missingFormatError responses can exclude substantialgeneration. Astropy84calls/81retained,3feedbackerrors; missingAPIoutputcannotbe reconstructed or declaredloop.",
       "evidence": "runs/nightly-swe-observable/audit.json; runs/malformed-response-retention/AUTODEBUG.md"
+    },
+    {
+      "fact": "Cancelling the unchanged CI workflow preserves build report but omits final evaluation samples/trajectories. Save live console and run/job metadata before progress-based stop; never infer score from progress counts.",
+      "evidence": [
+        "runs/full-gpqa-observable/stop.json",
+        "runs/nightly-terminal-observable/stop.json"
+      ]
+    },
+    {
+      "fact": "Four HTTP-only GPQA requests fit at131072 input tokens in unchanged B8pool; this is not four full advertised262144 contexts, task sandbox admission, or scored speed acceptance.",
+      "evidence": "runs/gpqa-c4-capacity/RESULT.json"
     }
   ],
   "suite_timings": [
@@ -257,6 +268,32 @@
         "scope": "three fullyaudited tasks, not completed frozen5 rung"
       },
       "evidence": "runs/nightly-swe-observable/audit.json"
+    },
+    {
+      "eval": "r1_gpqa_diamond",
+      "tasks": 198,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": null,
+      "observed_eval_hours_before_stop": 1.4877138,
+      "agent_hours": null,
+      "timeouts": null,
+      "score": null,
+      "status": "stopped_projected_nonfit",
+      "evidence": "runs/full-gpqa-observable/stop.json"
+    },
+    {
+      "eval": "terminal_bench_2_1",
+      "tasks": 10,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": null,
+      "observed_eval_hours_before_stop": 2.2,
+      "agent_hours": null,
+      "timeouts": null,
+      "score": null,
+      "status": "stopped_projected_nonfit",
+      "evidence": "runs/nightly-terminal-observable/stop.json"
     }
   ],
   "generic_fixes": [

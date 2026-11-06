@@ -1,0 +1,29 @@
+{
+  "run_id": 42206258311,
+  "stopped_at": "2026-11-06T14:18:58.613726+00:00",
+  "reason": "Measured completed-task throughput projects beyond12h including observed run setup/queue; no margin for tail. Stop under stage progress rule, not hardware stall or score gate.",
+  "progress": {
+    "at": "2026-11-06T14:15:44.505623Z",
+    "completed_tasks": 2,
+    "total_tasks": 10,
+    "running_tasks": 2,
+    "eval_elapsed_hours": 2.2
+  },
+  "projection": {
+    "method": "2.2h *10/2 + observed submit-to-eval overhead1.148611h",
+    "eval_hours": 11,
+    "workflow_hours": 12.14861111111111,
+    "limit_hours": 12,
+    "uncertainty": "Only2 completions with2 right-censored active tasks; empirical extrapolation is uncertain and not a proof that completion before12h is impossible. No claim of a confirmed loop or scoring loss at a limit."
+  },
+  "last_activity": "Continued model decoding and fresh prefills; no device stall",
+  "score": null,
+  "functional_at": 2,
+  "partial_artifacts": "Live console snapshot and run/job metadata retained before cancellation; completed trial artifacts may not upload on stock cancellation. No partial score invented.",
+  "evidence": [
+    "bringup/artifacts/stage12-terminal-stop-check.log",
+    "bringup/artifacts/stage12-terminal-stop-run.json",
+    "bringup/artifacts/stage12-terminal-stop-jobs.json",
+    "../terminal-nightly-tail-diagnosis/RESULT.json"
+  ]
+}

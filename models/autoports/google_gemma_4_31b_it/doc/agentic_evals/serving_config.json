@@ -164,6 +164,14 @@
       "max_num_seqs": 8,
       "batch_reason": "Smallest supported batch >=4; local four131072-context residency demonstrated, maxseq8",
       "capacity_evidence": "runs/gpqa-c4-capacity/RESULT.json"
+    },
+    "larger-gpqa20-c2": {
+      "eval": "r1_gpqa_diamond",
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch >=2; accepted C2, no pending C4 speed benefit",
+      "capacity_evidence": "runs/server-sized-gpqa-c2/audit.json"
     }
   },
   "release_limits": {

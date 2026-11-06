@@ -1,9 +1,9 @@
 {
-  "status": "all_suites_valid_smoke_larger_rungs_running",
+  "status": "GPQA intermediate fitting-list search and SWE repeat active; Terminal measured stop",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Full198 C2rung stopped: empiricalobservedprogressprojects29h (>12h); retainsvalid10 forreleasependingfreeze/dry. C4capacity/scored10effort doesnotprovefull198fit.",
+      "reason": "Full198 stopped for measured nonfit; valid10 retained. Next nested20 at accepted C2 tests intermediate fit without waiting for C4 speed effort.",
       "functional_at": 10,
       "projected_hours": null,
       "score": 0.9,
@@ -12,12 +12,13 @@
         0.9821237869049271
       ],
       "next_rung": {
-        "tasks": 198,
+        "tasks": 20,
         "planned_clients": 2,
         "batch": 8,
-        "run_id": 42208934357,
-        "projected_eval_hours": 5.2085724876293975,
-        "projected_workflow_hours": 11.084957715526901
+        "status": "queued",
+        "projected_workflow_hours": 7.72125727234195,
+        "source": "runs/larger-gpqa20-c2/manifest.json",
+        "run_id": 42233126698
       },
       "full_suite_decision": "stop",
       "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json"
@@ -41,8 +42,8 @@
       }
     },
     "terminal_bench_2_1": {
-      "decision": "go",
-      "reason": "Valid smoke2: no external retrieval or limit losses; zero score is model task failure. Frozen nightly10 dispatched42206258311 at C2/B8; 6.25h workflow forecast includes new-task margin. Release not frozen.",
+      "decision": "stop",
+      "reason": "Nightly10 measured completed-throughput projects12.1486h including observed queue/setup, beyond12h; stopped with partial evidence. Prior valid2 retained; no nightly score or confirmed loop.",
       "functional_at": 2,
       "projected_hours": null,
       "score": 0,
@@ -55,8 +56,10 @@
         "planned_clients": 2,
         "batch": 8,
         "run_id": 42206258311,
-        "projected_eval_hours": 4.781676175
-      }
+        "projected_eval_hours": 4.781676175,
+        "status": "stopped_nonfit"
+      },
+      "stop_evidence": "runs/nightly-terminal-observable/stop.json"
     }
   }
 }
