@@ -30,6 +30,8 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_dataflow_buffer_disjoint_slots.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
+    dataflow_buffer/test_dfb_write_barrier_bench.cpp
+    dataflow_buffer/test_dataflow_buffer_kernel_exit.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     test_kernel_thread_sync.cpp
     test_banked.cpp
@@ -54,6 +56,7 @@ set(UNIT_TESTS_API_SOURCES
     test_cross_node_dfb.cpp
     test_prefetcher_pipe.cpp
     test_prefetcher_pipe_dram_sender.cpp
+    test_tensor_prefetcher_signal.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_host_write_dma.cpp
