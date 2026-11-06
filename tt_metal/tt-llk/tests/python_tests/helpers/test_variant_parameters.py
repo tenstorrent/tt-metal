@@ -2195,17 +2195,19 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
         self.matmul_pack_block = int(pack_block)
         self.pack_keys = getattr(pack_block, "keys", None)
 
+    # The pack keys go into the variant hash: rows that differ only in them build different ELFs.
     def __repr__(self) -> str:
-        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block}, {self.pack_keys})"
 
     def __eq__(self, other) -> bool:
         return (
             isinstance(other, MATMUL_PACK_BLOCK)
             and other.matmul_pack_block == self.matmul_pack_block
+            and other.pack_keys == self.pack_keys
         )
 
     def __hash__(self) -> int:
-        return hash(self.matmul_pack_block)
+        return hash((self.matmul_pack_block, self.pack_keys))
 
     def convert_to_cpp(self) -> str:
         out = f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
