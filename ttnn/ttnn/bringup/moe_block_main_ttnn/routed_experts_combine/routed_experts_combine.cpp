@@ -16,6 +16,7 @@
 #include "../sparse_dispatch_2d/device/sparse_dispatch_2d_plan.hpp"
 #include "../sparse_dispatch_2d/sparse_dispatch_2d.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "../common/core_grid.hpp"
 
 namespace ttnn::operations::bringup::moe_block_main::routed_experts_combine {
 
@@ -73,7 +74,7 @@ uint32_t static_cb_bytes(MoEBlockResources& /*res*/, const fre::FlatRoutedExpert
 
 // The cells the flat plan leaves (k3 combine_cells), row-major.
 std::vector<CoreCoord> free_cells(MoEBlockResources& res, const fre::FlatRoutedExpertPlan& fp) {
-    const auto grid = res.mesh_device().compute_with_storage_grid_size();
+    const auto grid = block_grid(res.mesh_device().compute_with_storage_grid_size());
     const auto taken = fp.arena_cores();
     std::vector<CoreCoord> out;
     for (uint32_t y = 0; y < grid.y; ++y) {
@@ -187,6 +188,7 @@ CombineState make_state(
     const uint32_t S = s.plan->S, W = s.plan->W;
 
     // the call's arena: every worker core, the combine's bytes then the writers' words (rows of 64 B)
+    // (the whole grid, not block_grid: the arena is L1 every core holds, no program runs on it)
     const auto grid = mesh.compute_with_storage_grid_size();
     const uint32_t rows = l1.arena_bytes / 64 + kWriterWordsRows;
     const CoreRangeSet all(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));

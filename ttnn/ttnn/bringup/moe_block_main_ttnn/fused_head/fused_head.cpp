@@ -17,6 +17,7 @@
 #include "../common/moe_block_resources.hpp"
 
 #include "device/fused_head_device_operation.hpp"
+#include "../common/core_grid.hpp"
 
 namespace ttnn::operations::bringup::moe_block_main::fused_head {
 
@@ -131,7 +132,7 @@ const HeadFit& plan_fused_head(
         if (!f.why.empty()) {
             return f;
         }
-        const auto g = resources.mesh_device().compute_with_storage_grid_size();
+        const auto g = block_grid(resources.mesh_device().compute_with_storage_grid_size());
         const HeadShape shape = head_shape_of(
             resources.dims(),
             resources.config(),
@@ -253,7 +254,7 @@ const FusedHeadSetup& setup_fused_head(
         const auto& dims = resources.dims();
         const auto& cfg = resources.config();
         auto& mesh = resources.mesh_device();
-        const auto g = mesh.compute_with_storage_grid_size();
+        const auto g = block_grid(mesh.compute_with_storage_grid_size());
         FusedHeadSetup setup;
         HeadProgramConfig& pc = setup.config;
         pc.shape = head_shape_of(

@@ -53,6 +53,10 @@ each default off (= the source's program):
   them) - the `ttnn.bringup.flat_routed_expert` fork's weights_nk (DS41-35). `flat_routed_expert_weights.py`:
   `flat_weight_regions(..., nk=)`, FlatRoutedExpert with `layout.weights_nk` takes [N, K] matrices. Off: the source's
   program and key.
+- `set_max_grid(max_x, max_y)` (module function; default (0, 0) = the whole grid): every op's planner (ports, fused
+  head, flat experts, combine cells, fused tail) takes its grid from `common/core_grid.hpp` `block_grid()`, the compute
+  grid cut to the cap - a Blackhole Galaxy's 110-core rule (DeepSeek-V4.1 FIX.15: 11 x 10 of the 12 x 10). Set once,
+  before the first plan. The call's L1 arena and the words' slab still span the whole grid (memory, no program).
 
 ## Measured
 
@@ -62,7 +66,8 @@ not measured here yet (DeepSeek-V4.1 galaxy_8x4: deepseek_v41_flash_d_p, DS41_MO
 
 - Blackhole, a 2D fabric (FABRIC_2D or FABRIC_2D_TORUS_XY); the mesh opened with L1_SMALL for the words' slab and a
   fabric payload of one combine row (`models/demos/moe_block_main/tt/moe_impl.py`).
-- The ops take the whole compute grid (no core cap).
+- The ops take the whole compute grid unless `set_max_grid` caps it; the flat expert's fixed (unshaped) gate/up
+  rectangles need 12 columns on a Galaxy chip (a shaped plan, e.g. DeepSeek-V4.1's 48 cores, fits 11).
 - Kernels are main's of 2026-11-06 (`f93403fa228`); this branch's kernel APIs may differ (JIT errors show at first
   use).
 

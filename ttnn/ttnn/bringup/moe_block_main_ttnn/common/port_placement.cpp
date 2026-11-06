@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "port_placement.hpp"
+#include "core_grid.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -102,7 +103,7 @@ PortCores place_nearest(
 }  // namespace placement_detail
 
 std::vector<tt::tt_metal::CoreCoord> all_worker_cores(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    const auto grid = mesh_device.compute_with_storage_grid_size();
+    const auto grid = block_grid(mesh_device.compute_with_storage_grid_size());
     std::vector<tt::tt_metal::CoreCoord> cells;
     cells.reserve(grid.x * grid.y);
     for (size_t y = 0; y < grid.y; ++y) {

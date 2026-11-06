@@ -17,6 +17,7 @@
 
 #include "../../common/moe_block_resources.hpp"
 #include "../../flat_routed_expert/device/flat_routed_expert_device_operation_types.hpp"
+#include "../../common/core_grid.hpp"
 
 namespace ttnn::operations::bringup::moe_block_main::routed_experts_combine {
 
@@ -139,7 +140,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
         plan->pc.row_bytes + 32);
 
     // the cells: the flat plan's free ones; the port count the ports-apart accumulators lose (combine_port_count)
-    const auto grid = mesh_device.compute_with_storage_grid_size();
+    const auto grid = block_grid(mesh_device.compute_with_storage_grid_size());
     std::vector<CoreCoord> pool = in.cells;
     if (pool.empty()) {
         for (uint32_t y = 0; y < grid.y; ++y) {

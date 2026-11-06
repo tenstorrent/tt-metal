@@ -50,3 +50,21 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   `.../flat_routed_expert_program_factory.cpp`, `.../kernels/{gate_up_compute,down_compute}.cpp`,
   `flat_routed_expert/flat_routed_expert_nanobind.cpp`, `flat_routed_expert/flat_routed_expert_weights.py`,
   `tests/flat_routed_expert/test_flat_routed_expert_host.py`
+
+### set_max_grid: the block's programs inside a capped core grid (2026-11-06, deepseek_v41_flash_d_p FIX.15 re-applied)
+- What: `common/core_grid.{hpp,cpp}`: `set_max_grid(max_x, max_y)` / `max_grid()` (bound in the module) and
+  `block_grid(full)`, the compute grid cut to the cap. Every planner's grid read goes through it: port placement
+  (`all_worker_cores`), the fused head's shape and program (`h.grid`; its matmul columns are then `max_x - 1` and the
+  movers the last column), the flat expert's plan (rectangles, relays, down cells), the combine's free cells and pool,
+  the fused tail's A2A workers and engine. Not the call's L1 arena or the words' slab (memory on every core, no
+  program). The flat plan's 12-column check applies to its fixed rectangles only (a shaped plan's east rectangle is
+  sized to the columns left: `bw_cap`), and every rectangle is checked to fit. Default (0, 0): no cap, the source's
+  grid and plans. A cap different from the one the first plan saw raises.
+- Why: owner rule 18 (FIX.15): on a Blackhole Galaxy no op may run on more than 110 Tensix cores of a chip (the
+  chassis' PSU trips on a chip's di/dt); the carried block takes `MoEOptions.max_grid` for the same reason. Unchanged
+  at the default.
+- Needed by: deepseek_v41_flash_d_p (DS41_MOE_BLOCK_SRC=main; MAX_WORKER_CORES)
+- Files: `common/core_grid.{hpp,cpp}`, `common/sources.cmake`, `common/common_nanobind.cpp`, `common/port_placement.cpp`,
+  `fused_head/fused_head.cpp`, `fused_head/device/head_program.cpp`, `flat_routed_expert/device/flat_routed_expert_plan.cpp`,
+  `routed_experts_combine/routed_experts_combine.cpp`, `routed_experts_combine/device/combine_program.cpp`,
+  `fused_tail/device/fused_tail_plan.cpp`
