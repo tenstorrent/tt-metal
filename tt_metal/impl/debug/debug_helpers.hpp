@@ -60,10 +60,12 @@ inline static CoreDescriptorSet GetAllCores(
     for (const auto& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
+    // Only the DRAM cores Metal runs firmware on. On Blackhole each bank's NOC0 endpoint runs the syseng (MRISC)
+    // firmware from the bottom of its L1, which is where the debug buffers would land.
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         const auto& soc_desc = cluster.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_desc.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
-            all_cores.insert({{dram_core.x, dram_core.y}, CoreType::DRAM});
+        for (const auto& logical_core : soc_desc.get_metal_dram_cores(CoordSystem::LOGICAL)) {
+            all_cores.insert({logical_core, CoreType::DRAM});
         }
     }
     // Quasar dispatch-engine tiles use synthetic logical coords CoreCoord(index, 0) over the soc

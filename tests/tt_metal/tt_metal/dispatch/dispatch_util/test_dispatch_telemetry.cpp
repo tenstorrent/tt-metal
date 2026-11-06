@@ -25,9 +25,9 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include "command_queue_fixture.hpp"
 #include "multi_command_queue_fixture.hpp"
@@ -38,6 +38,7 @@
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "distributed/mesh_trace.hpp"
 #include "llrt/core_descriptor.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 // Clang TSan sets __has_feature(thread_sanitizer) but not always __SANITIZE_THREAD__.
 #if defined(__has_feature)
@@ -79,8 +80,8 @@ std::vector<char*> envp_with_observer_pci_id(std::string& observer_env) {
 }
 
 template <typename TCoreType>
-Program create_blank_program(const TCoreType& core) {
-    Program program = CreateProgram();
+Program create_blank_program(distributed::MeshDevice& mesh_device, const TCoreType& core) {
+    Program program = CreateProgram(mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -136,7 +137,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return devices_.at(0)->get_devices().front(); }
+    auto* device() const { return devices_.at(0)->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());
@@ -228,7 +229,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return device_->get_devices().front(); }
+    auto* device() const { return device_->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());
@@ -298,7 +299,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return mesh_device_->get_devices().front(); }
+    auto* device() const { return mesh_device_->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());
@@ -332,7 +333,7 @@ protected:
 
     template <typename TCoreType>
     Program create_l1_wait_program(const TCoreType& core) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*devices_.at(0));
         auto kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/wait_for_host_l1_write.cpp",
@@ -797,7 +798,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCount) {
 
     // Check a single program run
     distributed::MeshWorkload workload;
-    workload.add_program(device_range_, create_blank_program(worker_cores));
+    workload.add_program(device_range_, create_blank_program(*this->devices_.at(0), worker_cores));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
@@ -810,7 +811,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCount) {
     for (size_t run = 0; run < total_runs; ++run) {
         for (size_t i = 0; i < num_blank_programs; ++i) {
             distributed::MeshWorkload workload;
-            workload.add_program(device_range_, create_blank_program(worker_cores));
+            workload.add_program(device_range_, create_blank_program(*this->devices_.at(0), worker_cores));
             distributed::EnqueueMeshWorkload(cq, workload, false);
         }
         Finish(cq);
@@ -838,7 +839,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCountForTraceReplay) {
     ASSERT_FALSE(initial->info_cqs.empty());
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range_, create_blank_program(worker_cores));
+    workload.add_program(device_range_, create_blank_program(*this->devices_.at(0), worker_cores));
 
     // Load binaries and generate dispatch commands before trace capture; capture does not allow writes.
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -885,7 +886,7 @@ TEST_F(DispatchTelemetryReadApiTest, PrefetchCommandCountIncrementsAfterProgramR
 
     for (size_t i = 0; i < num_blank_programs; ++i) {
         distributed::MeshWorkload workload;
-        workload.add_program(device_range_, create_blank_program(worker_cores));
+        workload.add_program(device_range_, create_blank_program(*this->devices_.at(0), worker_cores));
         distributed::EnqueueMeshWorkload(cq, workload, false);
     }
     Finish(cq);
@@ -904,7 +905,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreEfficiencyIsNulloptWhenWorkerDi
     // Create the device, single-core stream, blank program, and telemetry object.
     auto& cq = devices_.at(0)->mesh_command_queue();
     const CoreRangeSet worker_core{CoreRange(CoreCoord{0, 0})};
-    Program program = create_blank_program(worker_core);
+    Program program = create_blank_program(*this->devices_.at(0), worker_core);
     DispatchTelemetry telemetry(tt_device());
 
     // Run the blank program.
@@ -927,7 +928,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchUtilizationIsEmptyWhenWorkerDispatc
     // Create the device, single-core stream, blank program, and telemetry object.
     auto& cq = devices_.at(0)->mesh_command_queue();
     const CoreRangeSet worker_core{CoreRange(CoreCoord{0, 0})};
-    Program program = create_blank_program(worker_core);
+    Program program = create_blank_program(*this->devices_.at(0), worker_core);
     DispatchTelemetry telemetry(tt_device());
 
     // Run the blank program.
@@ -977,7 +978,7 @@ TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
     constexpr size_t num_blank_programs = 4;
     for (size_t i = 0; i < num_blank_programs; ++i) {
         distributed::MeshWorkload workload;
-        workload.add_program(device_range_, create_blank_program(worker_core));
+        workload.add_program(device_range_, create_blank_program(*this->devices_.at(0), worker_core));
         distributed::EnqueueMeshWorkload(cq, workload, false);
     }
 
@@ -1411,7 +1412,7 @@ TEST_F(DispatchTelemetryReadApiTest, LastWorkLaunchTimestampIncrementsPerSubDevi
 
     const auto run_blank_program = [&](const CoreRangeSet& program_cores) {
         distributed::MeshWorkload workload;
-        workload.add_program(device_range_, create_blank_program(program_cores));
+        workload.add_program(device_range_, create_blank_program(*this->devices_.at(0), program_cores));
         distributed::EnqueueMeshWorkload(cq, workload, false);
         Finish(cq);
     };
@@ -1513,20 +1514,21 @@ TEST_F(DispatchTelemetryReadApiTest, InactiveWorkersIncrementCompleteSem) {
     };
 
     // Create a blank program.
-    const auto run_blank_program_and_expect_complete =
-        [&](const CoreRangeSet& first_program_cores, const CoreRangeSet& second_program_cores, const char* case_name) {
-            distributed::MeshWorkload first_workload;
-            first_workload.add_program(device_range_, create_blank_program(first_program_cores));
-            distributed::EnqueueMeshWorkload(cq, first_workload, false);
-            Finish(cq);
-            expect_completion_count_for_sub_device(0, case_name);
+    const auto run_blank_program_and_expect_complete = [&](const CoreRangeSet& first_program_cores,
+                                                           const CoreRangeSet& second_program_cores,
+                                                           const char* case_name) {
+        distributed::MeshWorkload first_workload;
+        first_workload.add_program(device_range_, create_blank_program(*this->devices_.at(0), first_program_cores));
+        distributed::EnqueueMeshWorkload(cq, first_workload, false);
+        Finish(cq);
+        expect_completion_count_for_sub_device(0, case_name);
 
-            distributed::MeshWorkload second_workload;
-            second_workload.add_program(device_range_, create_blank_program(second_program_cores));
-            distributed::EnqueueMeshWorkload(cq, second_workload, false);
-            Finish(cq);
-            expect_completion_count_for_sub_device(1, case_name);
-        };
+        distributed::MeshWorkload second_workload;
+        second_workload.add_program(device_range_, create_blank_program(*this->devices_.at(0), second_program_cores));
+        distributed::EnqueueMeshWorkload(cq, second_workload, false);
+        Finish(cq);
+        expect_completion_count_for_sub_device(1, case_name);
+    };
 
     const size_t half_sub_device_core_count = sub_device_core_count / 2;
     ASSERT_GT(half_sub_device_core_count, 0);

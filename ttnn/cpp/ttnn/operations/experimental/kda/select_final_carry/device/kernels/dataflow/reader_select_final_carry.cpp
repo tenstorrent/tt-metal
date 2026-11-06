@@ -43,11 +43,11 @@ void stream_tiles(const Accessor& source, uint32_t tile, uint32_t end_tile) {
 // Derive the chronology, publish this rank's mode to the writer, and stream the tiles it sends or copies.
 void kernel_main() {
     using namespace kda_select_final_carry;
+    const uint32_t tail_address = get_common_arg_val<uint32_t>(0);
+    const uint32_t prefix_address = get_common_arg_val<uint32_t>(1);
+    const uint32_t start_address = get_common_arg_val<uint32_t>(2);
+    const uint32_t end_address = get_common_arg_val<uint32_t>(3);
     size_t arg = 0;
-    const uint32_t tail_address = get_arg_val<uint32_t>(arg++);
-    const uint32_t prefix_address = get_arg_val<uint32_t>(arg++);
-    const uint32_t start_address = get_arg_val<uint32_t>(arg++);
-    const uint32_t end_address = get_arg_val<uint32_t>(arg++);
     const uint32_t copy_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t copy_end = get_arg_val<uint32_t>(arg++);
     const uint32_t send_begin = get_arg_val<uint32_t>(arg++);

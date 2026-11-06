@@ -58,10 +58,7 @@ void kernel_main() {
         Noc noc;
         DataflowBuffer tail_out(dfb::out_tail);
         const LocalTensorAccessor<uint32_t> out_shard(tensor::out);
-        const uint32_t out_shard_base = out_shard.get_bank_base_address();
         const uint32_t tile_bytes = tail_out.get_entry_size();
-        const uint32_t noc_x = my_x[noc.get_noc_id()];
-        const uint32_t noc_y = my_y[noc.get_noc_id()];
         const uint32_t num_threads = get_num_threads();
         uint32_t slot = get_my_thread_id();
         for (uint32_t c = 0; c < num_tcs; ++c, slot += num_threads) {
@@ -69,10 +66,10 @@ void kernel_main() {
             if (slot < TAIL_TILES) {
                 noc.async_write(
                     tail_out,
-                    UnicastEndpoint{},
+                    out_shard,
                     tile_bytes,
                     {.offset_bytes = 0},
-                    {.noc_x = noc_x, .noc_y = noc_y, .addr = out_shard_base + (dst_num_tiles + slot) * tile_bytes});
+                    {.offset_bytes = (dst_num_tiles + slot) * tile_bytes});
                 noc.async_write_barrier();
             }
             tail_out.pop_front(1);

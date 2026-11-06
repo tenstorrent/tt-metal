@@ -5,4 +5,5 @@ set(UNIT_TESTS_CONTEXT_SMOKE_SOURCES
     test_metal_env_api.cpp
     test_metal_context_api.cpp
     test_integration.cpp
+    test_mesh_device_properties.cpp
 )
