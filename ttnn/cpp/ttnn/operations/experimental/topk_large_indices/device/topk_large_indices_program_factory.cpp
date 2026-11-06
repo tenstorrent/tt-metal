@@ -11,7 +11,9 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
+#include <array>
 #include <optional>
 #include <tuple>
 
@@ -76,44 +78,26 @@ uint32_t rows_for_core(
     return 0;
 }
 
-void set_runtime_args(
-    tt::tt_metal::Program& program,
-    TopkLargeIndicesSharedVariables& shared,
-    const Tensor& input,
-    std::optional<uint32_t> valid_length) {
-    const auto runtime_args = get_runtime_shape_args(input, valid_length);
-    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel_id);
-    reader_args[topk_common_args::search_length] = runtime_args.search_len;
-    reader_args[topk_common_args::input_row_bytes] = runtime_args.input_row_bytes;
-    tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id)[topk_common_args::compute_search_length] =
-        runtime_args.search_len;
-    // The row assignment depends on the row count and, through the column split, on the searched chunk count.
-    const uint32_t num_chunks = tt::div_up(runtime_args.search_len, shared.llk_k);
-    if (shared.num_rows == runtime_args.num_rows && shared.num_chunks == num_chunks) {
-        return;
-    }
-    const auto assignments =
-        derive_core_row_assignments(shared.core_grid, runtime_args.num_rows, num_chunks, shared.row_split);
-    TT_FATAL(
-        assignments.size() == shared.cores.size(),
-        "topk_large_indices runtime assignment core count {} differs from compiled core count {}",
-        assignments.size(),
-        shared.cores.size());
+// Kernel handles in the built program follow create_descriptor's push_back order into desc.kernels.
+constexpr tt::tt_metal::KernelHandle reader_kernel_index = 0;
+constexpr tt::tt_metal::KernelHandle compute_kernel_index = 1;
+constexpr tt::tt_metal::KernelHandle writer_kernel_index = 2;
+
+// Single source of the per-core argument layout (topk_core_args), shared by create_descriptor and the cache-hit
+// refresh so the two cannot drift. fn receives (core, reader args, compute args, writer args) for every core in
+// the grid, including cores with no rows. The args are spans over stack storage, so the cache-hit refresh writes
+// them straight into the program without allocating; the spans are only valid during the call.
+template <typename Fn>
+void for_each_core_args(
+    const Tensor& input, const std::vector<CoreRowAssignment>& assignments, bool row_split, Fn&& fn) {
+    using Args = ttsl::Span<const uint32_t>;
     const auto* device = input.device();
-    for (uint32_t i = 0; i < assignments.size(); ++i) {
-        const auto& assignment = assignments[i];
-        TT_FATAL(
-            assignment.core == shared.cores[i],
-            "topk_large_indices runtime assignment core {} differs from compiled core {} at position {}",
-            assignment.core,
-            shared.cores[i],
-            i);
-        if (!shared.row_split) {
-            tt::tt_metal::SetRuntimeArgs(
-                program, shared.reader_kernel_id, assignment.core, {assignment.start_row, assignment.num_rows});
-            tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, assignment.core, {assignment.num_rows});
-            tt::tt_metal::SetRuntimeArgs(
-                program, shared.writer_kernel_id, assignment.core, {assignment.start_row, assignment.num_rows});
+    for (const auto& assignment : assignments) {
+        if (!row_split) {
+            const std::array<uint32_t, 2> reader{assignment.start_row, assignment.num_rows};
+            const std::array<uint32_t, 1> compute{assignment.num_rows};
+            const std::array<uint32_t, 2> writer{assignment.start_row, assignment.num_rows};
+            fn(assignment.core, Args(reader), Args(compute), Args(writer));
             continue;
         }
         const uint32_t has_split = assignment.has_split ? 1u : 0u;
@@ -121,27 +105,53 @@ void set_runtime_args(
         const auto partner = assignment.has_split
                                  ? device->worker_core_from_logical_core(assignments[assignment.partner_index].core)
                                  : CoreCoord{0, 0};
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            shared.reader_kernel_id,
-            assignment.core,
-            {assignment.start_row, assignment.num_rows, assignment.split_row, has_split, second_half});
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared.compute_kernel_id, assignment.core, {assignment.num_rows, has_split, second_half});
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            shared.writer_kernel_id,
-            assignment.core,
-            {assignment.start_row,
-             assignment.num_rows,
-             has_split,
-             second_half,
-             static_cast<uint32_t>(partner.x),
-             static_cast<uint32_t>(partner.y),
-             assignment.split_row});
+        const std::array<uint32_t, 5> reader{
+            assignment.start_row, assignment.num_rows, assignment.split_row, has_split, second_half};
+        const std::array<uint32_t, 3> compute{assignment.num_rows, has_split, second_half};
+        const std::array<uint32_t, 7> writer{
+            assignment.start_row,
+            assignment.num_rows,
+            has_split,
+            second_half,
+            static_cast<uint32_t>(partner.x),
+            static_cast<uint32_t>(partner.y),
+            assignment.split_row};
+        fn(assignment.core, Args(reader), Args(compute), Args(writer));
     }
-    shared.num_rows = runtime_args.num_rows;
-    shared.num_chunks = num_chunks;
+}
+
+// Whether the compiled program halves the leftover rows across core pairs. Every input is in the program hash.
+bool program_row_split(const operation_attributes_t& attrs, const Tensor& input) {
+    const auto& shape = input.logical_shape();
+    return row_split_enabled(
+        attrs.k,
+        flattened_rows_excluding_last_dim(shape),
+        shape[-1],
+        static_cast<uint32_t>(attrs.resolved_worker_core_grid.num_cores()));
+}
+
+// Re-derives the per-core row assignment for a cache hit whose row count or searched chunk count moved.
+void rewrite_core_args(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const Tensor& input,
+    uint32_t num_rows,
+    uint32_t num_chunks) {
+    const bool row_split_on = program_row_split(operation_attributes, input);
+    const auto assignments =
+        derive_core_row_assignments(operation_attributes.resolved_worker_core_grid, num_rows, num_chunks, row_split_on);
+    for_each_core_args(
+        input,
+        assignments,
+        row_split_on,
+        [&](const CoreCoord& core,
+            ttsl::Span<const uint32_t> core_reader_args,
+            ttsl::Span<const uint32_t> core_compute_args,
+            ttsl::Span<const uint32_t> core_writer_args) {
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_index, core, core_reader_args);
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_index, core, core_compute_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_index, core, core_writer_args);
+        });
 }
 
 }  // namespace
@@ -261,11 +271,11 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(
     return assignments;
 }
 
-TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TopkLargeIndicesProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
 
     const auto& input = tensor_args.input_tensor;
     auto& indices = tensor_return_value;
@@ -276,7 +286,6 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
 
     const auto& all_cores = operation_attributes.resolved_worker_core_grid;
-    const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
     // Runtime row counts are intentionally patched through runtime args instead of the program hash. The
     // caller-selected structural core grid is fixed in the hash, so cache hits can change shape without ever
     // creating kernels or CBs on cores owned by another subdevice.
@@ -303,58 +312,63 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t survivor_tiles = 2 * tiles_per_sequence;
     const uint32_t survivor_bytes = survivor_tiles * survivor_tile_bytes;
 
-    const uint32_t cb_depth = 2;
-    const auto input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_in, input_tile_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
+    const auto add_cb = [&](uint32_t cb,
+                            uint32_t total_size,
+                            tt::DataFormat data_format,
+                            uint32_t page_size,
+                            std::optional<tt::tt_metal::FaceGeometry> face_geometry = std::nullopt) {
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = total_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb),
+                .data_format = data_format,
+                .page_size = page_size,
+                .face_geometry = face_geometry,
+            }}},
+        });
+    };
 
-    auto indices_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_depth * indices_cb_row_bytes, {{cb_indices, tt::DataFormat::Float32}})
-            .set_page_size(cb_indices, indices_cb_row_bytes);
-    if (llk_target_k == LlkTargetK::K512) {
-        indices_cb_config.set_unpack_face_geometry(cb_indices, tt::constants::FACE_HEIGHT, 2);
-    }
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_cb_config);
+    const uint32_t cb_depth = 2;
+    add_cb(cb_in, cb_depth * tiles_per_sequence * input_tile_bytes, tt::DataFormat::Float16_b, input_tile_bytes);
+
+    add_cb(
+        cb_indices,
+        cb_depth * indices_cb_row_bytes,
+        tt::DataFormat::Float32,
+        indices_cb_row_bytes,
+        llk_target_k == LlkTargetK::K512 ? std::optional<tt::tt_metal::FaceGeometry>(tt::tt_metal::FaceGeometry{
+                                               .face_r_dim = tt::constants::FACE_HEIGHT, .num_faces = 2})
+                                         : std::nullopt);
 
     if (llk_target_k != LlkTargetK::K512) {
-        const auto indices_scratch_cb_config =
-            tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
-                .set_page_size(cb_indices_scratch, indices_row_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_scratch_cb_config);
+        add_cb(cb_indices_scratch, indices_row_bytes, tt::DataFormat::Float32, indices_row_bytes);
     }
 
     const bool has_meta = tensor_args.has_valid_length_metadata();
     if (has_meta) {
-        auto meta_cb_config =
-            tt::tt_metal::CircularBufferConfig(64, {{cb_meta, tt::DataFormat::UInt32}}).set_page_size(cb_meta, 64);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, meta_cb_config);
+        add_cb(cb_meta, 64, tt::DataFormat::UInt32, 64);
     }
 
     // A row of one chunk cannot be halved, so its program carries no transfer code (multi_chunk_rows and
     // row_split_possible are both in the program hash).
-    const uint32_t row_split = row_split_enabled(
-                                   k,
-                                   flattened_rows_excluding_last_dim(input.logical_shape()),
-                                   input.logical_shape()[-1],
-                                   static_cast<uint32_t>(cores.size()))
-                                   ? 1u
-                                   : 0u;
-    uint32_t credit_semaphore_id = 0;
-    uint32_t data_semaphore_id = 0;
-    if (row_split) {
-        const auto create_survivor_cb = [&](uint8_t cb) {
-            const auto survivor_cb_config =
-                // Raw 32 bit words: the index tiles are integers and must not pass through the float packer.
-                tt::tt_metal::CircularBufferConfig(survivor_bytes, {{cb, tt::DataFormat::UInt32}})
-                    .set_page_size(cb, survivor_tile_bytes);
-            tt::tt_metal::CreateCircularBuffer(program, all_cores, survivor_cb_config);
-        };
-        create_survivor_cb(cb_landing);
-        create_survivor_cb(cb_send);
-        credit_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-        data_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    const bool row_split_on = program_row_split(operation_attributes, input);
+    const uint32_t row_split = row_split_on ? 1u : 0u;
+    // Semaphore ids are assigned explicitly here; CreateSemaphore handed out the same 0 and 1 in creation order.
+    constexpr uint32_t credit_semaphore_id = 0;
+    constexpr uint32_t data_semaphore_id = 1;
+    if (row_split_on) {
+        // Raw 32 bit words: the index tiles are integers and must not pass through the float packer.
+        add_cb(cb_landing, survivor_bytes, tt::DataFormat::UInt32, survivor_tile_bytes);
+        add_cb(cb_send, survivor_bytes, tt::DataFormat::UInt32, survivor_tile_bytes);
+        for (const uint32_t semaphore_id : {credit_semaphore_id, data_semaphore_id}) {
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = semaphore_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = all_cores,
+                .initial_value = 0,
+            });
+        }
     }
 
     std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
@@ -375,34 +389,32 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const auto reader_noc = operation_attributes.dram_read_noc;
     const auto writer_noc =
         reader_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
-    auto reader_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = reader_noc,
-            .compile_args = reader_compile_args,
-            .named_compile_args = {{"row_split", row_split}}});
 
-    const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
-    const bool rows_are_multi_chunk = multi_chunk_rows(k, input.logical_shape()[-1]);
-    const bool whole_rows_split = split_whole_rows(
-        k,
-        flattened_rows_excluding_last_dim(input.logical_shape()),
-        input.logical_shape()[-1],
-        static_cast<uint32_t>(cores.size()));
+    tt::tt_metal::KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp";
+    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_args);
+    reader_desc.named_compile_time_args = {{"row_split", row_split}};
+    reader_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = reader_noc,
+    };
+
+    const uint32_t input_last_dim = input.logical_shape()[-1];
+    const uint32_t num_cores = static_cast<uint32_t>(all_cores.num_cores());
+    const auto body_mode = compute_body_mode(k, input_last_dim);
+    const bool rows_are_multi_chunk = multi_chunk_rows(k, input_last_dim);
+    const bool whole_rows_split =
+        split_whole_rows(k, flattened_rows_excluding_last_dim(input.logical_shape()), input_last_dim, num_cores);
+    const bool rows_are_long = long_rows(k, input_last_dim);
     // The K' 2048 segmented body holds its unfused accumulator in L1 while a later segment is split across the
     // threads: two sequences of raw 32-bit words, packed out of Dst and unpacked back. Whole rows and
     // block-aligned halves both take it, but only past one segment -- a shorter row never touches the CB.
-    const bool has_acc =
-        llk_k == to_uint32(LlkTargetK::K2048) && whole_rows_split && long_rows(k, input.logical_shape()[-1]);
+    const bool has_acc = llk_k == to_uint32(LlkTargetK::K2048) && whole_rows_split && rows_are_long;
     if (has_acc) {
         // Same shape as a survivor: two sequences of raw 32-bit words.
-        const auto acc_cb_config =
-            tt::tt_metal::CircularBufferConfig(survivor_bytes, {{cb_acc, tt::DataFormat::UInt32}})
-                .set_page_size(cb_acc, survivor_tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, acc_cb_config);
+        add_cb(cb_acc, survivor_bytes, tt::DataFormat::UInt32, survivor_tile_bytes);
     }
 
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
@@ -414,20 +426,22 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     compute_compile_args.push_back(cb_acc);
     // cb_in is CB 0, so the accumulator's presence cannot be inferred from its id being zero.
     compute_compile_args.push_back(has_acc ? 1u : 0u);
-    auto compute_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            // TopK XL stores fused BF16-value/u16-index words and unfused UINT32 indices in 32-bit DEST lanes.
-            .fp32_dest_acc_en = true,
-            // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
-            .dst_full_sync_en = true,
-            .compile_args = compute_compile_args,
-            .named_compile_args = {
-                {"row_split", row_split},
-                {"split_whole_rows", whole_rows_split ? 1u : 0u},
-                {"long_rows", long_rows(k, input.logical_shape()[-1]) ? 1u : 0u}}});
+
+    tt::tt_metal::KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp";
+    compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = std::move(compute_compile_args);
+    compute_desc.named_compile_time_args = {
+        {"row_split", row_split},
+        {"split_whole_rows", whole_rows_split ? 1u : 0u},
+        {"long_rows", rows_are_long ? 1u : 0u}};
+    compute_desc.config = tt::tt_metal::ComputeConfigDescriptor{
+        // TopK XL stores fused BF16-value/u16-index words and unfused UINT32 indices in 32-bit DEST lanes.
+        .fp32_dest_acc_en = true,
+        // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
+        .dst_full_sync_en = true,
+    };
 
     std::vector<uint32_t> writer_compile_args = {
         cb_indices,
@@ -439,58 +453,80 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     interleaved_accessor_args(indices).append_to(writer_compile_args);
     writer_compile_args.push_back(cb_landing);
     writer_compile_args.push_back(cb_send);
-    writer_compile_args.push_back(credit_semaphore_id);
-    writer_compile_args.push_back(data_semaphore_id);
+    writer_compile_args.push_back(row_split_on ? credit_semaphore_id : 0u);
+    writer_compile_args.push_back(row_split_on ? data_semaphore_id : 0u);
     writer_compile_args.push_back(survivor_tiles);
     writer_compile_args.push_back(survivor_bytes);
 
-    auto writer_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = writer_noc,
-            .compile_args = writer_compile_args,
-            .named_compile_args = {{"row_split", row_split}}});
+    tt::tt_metal::KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp";
+    writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_args);
+    writer_desc.named_compile_time_args = {{"row_split", row_split}};
+    writer_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = writer_noc,
+    };
 
-    TopkLargeIndicesSharedVariables shared{
-        .reader_kernel_id = reader_kernel,
-        .compute_kernel_id = compute_kernel,
-        .writer_kernel_id = writer_kernel,
-        .core_grid = all_cores,
-        .cores = cores,
-        .input_shape = input.logical_shape(),
-        .valid_length = operation_attributes.valid_length,
-        .llk_k = llk_k,
-        .row_split = row_split != 0};
-    const uint32_t meta_addr =
-        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
-    const uint32_t valid_end_addr =
-        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
-    tt::tt_metal::SetCommonRuntimeArgs(
-        program, reader_kernel, {input.buffer()->address(), meta_addr, 0, 0, valid_end_addr});
-    tt::tt_metal::SetCommonRuntimeArgs(program, compute_kernel, {0});
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, {indices.buffer()->address()});
-    set_runtime_args(program, shared, input, operation_attributes.valid_length);
+    // Common args. Buffers go in as Buffer* so they are recorded as bindings; an absent optional tensor passes a
+    // null Buffer*, which emits 0 (the kernels' "not present" value) and registers no binding.
+    const auto shape_args = get_runtime_shape_args(input, operation_attributes.valid_length);
+    tt::tt_metal::Buffer* meta_buffer = has_meta ? tensor_args.valid_length_tensor->buffer() : nullptr;
+    tt::tt_metal::Buffer* valid_end_buffer = has_vend ? tensor_args.valid_end_tensor->buffer() : nullptr;
+    reader_desc.emplace_common_runtime_args(
+        {input.buffer(),
+         meta_buffer,
+         shape_args.search_len,
+         shape_args.input_row_bytes,
+         valid_end_buffer,
+         shape_args.num_rows});
+    TT_FATAL(
+        reader_desc.common_runtime_args.size() == topk_common_args::reader_common_arg_count,
+        "topk_large_indices reader common args out of sync with topk_common_args::Reader");
+    compute_desc.common_runtime_args = {shape_args.search_len};
+    writer_desc.emplace_common_runtime_args({indices.buffer()});
+    TT_FATAL(
+        compute_desc.common_runtime_args.size() == topk_common_args::compute_common_arg_count &&
+            writer_desc.common_runtime_args.size() == topk_common_args::writer_common_arg_count,
+        "topk_large_indices compute/writer common args out of sync with topk_common_args");
 
-    return cached_program_t{std::move(program), std::move(shared)};
+    // Per-core args for every core in the grid, zero-row cores included.
+    const auto assignments = derive_core_row_assignments(
+        all_cores, shape_args.num_rows, tt::div_up(shape_args.search_len, llk_k), row_split_on);
+    for_each_core_args(
+        input,
+        assignments,
+        row_split_on,
+        [&](const CoreCoord& core,
+            ttsl::Span<const uint32_t> reader_args,
+            ttsl::Span<const uint32_t> compute_args,
+            ttsl::Span<const uint32_t> writer_args) {
+            reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>(reader_args.begin(), reader_args.end()));
+            compute_desc.runtime_args.emplace_back(
+                core, std::vector<uint32_t>(compute_args.begin(), compute_args.end()));
+            writer_desc.runtime_args.emplace_back(core, std::vector<uint32_t>(writer_args.begin(), writer_args.end()));
+        });
+
+    // Order fixes the kernel handles the override relies on (reader_kernel_index, compute_kernel_index, ...).
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
 }
 
 void TopkLargeIndicesProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    TT_FATAL(
-        operation_attributes.resolved_worker_core_grid == cached_program.shared_variables.core_grid,
-        "topk_large_indices cache hit resolved grid {} differs from compiled grid {}",
-        operation_attributes.resolved_worker_core_grid,
-        cached_program.shared_variables.core_grid);
-    auto& shared = cached_program.shared_variables;
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const auto& input = tensor_args.input_tensor;
-    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(cached_program.program, shared.reader_kernel_id);
-    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(cached_program.program, shared.writer_kernel_id);
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, reader_kernel_index);
+    auto& compute_args = tt::tt_metal::GetCommonRuntimeArgs(program, compute_kernel_index);
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, writer_kernel_index);
+
+    // Buffer addresses unconditionally: nothing else refreshes them once this hook exists.
     reader_args[topk_common_args::input_address] = input.buffer()->address();
     reader_args[topk_common_args::metadata_address] =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
@@ -500,16 +536,25 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
         tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
     writer_args[topk_common_args::output_address] = tensor_return_value.buffer()->address();
 
-    // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
-    // are runtime controls: update their common arguments when either changes, and
-    // rebuild the per-core row assignment only when the flattened row count changes.
-    if (shared.input_shape == input.logical_shape() && shared.valid_length == operation_attributes.valid_length) {
-        return;
-    }
+    // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length are runtime controls: the
+    // search length and row stride are rewritten on every hit (three stores), and the per-core row assignment is
+    // re-derived only when the row count or the searched chunk count moved. The values the program was last built
+    // or patched for are read back from its own common args, so no state lives outside the program.
+    const uint32_t llk_k = to_uint32(snap_to_llk_target_k(operation_attributes.k));
+    const auto shape_args = get_runtime_shape_args(input, operation_attributes.valid_length);
+    const uint32_t num_chunks = tt::div_up(shape_args.search_len, llk_k);
+    const uint32_t prev_num_rows = reader_args[topk_common_args::assigned_rows];
+    const uint32_t prev_num_chunks = tt::div_up(reader_args[topk_common_args::search_length], llk_k);
 
-    set_runtime_args(cached_program.program, shared, input, operation_attributes.valid_length);
-    shared.input_shape = input.logical_shape();
-    shared.valid_length = operation_attributes.valid_length;
+    // The per-core rewrite runs before search_length and assigned_rows are updated: those two words record what the
+    // assignment was built for, so if the rewrite throws part-way they still mark it stale and the next hit retries.
+    if (prev_num_rows != shape_args.num_rows || prev_num_chunks != num_chunks) {
+        rewrite_core_args(program, operation_attributes, input, shape_args.num_rows, num_chunks);
+    }
+    reader_args[topk_common_args::search_length] = shape_args.search_len;
+    reader_args[topk_common_args::input_row_bytes] = shape_args.input_row_bytes;
+    reader_args[topk_common_args::assigned_rows] = shape_args.num_rows;
+    compute_args[topk_common_args::compute_search_length] = shape_args.search_len;
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

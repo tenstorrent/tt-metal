@@ -8,15 +8,20 @@ namespace topk_common_args {
 // These values are shared by every core running the corresponding kernel.
 // valid_end_address: DRAM address of the 1-element real-token-end tensor (0 when uncapped). Like
 // metadata_address it is refreshed on every dispatch, so a moved buffer stays addressable.
+// assigned_rows: host bookkeeping only, never read by the kernel. It records the flattened row count the per-core
+// assignment was built for, so a cache hit can tell whether the assignment must be re-derived without keeping any
+// state outside the program.
 enum Reader {
     input_address = 0,
     metadata_address = 1,
     search_length = 2,
     input_row_bytes = 3,
-    valid_end_address = 4
+    valid_end_address = 4,
+    assigned_rows = 5,
+    reader_common_arg_count = 6
 };
-enum Compute { compute_search_length = 0 };
-enum Writer { output_address = 0 };
+enum Compute { compute_search_length = 0, compute_common_arg_count = 1 };
+enum Writer { output_address = 0, writer_common_arg_count = 1 };
 }  // namespace topk_common_args
 
 // Per-core args. A core reduces num_rows rows: whole rows from start_row and, with has_split, last one half of
