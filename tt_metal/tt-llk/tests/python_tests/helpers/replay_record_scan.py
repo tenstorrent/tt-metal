@@ -137,13 +137,18 @@ def _runtime_replay_records(words):
                 break  # rd is redefined: the lui's value ends here
         if compose is None or not value & 0x1:
             continue  # a playback word (no load_mode bit), e.g. a MOP template operand
-        for j in range(compose + 1, end):
-            if (
-                words[j] & 0x7F == RISCV_OPCODE_STORE
-                and (words[j] >> 12) & 0x7 == FUNCT3_SW
-            ):
-                records.append((j, None))
-                break
+        # The record is the store of that value: the first sw of rd itself. An earlier sw of another
+        # register (a spill, say) is not it. Only if rd is never stored (the value moved to another
+        # register first) does the first sw stand in, so no record is dropped.
+        stores = [
+            j
+            for j in range(compose + 1, end)
+            if words[j] & 0x7F == RISCV_OPCODE_STORE
+            and (words[j] >> 12) & 0x7 == FUNCT3_SW
+        ]
+        of_rd = [j for j in stores if (words[j] >> 20) & 0x1F == rd]
+        if of_rd or stores:
+            records.append(((of_rd or stores)[0], None))
     return records
 
 
