@@ -12,6 +12,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "api/debug/assert.h"
@@ -172,16 +175,16 @@ void kernel_main() {
     Semaphore<> addr_ready_sem(addr_ready_semaphore_id);
     uint32_t cross_addr_sem_l1_offset = get_semaphore(cross_addr_semaphore_id);
     for (uint32_t s = 0; s < num_workers; s++) {
-        ring_route_base[s] = get_write_ptr(ring_route_cb[s]);
-        ring_payload_base[s] = get_write_ptr(ring_payload_cb[s]);
-        ring_meta_base[s] = get_write_ptr(ring_meta_cb[s]);
+        ring_route_base[s] = CircularBuffer(ring_route_cb[s]).get_write_ptr();
+        ring_payload_base[s] = CircularBuffer(ring_payload_cb[s]).get_write_ptr();
+        ring_meta_base[s] = CircularBuffer(ring_meta_cb[s]).get_write_ptr();
         uint64_t mailbox = get_noc_addr(ring_noc_x[s], ring_noc_y[s], cross_addr_sem_l1_offset);
         noc_inline_dw_write(mailbox + 0 * sizeof(uint32_t), ring_route_base[s]);
         noc_inline_dw_write(mailbox + 1 * sizeof(uint32_t), ring_payload_base[s]);
         noc_inline_dw_write(mailbox + 2 * sizeof(uint32_t), ring_meta_base[s]);
-        noc_async_write_barrier();  // all three addresses must land before addr_ready wakes worker s
+        noc.async_write_barrier();  // all three addresses must land before addr_ready wakes worker s
         addr_ready_sem.up(noc, ring_noc_x[s], ring_noc_y[s], 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
         DPRINT_DISPATCH("Sender writer: addr handshake done ring={} u=({},{})\n", s, ring_noc_x[s], ring_noc_y[s]);
     }
 
@@ -189,7 +192,7 @@ void kernel_main() {
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 
-    uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
+    uint32_t packet_header_buffer_address = CircularBuffer(cb_packet_header_id).get_read_ptr();
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
 
 #ifdef FABRIC_2D
@@ -322,8 +325,8 @@ void kernel_main() {
             invalidate_l1_cache();
             if (*ring_data_avail_ptr[s] >= consumed[s] + 1) {
                 uint32_t slot = consumed[s] % writer_cb_size;
-                volatile tt_l1_ptr uint32_t* route_info =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_route_base[s] + slot * route_info_slot_stride);
+                uint32_t route_info_addr = ring_route_base[s] + slot * route_info_slot_stride;
+                CoreLocalMem<volatile uint32_t> route_info(route_info_addr);
                 if (route_info[0] == ROUTE_INFO_SENTINEL) {
                     done[s] = true;
                     num_done++;
@@ -333,8 +336,7 @@ void kernel_main() {
                     // Grouped ring slot (1D Ring, any top-k): one direction-group of destinations plus
                     // the fields needed to rebuild each destination's metadata here (the producer
                     // leaves the meta ring slot unwritten for groups). Layout: GroupedRouteInfo.
-                    const volatile tt_l1_ptr GroupedRouteInfo* group =
-                        reinterpret_cast<const volatile tt_l1_ptr GroupedRouteInfo*>(route_info);
+                    CoreLocalMem<const volatile GroupedRouteInfo> group(route_info_addr);
                     // Snapshot the per-group scalars into registers. Copies, not references, on
                     // purpose: the slot is volatile L1 written remotely by the worker, so a
                     // `const volatile uint32_t&` would re-issue an L1 load at every use below —
@@ -396,7 +398,7 @@ void kernel_main() {
                     // in-flight source.
                     auto& metadata_sender = fabric_connections[direction];
                     uint32_t meta_addr = ring_meta_base[s] + slot * aligned_metadata_page_size;
-                    volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_addr);
+                    CoreLocalMem<volatile int32_t> meta(meta_addr);
                     for (uint32_t i = 0; i < num_dests; ++i) {
                         // Exactly the documented metadata contract, identical to the local and legacy
                         // cross-device paths in writer_worker_dispatch: three int32 routing fields
@@ -421,7 +423,7 @@ void kernel_main() {
                             dest_pages[i],
                             (int)aligned_metadata_page_size,
                             l1_alignment);
-                        noc_async_writes_flushed();  // meta source reused next iteration
+                        noc.async_writes_flushed();  // meta source reused next iteration
                     }
 #else
                     uint32_t route = route_info[0];
@@ -486,7 +488,7 @@ void kernel_main() {
                             page_idx,
                             (int)aligned_metadata_page_size,
                             l1_alignment);
-                        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
+                        noc.async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
                     }
 #endif
 #endif  // SPARSE_MCAST_DISPATCH
@@ -500,7 +502,7 @@ void kernel_main() {
 #ifdef DEST_CHIP_ID
     // Defensive: drain any pending local NOC writes before fabric atomic-inc traffic,
     // so the exit-sem signal cannot reach peers ahead of the last metadata/payload writes.
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 
     // Exit semaphore exchange on a dedicated semaphore (exit_semaphore_address). The exit-inc must
     // not be observed before our prior fabric writes (payload + metadata) to that chip have landed,
@@ -545,7 +547,7 @@ void kernel_main() {
     // FABRIC_2D's FLUSH_BLOCKING handshake sends drain the source before packet-header reuse, but do
     // not prove arrival in the EDM inbox; FABRIC_1D's per-target helper sends are non-blocking. Keep a
     // full barrier before either connection path closes so every prior write and atomic has arrived.
-    noc_async_full_barrier();
+    noc.async_full_barrier();
 
 #ifdef FABRIC_2D
     fabric_connections.close();

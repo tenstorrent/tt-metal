@@ -41,6 +41,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -68,7 +69,11 @@ void kernel_main() {
 
     // ===== Compile-time args =====
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
+    CircularBuffer cb_input(cb_input_id);
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(1);
+#ifndef ROW_MAJOR_INPUT
+    CircularBuffer cb_signal(cb_signal_id);
+#endif
     constexpr uint32_t hidden_size = get_compile_time_arg_val(2);
     constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t total_batches = get_compile_time_arg_val(4);
@@ -76,9 +81,13 @@ void kernel_main() {
     constexpr uint32_t total_workers = get_compile_time_arg_val(6);
 
     constexpr uint32_t cb_indices_id = get_compile_time_arg_val(7);
+    CircularBuffer cb_indices(cb_indices_id);
     constexpr uint32_t cb_offsets_id = get_compile_time_arg_val(8);
+    CircularBuffer cb_offsets(cb_offsets_id);
     constexpr uint32_t cb_dispatch_table_id = get_compile_time_arg_val(9);
+    CircularBuffer cb_dispatch_table(cb_dispatch_table_id);
     constexpr uint32_t cb_plan_id = get_compile_time_arg_val(10);
+    CircularBuffer cb_plan(cb_plan_id);
 
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(11);
     constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(12);
@@ -126,6 +135,7 @@ void kernel_main() {
 #endif
     constexpr auto scales_args = TensorAccessorArgs<scales_args_offset>();
     constexpr uint32_t cb_scales_id = get_compile_time_arg_val(scales_args.next_compile_time_args_offset());
+    CircularBuffer cb_scales(cb_scales_id);
     constexpr uint32_t aligned_scales_page_size =
         get_compile_time_arg_val(scales_args.next_compile_time_args_offset() + 1);
 #endif
@@ -184,33 +194,41 @@ void kernel_main() {
     // local copy uninitialized and pull the owner's copy under the baton (per-batch loop).
     // dispatch_table[] is read-only -> every core keeps its own copy.
     constexpr bool IS_OWNER = (core_id == 0);
-    cb_reserve_back(cb_offsets_id, offsets_pages);
-    uint32_t offsets_base_addr = get_write_ptr(cb_offsets_id);
+    cb_offsets.reserve_back(offsets_pages);
+    uint32_t offsets_base_addr = cb_offsets.get_write_ptr();
     if constexpr (IS_OWNER) {
         for (uint32_t i = 0; i < offsets_pages; i++) {
-            noc_async_read_page(i, offsets_addr_gen, offsets_base_addr + i * aligned_offsets_page_size);
+            noc.async_read(
+                offsets_addr_gen,
+                cb_offsets,
+                offsets_addr_gen.get_aligned_page_size(),
+                {.page_id = i},
+                {.offset_bytes = i * aligned_offsets_page_size});
         }
     }
-    cb_reserve_back(cb_dispatch_table_id, dispatch_table_pages);
-    uint32_t dispatch_table_base_addr = get_write_ptr(cb_dispatch_table_id);
+    cb_dispatch_table.reserve_back(dispatch_table_pages);
+    uint32_t dispatch_table_base_addr = cb_dispatch_table.get_write_ptr();
     for (uint32_t i = 0; i < dispatch_table_pages; i++) {
-        noc_async_read_page(
-            i, dispatch_table_addr_gen, dispatch_table_base_addr + i * aligned_dispatch_table_page_size);
+        noc.async_read(
+            dispatch_table_addr_gen,
+            cb_dispatch_table,
+            dispatch_table_addr_gen.get_aligned_page_size(),
+            {.page_id = i},
+            {.offset_bytes = i * aligned_dispatch_table_page_size});
     }
-    noc_async_read_barrier();
-    tt_l1_ptr uint32_t* offsets = reinterpret_cast<tt_l1_ptr uint32_t*>(offsets_base_addr);
-    tt_l1_ptr int32_t* expert_dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_base_addr);
+    noc.async_read_barrier();
+    CoreLocalMem<uint32_t> offsets(offsets_base_addr);
+    CoreLocalMem<int32_t> expert_dispatch_table(dispatch_table_base_addr);
 
     // ===== Baton-ring setup =====
     // Each core waits on its own turn semaphore (local poll) and signals the next core's
     // semaphore after finishing its batch. The owner seeds its own semaphore to 1 so the
     // very first batch (batch 0, always owned by core 0) does not block.
     const uint32_t offsets_bytes = offsets_pages * aligned_offsets_page_size;
-    volatile tt_l1_ptr uint32_t* turn_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(turn_semaphore_id));
+    Semaphore<> turn_sem(turn_semaphore_id);
     Semaphore<> next_turn_sem(turn_semaphore_id);
     if constexpr (IS_OWNER) {
-        noc_semaphore_set(turn_sem_ptr, 1);
+        turn_sem.set(1);
     }
     uint32_t turn_expected = 1;  // per-core baton counter; +1 for each batch this core handles
     DPRINT_DISPATCH(
@@ -222,8 +240,8 @@ void kernel_main() {
         (uint32_t)total_workers);
 
     // ===== Indices scratch (overwritten per batch, single page slot used) =====
-    cb_reserve_back(cb_indices_id, read_batch_size);
-    uint32_t indices_base = get_write_ptr(cb_indices_id);
+    cb_indices.reserve_back(read_batch_size);
+    uint32_t indices_base = cb_indices.get_write_ptr();
 
     // Shrink the batch loop to this device's real (unpadded) tokens when right-padded (pad_side == 0).
     // The writer applies the same reduction so they agree on the end-of-plan handshake. Padded tokens
@@ -233,11 +251,12 @@ void kernel_main() {
 #ifdef HAS_PADDING_CONFIG
     {
         const auto padding_cfg_gen = TensorAccessor(padding_cfg_args, padding_config_address);
-        cb_reserve_back(cb_padding_config_id, 1);
-        uint32_t pc_l1 = get_write_ptr(cb_padding_config_id);
-        noc_async_read_page(0, padding_cfg_gen, pc_l1);
-        noc_async_read_barrier();
-        tt_l1_ptr uint32_t* pc = reinterpret_cast<tt_l1_ptr uint32_t*>(pc_l1);
+        CircularBuffer cb_padding_config(cb_padding_config_id);
+        cb_padding_config.reserve_back(1);
+        uint32_t pc_l1 = cb_padding_config.get_write_ptr();
+        noc.async_read(padding_cfg_gen, cb_padding_config, padding_cfg_gen.get_aligned_page_size(), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        CoreLocalMem<uint32_t> pc(pc_l1);
         uint32_t real_count = pc[0];
         uint32_t pad_side = pc[1];
         if (pad_side == 0) {
@@ -268,57 +287,78 @@ void kernel_main() {
         // path exactly; only batch_count rows are real (the plan only emits token_t < batch_count, so
         // the trailing slots are never referenced). Reads are 8-at-a-time (read_batch_size) and overlap
         // with the writer draining the previous batch via the double-buffered CB on the other RISC.
-        cb_reserve_back(cb_input_id, read_batch_size);
-        uint32_t payload_base = get_write_ptr(cb_input_id);
+        cb_input.reserve_back(read_batch_size);
         for (uint32_t t = 0; t < batch_count; t++) {
-            noc_async_read_page(batch_start + t, input_addr_gen, payload_base + t * aligned_input_page_size);
+            noc.async_read(
+                input_addr_gen,
+                cb_input,
+                input_addr_gen.get_aligned_page_size(),
+                {.page_id = batch_start + t},
+                {.offset_bytes = t * aligned_input_page_size});
         }
         // Read this batch's indices pages alongside the payload (single barrier covers all).
         for (uint32_t t = 0; t < batch_count; t++) {
-            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+            noc.async_read(
+                indices_addr_gen,
+                cb_indices,
+                indices_addr_gen.get_aligned_page_size(),
+                {.page_id = batch_start + t},
+                {.offset_bytes = t * aligned_indices_page_size});
         }
 #ifdef FP8_SCALED
         // Read this batch's per-token fp8 scale rows into the scales CB, indexed by token_t parallel
         // to the payload, so the writer can copy them into the metadata tail. Same batch granularity
         // and double-buffering as c_0 so reader/writer stay in lockstep.
-        cb_reserve_back(cb_scales_id, read_batch_size);
-        uint32_t scales_base = get_write_ptr(cb_scales_id);
+        cb_scales.reserve_back(read_batch_size);
         for (uint32_t t = 0; t < batch_count; t++) {
-            noc_async_read_page(batch_start + t, scales_addr_gen, scales_base + t * aligned_scales_page_size);
+            noc.async_read(
+                scales_addr_gen,
+                cb_scales,
+                scales_addr_gen.get_aligned_page_size(),
+                {.page_id = batch_start + t},
+                {.offset_bytes = t * aligned_scales_page_size});
         }
 #endif
-        noc_async_read_barrier();
-        cb_push_back(cb_input_id, read_batch_size);
+        noc.async_read_barrier();
+        cb_input.push_back(read_batch_size);
 #ifdef FP8_SCALED
-        cb_push_back(cb_scales_id, read_batch_size);
+        cb_scales.push_back(read_batch_size);
 #endif
 #else
         uint32_t tile_base_page = batch_idx * tiles_per_row;
 
         // 1. Signal compute to start untilizing this batch
-        cb_reserve_back(cb_signal_id, 1);
-        volatile tt_l1_ptr uint32_t* signal_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
+        cb_signal.reserve_back(1);
+        CoreLocalMem<volatile uint32_t> signal_ptr(cb_signal.get_write_ptr());
         signal_ptr[0] = 0x00000000;
-        cb_push_back(cb_signal_id, 1);
+        cb_signal.push_back(1);
 
         // 2. Stream tiled input stripe from DRAM in blocks of block_ct_dim tiles
         for (uint32_t blk = 0; blk < num_tile_blocks; blk++) {
-            cb_reserve_back(cb_input_id, block_ct_dim);
-            uint32_t blk_write_ptr = get_write_ptr(cb_input_id);
+            cb_input.reserve_back(block_ct_dim);
             uint32_t blk_start = tile_base_page + blk * block_ct_dim;
             for (uint32_t col = 0; col < block_ct_dim; col++) {
-                noc_async_read_page(blk_start + col, input_addr_gen, blk_write_ptr + col * aligned_input_page_size);
+                noc.async_read(
+                    input_addr_gen,
+                    cb_input,
+                    input_addr_gen.get_aligned_page_size(),
+                    {.page_id = blk_start + col},
+                    {.offset_bytes = col * aligned_input_page_size});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_id, block_ct_dim);
+            noc.async_read_barrier();
+            cb_input.push_back(block_ct_dim);
         }
 
         // 3. Read this batch's indices pages
         for (uint32_t t = 0; t < batch_count; t++) {
-            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+            noc.async_read(
+                indices_addr_gen,
+                cb_indices,
+                indices_addr_gen.get_aligned_page_size(),
+                {.page_id = batch_start + t},
+                {.offset_bytes = t * aligned_indices_page_size});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
 #endif
 
@@ -328,11 +368,10 @@ void kernel_main() {
             (uint32_t)sender_core_idx,
             (uint32_t)core_id,
             batch_idx);
-        cb_reserve_back(cb_plan_id, 1);
-        uint32_t plan_addr = get_write_ptr(cb_plan_id);
-        volatile tt_l1_ptr PlanHeader* plan = reinterpret_cast<volatile tt_l1_ptr PlanHeader*>(plan_addr);
-        volatile tt_l1_ptr PlanEntry* entries =
-            reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(plan_addr + sizeof(PlanHeader));
+        cb_plan.reserve_back(1);
+        uint32_t plan_addr = cb_plan.get_write_ptr();
+        CoreLocalMem<volatile PlanHeader> plan(plan_addr);
+        CoreLocalMem<volatile PlanEntry> entries(plan_addr + sizeof(PlanHeader));
         uint32_t entry_count = 0;
 
         DPRINT_DISPATCH(
@@ -341,8 +380,8 @@ void kernel_main() {
             (uint32_t)core_id,
             batch_idx,
             turn_expected,
-            (uint32_t)(*turn_sem_ptr));
-        noc_semaphore_wait_min(turn_sem_ptr, turn_expected);
+            turn_sem.value());
+        turn_sem.wait_min(turn_expected);
         DPRINT_DISPATCH("[R s={} c={}] b={} GOT baton\n", (uint32_t)sender_core_idx, (uint32_t)core_id, batch_idx);
         turn_expected++;
         if constexpr (!IS_OWNER) {
@@ -352,12 +391,11 @@ void kernel_main() {
                 offsets_bytes,
                 {.noc_x = owner_noc_x, .noc_y = owner_noc_y, .addr = offsets_base_addr},
                 {});
-            noc_async_read_barrier();
+            noc.async_read_barrier();
         }
 
         for (uint32_t t = 0; t < batch_count; t++) {
-            tt_l1_ptr uint16_t* indices_t =
-                reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
+            CoreLocalMem<uint16_t> indices_t(indices_base + t * aligned_indices_page_size);
             uint32_t token_idx = batch_start + t;
 
             // Walk this token's top-k experts; emit a plan entry for each one routed to this
@@ -402,7 +440,7 @@ void kernel_main() {
                     }
                 }
 
-                volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
+                CoreLocalMem<volatile PlanEntry> entry = entries + entry_count;
                 entry->flags = expert_lives_on_this_chip ? PLAN_FLAG_LOCAL : 0;
                 entry->token_t = t;
                 entry->routed_expert = (uint32_t)routed_expert;
@@ -440,7 +478,7 @@ void kernel_main() {
                 offsets_bytes,
                 {},
                 {.noc_x = owner_noc_x, .noc_y = owner_noc_y, .addr = offsets_base_addr});
-            noc_async_write_barrier();
+            noc.async_write_barrier();
         }
         if (batch_idx + 1 < effective_total_batches) {
             next_turn_sem.up(noc, next_noc_x, next_noc_y, 1);
@@ -460,7 +498,7 @@ void kernel_main() {
         }
 
         plan->entry_count = entry_count;
-        cb_push_back(cb_plan_id, 1);
+        cb_plan.push_back(1);
     }
 
     // Teardown: all batches done — push the two end-of-stream sentinels this core's
@@ -469,23 +507,21 @@ void kernel_main() {
 #ifndef ROW_MAJOR_INPUT
     // (1) Sentinel value to compute so it breaks out of its untilize loop. Row-major has no compute
     //     kernel, so this signal is skipped entirely.
-    cb_reserve_back(cb_signal_id, 1);
-    volatile tt_l1_ptr uint32_t* signal_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
+    cb_signal.reserve_back(1);
+    CoreLocalMem<volatile uint32_t> signal_ptr(cb_signal.get_write_ptr());
     signal_ptr[0] = ROUTE_INFO_SENTINEL;
-    cb_push_back(cb_signal_id, 1);
+    cb_signal.push_back(1);
 #endif
 
     // (2) Zero-entry end-of-plan page to the writer (entry_count == 0, entries[0].flags ==
     //     PLAN_FLAG_END) so it stops draining and forwards ROUTE_INFO_SENTINEL to the sender.
-    cb_reserve_back(cb_plan_id, 1);
-    uint32_t sentinel_addr = get_write_ptr(cb_plan_id);
-    volatile tt_l1_ptr PlanHeader* sentinel_plan = reinterpret_cast<volatile tt_l1_ptr PlanHeader*>(sentinel_addr);
-    volatile tt_l1_ptr PlanEntry* sentinel_entries =
-        reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(sentinel_addr + sizeof(PlanHeader));
+    cb_plan.reserve_back(1);
+    uint32_t sentinel_addr = cb_plan.get_write_ptr();
+    CoreLocalMem<volatile PlanHeader> sentinel_plan(sentinel_addr);
+    CoreLocalMem<volatile PlanEntry> sentinel_entries(sentinel_addr + sizeof(PlanHeader));
     sentinel_plan->entry_count = 0;
     sentinel_entries[0].flags = PLAN_FLAG_END;
-    cb_push_back(cb_plan_id, 1);
+    cb_plan.push_back(1);
 
     // next_turn_sem.up() is a non-posted atomic. If its response lands after the next kernel on this RISC has
     // snapshotted the NoC counters, that kernel's atomic barrier can hang or return before its own atomics land.

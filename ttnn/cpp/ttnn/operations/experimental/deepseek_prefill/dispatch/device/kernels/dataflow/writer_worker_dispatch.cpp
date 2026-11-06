@@ -46,6 +46,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "api/debug/assert.h"
@@ -141,18 +143,16 @@ void kernel_main() {
     addr_ready_sem.set(0);
 
     // All three base addresses arrive packed in the single mailbox slot (words [0],[1],[2]).
-    volatile tt_l1_ptr uint32_t* cross_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_addr_semaphore_id));
+    CoreLocalMem<volatile uint32_t> cross_addr_ptr(get_semaphore(cross_addr_semaphore_id));
     uint32_t sender_c4_l1_addr = cross_addr_ptr[0];
     uint32_t sender_c5_l1_addr = cross_addr_ptr[1];
     uint32_t sender_c6_l1_addr = cross_addr_ptr[2];
 
-    // Pre-compute NOC addresses for the sender's three receive buffers and its data_avail
-    // semaphore.  A cross-device entry writes route_info/payload/metadata into these slots,
-    // then bumps data_avail to tell the sender one slot is ready to forward over the fabric.
-    uint64_t sender_c4_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c4_l1_addr);
-    uint64_t sender_c5_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c5_l1_addr);
-    uint64_t sender_c6_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c6_l1_addr);
+    // The sender's three receive buffers and its data_avail semaphore.  A cross-device entry
+    // writes route_info/payload/metadata into these slots (as UnicastEndpoint destinations at
+    // sender_noc_x/y), then bumps data_avail to tell the sender one slot is ready to forward
+    // over the fabric.
+    UnicastEndpoint sender_ep;
     uint64_t sender_data_avail_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_avail_semaphore_id));
     Semaphore<> data_avail_sem(data_avail_semaphore_id);
@@ -161,8 +161,6 @@ void kernel_main() {
     // finished forwarding.  We poll it as a per-entry credit (wait for produced_count+1) before
     // overwriting a slot, so the sender's in-flight fabric send is never clobbered.
     Semaphore<> space_avail_sem(space_avail_semaphore_id);
-    volatile tt_l1_ptr uint32_t* space_avail_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(space_avail_semaphore_id));
 
     // Metadata scratch layout: [meta_scratch_slots local ring slots][1 trailing cross-device slot].
     // Local entries rotate through the ring so consecutive DRAM writes overlap; cross-device entries
@@ -172,8 +170,7 @@ void kernel_main() {
     uint32_t metadata_scratch_addr = cb_metadata_scratch.get_write_ptr();
     uint32_t xdev_metadata_scratch_addr = metadata_scratch_addr + meta_scratch_slots * aligned_metadata_page_size;
     uint32_t route_info_scratch_addr = cb_route_info_scratch.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* route_info_scratch =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_info_scratch_addr);
+    CoreLocalMem<volatile uint32_t> route_info_scratch(route_info_scratch_addr);
     uint32_t produced_count = 0;
     uint32_t local_count = 0;
 
@@ -212,8 +209,7 @@ void kernel_main() {
     }
     // The grouped record is built in the same route_info scratch the legacy path uses; the host sized
     // that CB from sizeof(GroupedRouteInfo) on this path.
-    volatile tt_l1_ptr GroupedRouteInfo* grouped_route_info =
-        reinterpret_cast<volatile tt_l1_ptr GroupedRouteInfo*>(route_info_scratch_addr);
+    CoreLocalMem<volatile GroupedRouteInfo> grouped_route_info(route_info_scratch_addr);
 
     uint32_t cur_token_valid = 0;  // 0 until the first cross-device entry of a token is bucketed
     uint32_t cur_token_t = 0;      // token row (into the current batch's untilize CB)
@@ -249,19 +245,30 @@ void kernel_main() {
                 (uint32_t)hop_mask,
                 slot);
 
-            uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
-            noc_async_write_one_packet_with_trid(
-                route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+            uint32_t c4_slot = sender_c4_l1_addr + slot * route_info_slot_stride;
+            noc.async_write<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                CoreLocalMem<uint32_t>(route_info_scratch_addr),
+                sender_ep,
+                route_info_slot_stride,
+                {},
+                {.noc_x = sender_noc_x, .noc_y = sender_noc_y, .addr = c4_slot},
+                {.trid = TRID_NON_LOCAL_WRITE});
 
             // Payload: the token's untilized row, chunked to NOC_MAX_BURST_SIZE packets. Every slot of a
             // token reads the same src_addr; the sender fans it out to gcount pages.
-            uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+            uint32_t c5_slot = sender_c5_l1_addr + slot * aligned_output_page_size;
             uint32_t off = 0;
             while (off < aligned_output_page_size) {
                 uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
                                      ? (uint32_t)NOC_MAX_BURST_SIZE
                                      : (aligned_output_page_size - off);
-                noc_async_write_one_packet_with_trid(src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
+                noc.async_write<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                    CoreLocalMem<uint32_t>(src_addr),
+                    sender_ep,
+                    chunk,
+                    {.offset_bytes = off},
+                    {.noc_x = sender_noc_x, .noc_y = sender_noc_y, .addr = c5_slot + off},
+                    {.trid = TRID_NON_LOCAL_WRITE});
                 off += chunk;
             }
 #ifdef FP8_SCALED
@@ -271,26 +278,29 @@ void kernel_main() {
             // Reuses the single trailing xdev scratch slot — safe because the barrier below retires this
             // write before the next emit_slot call can touch the scratch again.
             {
-                volatile tt_l1_ptr int32_t* meta =
-                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
+                CoreLocalMem<volatile int32_t> meta(xdev_metadata_scratch_addr);
                 meta[0] = (int32_t)linearized_mesh_coord;
                 meta[1] = (int32_t)cur_token_idx;
                 meta[2] = 0;  // placeholder; sender writes the real top-k slot per destination
                 // Same bit-for-bit fp32 scale copy as the local and legacy cross-device paths.
-                tt_l1_ptr uint32_t* src_scales =
-                    reinterpret_cast<tt_l1_ptr uint32_t*>(cur_scales_read_ptr + cur_token_t * aligned_scales_page_size);
+                CoreLocalMem<uint32_t> src_scales(cur_scales_read_ptr + cur_token_t * aligned_scales_page_size);
                 for (uint32_t w = 0; w < num_scale_words; w++) {
                     meta[3 + w] = (int32_t)src_scales[w];
                 }
-                uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
-                noc_async_write_one_packet_with_trid(
-                    xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+                uint32_t c6_slot = sender_c6_l1_addr + slot * aligned_metadata_page_size;
+                noc.async_write<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                    CoreLocalMem<uint32_t>(xdev_metadata_scratch_addr),
+                    sender_ep,
+                    aligned_metadata_page_size,
+                    {},
+                    {.noc_x = sender_noc_x, .noc_y = sender_noc_y, .addr = c6_slot},
+                    {.trid = TRID_NON_LOCAL_WRITE});
             }
 #else
             // No metadata staged: the sender builds each destination's metadata from route_info.
 #endif
 
-            noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = TRID_NON_LOCAL_WRITE});
             noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
             produced_count++;
         };
@@ -352,11 +362,12 @@ void kernel_main() {
 #ifdef HAS_PADDING_CONFIG
     {
         const auto padding_cfg_gen = TensorAccessor(padding_cfg_args, padding_config_address);
-        cb_reserve_back(cb_padding_config_id, 1);
-        uint32_t pc_l1 = get_write_ptr(cb_padding_config_id);
-        noc_async_read_page(0, padding_cfg_gen, pc_l1);
-        noc_async_read_barrier();
-        tt_l1_ptr uint32_t* pc = reinterpret_cast<tt_l1_ptr uint32_t*>(pc_l1);
+        CircularBuffer cb_padding_config(cb_padding_config_id);
+        cb_padding_config.reserve_back(1);
+        uint32_t pc_l1 = cb_padding_config.get_write_ptr();
+        noc.async_read(padding_cfg_gen, cb_padding_config, padding_cfg_gen.get_aligned_page_size(), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        CoreLocalMem<uint32_t> pc(pc_l1);
         uint32_t real_count = pc[0];
         uint32_t pad_side = pc[1];
         if (pad_side == 0) {
@@ -388,9 +399,8 @@ void kernel_main() {
         // Wait for reader to publish the per-batch route plan
         cb_plan.wait_front(1);
         uint32_t plan_addr = cb_plan.get_read_ptr();
-        volatile tt_l1_ptr PlanHeader* plan = reinterpret_cast<volatile tt_l1_ptr PlanHeader*>(plan_addr);
-        volatile tt_l1_ptr PlanEntry* entries =
-            reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(plan_addr + sizeof(PlanHeader));
+        CoreLocalMem<volatile PlanHeader> plan(plan_addr);
+        CoreLocalMem<volatile PlanEntry> entries(plan_addr + sizeof(PlanHeader));
         uint32_t entry_count = plan->entry_count;
         DPRINT_DISPATCH(
             "[W c={}] b={} draining plan entries={} produced_so_far={}\n",
@@ -404,7 +414,7 @@ void kernel_main() {
             // untilized token; flags selects its destination: local DRAM here, or staged into the
             // sender's receive buffers for the sender to forward over the fabric.
             for (uint32_t e = 0; e < entry_count; e++) {
-                volatile tt_l1_ptr PlanEntry* entry = &entries[e];
+                CoreLocalMem<volatile PlanEntry> entry = entries + e;
                 uint32_t flags = entry->flags;
                 uint32_t token_t = entry->token_t;
                 uint32_t page_idx = entry->page_idx;
@@ -431,7 +441,7 @@ void kernel_main() {
                     // next ring slot, then written to the same DRAM page index as the payload.
                     uint32_t meta_addr =
                         metadata_scratch_addr + (local_count % meta_scratch_slots) * aligned_metadata_page_size;
-                    volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_addr);
+                    CoreLocalMem<volatile int32_t> meta(meta_addr);
                     meta[0] = (int32_t)linearized_mesh_coord;
                     meta[1] = (int32_t)token_idx;
                     meta[2] = (int32_t)k;
@@ -439,8 +449,7 @@ void kernel_main() {
                     // Copy this token's fp32 scale words (bit-for-bit) into the metadata tail so the
                     // routed buffer can be dequantized downstream. token_t indexes the scales CB.
                     {
-                        tt_l1_ptr uint32_t* src_scales =
-                            reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
+                        CoreLocalMem<uint32_t> src_scales(scales_read_ptr + token_t * aligned_scales_page_size);
                         for (uint32_t w = 0; w < num_scale_words; w++) {
                             meta[3 + w] = (int32_t)src_scales[w];
                         }
@@ -490,7 +499,7 @@ void kernel_main() {
                         (uint32_t)core_id,
                         batch_idx,
                         produced_count + 1,
-                        (uint32_t)(*space_avail_sem_ptr),
+                        space_avail_sem.value(),
                         route);
                     space_avail_sem.wait_min(produced_count + 1);
 
@@ -503,26 +512,35 @@ void kernel_main() {
                     route_info_scratch[1] = distance;
                     route_info_scratch[2] = page_idx;
                     route_info_scratch[3] = dst_chip;
-                    uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
-                    noc_async_write_one_packet_with_trid(
-                        route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+                    uint32_t c4_slot = sender_c4_l1_addr + slot * route_info_slot_stride;
+                    noc.async_write<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                        CoreLocalMem<uint32_t>(route_info_scratch_addr),
+                        sender_ep,
+                        route_info_slot_stride,
+                        {},
+                        {.noc_x = sender_noc_x, .noc_y = sender_noc_y, .addr = c4_slot},
+                        {.trid = TRID_NON_LOCAL_WRITE});
 
                     // Payload: chunk to NOC_MAX_BURST_SIZE packets, each tagged with TRID.
-                    uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+                    uint32_t c5_slot = sender_c5_l1_addr + slot * aligned_output_page_size;
                     uint32_t off = 0;
                     while (off < aligned_output_page_size) {
                         uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
                                              ? (uint32_t)NOC_MAX_BURST_SIZE
                                              : (aligned_output_page_size - off);
-                        noc_async_write_one_packet_with_trid(
-                            src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
+                        noc.async_write<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                            CoreLocalMem<uint32_t>(src_addr),
+                            sender_ep,
+                            chunk,
+                            {.offset_bytes = off},
+                            {.noc_x = sender_noc_x, .noc_y = sender_noc_y, .addr = c5_slot + off},
+                            {.trid = TRID_NON_LOCAL_WRITE});
                         off += chunk;
                     }
 
                     // Metadata: same [chip, token, top-k slot] layout as the local path, staged in
                     // the cross-device scratch slot, then written to the sender's c_6 slot.
-                    volatile tt_l1_ptr int32_t* meta =
-                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
+                    CoreLocalMem<volatile int32_t> meta(xdev_metadata_scratch_addr);
                     meta[0] = (int32_t)linearized_mesh_coord;
                     meta[1] = (int32_t)token_idx;
                     meta[2] = (int32_t)k;
@@ -530,20 +548,24 @@ void kernel_main() {
                     // Same scale-tail copy as the local path; the full aligned_metadata_page_size
                     // (which already accounts for the scale fields) is sent to the sender's c_6 slot.
                     {
-                        tt_l1_ptr uint32_t* src_scales =
-                            reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
+                        CoreLocalMem<uint32_t> src_scales(scales_read_ptr + token_t * aligned_scales_page_size);
                         for (uint32_t w = 0; w < num_scale_words; w++) {
                             meta[3 + w] = (int32_t)src_scales[w];
                         }
                     }
 #endif
-                    uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
-                    noc_async_write_one_packet_with_trid(
-                        xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+                    uint32_t c6_slot = sender_c6_l1_addr + slot * aligned_metadata_page_size;
+                    noc.async_write<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                        CoreLocalMem<uint32_t>(xdev_metadata_scratch_addr),
+                        sender_ep,
+                        aligned_metadata_page_size,
+                        {},
+                        {.noc_x = sender_noc_x, .noc_y = sender_noc_y, .addr = c6_slot},
+                        {.trid = TRID_NON_LOCAL_WRITE});
 
                     // Wait only on this entry's cross-device writes — in-flight local
                     // DRAM writes are tagged-out by TRID and keep flying.
-                    noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+                    noc.async_write_barrier<NocOptions::TXN_ID>({.trid = TRID_NON_LOCAL_WRITE});
                     // The transaction ID is a command-buffer register, not a per-write
                     // argument. Restore the default ID before this worker hands its NOC
                     // interface to another kernel (or issues an untagged local write).
@@ -588,7 +610,7 @@ void kernel_main() {
         "[W c={}] loop DONE; WAIT space_avail>={} (have={}) to send SENTINEL\n",
         (uint32_t)core_id,
         produced_count + 1,
-        (uint32_t)(*space_avail_sem_ptr));
+        space_avail_sem.value());
     space_avail_sem.wait_min(produced_count + 1);
     DPRINT_DISPATCH("[W c={}] sending SENTINEL (produced total={})\n", (uint32_t)core_id, produced_count);
 
@@ -597,13 +619,18 @@ void kernel_main() {
     route_info_scratch[1] = 0;
     route_info_scratch[2] = 0;
     route_info_scratch[3] = 0;
-    uint64_t sentinel_c4_slot = sender_c4_base_noc_addr + sentinel_slot * route_info_slot_stride;
-    noc_async_write_one_packet_with_trid(
-        route_info_scratch_addr, sentinel_c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
-    noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+    uint32_t sentinel_c4_slot = sender_c4_l1_addr + sentinel_slot * route_info_slot_stride;
+    noc.async_write<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+        CoreLocalMem<uint32_t>(route_info_scratch_addr),
+        sender_ep,
+        route_info_slot_stride,
+        {},
+        {.noc_x = sender_noc_x, .noc_y = sender_noc_y, .addr = sentinel_c4_slot},
+        {.trid = TRID_NON_LOCAL_WRITE});
+    noc.async_write_barrier<NocOptions::TXN_ID>({.trid = TRID_NON_LOCAL_WRITE});
     noc_async_write_set_trid(0);
     data_avail_sem.up(noc, sender_noc_x, sender_noc_y, 1);
 
     // noc_async_full_barrier flushes everything in-flight (including the inc) before exit.
-    noc_async_full_barrier();
+    noc.async_full_barrier();
 }
