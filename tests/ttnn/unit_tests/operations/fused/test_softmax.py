@@ -1607,7 +1607,6 @@ def _sharded_softmax_case(device, case):
     [
         ("row_major_causal_mask", "A causal mask needs TILE layout"),
         ("hw_dims_offset_grid", "on the first 2 cores of the program grid"),
-        ("batches_per_shard", "each input shard must lie within one batch"),
         ("width_shards", "every shard must hold whole rows"),
         ("block_shards", "every shard must hold whole rows"),
         ("width_sharded_causal_mask", "must be sharded like the input"),
@@ -1625,6 +1624,7 @@ def test_sharded_softmax_rejects_unsupported_geometry(device, expect_error, case
         "row_major_mask",
         "hw_dims_origin_grid",
         "batch_per_shard",
+        "batches_per_shard",
         "height_shards",
         "full_width_shard",
         "height_sharded_causal_mask",

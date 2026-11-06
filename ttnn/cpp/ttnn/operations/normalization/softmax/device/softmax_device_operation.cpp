@@ -225,6 +225,12 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     input_tile.get_height(),
                     input_tile.get_width(),
                     mask.padded_shape());
+                // The readers fetch one input row's worth of mask tiles per mask row.
+                TT_FATAL(
+                    mask.padded_shape()[-1] == tensors_args.input_tensor.padded_shape()[-1],
+                    "Mask width must match the input width, got mask padded shape {} and input padded shape {}",
+                    mask.padded_shape(),
+                    tensors_args.input_tensor.padded_shape());
             }
             for (uint32_t i = 1; i < tensors_args.input_tensor.padded_shape().rank() - 2; i++) {
                 TT_FATAL(
@@ -271,6 +277,11 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             "shard width must equal to input tensor shape[3]!");
 
                         TT_FATAL(attributes.inplace, "Operation must be inplace for sharded multi-core program config");
+                        TT_FATAL(
+                            mask.padded_shape()[0] == 1 || mask.padded_shape()[0] == shape[0],
+                            "Mask batch size must be 1 or match the input batch size, got input: {} vs mask: {}",
+                            shape,
+                            mask.padded_shape());
                         if (!attributes.is_scale_causal_mask_hw_dims_softmax) {
                             // grid
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
@@ -400,34 +411,18 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                         !(attributes.is_causal_mask && mask.layout() == Layout::ROW_MAJOR),
                         "A causal mask needs TILE layout with SoftmaxShardedMultiCoreProgramConfig; a ROW_MAJOR mask "
                         "holds one row per batch, which the sharded reader streams only once");
-                    if (attributes.is_causal_mask && mask.is_sharded()) {
-                        // The compute reads the resident mask shard as if it had the input's shard geometry.
+                    if (mask.is_sharded()) {
+                        // The compute reads the resident mask shard as if it had the input's shard geometry. Every
+                        // sharded mask is read this way, causal or not.
                         TT_FATAL(
                             mask.memory_config().memory_layout() == a.memory_config().memory_layout() &&
                                 mask.shard_spec() == a.shard_spec(),
-                            "A sharded causal mask must be sharded like the input; got a {} mask with shard spec {} "
+                            "A sharded mask must be sharded like the input; got a {} mask with shard spec {} "
                             "and a {} input with shard spec {}",
                             mask.memory_config().memory_layout(),
                             mask.shard_spec(),
                             a.memory_config().memory_layout(),
                             a.shard_spec());
-                    }
-                    if (!attributes.is_scale_causal_mask_hw_dims_softmax && !mask.is_sharded() &&
-                        mask.padded_shape()[0] > 1 && a.is_sharded()) {
-                        // The reader moves to the next batch's mask only between cores, never within a shard.
-                        const auto& shard_shape = a.shard_spec()->shape;
-                        const uint64_t batch_volume =
-                            static_cast<uint64_t>(input_shape[1]) * input_shape[2] * input_shape[3];
-                        const uint64_t shard_volume = static_cast<uint64_t>(shard_shape[0]) * shard_shape[1];
-                        TT_FATAL(
-                            batch_volume % shard_volume == 0,
-                            "With a mask of {} batches, each input shard must lie within one batch: a batch holds {} "
-                            "elements and a [{}, {}] shard holds {}",
-                            mask.padded_shape()[0],
-                            batch_volume,
-                            shard_shape[0],
-                            shard_shape[1],
-                            shard_volume);
                     }
                 }
             }
