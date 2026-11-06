@@ -42,8 +42,8 @@ struct MatmulDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    // The output's mesh label when a transposed operand's Shard lands on another dim of the output than the one it
-    // names; empty otherwise, which leaves launch() its default label.
+    // With a transpose flag set, the output's mesh label when an operand's Shard lands on another dim of the output
+    // than the one it names; empty otherwise, which leaves launch() its default label.
     static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 

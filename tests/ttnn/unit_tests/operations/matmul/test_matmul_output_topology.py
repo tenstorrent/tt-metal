@@ -4,11 +4,15 @@
 """Mesh-topology labels of ttnn.matmul and ttnn.linear outputs with a transposed operand.
 
 a's M dim and b's N dim become the output's last two dims, but transpose_a / transpose_b store them on the other side
-of K in the operand. A Shard on a transposed operand's M or N follows it to the output dim it becomes, so the output
+of K in the operand. A Shard on a transposed operand's M or N follows it to the output dim it becomes, and a Shard
+counted from the front of an operand of lower rank than the output to the output dim it lines up with, so the output
 gathered along the dim its label names is the product of the gathered operands. A Shard keeps its spelling (a negative
 dim stays negative). Otherwise the output keeps the default label, the union of the operands' labels: without a
 transpose flag, when an operand is split on the contracted dim (each device then holds a partial sum), and when a
 preallocated output has another shape than the operands give.
+
+The 1x2 mesh's first axis has one device: a Shard on it leaves every device the whole dim, but the label still names
+it, which is how these tests put a label on each of two mesh axes.
 """
 
 import pytest
@@ -23,11 +27,12 @@ S, K, N = 64, 64, 128  # rows, contracted dim, columns
 REPLICATE = "PlacementReplicate()"
 
 
-def _put(tensor, mesh_device, placement, nd=True):
-    """`tensor` on the 1x2 mesh, labelled [Replicate, placement] (one placement per mesh axis) or, with nd=False, with
-    the collapsed 1-D label ShardTensorToMesh / ReplicateTensorToMesh give."""
+def _put(tensor, mesh_device, placement, nd=True, first_axis=None):
+    """`tensor` on the 1x2 mesh, labelled [first_axis or Replicate, placement] (one placement per mesh axis) or, with
+    nd=False, with the collapsed 1-D label ShardTensorToMesh / ReplicateTensorToMesh give."""
     if nd:
-        mapper = ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), placement]))
+        first_axis = first_axis or ttnn.PlacementReplicate()
+        mapper = ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig([first_axis, placement]))
     elif isinstance(placement, ttnn.PlacementShard):
         mapper = ttnn.ShardTensorToMesh(mesh_device, dim=placement.dim)
     else:
@@ -39,8 +44,8 @@ def _replicated(tensor, mesh_device, nd=True):
     return _put(tensor, mesh_device, ttnn.PlacementReplicate(), nd)
 
 
-def _sharded(tensor, mesh_device, dim, nd=True):
-    return _put(tensor, mesh_device, ttnn.PlacementShard(dim), nd)
+def _sharded(tensor, mesh_device, dim, nd=True, first_axis=None):
+    return _put(tensor, mesh_device, ttnn.PlacementShard(dim), nd, first_axis)
 
 
 def _placements(tensor):
@@ -48,13 +53,13 @@ def _placements(tensor):
 
 
 def _gathered(tensor):
-    """The tensor a 1xN mesh tensor's label describes: its device tensors concatenated along the Shard's dim."""
+    """The tensor a 1xN mesh tensor's label describes: its device tensors concatenated along the dim its last mesh
+    axis, the one with N devices, is split on."""
     pieces = [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(tensor)]
-    dims = [p.dim for p in tensor.tensor_topology().placements() if isinstance(p, ttnn.PlacementShard)]
-    if not dims:
+    placement = tensor.tensor_topology().placements()[-1]
+    if not isinstance(placement, ttnn.PlacementShard):
         return pieces[0]
-    (dim,) = dims
-    return torch.cat(pieces, dim=dim)
+    return torch.cat(pieces, dim=placement.dim)
 
 
 @pytest.mark.parametrize("nd", [True, False], ids=["nd", "collapsed"])
@@ -105,6 +110,31 @@ def test_transposed_activation_split_on_rows(mesh_device):
     assert_with_pcc(a.mT @ b, _gathered(out), 0.999)
 
 
+def test_lower_rank_operand_split_on_out(mesh_device):
+    """A 2-D [in, out] b split on out (dim 1) against a 4-D a with transpose_a: out is the output's last dim."""
+    a, b = torch.randn(1, 1, K, S), torch.randn(K, N)
+
+    out = ttnn.matmul(_replicated(a, mesh_device), _sharded(b, mesh_device, 1), transpose_a=True)
+
+    assert _placements(out) == [REPLICATE, "PlacementShard(3)"]
+    assert_with_pcc(a.mT @ b, _gathered(out), 0.999)
+
+
+def test_transposed_and_lower_rank_shards_on_two_axes(mesh_device):
+    """a split on M on the first mesh axis and a 3-D b split on N on the second: each Shard lands on its own output dim,
+    so neither axis is labelled Replicate."""
+    a, b = torch.randn(1, 1, K, S), torch.randn(1, K, N)
+
+    out = ttnn.matmul(
+        _put(a, mesh_device, ttnn.PlacementReplicate(), first_axis=ttnn.PlacementShard(3)),
+        _sharded(b, mesh_device, 2),
+        transpose_a=True,
+    )
+
+    assert _placements(out) == ["PlacementShard(2)", "PlacementShard(3)"]
+    assert_with_pcc(a.mT @ b, _gathered(out), 0.999)
+
+
 @pytest.mark.parametrize("dim", [3, -1])
 def test_untransposed_weight_label_unchanged(mesh_device, dim):
     """A [in, out] weight split on out: without a transpose flag the default label already names the output's columns."""
@@ -130,6 +160,21 @@ def test_contracted_dim_split_keeps_default_label(mesh_device, transpose_b):
     assert _placements(out) == [REPLICATE, "PlacementShard(3)"]
     partial_sums = [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(out)]
     assert_with_pcc(x @ w, sum(partial_sums), 0.999)
+
+
+def test_contracted_dim_split_with_a_moved_shard_keeps_default_label(mesh_device):
+    """a split on K on the first mesh axis, a transposed weight split on out on the second. The output keeps the default
+    label: renumbering only the weight's Shard would claim dim 3 twice and label the second axis Replicate, although its
+    devices hold different columns."""
+    x, w = torch.randn(1, 1, S, K), torch.randn(1, 1, N, K)
+
+    out = ttnn.linear(
+        _put(x, mesh_device, ttnn.PlacementReplicate(), first_axis=ttnn.PlacementShard(3)),
+        _sharded(w, mesh_device, 2),
+        transpose_b=True,
+    )
+
+    assert _placements(out)[1] != REPLICATE
 
 
 def test_preallocated_output_of_another_shape_keeps_default_label(mesh_device):

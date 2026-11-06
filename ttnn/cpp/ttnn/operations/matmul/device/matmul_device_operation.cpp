@@ -3249,18 +3249,20 @@ using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
 
 // The dims of one operand of rank `rank` that its label depends on: `contracted` (K) and, when the operand's transpose
 // flag is set, `transposed` (a's M or b's N, stored on the other side of K) with the output dim it becomes,
-// `destination`. -1 for none.
+// `destination`.
 struct OperandDims {
     int rank = 0;
-    int contracted = -1;
-    int transposed = -1;
-    int destination = -1;
+    int contracted = 0;
+    std::optional<int> transposed;
+    int destination = 0;
 };
 
-// `topology`'s placements with a Shard on the transposed dim renumbered to its output dim, keeping its spelling: a
-// negative dim stays negative, counted from the end of the output. Every other Shard keeps its dim, as in the default
-// label. nullopt when a Shard is on the contracted dim. Sets `moved` when a Shard's dim changes.
-std::optional<ttsl::SmallVector<Placement>> renumber_transposed_shard(
+// `topology`'s placements with each Shard renumbered to the output dim its dim becomes, keeping its spelling: a
+// negative dim stays negative, counted from the end of the output. A Shard on the transposed dim goes to
+// `destination`; any other dim lines up with the output's from the end, so a dim counted from the front of an operand
+// of lower rank than the output moves up by the rank difference. nullopt when a Shard is on the contracted dim, or on
+// a dim the operand does not have (a label a reshape left behind, #64322). Sets `moved` when a Shard's dim changes.
+std::optional<ttsl::SmallVector<Placement>> renumber_operand_shards(
     const tt::tt_metal::TensorTopology& topology, const OperandDims& dims, int output_rank, bool& moved) {
     ttsl::SmallVector<Placement> placements = topology.placements();
     for (auto& placement : placements) {
@@ -3269,14 +3271,13 @@ std::optional<ttsl::SmallVector<Placement>> renumber_transposed_shard(
             continue;
         }
         const int dim = shard->dim < 0 ? shard->dim + dims.rank : shard->dim;
-        if (dim == dims.contracted) {
+        if (dim < 0 || dim >= dims.rank || dim == dims.contracted) {
             return std::nullopt;
         }
-        if (dim == dims.transposed) {
-            const int spelled = shard->dim < 0 ? dims.destination - output_rank : dims.destination;
-            moved = moved || spelled != shard->dim;
-            shard->dim = spelled;
-        }
+        const int destination = dim == dims.transposed ? dims.destination : dim + output_rank - dims.rank;
+        const int spelled = shard->dim < 0 ? destination - output_rank : destination;
+        moved = moved || spelled != shard->dim;
+        shard->dim = spelled;
     }
     return placements;
 }
@@ -3285,10 +3286,12 @@ std::optional<ttsl::SmallVector<Placement>> renumber_transposed_shard(
 
 // The default label is the union of the operands' labels, each Shard keeping its dim number. A transposed operand
 // breaks that: a's M and b's N become the output's last two dims, but transpose_a / transpose_b store them on the other
-// side of K, so a Shard on them names another output dim. This hook moves those Shards to the dims they become and
-// takes the same union of the operands' labels. It returns empty, leaving the default, when no transpose flag is set or
-// no Shard moves; when an operand is sharded on its contracted dim (each device then holds a partial sum, which no
-// placement describes yet; the default labels such an output Shard, not Replicate, on that mesh axis); for rank-1
+// side of K, so a Shard on them names another output dim. This hook moves those Shards to the dims they become, and a
+// Shard counted from the front of an operand of lower rank than the output to the output dim it lines up with, then
+// takes the union of a's, b's and the bias's labels (unlike the default, not a preallocated output's own label, which
+// may be stale, #64318). It returns empty, leaving the default, when no transpose flag is set or no Shard moves; when
+// an operand is sharded on its contracted dim (each device then holds a partial sum, which no placement describes yet;
+// the default labels such an output Shard, not Replicate, on that mesh axis) or on a dim it does not have; for rank-1
 // operands and the multi-weight form; and when a preallocated output's shape differs from the one the operands give
 // (validation lets it fold leading dims into its rows), since its dims cannot be counted from the operands'.
 std::vector<tt::tt_metal::TensorTopology> MatmulDeviceOperation::compute_output_topologies(
@@ -3319,17 +3322,17 @@ std::vector<tt::tt_metal::TensorTopology> MatmulDeviceOperation::compute_output_
     const OperandDims a_dims{
         .rank = a_rank,
         .contracted = attributes.transpose_a ? a_rank - 2 : a_rank - 1,
-        .transposed = attributes.transpose_a ? a_rank - 1 : -1,
+        .transposed = attributes.transpose_a ? std::optional<int>(a_rank - 1) : std::nullopt,
         .destination = output_rank - 2};
     const OperandDims b_dims{
         .rank = b_rank,
         .contracted = attributes.transpose_b ? b_rank - 1 : b_rank - 2,
-        .transposed = attributes.transpose_b ? b_rank - 2 : -1,
+        .transposed = attributes.transpose_b ? std::optional<int>(b_rank - 2) : std::nullopt,
         .destination = output_rank - 1};
 
     bool moved = false;
-    auto a_placements = renumber_transposed_shard(a.tensor_topology(), a_dims, output_rank, moved);
-    auto b_placements = renumber_transposed_shard(b.tensor_topology(), b_dims, output_rank, moved);
+    auto a_placements = renumber_operand_shards(a.tensor_topology(), a_dims, output_rank, moved);
+    auto b_placements = renumber_operand_shards(b.tensor_topology(), b_dims, output_rank, moved);
     if (!moved || !a_placements.has_value() || !b_placements.has_value()) {
         return {};
     }
