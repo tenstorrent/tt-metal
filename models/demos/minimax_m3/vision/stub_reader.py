@@ -18,7 +18,7 @@ class StubEmbeddingReader:
     def __init__(self, hidden: int):
         self.hidden = hidden
 
-    def fetch(self, media_key: str) -> memoryview:
+    def fetch(self, media_key: bytes) -> memoryview:
         return self.fetch_batch([FetchRequest(media_key)])[0]
 
     def fetch_batch(self, requests) -> list[memoryview]:
@@ -28,14 +28,13 @@ class StubEmbeddingReader:
             out.append(value[offset:] if length == -1 else value[offset : offset + length])
         return out
 
-    def _value(self, media_key: str) -> memoryview:
+    def _value(self, media_key: bytes) -> memoryview:
         try:
-            key = bytes.fromhex(media_key)
-            n = stub_key_tokens(key)
-        except (ValueError, TypeError, struct.error) as e:
-            raise Missing(media_key) from e
+            n = stub_key_tokens(media_key)
+        except (ValueError, struct.error) as e:
+            raise Missing(media_key.hex()) from e
         buf = memoryview(bytearray(format.stored_nbytes(n, self.hidden)))
-        gen = torch.Generator().manual_seed(int.from_bytes(hashlib.sha256(key).digest()[:7], "little"))
+        gen = torch.Generator().manual_seed(int.from_bytes(hashlib.sha256(media_key).digest()[:7], "little"))
         rows = (torch.randn(n, self.hidden, generator=gen) * 0.02).to(torch.bfloat16)
         format.embeddings(buf, self.hidden)[:] = rows.view(torch.int16).numpy()
         return buf

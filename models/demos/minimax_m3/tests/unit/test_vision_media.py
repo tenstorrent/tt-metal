@@ -101,12 +101,12 @@ def test_image_pickles_out_of_band():
 
 def test_stub_reader_serves_stub_keys(expect_error):
     reader = StubEmbeddingReader(64)
-    key = stub_media_key(6, 0).hex()
+    key = stub_media_key(6, 0)
     value = reader.fetch(key)
     assert media_format.embeddings(value, 64).shape == (6, 64)
-    assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1).hex()))
+    assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1)))
     head, rest = reader.fetch_batch([FetchRequest(key, 0, 16), FetchRequest(key, 16)])
     assert bytes(head) + bytes(rest) == bytes(value)
-    for key in (bytes(32).hex(), "00"):
-        with expect_error(Missing, key):
+    for key in (bytes(32), b"\0"):
+        with expect_error(Missing, key.hex()):
             reader.fetch(key)

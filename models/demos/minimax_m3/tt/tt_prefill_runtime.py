@@ -41,7 +41,7 @@ import ttnn
 from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.media import build_injection, store_key
+from models.demos.common.prefill.media import build_injection
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
 from models.demos.minimax_m3.tt.residual import activation_mapper
@@ -349,7 +349,7 @@ class TtPrefillRuntime:
         cfg = self.config
         hidden = self.hf_config.hidden_size
         keys = list(dict.fromkeys(ref.media_key for ref in media_refs))
-        bufs = self.media_embedding_reader.fetch_batch([FetchRequest(store_key(k)) for k in keys])
+        bufs = self.media_embedding_reader.fetch_batch([FetchRequest(k) for k in keys])
         values = {key: media_format.embeddings(buf, hidden) for key, buf in zip(keys, bufs, strict=True)}
 
         def rows_of(ref):

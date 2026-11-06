@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.multimedia_store.reader import FetchRequest
-from models.demos.common.prefill.media import build_injection, store_key
+from models.demos.common.prefill.media import build_injection
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt import tt_prefill_runtime
@@ -32,10 +32,10 @@ IMAGE_TOKEN, VISION_START, VISION_END = 1000, 1001, 1002
 
 
 class Store:
-    """Serves each image's embeddings as a stored value in format.py's layout, keyed by store_key."""
+    """Serves each image's embeddings as a stored value in format.py's layout, keyed by media key."""
 
     def __init__(self, embs: dict):
-        self.values = {store_key(key): self.value(rows) for key, rows in embs.items()}
+        self.values = {key: self.value(rows) for key, rows in embs.items()}
 
     @staticmethod
     def value(rows: torch.Tensor) -> bytes:
