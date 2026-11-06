@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-import transformers
 from datasets import load_dataset
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -126,12 +125,12 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
-def test_vit_attention(device, model_name, batch_size, sequence_size):
+def test_vit_attention(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    hf_config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(hf_config, batch_size, device)
-    model = transformers.models.vit.modeling_vit.ViTAttention(hf_config).eval()
+    full_model = load_torch_model(model_location_generator, embedding=True)
+    config = ttnn_optimized_sharded_vit.update_model_config(full_model.config, batch_size, device)
+    model = full_model.vit.layers[0].attention
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_output, *_ = model(torch_hidden_states)
@@ -170,12 +169,12 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
-def test_vit_mlp(device, model_name, batch_size, sequence_size):
+def test_vit_mlp(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    hf_config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(hf_config, batch_size, device)
-    model = transformers.models.vit.modeling_vit.ViTMLP(hf_config).eval()
+    full_model = load_torch_model(model_location_generator, embedding=True)
+    config = ttnn_optimized_sharded_vit.update_model_config(full_model.config, batch_size, device)
+    model = full_model.vit.layers[0].mlp
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_output = model(torch_hidden_states)
@@ -203,7 +202,7 @@ def test_vit_mlp(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.995)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.999)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
