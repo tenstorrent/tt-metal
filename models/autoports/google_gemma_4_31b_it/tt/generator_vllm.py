@@ -53,6 +53,9 @@ class Gemma4ForCausalLM:
                 {
                     "event": "autoport_registration",
                     "class": f"{cls.__module__}:{cls.__name__}",
+                    "module_file": os.path.realpath(__file__),
+                    "device_ids": list(mesh_device.get_device_ids()),
+                    "mesh_shape": str(mesh_device.shape),
                     "layers": list(obj.model.layer_indices),
                     "precision": obj.model.precision_config,
                 }
