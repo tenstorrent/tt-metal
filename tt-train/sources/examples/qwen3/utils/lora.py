@@ -150,14 +150,15 @@ class LoRAColumnParallelLinear(AbstractModuleBase):
         self.scaling = alpha / rank
         self.lora_A = Parameter(make_dist_replicated_weight((1, 1, rank, in_features), std=1.0 / math.sqrt(rank)))
         self.lora_B = Parameter(make_dist_sharded_zeros((1, 1, out_features, rank), 2, self.shard_dim))
+        if self.shard_dim is not None and get_tp_size(self.shard_dim) > 1:
+            # Its output feeds only this device's rows of lora_B, so its gradient is a partial sum across tp.
+            ttml.parallel.mark_partial(self.lora_A, ttml.mesh().axis_names[self.shard_dim])
 
     def forward(self, x):
         x_b = ttml.ops.distributed.broadcast(x, self.shard_dim)
         bias_t = self.base_layer.col_bias.tensor if self.base_layer.col_bias is not None else None
         base_out = ttml.ops.linear.linear(x_b, self.base_layer.weight.tensor, bias_t)
-        # The replicated lora_A's per-device grad only covers the local lora_B shard; broadcast sums it across TP.
-        lora_A = ttml.ops.distributed.broadcast(self.lora_A.tensor, self.shard_dim)
-        h = ttml.ops.linear.linear(x_b, lora_A, None)
+        h = ttml.ops.linear.linear(x_b, self.lora_A.tensor, None)
         lora_out = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.scaling != 1.0:
             lora_out = lora_out * self.scaling

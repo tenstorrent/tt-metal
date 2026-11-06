@@ -95,6 +95,7 @@ def test_column_parallel_grads_match_reference(tp_mesh, gather_output):
 
     loss, G = _weighted_mean(layer(x), shard_dim=None if gather_output else 3)
     loss.backward(False)
+    ttml.sync_gradients(layer.parameters())
 
     # Reference in float32 from the bf16 values actually on device. A gathered output is replicated, so its mean
     # spans every column; a sharded output's mean only spans the local columns, and backward starts from 1 on each

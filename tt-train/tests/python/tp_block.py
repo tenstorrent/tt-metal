@@ -48,7 +48,7 @@ def make_adamw(params):
 
 
 def train_step(model, opt, dim: int, input_scale: float = 1.0) -> None:
-    """One forward/backward/optimizer step on a ``(1, 1, dim, dim)`` input, so every moment exists and has been
+    """One forward/backward/sync/optimizer step on a ``(1, 1, dim, dim)`` input, so every moment exists and has been
     touched by the update kernel (and, for FSDP, so the gather -> compute -> reduce-scatter -> reshard hooks ran)."""
     ctx = ttml.autograd.AutoContext.get_instance()
     x = ttml.autograd.Tensor.from_numpy(
@@ -59,6 +59,7 @@ def train_step(model, opt, dim: int, input_scale: float = 1.0) -> None:
     opt.zero_grad()
     loss = ttml.ops.unary.mean(model(x))
     loss.backward(False)
+    ttml.sync_gradients(model.parameters())
     opt.step()
     ctx.reset_graph()
 
