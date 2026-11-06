@@ -939,11 +939,17 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
             fabric_context.get_builder_context(), *static_allocator, config.topology, direction);
     // Worker channels need their buffer-index-counter L1 address set so the EDM kernel can reset it on each launch.
     // Channel 0 is always a worker. VC2 is also a worker channel when active.
-    downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
-    if (sender_counts[2] > 0) {
-        size_t vc2_flat = sender_counts[0] + sender_counts[1];
-        downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
-            sender_channels_buffer_index_semaphore_id[vc2_flat];
+    // Without stream registers every channel's producer cursor is its credit, so the kernel resets each one at the
+    // address its upstream writes (build_connection_to_fabric_channel). Left 0, the reset lands on L1 0-15.
+    if (!fabric_context.get_hal().has_stream_registers()) {
+        downstream_vcs_sender_channel_buffer_index_semaphore_id = sender_channels_buffer_index_semaphore_id;
+    } else {
+        downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
+        if (sender_counts[2] > 0) {
+            size_t vc2_flat = sender_counts[0] + sender_counts[1];
+            downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
+                sender_channels_buffer_index_semaphore_id[vc2_flat];
+        }
     }
 
     // Add this log right at the beginning of the constructor body
