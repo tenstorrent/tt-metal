@@ -1,5 +1,5 @@
 {
-  "status": "awaiting_operator_exception",
+  "status": "blocked",
   "resolution": "AGENTS.md decisions 4\u20136: model-owned consecutive completion boundaries accepted; GPQA local noncoverage authorized; fresh profiles authorized.",
   "prior_evidence": "attempts/incomplete-96fb930d/blocked.json",
   "plugin_completion_patch": "rejected and unapplied",
@@ -7,5 +7,8 @@
   "prior_accounting_and_dataset_blockers": "resolved by AGENTS.md decisions 4\u20136",
   "current_blocker": "Installed outer checker rejects explicitly authorized accuracy noncoverage. Applying the tested generic patch requires the pending installed-package read-only exception.",
   "validation": "setup/checker-patch-validation.json",
-  "consecutive_goal_turns_with_current_blocker": 2
+  "consecutive_goal_turns_with_current_blocker": 3,
+  "verified_unix": 1793937755.4249701,
+  "installed_checker_exit_code": 2,
+  "installed_checker_sha256": "a92dea8224c7bf476d1d07816060d692b71408aabc9a4cdbd7eee887fdf8aa58"
 }

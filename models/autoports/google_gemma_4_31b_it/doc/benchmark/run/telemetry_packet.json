@@ -37,7 +37,7 @@
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall phase rooflines are reported separately and are not device-time measurements.",
     "accuracy": "GPQA credential unavailable; operator decision5 permits local noncoverage. SWE/Terminal tool suites require Stage12 harness.",
-    "workflow_completion": "Installed outer checker correction awaits requested read-only exception; prepared patch passes full evidence and negative coverage tests in isolated copy."
+    "workflow_completion": "Goal blocked after third consecutive audit: installed checker rejects operator-authorized noncoverage; tested correction awaits installed-package read-only exception."
   },
   "notes": [
     "Full60layers, head_bfp4, context262144, prefix caching enabled.",
