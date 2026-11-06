@@ -3046,6 +3046,47 @@ tasks:
       short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
+- id: P.39
+  title: 'Served index keys in Blaze decode''s format: scaled FP8 E4M3, one fp32 scale a row, 192-byte rows (PD migration compatibility, for now)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.38
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-06 (PD migration first cut, compatibility with Blaze decode for now; keep today''s bf16 served index keys behind a switch). OWNER-AUTHORIZED CONTRACT CHANGE: the served index-key caches (2_index_k_r2, 4_index_k_r1) change from bf16 rows (256 B) to Blaze decode''s indexer key cache rows, byte for byte: uint8 [.., 192] row-major, one row per compressed position; bytes 0..127 = e4m3 of key[i] / scale (same order as the bf16 key), bytes 128..131 = scale as fp32 little-endian, scale = clamp(amax(|key|), 1e-4, 3e38) * float32(1/448) (not a power of two), bytes 132..191 padding (zeros). Encoding as Blaze''s device writer: values times the reciprocal of the scale truncated to TF32 (& 0xFFFFE000), e4m3 mantissa truncated toward zero, below 2^-6 flushed to zero. Byte-exact reference: tt-metal''s ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x, round_scale_to_power_of_two=False) (tt-blaze 8223e7f9963e tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:75-118 checks bytes 0..131 against it; _quantize_scaled_keys is the exact torch recipe; do NOT use csa2_harness.py pack_index_keys, it rounds to nearest). Use per_token_cast_to_fp8 on device (stock op, already in the tree) plus a step that builds the 192-byte rows and writes them into the served cache (records: 32 rows x 192 B contiguous in one bank, the contract''s record rule; our SP placement stays). Our indexer keeps scoring with INDEX_K_FORMAT (bfp4 default): read the served fp8 rows, dequantize, then as today; or keep a persistent compute copy, your choice, say the cost. Layers: we serve index keys on 2, 8, 14 (ratio 2) and 20 (ratio 1); Blaze decode also keeps an index cache on reindex layers 24, 28, 32, 36 (ratio 1, key from the stage payload index_cache_row, csa_attention/op.py:1156-1161): check in tt-blaze (clone /scratch/dnijemcevic/tt-blaze-ro) what key those layers hold; if it is layer 20''s key, serve the same rows under those layers too (configs and order as serving_contract.md, documented). Setting INDEX_K_SERVED (fp8_row192 default / bf16 = today). Update serving_contract.md (the table, record sizes: 32 x 192 = 6144 B a record for ratio 1, 16 x 192 for ratio 2) and the contract / kv_layout / acks tests'' readers of index_k to the new bytes: decode the fp8 rows and compare with the golden at a stated fp8 tolerance, plus a byte-exact check of the encoding against per_token_cast_to_fp8 / the Blaze recipe. Never loosen any other check. Agent rules 18 and 19 hold. Do not profile the model yourself: the orchestrator measures at 51200. Report in plain language.'
+  ab:
+    env:
+      INDEX_K_SERVED: bf16
+      ENGRAM_TABLE: resident
+    change:
+      INDEX_K_SERVED: fp8_row192
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
