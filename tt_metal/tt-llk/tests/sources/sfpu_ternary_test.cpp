@@ -105,7 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
+                _perf_unpack_stream_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -175,6 +175,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream (perf.h)
+        {
+            _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+        }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -189,28 +193,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     else
                     {
                         _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(num_faces /* iterations */);
-                    }
-                }
-            }
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
-            {
-                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
-                {
-                    const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
-                    {
-                        if constexpr (unpack_to_dest)
-                        {
-                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                                block_tile, formats.math, formats.math);
-                        }
-                        else
-                        {
-                            _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(num_faces /* iterations */);
-                        }
                     }
                 }
             }
@@ -318,7 +300,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

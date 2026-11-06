@@ -87,19 +87,6 @@ constexpr uint32_t kNumOneTile = 1U;
 
 namespace ttml::metal::ops::polynorm3_bw::device {
 
-namespace {
-
-// The input's tile rows over the device's compute grid. create_descriptor() pins it against split_work_to_cores, and
-// override_runtime_arguments() walks the same cores from it.
-WorkSplit make_work_split(const ttnn::Tensor& input) {
-    const auto& shape = input.padded_shape();
-    return compute_work_split(
-        input.device()->compute_with_storage_grid_size(),
-        shape[0] * shape[1] * (shape[-2] / tt::constants::TILE_HEIGHT));
-}
-
-}  // namespace
-
 tt::tt_metal::ProgramDescriptor PolyNorm3BackwardProgramFactory::create_descriptor(
     const PolyNorm3BWAttributes& args, const PolyNorm3BWTensorArgs& tensor_args, PolyNorm3BWTensorReturn& output) {
     const auto& input = tensor_args.input;
@@ -115,9 +102,7 @@ tt::tt_metal::ProgramDescriptor PolyNorm3BackwardProgramFactory::create_descript
     const auto padded_tensor_shape = input.padded_shape();
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
     const uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-    const uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
-    const uint32_t total_rows_to_process = NC * Ht;
+    const uint32_t total_rows_to_process = num_tile_rows(input);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
@@ -125,7 +110,7 @@ tt::tt_metal::ProgramDescriptor PolyNorm3BackwardProgramFactory::create_descript
     constexpr uint32_t packed_partials_tiles_per_row = 4U;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
-    const WorkSplit split = make_work_split(input);
+    const WorkSplit split = compute_tile_row_work_split(input);
     check_work_split(
         split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
@@ -275,7 +260,7 @@ void PolyNorm3BackwardProgramFactory::override_runtime_arguments(
     const PolyNorm3BWTensorArgs& tensor_args,
     PolyNorm3BWTensorReturn& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const WorkSplit split = make_work_split(tensor_args.input);
+    const WorkSplit split = compute_tile_row_work_split(tensor_args.input);
 
     const uint32_t input_addr = tensor_args.input.buffer()->address();
     const uint32_t dL_dout_addr = tensor_args.dL_dout.buffer()->address();

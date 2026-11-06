@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
+#include <utility>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -28,12 +30,20 @@ namespace relaxation_fields {
 // set is a product of the flags rather than one of a fixed list of modes. Naming the fields, not
 // the modes, is what lets a new modifier be one line here plus one line in each consumer.
 //
-// tensor_layout is load-bearing in every relaxed set, so it is implicit rather than a member.
+// The rest of tensor_layout -- dtype, page_config, and memory_config -- is load-bearing in every
+// relaxed set, so it is implicit rather than a member (see layout_hash_except_alignment and
+// layouts_match_except_alignment below).
 struct PertinentFields {
     // The unrelaxed default is special: the whole TensorSpec is load-bearing, and is compared via
     // TensorSpec's own operator== rather than field-by-field. Kept distinct so the strict path
     // keeps exactly the behavior it has always had.
     bool whole_spec = false;
+
+    // The TensorLayout alignment, the one component of tensor_layout a relaxation can free. It reaches
+    // the TensorAccessor only through the padded shape and the ROW-MAJOR page size, so freeing it opens
+    // no CTA to staleness that freeing the shape had not already opened -- and page_size and
+    // shard_distribution below still pin what those CTAs bake.
+    bool alignment = false;
 
     bool padded_shape = false;
     bool logical_rank = false;
@@ -50,7 +60,7 @@ struct PertinentFields {
     //
     // Only pertinent where the shape is otherwise free. When the logical or padded shape is pinned
     // the geometry is pinned with it, since it is a pure function of that shape plus the shard spec
-    // -- and tensor_layout, load-bearing everywhere, pins the shard spec.
+    // -- and memory_config, load-bearing everywhere, pins the shard spec.
     bool shard_distribution = false;
 };
 
@@ -60,22 +70,43 @@ struct PertinentFields {
 // a proof -- also extend the flag-combination sweep in the tensor_spec_relaxations unit tests, which is
 // what actually detects a disagreement.
 static_assert(
-    sizeof(PertinentFields) == 5,
+    sizeof(PertinentFields) == 6,
     "A PertinentFields member was added or removed. Wire the new term into BOTH "
     "hash_tensorspec_with_relaxation and tensorspecs_match_with_relaxation, then update this count.");
 
+// The relaxed paths compare tensor_layout field by field, so that the alignment can be left out.
+// TensorLayout's own operator== compares every field, so a field added to TensorLayout would be
+// compared by the strict path but silently skipped by the relaxed ones.
+static_assert(
+    std::tuple_size_v<decltype(std::declval<const tt::tt_metal::TensorLayout&>().attribute_values())> == 4,
+    "TensorLayout gained or lost a field. Add it to layout_hash_except_alignment and "
+    "layouts_match_except_alignment, then update this count.");
+
+// tensor_layout minus its alignment: the floor every relaxed set pins.
+ttsl::hash::hash_t layout_hash_except_alignment(const tt::tt_metal::TensorLayout& layout) {
+    return ttsl::hash::hash_objects_with_default_seed(
+        layout.get_data_type(), layout.get_page_config(), layout.get_memory_config());
+}
+
+bool layouts_match_except_alignment(const tt::tt_metal::TensorLayout& a, const tt::tt_metal::TensorLayout& b) {
+    return a.get_data_type() == b.get_data_type() && a.get_page_config() == b.get_page_config() &&
+           a.get_memory_config() == b.get_memory_config();
+}
+
 PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
-        // Per-dim shape values are free. The rank stays load-bearing unless it too is relaxed, and
-        // the sharded distribution geometry is load-bearing either way -- see shard_distribution.
+        // Per-dim shape values are free. The rank and the alignment stay load-bearing unless they too
+        // are relaxed, and the sharded distribution geometry is load-bearing either way -- see
+        // shard_distribution.
         return PertinentFields{
+            .alignment = !relaxation.relax_tensor_layout_alignment,
             .logical_rank = !relaxation.relax_logical_rank,
             .page_size = relaxation.match_page_size,
             .shard_distribution = true,
         };
     }
     if (relaxation.match_padded_shape_only) {
-        return PertinentFields{.padded_shape = true};
+        return PertinentFields{.alignment = true, .padded_shape = true};
     }
     // relax_logical_rank is inert on its own, as its doc states: neither the strict comparison nor
     // padded-shape matching carries a separable rank term that dropping it could loosen. Note what
@@ -83,6 +114,11 @@ PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
     // max(logical rank, alignment rank), so it pins every rank at or above the alignment rank -- the
     // ordinary case -- while already tolerating, with nobody opting in, the rank changes the padding
     // absorbs below it (with TILE's rank-2 default alignment, rank 1 against rank 2).
+    //
+    // relax_tensor_layout_alignment is inert on its own too, by choice. Under strict matching, a freed alignment
+    // could change the padded shape, and with it the page count, which a strict-mode op is entitled
+    // to bake. Padded-shape matching could tolerate two alignments that pad to the same shape, but no
+    // op has asked for that.
     return PertinentFields{.whole_spec = true};
 }
 
@@ -133,7 +169,10 @@ std::uint64_t hash_tensorspec_with_relaxation(
         // compares values that were never meant to line up.
         return ttsl::hash::hash_objects_with_default_seed(spec.logical_shape(), spec.tensor_layout());
     }
-    ttsl::hash::hash_t hash = ttsl::hash::hash_objects_with_default_seed(spec.tensor_layout());
+    ttsl::hash::hash_t hash = relaxation_fields::layout_hash_except_alignment(spec.tensor_layout());
+    if (fields.alignment) {
+        hash = ttsl::hash::hash_objects(hash, spec.tensor_layout().get_alignment());
+    }
     if (fields.padded_shape) {
         hash = ttsl::hash::hash_objects(hash, spec.padded_shape());
     }
@@ -170,7 +209,10 @@ bool tensorspecs_match_with_relaxation(
     if (fields.whole_spec) {
         return a == b;
     }
-    if (!(a.tensor_layout() == b.tensor_layout())) {
+    if (!relaxation_fields::layouts_match_except_alignment(a.tensor_layout(), b.tensor_layout())) {
+        return false;
+    }
+    if (fields.alignment && !(a.tensor_layout().get_alignment() == b.tensor_layout().get_alignment())) {
         return false;
     }
     if (fields.padded_shape && !(a.padded_shape() == b.padded_shape())) {

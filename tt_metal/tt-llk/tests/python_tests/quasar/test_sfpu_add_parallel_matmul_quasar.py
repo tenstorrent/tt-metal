@@ -32,6 +32,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
+    generate_parallel_matmul_dest_depth_profiles,
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     max_dest_tiles,
@@ -70,6 +71,7 @@ DIMENSION_PROFILES = (
 )
 # Perf uses the multi-tile profile; one tile is too short to time.
 PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
+
 
 # Caps each add operand at 45% of format max so |a|+|b| stays <= 90% with rounding headroom.
 ADD_RANGE_SAFETY_FACTOR = 0.45
@@ -122,18 +124,20 @@ def generate_parallel_matmul_add_combinations(
             (PERF_DIMENSION_PROFILE,) if is_perf else DIMENSION_PROFILES
         )
         for dest_sync in dest_sync_modes:
+            profiles = [
+                profile
+                for profile in dimension_profiles
+                if _matmul_output_fits_dest(profile[1], profile[2], dest_acc, dest_sync)
+            ]
+            if not is_perf:
+                profiles += generate_parallel_matmul_dest_depth_profiles(
+                    dest_acc, dest_sync
+                )
             for (
                 ADD_INPUT_DIMENSIONS,
                 MATMUL_A_DIMENSIONS,
                 MATMUL_B_DIMENSIONS,
-            ) in dimension_profiles:
-                if not _matmul_output_fits_dest(
-                    MATMUL_A_DIMENSIONS,
-                    MATMUL_B_DIMENSIONS,
-                    dest_acc,
-                    dest_sync,
-                ):
-                    continue
+            ) in profiles:
                 combinations.append(
                     (
                         fmt,

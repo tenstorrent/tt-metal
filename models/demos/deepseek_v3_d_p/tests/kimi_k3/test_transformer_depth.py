@@ -55,7 +55,6 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
@@ -158,9 +157,6 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
         tp_axis=TP_AXIS,
-        # Same pools the KDA layers cycle. AttnRes's private fallback set is only safe while nothing
-        # else has a collective in flight on this axis, which is not true inside a K3 layer stack.
-        tt_ccl=get_tt_ccl(mesh_device),
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),

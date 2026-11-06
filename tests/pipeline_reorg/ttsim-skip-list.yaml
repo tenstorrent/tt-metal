@@ -15,7 +15,6 @@ wormhole_b0:
   # Job-level timeouts -- can be cut down still
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
@@ -25,10 +24,16 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # ttsim: UnpredictableValue noc_check_self_overlap. conv3d's reader shifts retained W
+  # columns with one NOC read whose source and destination overlap in the same L1.
+  # Issue: https://github.com/tenstorrent/tt-metal/issues/64557
+  # exit: #64557's fix lands; then the file moves back to the timeouts above (it also
+  # takes over 40 minutes on the simulator).
+  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
@@ -39,6 +44,13 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+
+  # ttsim: UnpredictableValue noc_check_self_overlap. conv3d's reader shifts retained W
+  # columns with one NOC read whose source and destination overlap in the same L1.
+  # Issue: https://github.com/tenstorrent/tt-metal/issues/64557
+  # exit: #64557's fix lands; then the file moves back to the timeouts above (it also
+  # takes over 40 minutes on the simulator).
+  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
 
   # fp8 operands in tensix_elw_op (e.g. src_a_fmt=4 src_b_fmt=10) are not modeled by ttsim
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py

@@ -317,8 +317,8 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
 
     bool input_height_sharded = native && input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
                                 input_tensor.shard_spec()->shape[1] == input_padded_shape[-1];
-    bool input_width_and_height_fully_in_shard =
-        input_height_sharded && input_tensor.shard_spec()->shape[0] % input_padded_shape[-2] == 0;
+    bool input_width_and_height_fully_in_shard = input_height_sharded && input_padded_shape[-2] > 0 &&
+                                                 input_tensor.shard_spec()->shape[0] % input_padded_shape[-2] == 0;
     bool output_height_sharded = native && output_memory_config.is_sharded() &&
                                  output_memory_config.shard_spec().has_value() &&
                                  output_memory_config.shard_spec()->shape[1] == output_width;
@@ -326,7 +326,7 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
                                 output_memory_config.shard_spec().has_value() &&
                                 output_memory_config.shard_spec()->shape[0] == output_height;
     bool output_width_and_height_fully_in_shard =
-        output_height_sharded && output_memory_config.shard_spec()->shape[0] % output_height == 0;
+        output_height_sharded && output_height > 0 && output_memory_config.shard_spec()->shape[0] % output_height == 0;
     // Second disjunct is TILE-only; the RM branch below dispatches on use_sharded_wh_rm, not use_sharded_wh.
     bool use_sharded_wh =
         native && ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
@@ -393,6 +393,12 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     const auto& shape = input_tensor.padded_shape();
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
     uint32_t W = shape[3], H = shape[2];
+    const bool any_sharded = input_tensor.is_sharded() ||
+                             derive_effective_output_memory_config(operation_attributes, tensor_args).is_sharded();
+    TT_FATAL(
+        !(any_sharded && dim == TransposeOpDim::WH) || (H > 0 && W > 0),
+        "Sharded WH transpose requires non-zero H and W, got shape {}",
+        shape);
 
     if (!row_major) {
         TT_FATAL(

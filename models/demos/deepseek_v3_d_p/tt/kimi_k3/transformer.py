@@ -18,7 +18,6 @@ swaps in a walk. Nothing in the layer loop changes between them, which is the po
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -37,7 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geo
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
@@ -163,20 +162,6 @@ class TtKimiK3Transformer(LightweightModule):
                 hidden_size=model_cfg.EMB_SIZE,
                 eps=model_cfg.RMS_NORM_EPS,
                 tp_axis=tp_axis,
-                # Hand AttnRes the model's own CCL pools. Without this it falls back to one fixed,
-                # privately-allocated semaphore set, which is only safe while nothing else has a
-                # collective in flight on the same axis -- and Kimi-K3's KDA layers cycle tt_ccl's
-                # pools on exactly this axis between every AttnRes read.
-                tt_ccl=get_tt_ccl(mesh_device),
-                # The statistics fold engages at FOLD_MIN_CANDIDATES (4) sealed snapshots and swaps
-                # the collective for a permute/composite-all_reduce pair. A pipelined rank reaches
-                # that depth on its FIRST layer (it inherits `first_layer_idx // 12` snapshots),
-                # where a single-rank run of the same width never would — 36 layers tops out at 3.
-                # Exposed so the fold can be taken out of the picture when diagnosing an L1
-                # placement failure. #54876's author later corrected its cause to layers-per-rank
-                # (40 fails, 36 passes even at sealed depth 6); the earlier depth-4 reproductions
-                # were contaminated by un-reset devices.
-                fold_stats=os.environ.get("PREFILL_ATTN_RES_FOLD_STATS", "1") == "1",
                 weights=load_attn_res_weights(
                     mesh_device,
                     state_dict.get("attn_res_weights"),
@@ -364,17 +349,19 @@ class TtKimiK3Transformer(LightweightModule):
     def _pack_handoff(self, live, sealed):
         """Fuse the live stream and the sealed set into the one tensor the D2D socket carries.
 
-        `[1,1,N,d]` and `[1,k,N,d]` concatenate on dim 1 into `[1,k+1,N,d]`: plane 0 is the
+        `sealed` is the list of snapshot tensors in seal order, `[1,S_i,N,d]` each, so with the
+        live stream they concatenate on dim 1 into `[1,k+1,N,d]`: plane 0 is the
         live stream at a constant offset, planes `1..k` the sealed set in seal order. The mesh
         mapper shards dims 2 and 3, so dim 1 only widens the per-chip shard and the global
         tensor still means what it says.
 
         Both inputs are owned here (`handoff` transferred them) and are freed once copied.
         """
-        packed = live if sealed is None else ttnn.concat([live, sealed], dim=1)
+        packed = live if sealed is None else ttnn.concat([live, *sealed], dim=1)
         if sealed is not None:
             ttnn.deallocate(live)
-            ttnn.deallocate(sealed)
+            for snapshot in sealed:
+                ttnn.deallocate(snapshot)
         assert packed.shape[1] == self.outbound_planes, (
             f"handoff packed {packed.shape[1]} planes, but this rank's outbound spec is "
             f"{self.outbound_planes}; the socket would reject it far from here"
@@ -397,16 +384,6 @@ class TtKimiK3Transformer(LightweightModule):
         live = ttnn.slice(packed, [0, 0, 0, 0], [1, 1, tokens, width])
         sealed = ttnn.slice(packed, [0, 1, 0, 0], [1, planes, tokens, width]) if planes > 1 else None
         return live, sealed
-
-    def reset_streams(self, slot: int = 0) -> None:
-        """Zero the KDA carries for a new request. Call outside any captured region."""
-        if self.kda_scratch is None:
-            return
-        if self.kda_states is None:
-            raise RuntimeError(
-                "no KDA state slabs on the model; the runtime hands kv_caches.kda_states over at compile()"
-            )
-        self.kda_states.zero_slot(slot)
 
     def forward(
         self,
@@ -479,15 +456,16 @@ class TtKimiK3Transformer(LightweightModule):
         residual = self._residual_factory(hidden, inherited)
         # The regression guard for the bug this handoff exists to fix: a rank that starts with
         # nothing sealed silently believes it is the start of the model and reads every layer
-        # against an empty set. Host metadata only (`block_residual.shape[1]`), so it is safe
+        # against an empty set. Host metadata only (the sealed snapshots' `shape[1]`), so it is safe
         # inside a trace capture.
         assert residual.num_sealed == self.inbound_planes - 1, (
             f"rank starting at layer {self.first_layer_idx} opened with {residual.num_sealed} sealed "
             f"snapshots, expected {self.inbound_planes - 1}"
         )
 
-        # The KDA layers' slot and bounds, built once per chunk: borrowed from `metadata` when traced,
-        # uploaded from the host ints when eager (and freed below). A rank without KDA layers uploads nothing.
+        # The KDA layers' slot and bounds, built once per chunk: borrowed
+        # from `metadata` when traced, uploaded from the host ints when eager; what was built here is freed
+        # below. A rank without KDA layers builds nothing.
         kda_scalars, owned_scalars = (
             build_kda_scalars(self.mesh_device, metadata, cache_user_id, actual_start, actual_end)
             if self.kda_scratch is not None

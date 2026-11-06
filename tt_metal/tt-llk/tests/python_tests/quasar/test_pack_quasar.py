@@ -10,7 +10,7 @@ from helpers.constraints import (
     is_valid_quasar_dest_mode_conversion,
 )
 from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
@@ -25,6 +25,7 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import (
+    generate_dest_depth_input_dimensions,
     generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
@@ -177,6 +178,31 @@ PACK_FORMATS = input_output_formats(
 )
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
+
+# 4 and 8 full Dest sections per run. Float32 takes the unpack-to-Dest path, Float16_b the FPU one.
+PACK_DEST_DEPTH_COMBINATIONS = [
+    (
+        fmt,
+        dest_acc,
+        dest_sync,
+        runtime(dimensions),
+        runtime(PackerReluType.NoRelu),
+        runtime((32, 32)),
+    )
+    for fmt, dest_acc_modes in (
+        (
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            (DestAccumulation.No, DestAccumulation.Yes),
+        ),
+        (
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+            (DestAccumulation.Yes,),
+        ),
+    )
+    for dest_acc in dest_acc_modes
+    for dest_sync in quasar_dest_sync_modes()
+    for dimensions in generate_dest_depth_input_dimensions(dest_acc, dest_sync)
+]
 
 
 @pytest.mark.quasar
@@ -395,3 +421,10 @@ def test_pack_quasar(
         test_passed = True
 
     assert test_passed, "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(formats_dest_acc_sync_dims_relu=PACK_DEST_DEPTH_COMBINATIONS)
+def test_pack_dest_depth_quasar(formats_dest_acc_sync_dims_relu):
+    # A lone parametrize argument arrives wrapped in a 1-tuple.
+    test_pack_quasar(formats_dest_acc_sync_dims_relu[0], [PerfRunType.L1_TO_L1], 1)

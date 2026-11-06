@@ -162,8 +162,7 @@ namespace ttml::metal {
 // The helpers below mirror the Program-based create_* helpers above, with the same parameter order minus the Program.
 // ---------------------------------------------------------------------------------------------------------------------
 
-// CBs get merged core ranges, as CreateCircularBuffer gives them (Program::add_circular_buffer merges; building from a
-// CBDescriptor does not), so a CB covers the same rectangles as in a Program-built factory.
+// Program(const ProgramDescriptor&) merges a CB's core ranges, as CreateCircularBuffer does, so they go in as given.
 inline tt::tt_metal::CBDescriptor make_cb_descriptor(
     const tt::tt_metal::CoreRangeSet& core_ranges,
     uint32_t cb_index,
@@ -172,7 +171,7 @@ inline tt::tt_metal::CBDescriptor make_cb_descriptor(
     uint32_t num_tiles) {
     return tt::tt_metal::CBDescriptor{
         .total_size = num_tiles * single_tile_size,
-        .core_ranges = core_ranges.merge_ranges(),
+        .core_ranges = core_ranges,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_index),
             .data_format = data_format,
@@ -190,7 +189,7 @@ inline tt::tt_metal::CBDescriptor make_cb_descriptor_bytes(
     uint32_t page_size_bytes = 0U) {
     return tt::tt_metal::CBDescriptor{
         .total_size = total_bytes,
-        .core_ranges = core_ranges.merge_ranges(),
+        .core_ranges = core_ranges,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_index),
             .data_format = data_format,
@@ -379,6 +378,26 @@ inline WorkSplit compute_work_split(const tt::tt_metal::CoreCoord& grid, uint32_
         split.units_per_core_group_2 = units / split.num_cores;
     }
     return split;
+}
+
+// Rows of tiles of a TILE-layout tensor: the height of its physical 2D shape (every dim but the last, padded) in units
+// of its tile's height.
+inline uint32_t num_tile_rows(const ttnn::Tensor& tensor) {
+    const auto& spec = tensor.tensor_spec();
+    return static_cast<uint32_t>(spec.physical_shape().height() / spec.tile().get_height());
+}
+
+// compute_work_split with one unit per tile row (num_tile_rows) of a TILE-layout tensor, over its device's compute
+// grid.
+inline WorkSplit compute_tile_row_work_split(const ttnn::Tensor& tensor) {
+    return compute_work_split(tensor.device()->compute_with_storage_grid_size(), num_tile_rows(tensor));
+}
+
+// compute_work_split with one unit per tile of a TILE-layout tensor's padded shape, over its device's compute grid.
+inline WorkSplit compute_tile_work_split(const ttnn::Tensor& tensor) {
+    return compute_work_split(
+        tensor.device()->compute_with_storage_grid_size(),
+        static_cast<uint32_t>(tensor.physical_volume() / tensor.tensor_spec().tile().get_tile_hw()));
 }
 
 // TT_FATALs unless `split` describes the same cores and units as the split_work_to_cores result passed in.

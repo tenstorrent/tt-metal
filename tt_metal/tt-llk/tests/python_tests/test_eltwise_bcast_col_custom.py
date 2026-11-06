@@ -38,6 +38,7 @@ from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
+    IN_FACE_DIMS,
     INPUT_DIMENSIONS,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -59,6 +60,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
+    FACE_C_DIM,
     get_tile_params,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
@@ -218,8 +220,9 @@ def _canonical_bcast_col_config(
             NUM_BLOCKS(
                 num_blocks, input_num_blocks=num_blocks, output_num_blocks=num_blocks
             ),
-            NUM_FACES_R_DIM(num_faces_r_dim),
-            NUM_FACES_C_DIM(num_faces_c_dim),
+            IN_FACE_DIMS(face_r_dim, FACE_C_DIM, face_r_dim, FACE_C_DIM),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
             TEST_FACE_DIMS(face_r_dim=face_r_dim),
             LOOP_FACTOR(1),
         ],

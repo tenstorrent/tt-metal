@@ -1575,6 +1575,20 @@ TEST_F(SDPABackwardTest, Validation_RejectsPaddedQK) {
         << "sdpa_bw should reject Q/K with non-tile-aligned head_dim";
 }
 
+TEST_F(SDPABackwardTest, Validation_CompositeRejectsMissingMask) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    const auto query = autograd::create_tensor(in.query);
+    const auto key = autograd::create_tensor(in.key);
+    const auto value = autograd::create_tensor(in.value);
+
+    // Unlike ops::scaled_dot_product_attention, the composite has no causal default: a missing mask must throw
+    // rather than silently attend to every key.
+    EXPECT_THROW(ops::scaled_dot_product_attention_composite(query, key, value, std::nullopt), std::invalid_argument);
+    EXPECT_THROW(
+        ops::scaled_dot_product_attention_composite(query, key, value, autograd::TensorPtr{}), std::invalid_argument);
+}
+
 // ========== Ring Attention Simulation on Single Device ==========
 // Simulates ring attention forward + backward on a single device by splitting
 // K/V into chunks along the sequence dimension and combining outputs with the

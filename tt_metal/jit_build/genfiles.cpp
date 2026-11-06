@@ -216,7 +216,7 @@ string generate_cached_semaphore_list(const JitBuildSettings& settings) {
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
-void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings, tt::ARCH arch) {
     const string path = out_dir + "kernel_bindings_generated.h";
 
     // Get the DFB bindings from the settings callback
@@ -378,6 +378,22 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     }
     if (scratch_entries.empty()) {
         content << "struct ScratchpadBindingToken;\n";
+    }
+
+    // Bit per DFB this kernel binds. Quasar's kernel-exit finish (dataflow_buffer_finish.h) walks these.
+    // Only Quasar firmware reads the mask, and only Quasar caps a core at 32 DFB slots: Blackhole has 64,
+    // so a WH/BH kernel binding slot 32 or higher must still build.
+    if (arch == tt::ARCH::QUASAR) {
+        uint32_t bound_dfb_mask = 0;
+        for (const auto& entry : dfb_entries) {
+            TT_FATAL(
+                entry.id < 32,
+                "DFB binding '{}' has device slot {}, outside the 32-bit bound mask",
+                entry.name,
+                entry.id);
+            bound_dfb_mask |= 1u << entry.id;
+        }
+        content << fmt::format("#define KERNEL_BOUND_DFB_MASK 0x{:x}u\n", bound_dfb_mask);
     }
 
     // Emit DFB bindings
@@ -782,7 +798,7 @@ void jit_build_genfiles_kernel_include(
     const bool is_metal2 = settings.is_metal2_kernel();
     string kernel_header_content;
     if (is_metal2) {
-        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_bindings_generated_header(out_dir, settings, env.get_arch());
         write_kernel_args_generated_header(out_dir, settings);
         kernel_header_content =
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
@@ -827,7 +843,7 @@ void jit_build_genfiles_triscs_src(
     const bool is_metal2 = settings.is_metal2_kernel();
     if (is_metal2) {
         // The cached pool is DM-only
-        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_bindings_generated_header(out_dir, settings, env.get_arch());
         write_kernel_args_generated_header(out_dir, settings);
     }
     // No prolog #include: force-included by the compile recipe instead, so the map is defined ahead

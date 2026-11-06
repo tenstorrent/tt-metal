@@ -85,7 +85,7 @@ ttnn::device_operation::ProgramArtifacts ConvertToCHWProgramFactory::create_prog
         "Mismatch between core grid and input/shard shapes");
 
     const uint32_t total_tiles = HW / TILE_HEIGHT;  // assume C < 32
-    const uint32_t total_tiles_per_core = tt::div_up(total_tiles, input_cores.size());
+    const uint32_t total_tiles_per_core = a.shard_spec()->shape[0] / TILE_HEIGHT;
 
     log_debug(tt::LogType::LogOp, "Processing {} tiles per core ({} total tiles)", total_tiles_per_core, total_tiles);
 

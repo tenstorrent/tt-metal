@@ -923,7 +923,7 @@ TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
     EXPECT_EQ(submesh_1->impl().get_context_id(), context_id);
 
     SystemMemoryManager& sysmem_manager = mesh_device->impl().get_devices()[0]->sysmem_manager();
-    EXPECT_EQ(sysmem_manager.get_context_id(), context_id);
+    EXPECT_EQ(&sysmem_manager.metal_context(), &mesh_device->impl().metal_context());
 }
 
 TEST(MetalEnvMockCCL, FabricConfiguredBeforeCreate_CreatesMeshAndQuerySucceeds) {

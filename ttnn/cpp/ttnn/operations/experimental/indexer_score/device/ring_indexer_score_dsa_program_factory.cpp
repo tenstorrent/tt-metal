@@ -712,14 +712,50 @@ ProgramDescriptor build_ring_program_descriptor(
     return desc;
 }
 
+// A full-mesh fused ring's route (snake orientation, Ring vs Linear closure) is proved here, on a program-cache
+// miss, instead of in invoke on every call: proving it walks the fabric control plane. The key need not hold it:
+// the program cache is per mesh device, and the device's fabric cannot change while it is open.
+operation_attributes_t resolve_full_mesh_route(const operation_attributes_t& args, const Tensor& q) {
+    // Only create_mesh_workload's resolved copy carries a route hash; invoke never sets one.
+    if (!args.has_fused_ring() || !args.fused_ring->full_mesh || args.fused_ring->route_plan_hash.has_value()) {
+        return args;
+    }
+    auto resolved = args;
+    auto& fused = *resolved.fused_ring;
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const std::array<tt::tt_fabric::Topology, 2> axis_topology{
+        ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
+    const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+        q,
+        std::nullopt,
+        fused.num_links,
+        axis_topology,
+        true,
+        "ring_indexer_score_dsa",
+        /*allow_open_path=*/true);
+    TT_FATAL(route.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh route");
+    TT_FATAL(
+        route->plan.mesh_rows == fused.mesh_rows && route->plan.mesh_cols == fused.mesh_cols,
+        "ring_indexer_score_dsa full-mesh route {}x{} does not match the {}x{} mesh it was requested for",
+        route->plan.mesh_rows,
+        route->plan.mesh_cols,
+        fused.mesh_rows,
+        fused.mesh_cols);
+    fused.topology = route->topology;
+    fused.snake_orientation = route->plan.orientation;
+    fused.route_plan_hash = route->plan.route_plan_hash;
+    return resolved;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 tt::tt_metal::WorkloadDescriptor RingIndexerScoreDsaProgramFactory::create_workload_descriptor(
-    const operation_attributes_t& args,
+    const operation_attributes_t& unresolved_args,
     const tensor_args_t& tensors,
     tensor_return_value_t& out,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const auto args = CMAKE_UNIQUE_NAMESPACE::resolve_full_mesh_route(unresolved_args, tensors.q);
     tt::tt_metal::WorkloadDescriptor wd;
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
@@ -732,11 +768,13 @@ tt::tt_metal::WorkloadDescriptor RingIndexerScoreDsaProgramFactory::create_workl
 
 RingIndexerScoreDsaMeshWorkloadFactory::cached_mesh_workload_t
 RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& args,
+    const operation_attributes_t& unresolved_args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    // Program-cache miss: prove the full-mesh route once; create_workload_descriptor then sees it resolved.
+    const auto args = resolve_full_mesh_route(unresolved_args, tensors.q);
     auto descriptor_cached = descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out);
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     constexpr std::array kernel_indices{

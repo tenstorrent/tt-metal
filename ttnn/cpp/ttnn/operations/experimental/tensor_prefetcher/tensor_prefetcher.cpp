@@ -50,6 +50,7 @@ void queue_tensor_prefetcher_request(
     const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     bool capture_into_trace) {
+    ttnn::device_operation::detail::throw_if_recording_command_list("queue_tensor_prefetcher_request");
     TT_FATAL(!prefetcher_pipes.empty(), "queue_tensor_prefetcher_request needs at least one PrefetcherPipe");
 
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
@@ -114,6 +115,7 @@ uint32_t get_tensor_prefetcher_signal_address(tt::tt_metal::distributed::MeshDev
 
 void queue_tensor_prefetcher_wait_for_signal(
     tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, bool capture_into_trace) {
+    ttnn::device_operation::detail::throw_if_recording_command_list("queue_tensor_prefetcher_wait_for_signal");
     // A NO_DISPATCH graph capture launches no program, so no op raises the signal that would release
     // the wait, and every later wait and request would sit behind it.
     if (ttnn::device_operation::detail::graph_capture_blocks_dispatch()) {
