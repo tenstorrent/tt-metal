@@ -60,6 +60,13 @@ def register_conv_slices(mesh_shape: tuple[int, int], height: int, width: int, h
         h, w = (h - 2) // 2 + 1, (w - 2) // 2 + 1
 
 
+class _AutoSliceTable(dict):
+    """A conv slice table whose missing shapes get 0 (ttnn picks the DRAM width-slice count) instead of None."""
+
+    def get(self, key, default=None):
+        return super().get(key, 0)
+
+
 def _vae_kwargs(mesh_device, parallel_config, ccl_manager) -> dict:
     return dict(
         block_out_channels=BLOCK_OUT_CHANNELS,
@@ -135,10 +142,17 @@ class Flux3KleinVae:
             self._decoders[size] = self._load(decoder, parallel_config, SUBFOLDER)
         return self._decoders[size]
 
+    def _encoder_h_sharded(self, height: int) -> bool:
+        # H / h_factor rows per device must stay even through the three stride-2 downsamplers
+        return height % (SCALE * self._device.shape[self.h_axis]) == 0
+
     def encoder(self, size: int) -> Flux2VaeEncoder:
         if size not in self._encoders:
             parallel_config = Flux2VaeParallelConfig.from_axes(
-                self._device, tp_axis=self._tp_axis, h_axis=None, w_axis=None
+                self._device,
+                tp_axis=self._tp_axis,
+                h_axis=self.h_axis if self._encoder_h_sharded(size) else None,
+                w_axis=None,
             )
             encoder = Flux2VaeEncoder(**_vae_kwargs(self._device, parallel_config, self._ccl))
             self._encoders[size] = self._load(encoder, parallel_config, "vae_encoder")
@@ -171,16 +185,32 @@ class Flux3KleinVae:
     def encode(self, image) -> torch.Tensor:
         """`[h * w, 128]` bf16 latent tokens of a PIL image."""
         width, height = image.size
-        register_conv_slices(tuple(self._device.shape), height, width)
+        mesh_key = tuple(self._device.shape)
+        register_conv_slices(mesh_key, height, width)
+        sharded = height == width and self._encoder_h_sharded(height)
         x = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
         x = tensor.from_torch(
             x[None].contiguous(),
             device=self._device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_axes=[None, None, None, None],
+            mesh_axes=[None, self.h_axis if sharded else None, None, None],
         )
-        out = self.encoder(width).encode(x, height=height, width=width, traced=False)
+        encoder = self.encoder(width)
+        if sharded:
+            # the per-device shapes of the H-sharded convs are not in the slice table: let ttnn pick (DRAM, auto)
+            table = Conv2d.slice_params.get(mesh_key, Conv2d.slice_default)
+            Conv2d.slice_params[mesh_key] = _AutoSliceTable(table)
+            try:
+                rows = encoder.forward(x, traced=False)
+            finally:
+                Conv2d.slice_params[mesh_key] = table
+            full = self._ccl.all_gather(rows, dim=1, mesh_axis=self.h_axis, use_hyperparams=True)
+            ttnn.deallocate(rows)
+            out = encoder.normalize_and_patchify(full, height=height, width=width)
+            ttnn.deallocate(full)
+        else:
+            out = encoder.encode(x, height=height, width=width, traced=False)
         tokens = tensor.to_torch(out)[0]
         ttnn.deallocate(out)
         ttnn.deallocate(x)
