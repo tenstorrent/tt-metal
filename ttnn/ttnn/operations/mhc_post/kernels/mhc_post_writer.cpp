@@ -70,6 +70,43 @@ FORCE_INLINE uint32_t tile_word(uint32_t t, uint32_t c) {
     return ((t / FACE_DIM) * 2 + (c / FACE_DIM)) * FACE_WORDS + (t % FACE_DIM) * FACE_DIM + (c % FACE_DIM);
 }
 
+// Stats tile -> hc lanes and back (mhc_post_hc_sfpu.hpp lane layout). Plain (non-volatile) L1
+// pointers, fully unrolled over the quantities, so the RISC keeps several loads in flight instead
+// of serializing one volatile access at a time (the volatile form measured ~30 us per call on the
+// focus shape's critical path). The caller's CB handshakes order the data; the compiler barriers
+// below keep the accesses inside them.
+FORCE_INLINE void stats_to_lanes(uint32_t stats_l1, uint32_t lanes_l1) {
+    using namespace mhc_post_hc;
+    asm volatile("" ::: "memory");
+    const uint32_t* st = reinterpret_cast<const uint32_t*>(stats_l1);
+    uint32_t* lanes = reinterpret_cast<uint32_t*>(lanes_l1);
+    for (uint32_t t = 0; t < 32; ++t) {
+#pragma GCC unroll 25
+        for (uint32_t k = 0; k <= SS_Q; ++k) {
+            const uint32_t v = st[tile_word(t, k)];
+            lanes[lane_word(k, t)] = v;
+            if constexpr (!DENSE) {
+                lanes[lane_word(k, t) + LANE_DUP] = v;
+            }
+        }
+    }
+    asm volatile("" ::: "memory");
+}
+
+FORCE_INLINE void lanes_to_hc(uint32_t lanes_l1, uint32_t hc_l1) {
+    using namespace mhc_post_hc;
+    asm volatile("" ::: "memory");
+    const uint32_t* res = reinterpret_cast<const uint32_t*>(lanes_l1);
+    uint32_t* hrow = reinterpret_cast<uint32_t*>(hc_l1);
+    for (uint32_t t = 0; t < 32; ++t) {
+#pragma GCC unroll 24
+        for (uint32_t k = 0; k < NG; ++k) {
+            hrow[tile_word(t, k)] = res[lane_word(k, t)];
+        }
+    }
+    asm volatile("" ::: "memory");
+}
+
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem_ptr(uint32_t id) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id));
 }
@@ -125,39 +162,43 @@ void kernel_main() {
         noc.write_zeros_l1_barrier();
     }
 
-    // hc_row: stats tile (row t, col k) -> lane word (k, t) of lane tile k / 16 (+ its duplicate);
-    // compute runs the hc program; result lanes -> hc page (row t, col k).
-    auto hc_row = [&](uint32_t stats_l1, uint32_t row) {
+    // hc_row, decoupled from compute (which runs it one iteration late, see the compute kernel):
+    // push_lanes permutes the stats tile (row t, col k) into lane words (k, t) and returns at once;
+    // drain_hc takes a finished result back to an hc page (row t, col k). Draining polls (between
+    // blocks and after each post_row) and blocks only when the lane ring is full or at the end, so
+    // neither side waits on the other's cross-core combine traffic.
+    uint32_t hc_rows[mhc_post_hc::LANE_SETS];
+    uint32_t hc_head = 0, hc_count = 0;
+    auto drain_hc = [&](bool blocking) {
         using namespace mhc_post_hc;
-        cb_reserve_back(cb_hc_lanes, LANE_TILES);
-        volatile tt_l1_ptr uint32_t* lanes = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_hc_lanes));
-        volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_l1);
-        for (uint32_t k = 0; k <= SS_Q; ++k) {
-            volatile tt_l1_ptr uint32_t* lt = lanes + (k / 16) * 1024;
-            for (uint32_t t = 0; t < 32; ++t) {
-                const uint32_t v = st[tile_word(t, k)];
-                lt[lane_word(k, t)] = v;
-                lt[lane_word(k, t) + 32] = v;
-            }
+        if (hc_count == 0 || (!blocking && !cb_pages_available_at_front(cb_hc_out, LANE_TILES))) {
+            return;
         }
-        cb_push_back(cb_hc_lanes, LANE_TILES);
+        const uint32_t row = hc_rows[hc_head];
+        hc_head = (hc_head + 1) % LANE_SETS;
+        --hc_count;
         cb_wait_front(cb_hc_out, LANE_TILES);
-        volatile tt_l1_ptr uint32_t* res = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_hc_out));
-        volatile tt_l1_ptr uint32_t* hrow = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_hc_row));
-        for (uint32_t k = 0; k < NG; ++k) {
-            volatile tt_l1_ptr uint32_t* lt = res + (k / 16) * 1024;
-            for (uint32_t t = 0; t < 32; ++t) {
-                hrow[tile_word(t, k)] = lt[lane_word(k, t)];
-            }
-        }
+        noc_async_write_barrier();  // the previous hc page has left cb_hc_row
+        lanes_to_hc(get_read_ptr(cb_hc_out), get_write_ptr(cb_hc_row));
         cb_pop_front(cb_hc_out, LANE_TILES);
         noc_async_write_page(row, hc_acc, get_write_ptr(cb_hc_row));
+    };
+    auto push_lanes = [&](uint32_t stats_l1, uint32_t row) {
+        using namespace mhc_post_hc;
+        if (hc_count == LANE_SETS) {
+            drain_hc(true);  // compute ran the oldest one already (its combines precede it)
+        }
+        cb_reserve_back(cb_hc_lanes, LANE_TILES);
+        stats_to_lanes(stats_l1, get_write_ptr(cb_hc_lanes));
+        cb_push_back(cb_hc_lanes, LANE_TILES);
+        hc_rows[(hc_head + hc_count) % LANE_SETS] = row;
+        ++hc_count;
     };
     auto write_stats = [&](uint32_t cb, uint32_t row) {
         cb_wait_front(cb, 1);
         noc_async_write_page(row, stats_acc, get_read_ptr(cb));
         if constexpr (collapse) {
-            hc_row(get_read_ptr(cb), row);
+            push_lanes(get_read_ptr(cb), row);
         }
         noc_async_write_barrier();
         cb_pop_front(cb, 1);
@@ -205,6 +246,9 @@ void kernel_main() {
         if (r >= 2 * COMBINE_LAG && r - 2 * COMBINE_LAG < num_rows && geo.roots(r - 2 * COMBINE_LAG)) {
             write_stats(cb_stats_row, row_start + r - 2 * COMBINE_LAG);
         }
+        if constexpr (collapse) {
+            drain_hc(false);
+        }
     };
 
     for (uint32_t r = 0; r < num_rows; ++r) {
@@ -233,6 +277,7 @@ void kernel_main() {
             cb_pop_front(cb_out_tiles, window);
             if constexpr (collapse) {
                 cb_pop_front(cb_y_tiles, block_c);
+                drain_hc(false);
             }
         }
         if constexpr (fused) {
@@ -242,6 +287,12 @@ void kernel_main() {
     if constexpr (fused) {
         for (uint32_t r = num_rows; r < num_rows + 2 * COMBINE_LAG; ++r) {
             post_row(r);
+        }
+        if constexpr (collapse) {
+            while (hc_count > 0) {
+                drain_hc(true);  // the trailing stats rows' hc
+            }
+            noc_async_write_barrier();
         }
         noc_async_atomic_barrier();
     }

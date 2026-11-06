@@ -102,7 +102,7 @@ Refinements 1 and 2 exist to land every one of these values in `SUPPORTED`.
 - Stats at the focus shape (HiFi2): 151 µs vs 103 µs reference. Plain bf16: 84.6 µs.
 - The op is SFPU-mix-bound. Remaining levers are in Refinements 3 and 5.
 
-### [ ] Refinement 2 — collapse mode (hc SFPU program + y)
+### [x] Refinement 2 — collapse mode (hc SFPU program + y)
 
 **Goal**: add `"collapse"` to `SUPPORTED["mode"]` by building **collapse-2d-tree** on top of Refinement 1:
 - Read `collapse_pre` P in-kernel: separate → one more source page; packed → the same page as the mixes, pre at
@@ -136,6 +136,18 @@ Refinements 1 and 2 exist to land every one of these values in `SUPPORTED`.
   `test_hc_scalars_are_runtime`, `test_collapse_pre_controls_y`, `test_output_buffers[collapse]`,
   `test_max_grid[*]`, `test_collapse_deterministic`, `test_projection_hifi4`.
 - `xfail_expected` is 0 and there are no loud categories.
+
+**Outcome**:
+- Landed: collapse-2d-tree. P is read in-kernel (packed = the same single mixes page). y is an fp32 SFPU chain
+  from the X' block in L1, before the projection. The hc step is one lane-wise fp32 SFPI program
+  (`HcProgram`), run on each row's stats core (rotating root).
+- On Blackhole, the dense lane layout came from a device probe: an SFPU load = 4 rows × 8 even|odd columns.
+- Golden results: collapse 62/62; `test_regression.py` 26/27.
+- The one failure, `test_hc_scalars_are_runtime`, is a golden-suite defect. With `hc_eps = 1.1e-5`, the
+  float64 reference itself has |colsum − 1| = 1.1e-5 > `HC_COLSUM = 1e-5`. The gate should scale with
+  `hc_eps`; every other gate of that test passes. This needs a human edit to `helpers.py`.
+- Perf at T160/C5120 HiFi2: collapse 192 µs vs stats 152 µs. The rest is writer lane permutes (~11 µs),
+  the y chain (~9 µs) and the hc SFPU (~5 µs); see the changelog for the levers.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile: block / split knob co-tune
 

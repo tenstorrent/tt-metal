@@ -73,7 +73,11 @@ CB_Y_TILES = 19  # y = sum_i P_i X'_i, one block (bf16), pushed per tile
 CB_HC_LANES = 20  # root: stats row permuted into the hc lane layout (writer -> compute)
 CB_HC_OUT = 21  # root: hc program result lanes (compute -> writer)
 CB_HC_ROW = 22  # root: writer-private landing tile for the inverse permutation
-HC_LANE_TILES = 2  # 25 quantities x 64 datums (mhc_post_hc_sfpu.hpp)
+HC_LANE_TILES = 2  # cb_hc_lanes / cb_hc_out capacity (mhc_post_hc_sfpu.hpp LANE_CB_PAGES)
+# collapse: iterations between a row's stats combine and its hc program on the compute side.
+# 1 decouples the compute from the writer's lane permute (which sits behind the writer's cross-core
+# sends); 0 runs it right after the combine. Measured equal at T160 / T640 (C5120, HiFi2).
+HC_LAG = 1
 
 
 def _tile_bytes(dtype):
@@ -97,22 +101,37 @@ def _n_coef_cols(mode, n=N_STREAMS):
 
 
 def choose_split(Rt, Ct, *, f_tile, x_tile, n_src, G, fused=False, n=N_STREAMS):
-    """(R, Q) minimizing the busiest core's DRAM bytes. Tie-break: smaller R·Q, then smaller Q."""
+    """(R, Q) minimizing the busiest core's DRAM bytes. Tie-break: smaller R·Q, then smaller Q.
+
+    Fused modes keep the core's W slice resident. The preferred bound is W_RESIDENT_BUDGET; when
+    no split of a small grid (max_grid) meets it, the bound relaxes to "the whole fused inventory
+    fits L1_CB_BUDGET at block_c = 1" — same function for stats and collapse (mode-invariant), and a
+    no-op wherever the preferred bound is feasible."""
     unit_bytes = f_tile + 2 * n * x_tile
     row_bytes = n_src * FP32_TILE_BYTES
     w_bytes_per_c = n * FP32_TILE_BYTES if fused else 0
-    best = None
-    for R in range(1, min(Rt, G) + 1):
-        rt_max = -(-Rt // R)
-        for Q in range(1, min(Ct, G // R) + 1):
-            ct_max = -(-Ct // Q)
-            if fused and n * ct_max * FP32_TILE_BYTES > W_RESIDENT_BUDGET:
-                continue
-            cost = rt_max * (ct_max * unit_bytes + row_bytes) + ct_max * w_bytes_per_c
-            key = (cost, R * Q, Q)
-            if best is None or key < best[0]:
-                best = (key, R, Q)
-    return best[1], best[2]
+
+    def w_fits_budget(ct_max, Q):
+        return n * ct_max * FP32_TILE_BYTES <= W_RESIDENT_BUDGET
+
+    def w_fits_l1(ct_max, Q):
+        return fused_fixed_bytes(ct_max, Q) + fused_per_c_bytes(f_tile, x_tile) <= L1_CB_BUDGET
+
+    for feasible in (w_fits_budget, w_fits_l1) if fused else (lambda ct_max, Q: True,):
+        best = None
+        for R in range(1, min(Rt, G) + 1):
+            rt_max = -(-Rt // R)
+            for Q in range(1, min(Ct, G // R) + 1):
+                ct_max = -(-Ct // Q)
+                if not feasible(ct_max, Q):
+                    continue
+                cost = rt_max * (ct_max * unit_bytes + row_bytes) + ct_max * w_bytes_per_c
+                key = (cost, R * Q, Q)
+                if best is None or key < best[0]:
+                    best = (key, R, Q)
+        if best is not None:
+            return best[1], best[2]
+    raise RuntimeError(f"mhc_post: no (R, Q) split of {G} cores keeps the {Ct}-column W slice resident in L1")
 
 
 def plain_fixed_bytes(n_src, n_coef_cols):
@@ -402,7 +421,7 @@ def create_program_descriptor(
     writer_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(h_tensor).get_compile_time_args())
 
-    compute_ct = [CB_COEF_COLS, CB_F_TILES, CB_X_TILES, CB_OUT_TILES, n, block_c, n_coef_cols] + fused_ct
+    compute_ct = [CB_COEF_COLS, CB_F_TILES, CB_X_TILES, CB_OUT_TILES, n, block_c, n_coef_cols] + fused_ct + [HC_LAG]
 
     # --- physical coordinates of every core of the program (combine transport) ---
     def phys(k):

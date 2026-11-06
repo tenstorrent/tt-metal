@@ -88,6 +88,8 @@ constexpr bool collapse = get_compile_time_arg_val(FB + 25) != 0;
 constexpr uint32_t cb_y_tiles = get_compile_time_arg_val(FB + 26);
 constexpr uint32_t cb_hc_lanes = get_compile_time_arg_val(FB + 27);
 constexpr uint32_t cb_hc_out = get_compile_time_arg_val(FB + 28);
+constexpr uint32_t HC_LAG = get_compile_time_arg_val(FB + 30);  // after fused_ct (descriptor HC_LAG)
+static_assert(HC_LAG <= 1, "hc runs at most one iteration after its combine");
 
 static_assert(n == 4, "mhc_post: the mix chain is written for n = 4 streams");
 
@@ -231,17 +233,25 @@ ALWI void collapse_block(uint32_t extent, DataflowBuffer& coef, DataflowBuffer& 
         PackY{y});
 }
 
-// hc_row: the hc program in place over the 2 lane tiles (D0, D1).
+// hc_row: the hc program in place over the LANE_TILES lane tiles (D0[, D1]).
 ALWI void hc_row(const uint32_t* params, DataflowBuffer& lanes, DataflowBuffer& out) {
     lanes.wait_front(mhc_post_hc::LANE_TILES);
     out.reserve_back(mhc_post_hc::LANE_TILES);
-    ckl::eltwise_chain(
-        ckl::IterationShape::one_tile(),
-        LoadLanes<ckl::Dst::D0>{lanes, 0},
-        LoadLanes<ckl::Dst::D1>{lanes, 1},
-        mhc_post_hc::HcProgram<ckl::Dst::D0>{params},
-        PackLanes<ckl::Dst::D0>{out, 0},
-        PackLanes<ckl::Dst::D1>{out, 1});
+    if constexpr (mhc_post_hc::LANE_TILES == 1) {
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            LoadLanes<ckl::Dst::D0>{lanes, 0},
+            mhc_post_hc::HcProgram<ckl::Dst::D0>{params},
+            PackLanes<ckl::Dst::D0>{out, 0});
+    } else {
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            LoadLanes<ckl::Dst::D0>{lanes, 0},
+            LoadLanes<ckl::Dst::D1>{lanes, 1},
+            mhc_post_hc::HcProgram<ckl::Dst::D0>{params},
+            PackLanes<ckl::Dst::D0>{out, 0},
+            PackLanes<ckl::Dst::D1>{out, 1});
+    }
     out.push_back(mhc_post_hc::LANE_TILES);
     lanes.pop_front(mhc_post_hc::LANE_TILES);
 }
@@ -442,9 +452,24 @@ void kernel_main() {
         DataflowBuffer y_buf(collapse ? cb_y_tiles : cb_xprime_mm);
         DataflowBuffer hc_lanes_buf(collapse ? cb_hc_lanes : cb_xprime_mm);
         DataflowBuffer hc_out_buf(collapse ? cb_hc_out : cb_xprime_mm);
+        // hc_row runs HC_LAG iterations after the row's stats are combined. With 1 (after the next
+        // row's mix) this core's compute never waits on its writer's lane permute, which sits behind
+        // the writer's cross-core credit / send waits; the writer polls for the result either way.
+        uint32_t hc_due = 0, hc_produced = 0;  // stats rows awaiting hc: previous / this iteration
         auto stats_done = [&]() {
-            if constexpr (collapse) {
+            if constexpr (collapse && HC_LAG == 0) {
                 hc_row(hc_params, hc_lanes_buf, hc_out_buf);
+            } else {
+                ++hc_produced;
+            }
+        };
+        auto run_due_hc = [&]() {
+            if constexpr (collapse) {
+                for (; hc_due > 0; --hc_due) {
+                    hc_row(hc_params, hc_lanes_buf, hc_out_buf);
+                }
+                hc_due = hc_produced;
+                hc_produced = 0;
             }
         };
 
@@ -582,6 +607,8 @@ void kernel_main() {
             if (r >= 2 * COMBINE_LAG && r - 2 * COMBINE_LAG < num_rows && geo.roots(r - 2 * COMBINE_LAG)) {
                 root_combine();
             }
+            run_due_hc();  // hc of the stats rows combined in the previous iteration
         }
+        run_due_hc();  // drain: the last iteration's stats rows
     }
 }

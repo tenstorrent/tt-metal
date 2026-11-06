@@ -65,7 +65,20 @@ Scaling: `cb_f_tiles`, `cb_x_tiles` and `cb_out_tiles` scale with `block_c` (and
 | `cb_proj_masks` (new) | `PROJ_EXACT_PASSES` = 16 (HiFi3/HiFi4 only) | 16 (resident whole kernel) | {all axes: streams; constant} | Float16_b | reader (NoC-zeroed, 64 lanes/tile written) | compute | whole kernel | Column masks {j, j+16} for the exact projection. Needed because the FPU rounds every 16-term face partial sum to ~tf32 (measured; see changelog), so the projection runs 16 passes with one product per face. |
 | `cb_xprime_masked` (new) | `n · block_c` (HiFi3/HiFi4 only) | `n · extent` | {c: spans → block_c, j: spans → n, k_w: spans → n·block_c; others: streams} | Float16_b | compute | compute (matmul in0) | per pass | One masked X' block, re-made 16 times per block. It cannot be packed into `cb_xprime_mm` in place, because the unmasked block feeds all 16 passes. |
 | `cb_zero` | **dropped** | — | — | — | — | — | — | `cb_ss_run` is seeded by a `FillScalar` chain into DEST at each row start (ledger fold option taken). `cb_proj_run` needs no seed: the row's first block packs straight into it. |
-| `cb_hc_*`, `cb_y_tiles` | not built (collapse, Refinement 2) | — | — | — | — | — | — | Reserved in `fused_fixed_bytes` / `fused_per_c_bytes` so the split is already mode-invariant. |
+| `cb_hc_*`, `cb_y_tiles` | built in Refinement 2 (see below) | — | — | — | — | — | — | Reserved in `fused_fixed_bytes` / `fused_per_c_bytes` so the split is already mode-invariant. |
+
+### Refinement 2 — collapse inventory as built (departures from the fused table)
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_coef_src` | `n_src_read` = distinct (buffer, tile column) windows among post / comb / P: 1 packed (pre, post, comb share mixes tile 0), 2–3 separate | `n_src_read` | as designed | Float32 | reader | reader (private scratch) | per row | Host-deduplicated slots (`_coef_sources`); a packed mixes page holding all three windows is ONE read, never sliced. |
+| `cb_coef_cols` | 24 (collapse) | 24 | as designed (P_i at tiles 20..23) | Float32 (UnpackToDestFp32) | reader | compute | per row | P_i feed y's Col broadcasts exactly like post / comb. |
+| `cb_y_tiles` | `block_c` | ≤ `block_c` (per-tile push; ragged tail padded to `block_c`) | {row: streams, c: spans → block_c, i: streams (contracted by y), j: streams; others: streams} | Float16_b (y is bf16) | compute | writer | per block | As designed. y is computed from `cb_xprime_mm` (packed compact `[j][c]`, stride = the block's extent) before the projection pops it; never re-read from DRAM. |
+| `cb_hc_lanes` | 2 (design 3) | 1 (dense, Blackhole) / 2 (robust) per row; up to 2 rows in flight (dense) | {row: spans → LANE_SETS rows in flight, hc_q: spans → 25 quantities; others: streams} | Float32 (UnpackToDestFp32) | writer | compute | per stats row | **No constants lane tile**: the hc scalars and the 24 `b_k` are compute RT args loaded as SFPU immediates, so the design's constants tile is deleted. Dense lane layout on Blackhole (one SFPU load per quantity, probed on device) → 1 tile per row instead of 2. |
+| `cb_hc_out` | 2 | 1 (dense) / 2 (robust) per row | {hc_q: spans → 24 outputs; others: streams} | Float32 | compute | writer | per stats row | Separate from `cb_hc_lanes`: the writer polls for the result while the next row's lanes may already be pushed. |
+| `cb_hc_row` | 1 | 1 | {hc_q: spans → 24 cols; others: streams} | Float32 | writer | writer (private scratch, NoC-zeroed once so cols 24..31 of the hc page are 0) | per stats row | Writer-private; the reader's `cb_coef_src` is live concurrently in another kernel. |
+
+The collapse CBs fit the reservation already charged in `fused_fixed_bytes` (3 + 2 + 1 tiles for the hc CBs; built 2 + 2 + 1) and `fused_per_c_bytes` (+1 bf16 y page per c), so `(R, Q, block_c)` — and the stats bits — are unchanged from Refinement 1. Small grids (`max_grid`, e.g. 3×2) where no split meets `W_RESIDENT_BUDGET` now fall back to the largest W slice for which the whole fused inventory fits `L1_CB_BUDGET` at `block_c = 1` (a no-op wherever the preferred bound is feasible).
 
 Sizing (host, `mhc_post_program_descriptor.py`): `fused_fixed_bytes` = the collapse inventory above (n_src 3, 24 coefficient columns, the resident W slice, the combine CBs, the hc CBs) plus the 16 mask tiles. `fused_per_c_bytes` = `plain_per_c_bytes` + `cb_xprime_mm` + `cb_xprime_masked` + y. Both are charged at every fidelity and in both fused modes, so `(R, Q, block_c)` depends only on shape, dtypes and coef_source. Built focus split (bf16, packed, T=160, C=5120): R=2, Q=54, 3 rows × 3 c-tiles per core, `block_c = 2`.
 
@@ -120,7 +133,7 @@ Totals: DRAM 30.3 MB (minimum 29.5 MB; +2.7 %); NoC cross-core 0; core-local re-
 | mixes (= post = comb = P; 20 KB) | Q = 54 (1.1 MB) | Reuse-shared along c. Packed means one page serves all three roles. | 0 |
 | W (2.62 MB) | R = 2 (5.24 MB) | Reuse-shared along rows. Resident per core (read once per core, not per row). | 0 |
 | partial stats tiles | — | — | 270 × 4 KiB = 1.1 MB core → leader; 5 rows × 4 × 4 KiB = 80 KB leader → root |
-| stats (20 KB), hc (20 KB) | 1 (write) | written by the row's root | 0 |
+| stats (20 KB), hc (20 KB) | 1 (write) | written by the core that combines the row (two-level: the rotating root; single-level: the group leader) | 0 |
 
 Totals: DRAM ≈ 22.8 MB (minimum ≈ 19.1 MB with W and the mixes once); NoC ≈ 1.2 MB in 4 KiB unicasts.
 

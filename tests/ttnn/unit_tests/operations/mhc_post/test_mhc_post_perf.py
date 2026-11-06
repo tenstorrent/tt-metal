@@ -29,7 +29,7 @@ def test_perf_plain_fp32(T, C, device):
     assert list(out.shape) == [1, 1, T, N * C]
 
 
-@pytest.mark.parametrize("mode", ["plain", "stats"])
+@pytest.mark.parametrize("mode", ["plain", "stats", "collapse"])
 @pytest.mark.parametrize("fidelity", [ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4], ids=["HiFi2", "HiFi4"])
 @pytest.mark.parametrize("T,C", [(160, 5120), (640, 5120)])
 def test_perf_bf16_packed(T, C, fidelity, mode, device):
@@ -40,8 +40,11 @@ def test_perf_bf16_packed(T, C, fidelity, mode, device):
     )
     mixes = _dev(torch.rand(1, 1, T, N * (N + 2)), device)
     kw = dict(post_col=N, comb_col=2 * N)
-    if mode == "stats":
+    if mode in ("stats", "collapse"):
         kw["stats_weight"] = _dev(torch.randn(1, 1, N * C, 32) * 0.01, device)
+    if mode == "collapse":
+        ng = N * (N + 2)
+        kw.update(collapse_pre=mixes, hc_scale=[0.3, 0.2, 0.4], hc_base=[0.1 * (k % 5) for k in range(ng)])
     cfg = ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=True, math_approx_mode=False)
     out = mhc_post(
         bf(torch.randn(1, 1, T, C)), bf(torch.randn(1, 1, T, N * C)), mixes, mixes, compute_kernel_config=cfg, **kw

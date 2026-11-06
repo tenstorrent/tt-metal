@@ -4,13 +4,17 @@
 // mhc_post — the hc step (DeepSeek-V4 hc_split_sinkhorn after the projection) as one custom fp32
 // SFPU program over "hc lane" tiles, plus its eltwise_chain element (HcProgram).
 //
-// Lane layout (op_design.md → Dataflow "stats → hc lanes", the robust layout): quantity k
-// (0..23 = the stats mix columns, 24 = the sum of squares) occupies dest rows 4·(k%16)..+3 of lane
-// tile k/16 (all 16 columns) — i.e. SFPU vectors dst_reg[2k] and dst_reg[2k+1] counted from lane
-// tile 0. Token t sits at rel row t/16, col t%16 of the 4-row block, and rel rows 2..3 duplicate
-// rows 0..1. Every quantity block is therefore a whole number of SFPU loads, so every op below is
-// lane-wise between quantities whatever the intra-load datum mapping is; both halves (vector 2k
-// and 2k+1) are processed identically.
+// Lane layouts (op_design.md → Dataflow "stats → hc lanes"); quantity k = 0..23 are the stats mix
+// columns, k = 24 the sum of squares. Every op below is lane-wise between quantities.
+//  * ROBUST (any arch): quantity k occupies dest rows 4·(k%16)..+3 of lane tile k/16, all 16
+//    columns — SFPU vectors dst_reg[2k] and dst_reg[2k+1]. Token t sits at rel row t/16, col t%16;
+//    rel rows 2..3 duplicate rows 0..1. Each quantity is a whole number of SFPU loads, so it is
+//    correct whatever the intra-load datum mapping; both halves are processed.
+//  * DENSE (Blackhole, where the mapping was probed on device: one SFPU load = 4 dest rows x the 8
+//    even or the 8 odd columns; processing only vector 2k of the robust layout left every odd
+//    token untouched): quantity k is ONE load, dst_reg[k] — dest rows 4·(k/2)..+3, columns of
+//    parity k%2. Token t at rel row t/8, col 2·(t%8) + k%2. All 25 quantities fit one lane tile,
+//    the program runs once, and the writer moves half the words.
 //
 // Program per token (all fp32, lane-wise, exact transcendentals, no FPU operand):
 //   r     = rsqrt(ss * (1/width) + norm_eps)                    (magic seed + 3 Newton steps)
@@ -46,7 +50,16 @@ namespace mhc_post_hc {
 constexpr uint32_t N = 4;
 constexpr uint32_t NG = N * (N + 2);  // 24 hc quantities
 constexpr uint32_t SS_Q = NG;         // quantity index of the sum of squares
-constexpr uint32_t LANE_TILES = 2;    // 25 quantities x 64 datums -> 2 tiles
+#ifdef ARCH_BLACKHOLE
+constexpr bool DENSE = true;  // the layout knob (see above)
+#else
+constexpr bool DENSE = false;
+#endif
+constexpr uint32_t LANE_TILES = DENSE ? 1 : 2;              // tiles the hc program works on (host CB holds 2)
+constexpr uint32_t HALVES = DENSE ? 1 : 2;                  // SFPU passes over the quantities
+constexpr uint32_t VEC_STRIDE = DENSE ? 1 : 2;              // SFPU vectors per quantity step
+constexpr uint32_t LANE_CB_PAGES = 2;                       // cb_hc_lanes / cb_hc_out capacity (host HC_LANE_TILES)
+constexpr uint32_t LANE_SETS = LANE_CB_PAGES / LANE_TILES;  // hc rows in flight writer <-> compute
 
 // Runtime parameter block (compute RT args, fp32 bits unless noted).
 constexpr uint32_t P_BASE = 0;            // b_0 .. b_23
@@ -59,9 +72,13 @@ constexpr uint32_t P_HC_EPS = NG + 5;     // hc_eps
 constexpr uint32_t P_ITERS = NG + 6;      // hc_sinkhorn_iters (integer)
 constexpr uint32_t NUM_PARAMS = NG + 7;
 
-// Writer-side lane addressing: fp32 word of (quantity k, token t) inside lane tile k / 16
-// (the duplicate sits at + 32).
-constexpr uint32_t lane_word(uint32_t k, uint32_t t) { return (k % 16) * 64 + t; }
+// Writer-side lane addressing: fp32 word of (quantity k, token t), counted from lane tile 0 (a
+// tile is 1024 words; faces stacked, so dest row R, column c is word 16·R + c). ROBUST layout: the
+// duplicate copy sits at + LANE_DUP.
+constexpr uint32_t lane_word(uint32_t k, uint32_t t) {
+    return DENSE ? 64 * (k / 2) + 16 * (t / 8) + 2 * (t % 8) + (k % 2) : (k / 16) * 1024 + (k % 16) * 64 + t;
+}
+constexpr uint32_t LANE_DUP = 32;
 
 }  // namespace mhc_post_hc
 
@@ -70,7 +87,8 @@ namespace ckernel::sfpu {
 
 namespace mhc_hc_detail {
 
-constexpr uint32_t q(uint32_t k) { return 2 * k; }  // SFPU vector index of quantity k (this half)
+// SFPU vector index of quantity k (this half)
+constexpr uint32_t q(uint32_t k) { return mhc_post_hc::VEC_STRIDE * k; }
 
 sfpi_inline sfpi::vFloat bits(uint32_t v) { return Converter::as_float(v); }
 
@@ -142,7 +160,7 @@ inline void calculate_mhc_hc(const uint32_t* p) {
     const uint32_t hc_eps = p[mhc_post_hc::P_HC_EPS];
 
 #pragma GCC unroll 0
-    for (int half = 0; half < 2; ++half) {
+    for (uint32_t half = 0; half < mhc_post_hc::HALVES; ++half) {
         // r = rsqrt(ss / width + norm_eps), kept in the ss slot
         {
             sfpi::vFloat ss = sfpi::dst_reg[q(mhc_post_hc::SS_Q)];
@@ -204,7 +222,7 @@ inline void calculate_mhc_hc(const uint32_t* p) {
             row_normalize(hc_eps);
             col_normalize(hc_eps);
         }
-        sfpi::dst_reg++;  // the duplicate half (vectors 2k + 1)
+        sfpi::dst_reg++;  // ROBUST: the second half (vectors 2k + 1)
     }
 }
 

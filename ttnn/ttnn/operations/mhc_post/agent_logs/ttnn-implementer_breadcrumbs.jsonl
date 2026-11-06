@@ -4,3 +4,8 @@
 {"event":"device_print_observation","detail":"probes: FPU matmul rounds each 16-term face partial to ~tf32 at all fidelities (2 exact products in one face lose 2^-11); one product per face exact; DEST accumulation across K tiles exact","ts":"2026-11-06T17:49:47+00:00"}
 {"event":"test_run","status":"pass","test":"test_mhc_post.py -k fused","detail":"stats T160/T150 pass with 16-pass masked exact projection at HiFi4","ts":"2026-11-06T17:49:47+00:00"}
 {"event":"test_run","status":"pass","detail":"golden stats 58/58, plain 232/232, regression 15 pass; unit dir 49 pass","ts":"2026-11-06T18:05:00+00:00"}
+{"event":"test_run","refinement":2,"result":"fail","class":"numerical","detail":"y PCC 0.905; bad tiles = ragged-tail block only","ts":"2026-11-06T18:52:14+00:00"}
+{"event":"fix_applied","refinement":2,"detail":"y operand offset i*extent (cb_xprime_mm packed compact [j][c])","ts":"2026-11-06T18:52:14+00:00"}
+{"event":"device_print_observation","refinement":2,"detail":"lane probe: processing only SFPU vector 2k leaves odd tokens raw -> BH load = 4 rows x 8 even|odd cols; dense layout built","ts":"2026-11-06T18:52:14+00:00"}
+{"event":"hypothesis","refinement":2,"detail":"collapse-stats 59us; ablation: no hc roundtrip+no y = 160.6us; culprit = volatile word permutes on BRISC (fixed: 209.8->192.6us)","ts":"2026-11-06T18:52:14+00:00"}
+{"event":"test_run","refinement":2,"result":"pass","detail":"golden collapse 62/62; regression 26/27 (test_hc_scalars_are_runtime: reference itself violates HC_COLSUM for hc_eps=1.1e-5)","ts":"2026-11-06T18:52:14+00:00"}

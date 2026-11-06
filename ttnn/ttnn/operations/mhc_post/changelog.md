@@ -103,3 +103,96 @@
 - **Tests added**: `test_mhc_post_perf.py::test_perf_bf16_packed` (plain / stats × HiFi2 / HiFi4 × T160 / T640
   perf probe). The acceptance file already covers `test_plain_mixed_dtypes`, `test_plain_packed` and
   `test_fused_modes[stats-*]`.
+
+## Refinement 2 — collapse mode (hc SFPU program + y)
+- **Date**: 2026-11-06
+- **What was done**: `"collapse"` added to `SUPPORTED["mode"]`. Built collapse-2d-tree on top of stats-2d-tree;
+  the split, block and stats summation order are unchanged.
+  - **P in-kernel.** The reader deduplicates coefficient source pages by (buffer, tile column) on the host
+    (`_coef_sources`). Packed mixes `[pre | post | comb]` are still ONE page per (core, row); a separate P is
+    one more page. P_0..3 expand into `cb_coef_cols` tiles 20..23.
+  - **`collapse_block`**: y = Σ_i P_i · X'_i, an `eltwise_chain` (UnaryBcast<Col> + CopyTile + MulBinary /
+    Addcmul in fp32 DEST, one bf16 pack) over the bf16 X' block already in `cb_xprime_mm`. It runs after the
+    mix and before the projection pops the block, so y never reads DRAM. `cb_y_tiles` goes to the writer
+    (`y` or the caller's `y_output`).
+  - **hc program** (`kernels/mhc_post_hc_sfpu.hpp`): a custom lane-wise fp32 SFPI program, wrapped as an
+    `eltwise_chain` element (`HcProgram`) so the chain still owns DEST sync, CB lifecycle and reconfig.
+    - Steps: rsqrt (bit seed + 3 Newton steps); sigmoid = exact exp (`_sfpu_exp_fp32_accurate_`) + reciprocal
+      (approx + 2 Newton); row-max softmax + eps; Sinkhorn column step, then `iters − 1` row/column pairs.
+      Every division is a reciprocal × multiply. No FPU operand, and no dependence on `math_approx_mode`.
+    - The hc scalars and the 24 `b_k` are compute RT args (fp32 bits; 1/width computed in double on the host),
+      loaded as SFPU immediates. The design's constants lane tile is therefore deleted.
+  - **Lane layout probe** (design Key Risk). Running the robust layout's program on only vector 2k left every
+    odd token unprocessed. So on Blackhole one SFPU load = 4 dest rows × the 8 even (or 8 odd) columns.
+    - Built a **dense layout** knob (`mhc_post_hc::DENSE`, on for `ARCH_BLACKHOLE`): one load per quantity,
+      all 25 quantities in one lane tile, one pass.
+    - The robust 2-tile layout stays for other arches. It was verified on Blackhole by forcing the knob off.
+  - **Where hc runs**: on the core that produces the row's stats (two-level: the rotating root; single-level:
+    the leader).
+    - The writer permutes the stats tile into lanes (`stats_to_lanes`), compute runs `HcProgram`, and the
+      writer inverse-permutes (`lanes_to_hc`) and writes the hc page.
+    - The writer drains hc results by polling between blocks (blocking only when the lane ring is full, or
+      at the end).
+    - Compute runs the hc `HC_LAG` iterations after the combine (host knob, default 1; 0 measured equal).
+  - **Output plumbing**: hc (…, T, 24) fp32 and y (…, T, C) bf16 are allocated, or the caller's buffers are
+    validated (shape / dtype / layout / DRAM / no aliasing). `collapse_pre` is validated as fp32 TILE
+    (…, T, ≥ n). The call returns `(X', stats, hc, y)` from one `generic_op`.
+  - **Small-grid fix** (`choose_split`): when no split of a small `max_grid` (3×2) meets `W_RESIDENT_BUDGET`,
+    the bound relaxes to "the whole fused inventory fits `L1_CB_BUDGET` at `block_c = 1`". This is a no-op
+    wherever the preferred bound is feasible, so it is mode-invariant and leaves the stats bits unchanged.
+- **Accuracy achieved** (bf16 / bf16):
+  - hc: rel L2 vs DeepSeek's float64 hc on the op's own stats row ≤ 1e-5 per part (`HC_OWN_REL` gate, all
+    cells and HiFi2 / HiFi4); comb column sums within 2e-7 of the float64 reference.
+  - y: bf16 PCC ≥ 0.99995, rel RMS ≤ 4e-3, and signed bias within the bf16 floor vs y on the op's own X'.
+  - X' and stats are bit-identical to stats mode (`test_fused_modes_agree`).
+  - Shapes: the 62 golden collapse cells (T 1 … 2048, C 32 … 7168, aligned and ragged, rank 2–4), plus
+    (1,1,160,20480) and (1,1,150,2560).
+- **Golden test progress** (targeted slices):
+  - `test_golden.py` collapse: 62 / 62.
+  - collapse + stats + plain-packed: 244 / 244 (348 INVALID skips).
+  - `test_regression.py`: 26 / 27.
+  - Unit dir: 55 / 55.
+- **Perf** (device-kernel ns, Blackhole, bf16 / bf16, packed, HiFi2):
+
+  | Shape | plain | stats | collapse |
+  |---|---|---|---|
+  | T160 C5120 | 84.5 µs | 152.3 µs | 191.8–192.6 µs |
+  | T640 C5120 | 343 µs | 566 µs | 636.5 µs |
+
+  - The first collapse build measured 211.5 µs at T160. Ablations at T160, one variant at a time:
+
+    | Variant | Time |
+    |---|---|
+    | hc SFPU stubbed | 200.1 µs |
+    | y chain stubbed | 202.4 µs |
+    | hc + y compute stubbed | 191.2 µs |
+    | + no y DRAM writes | 191.4 µs |
+    | no hc round trip, no y | 160.6 µs |
+
+    The lane permutes on BRISC were the hidden cost: ~1,600 volatile single-word L1 accesses per hc row, on
+    the tail.
+  - Non-volatile, unrolled permutes: 209.8 → 192.6 µs. Dense lanes: 211.5 → 208.9 µs. The HC_LAG / polled
+    drain lever measured flat (kept as a knob).
+  - Remaining collapse − stats ≈ 40 µs at T160:
+    - the permutes still cost ~11 µs (181.2 µs with them stubbed), L1-latency-bound word moves on the
+      writer RISC;
+    - y compute ~9 µs;
+    - hc SFPU ~5 µs;
+    - ~8 µs of extra CB / coefficient traffic.
+  - Next levers, for the perf refinements: move the in/out permutes off the writer's critical path
+    (split across NCRISC / BRISC, or an SFPU-side transpose: `transpose_dest` + lane shuffles), and fold y
+    into the mix chain while D0 is live.
+- **Issues encountered**:
+  - y was wrong on ragged-tail blocks. `cb_xprime_mm` is packed compact `[j][c]` (stride = extent, as the
+    matmul reads it), so the y operand offset is `i·extent`, not `i·block_c`. Fixed.
+  - **Golden-suite defect (finding, not fixable in the op):** `test_regression.py::test_hc_scalars_are_runtime`
+    sets `hc_eps = 1.1e-5 / 1.2e-5`.
+    - The last Sinkhorn step is a column normalization, s / (s + eps), so the comb column sums are 1 − eps.
+      The float64 DeepSeek reference itself (`helpers.deepseek_hc`) has max |colsum − 1| = 1.10e-5 / 1.20e-5,
+      above the fixed `HC_COLSUM = 1e-5` gate. The device gives 1.116e-5 / 1.211e-5.
+    - A probe with only that gate widened to the reference's own deviation shows every other gate of the
+      test passing for both seeds.
+    - The gate should scale with `hc_eps` (e.g. `HC_COLSUM + hc_eps`). Proposed for a human to change in
+      `eval/golden_tests/mhc_post/helpers.py`. I did not distort the hc output to meet it.
+- **Tests added**: `test_mhc_post_perf.py::test_perf_bf16_packed` gains `mode=collapse`. Probe
+  `probes/probe_010.py` (y tile-error map) and the lane-mapping probe are recorded above.
