@@ -29,8 +29,9 @@ Knobs (environment):
   PRECOMPILE_DRY_RUN_ONLY=1       stop after the dry run and the compile (no real run)
 
 Not warmed by the dry run, so they compile inline in the real run: tests that drive trace or graph
-capture (skipped in the dry run), programs chosen from values read back from the device, and ops after a
-point where a body throws.
+capture (skipped in the dry run), ops after a body's first trace capture or host-device socket transfer
+(the body stops there), programs chosen from values read back from the device, and ops after a point
+where a body throws.
 
 The plugin prints one ``PRECOMPILE_RESULT:`` line of key=value fields for harnesses to parse.
 """
@@ -70,6 +71,7 @@ class _DryRunStats:
     bodies: int = 0
     swallowed: int = 0
     skipped_capture: int = 0
+    skipped_socket: int = 0
     shallow: int = 0
     fallback: int = 0
 
@@ -118,6 +120,14 @@ _STAND_IN_NAMES = (
     "assert_numeric_metrics",
     "from_torch",
     "torch2tt_tensor",
+    "begin_trace_capture",
+    "execute_trace",
+    "begin_graph_capture",
+    "read",
+    "read_tensor",
+    "write",
+    "write_tensor",
+    "barrier",
 )
 
 
@@ -384,9 +394,58 @@ def _boundary_patches():
     ]
 
 
+class _DryRunCaptureStop(Exception):
+    """A dry-run body reached trace or graph capture or a host-device socket transfer, which need real dispatch."""
+
+
+def _capture_guard_patches():
+    """Trace and graph capture -> stop the body there. A capture inside a helper the source check can't see
+    would run with dispatch blocked and leave the device unusable; ops built before it are already queued."""
+
+    def _build(name):
+        def _stop(*a, **k):
+            _STATS.skipped_capture += 1
+            raise _DryRunCaptureStop(f"precompile dry run: stopped at {name}")
+
+        return lambda _orig: _stop
+
+    return [
+        _RebindPatch("ttnn", "begin_trace_capture", _build("begin_trace_capture")),
+        _RebindPatch("ttnn", "execute_trace", _build("execute_trace")),
+        _RebindPatch("ttnn.graph", "begin_graph_capture", _build("begin_graph_capture")),
+    ]
+
+
+def _socket_guard_patches():
+    """Host-device socket transfers -> stop the body there. With dispatch blocked the device never sends or acks,
+    and the wait is a blocking C++ call that pytest-timeout cannot interrupt; the socket op's program is already
+    queued."""
+    import ttnn
+
+    def _build(name):
+        def _stop(*a, **k):
+            _STATS.skipped_socket += 1
+            raise _DryRunCaptureStop(f"precompile dry run: stopped at {name}")
+
+        return lambda _orig: _stop
+
+    patches = []
+    for cls_name, methods in (
+        ("H2DSocket", ("write", "write_tensor", "barrier")),
+        ("D2HSocket", ("read", "read_tensor", "barrier")),
+    ):
+        cls = getattr(ttnn, cls_name, None)
+        for method in methods:
+            if cls is not None and hasattr(cls, method):
+                patches.append(_AttrPatch(cls, method, _build(f"{cls_name}.{method}")))
+    return patches
+
+
 @contextlib.contextmanager
 def _stand_ins():
     with contextlib.ExitStack() as stack:
+        for patch in _capture_guard_patches() + _socket_guard_patches():
+            stack.enter_context(patch)
         if _FAST_COLLECT:
             for patch in _reference_op_patches() + _verifier_patches() + _boundary_patches():
                 stack.enter_context(patch)
@@ -575,6 +634,7 @@ def pytest_runtestloop(session):
             f"\nPRECOMPILE: dry run over {n} item(s) took {dry_run_s:.1f}s: {at_dry_run_end.programs_added} "
             f"programs, {at_dry_run_end.kernels_queued} kernels queued, {at_dry_run_end.kernels_built} built so far "
             f"(swallowed {_STATS.swallowed}, skipped-capture {_STATS.skipped_capture}, "
+            f"skipped-socket {_STATS.skipped_socket}, "
             f"shape-only {_STATS.shallow}, fallback {_STATS.fallback})",
             flush=True,
         )
@@ -607,6 +667,7 @@ def pytest_runtestloop(session):
             bodies=_STATS.bodies,
             swallowed=_STATS.swallowed,
             skipped_capture=_STATS.skipped_capture,
+            skipped_socket=_STATS.skipped_socket,
             dry_run_s=dry_run_s if dry_run_s is not None else time.monotonic() - t0,
             wait_s=wait_s,
             real_s=real_s,
