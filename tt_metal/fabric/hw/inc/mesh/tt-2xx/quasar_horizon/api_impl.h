@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Horizon (Quasar 2xx) mesh API implementation.
-// Uses Horizon crossbar routing via fabric_over_noc_routing_l1_info_t::flat_addr + noc_async_write.
+// Forwards to the a2a APIs (tt_metal/fabric/hw/inc/a2a/api.h), which route over the Horizon crossbar.
 // All functions except fabric_unicast_noc_unicast_write are TODO stubs.
 
 #pragma once
@@ -19,15 +19,10 @@
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
 #include "tt_metal/fabric/hw/inc/mesh/addrgen_api.h"
+#include "tt_metal/fabric/hw/inc/a2a/api.h"
 
 using namespace tt::tt_fabric::common::experimental;
 namespace tt::tt_fabric::mesh::experimental {
-
-// ATT endpoint parameters for Horizon x2 (values from horizon_2x3_att_config.h).
-// Defined here as constexpr to avoid pulling in the config header into kernel code.
-static constexpr uint32_t HORIZON_ATT_WORKER_GRID_X = 2;
-static constexpr uint32_t HORIZON_ATT_ENDPOINT_SHIFT = 26;
-static constexpr uint64_t HORIZON_ATT_OFFSET_MASK = (uint64_t(1) << HORIZON_ATT_ENDPOINT_SHIFT) - 1;
 
 // FABRIC_MAX_PACKET_SIZE is available via macro from addrgen_api.h
 
@@ -44,28 +39,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     [[maybe_unused]] auto* _ci = client_interface;
     [[maybe_unused]] auto* _ph = packet_header;
 
-    const uint64_t noc_addr = noc_unicast_command_header.noc_address;
-    // noc_addr is a flat ATT address: REMOTE_WINDOW.compare | (selector << HORIZON_ATT_ENDPOINT_SHIFT) | offset
-    const uint64_t local_offset = noc_addr & HORIZON_ATT_OFFSET_MASK;
-    const uint32_t selector = static_cast<uint32_t>((noc_addr >> HORIZON_ATT_ENDPOINT_SHIFT) & 0x3F);
-    const uint32_t tile_x = selector % HORIZON_ATT_WORKER_GRID_X;
-    const uint32_t tile_y = selector / HORIZON_ATT_WORKER_GRID_X;
-
-    ASSERT(dst_mesh_id < tt::tt_fabric::MAX_HORIZON_MESHES);
-    ASSERT(dst_dev_id < tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
-    ASSERT(tile_x < HORIZON_ATT_WORKER_GRID_X);
-    ASSERT(tile_y < tt::tt_fabric::MAX_HORIZON_NOC_Y);
-    const auto* routing_table =
-        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_over_noc_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    // flat_addr[mesh][dev_id][noc_x_within_dev][noc_y_within_dev]
-    const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y] + local_offset;
-
-    // Horizon NoC communication can currently only reach the lower 1 MB of each
-    // Tensix core's L1; the NOC2AXI crossbar window is 1 MB per tile slot.
-    ASSERT(local_offset + size <= (1u << 20));
-    // Zero base means self-entry or unfilled routing table slot.
-    ASSERT(remote_addr - local_offset != 0);
-    noc_async_write(src_addr, remote_addr, size);
+    // Horizon has no fabric routers or packet headers: this is a direct crossbar write.
+    a2a::experimental::fabric_unicast_noc_unicast_write(
+        dst_dev_id, dst_mesh_id, src_addr, size, noc_unicast_command_header);
 }
 
 template <bool SetRoute>

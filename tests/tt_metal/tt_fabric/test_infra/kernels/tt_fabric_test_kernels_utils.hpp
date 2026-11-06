@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_fabric_test_noc_connection.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -423,7 +424,7 @@ struct NocUnicastScatterWriteFields {
 template <typename T>
 void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFields2D& mcast_fields) {
     (void)fabric_set_2d_mcast_route(
-        (T*)packet_header_address,
+        reinterpret_cast<T*>(static_cast<uintptr_t>(packet_header_address)),
         mcast_fields.dst_device_id,
         mcast_fields.dst_mesh_id,
         mcast_fields.num_hops_e,
@@ -461,7 +462,9 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true> {
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
         fabric_set_unicast_route(
-            (HybridMeshPacketHeader*)packet_header_address, unicast_fields.dst_device_id, unicast_fields.dst_mesh_id);
+            reinterpret_cast<HybridMeshPacketHeader*>(static_cast<uintptr_t>(packet_header_address)),
+            unicast_fields.dst_device_id,
+            unicast_fields.dst_mesh_id);
     }
 };
 
@@ -542,21 +545,32 @@ struct MuxCachedInfo {
 /* ****************************************************************************
  * FabricConnectionArray: Unified connection management for kernel
  *
- * Provides type-erased storage for both WorkerToFabricEdmSender and
- * WorkerToFabricMuxSender connections with runtime dispatch.
+ * Provides type-erased storage for every connection kind -- a fabric router (WorkerToFabricEdmSender), a
+ * fabric mux (WorkerToFabricMuxSender), or, on fabric-over-NoC architectures, a direct NoC connection to a
+ * peer (FabricOverNocConnection) -- with runtime dispatch on the kind.
  * *****************************************************************************/
+// Matches the connection kind the host writes ahead of each connection's runtime args.
+enum class FabricConnectionKind : uint8_t { EDM = 0, MUX = 1, NOC = 2 };
+
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct FabricConnectionArray {
     // TODO: get the num buffers more systematically
     static constexpr uint8_t NUM_BUFFERS = 8;
 
     using MuxConnectionType = tt::tt_fabric::WorkerToFabricMuxSender<NUM_BUFFERS>;
-    static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(EdmSenderT), sizeof(MuxConnectionType));
+#ifdef FABRIC_TEST_HAS_NOC_TRANSPORT
+    using NocConnectionType = FabricOverNocConnection;
+#else
+    using NocConnectionType = MuxConnectionType;  // Never constructed: no NoC transport on this architecture
+#endif
+    static constexpr size_t MAX_CONNECTION_SIZE =
+        std::max({sizeof(EdmSenderT), sizeof(MuxConnectionType), sizeof(NocConnectionType)});
+    static constexpr size_t MAX_CONNECTION_ALIGN =
+        std::max({alignof(EdmSenderT), alignof(MuxConnectionType), alignof(NocConnectionType)});
 
     // Type-erased storage for connections (sized for maximum).
-    alignas(std::max(alignof(EdmSenderT), alignof(MuxConnectionType)))
-        std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
-    std::array<bool, MAX_NUM_FABRIC_CONNECTIONS> is_mux;
+    alignas(MAX_CONNECTION_ALIGN) std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
+    std::array<FabricConnectionKind, MAX_NUM_FABRIC_CONNECTIONS> kind;
 
     // Cached mux info for wait_for_fabric_endpoint_ready
     std::array<MuxCachedInfo, MAX_NUM_FABRIC_CONNECTIONS> mux_cached_info;
@@ -564,13 +578,35 @@ struct FabricConnectionArray {
     // Actual number of connections in use (set at initialization, bounds-checked in kernel)
     uint8_t num_connections = 0;
 
+    // Every kind lives at the same slot, so the type-erased pointer does not depend on the kind.
+    FORCE_INLINE void* get_connection_ptr(uint8_t idx) { return storage.data() + idx * MAX_CONNECTION_SIZE; }
+
     // Accessors with proper type casting
     FORCE_INLINE EdmSenderT& get_fabric_connection(uint8_t idx) {
-        return *reinterpret_cast<EdmSenderT*>(storage.data() + idx * MAX_CONNECTION_SIZE);
+        return *reinterpret_cast<EdmSenderT*>(get_connection_ptr(idx));
     }
 
     FORCE_INLINE MuxConnectionType& get_mux_connection(uint8_t idx) {
-        return *reinterpret_cast<MuxConnectionType*>(storage.data() + idx * MAX_CONNECTION_SIZE);
+        return *reinterpret_cast<MuxConnectionType*>(get_connection_ptr(idx));
+    }
+
+    FORCE_INLINE bool is_mux(uint8_t idx) const { return kind[idx] == FabricConnectionKind::MUX; }
+
+    // Calls fn with the connection at conn_ptr cast to its concrete type. BENCHMARK_MODE skips the runtime check:
+    // the host only enables it for single fabric-router connections.
+    template <bool BENCHMARK_MODE = false, typename Fn>
+    FORCE_INLINE void dispatch(void* conn_ptr, uint8_t idx, Fn&& fn) {
+        if constexpr (BENCHMARK_MODE) {
+            fn(*static_cast<EdmSenderT*>(conn_ptr));
+        } else {
+            switch (kind[idx]) {
+                case FabricConnectionKind::MUX: fn(*static_cast<MuxConnectionType*>(conn_ptr)); break;
+#ifdef FABRIC_TEST_HAS_NOC_TRANSPORT
+                case FabricConnectionKind::NOC: fn(*static_cast<NocConnectionType*>(conn_ptr)); break;
+#endif
+                default: fn(*static_cast<EdmSenderT*>(conn_ptr)); break;
+            }
+        }
     }
 
     // Parse connections from runtime args
@@ -578,10 +614,10 @@ struct FabricConnectionArray {
     template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX, typename MemoryMapType>
     void parse_from_args(size_t& rt_args_idx, MemoryMapType& memory_map) {
         for (uint8_t i = 0; i < num_connections; i++) {
-            // Parse connection type flag
-            is_mux[i] = get_arg_val<uint32_t>(rt_args_idx++) != 0;
+            // Parse connection kind
+            kind[i] = static_cast<FabricConnectionKind>(get_arg_val<uint32_t>(rt_args_idx++));
 
-            if (is_mux[i]) {
+            if (kind[i] == FabricConnectionKind::MUX) {
                 // Initialize mux connection using placement new
                 mux_cached_info[i].mux_x = get_arg_val<uint32_t>(rt_args_idx++);
                 mux_cached_info[i].mux_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -614,6 +650,13 @@ struct FabricConnectionArray {
                     mux_local_addrs.teardown_address,
                     mux_local_addrs.buffer_index_address);
                 new (&get_mux_connection(i)) MuxConnectionType(conn);
+            } else if (kind[i] == FabricConnectionKind::NOC) {
+#ifdef FABRIC_TEST_HAS_NOC_TRANSPORT
+                new (get_connection_ptr(i))
+                    NocConnectionType(NocConnectionType::template build_from_args<core_type>(rt_args_idx));
+#else
+                ASSERT(false);  // The host only emits NoC connections on fabric-over-NoC architectures
+#endif
             } else {
                 // Initialize fabric connection using placement new
                 auto conn = EdmSenderT::template build_from_args<core_type>(rt_args_idx);
@@ -625,25 +668,19 @@ struct FabricConnectionArray {
     // Lifecycle management
     FORCE_INLINE void open_all() {
         for (uint8_t i = 0; i < num_connections; i++) {
-            if (is_mux[i]) {
+            if (is_mux(i)) {
                 // Wait for mux to be ready before connecting
                 const auto& info = mux_cached_info[i];
                 tt::tt_fabric::wait_for_fabric_endpoint_ready(
                     info.mux_x, info.mux_y, info.mux_status_address, info.local_mux_status_address);
-                get_mux_connection(i).open();
-            } else {
-                get_fabric_connection(i).open();
             }
+            dispatch(get_connection_ptr(i), i, [](auto& conn) { conn.open(); });
         }
     }
 
     FORCE_INLINE void close_all() {
         for (uint8_t i = 0; i < num_connections; i++) {
-            if (is_mux[i]) {
-                get_mux_connection(i).close();
-            } else {
-                get_fabric_connection(i).close();
-            }
+            dispatch(get_connection_ptr(i), i, [](auto& conn) { conn.close(); });
         }
     }
 
@@ -652,95 +689,43 @@ struct FabricConnectionArray {
     // Wait for connection to have space
     template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void wait_for_empty_write_slot(void* conn_ptr, uint8_t idx) {
-        if constexpr (BENCHMARK_MODE) {
-            // Fast path: no runtime check, direct cast
-            static_cast<EdmSenderT*>(conn_ptr)->wait_for_empty_write_slot();
-        } else {
-            // Normal path: runtime dispatch using cached is_mux array
-            if (is_mux[idx]) {
-                static_cast<MuxConnectionType*>(conn_ptr)->wait_for_empty_write_slot();
-            } else {
-                static_cast<EdmSenderT*>(conn_ptr)->wait_for_empty_write_slot();
-            }
-        }
+        dispatch<BENCHMARK_MODE>(conn_ptr, idx, [](auto& conn) { conn.wait_for_empty_write_slot(); });
     }
 
     // Send header only (used for credit returns)
     template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void send_header_non_blocking(void* conn_ptr, uint8_t idx, uint32_t header_addr) {
-        if constexpr (BENCHMARK_MODE) {
-            static_cast<EdmSenderT*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
-                header_addr, sizeof(PACKET_HEADER_TYPE));
-        } else {
-            if (is_mux[idx]) {
-                static_cast<MuxConnectionType*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
-                    header_addr, sizeof(PACKET_HEADER_TYPE));
-            } else {
-                static_cast<EdmSenderT*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
-                    header_addr, sizeof(PACKET_HEADER_TYPE));
-            }
-        }
+        dispatch<BENCHMARK_MODE>(conn_ptr, idx, [header_addr](auto& conn) {
+            conn.send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
+        });
     }
 
     // Send payload without header (used for multi-part sends)
     template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void send_payload_without_header(void* conn_ptr, uint8_t idx, uint32_t payload_addr, size_t size) {
-        if constexpr (BENCHMARK_MODE) {
-            static_cast<EdmSenderT*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
-                payload_addr, size);
-        } else {
-            if (is_mux[idx]) {
-                static_cast<MuxConnectionType*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
-                    payload_addr, size);
-            } else {
-                static_cast<EdmSenderT*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
-                    payload_addr, size);
-            }
-        }
+        dispatch<BENCHMARK_MODE>(conn_ptr, idx, [payload_addr, size](auto& conn) {
+            conn.send_payload_without_header_non_blocking_from_address(payload_addr, size);
+        });
     }
 
     // Send header with flush (used for completing multi-part sends)
     template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void send_header_flush_blocking(void* conn_ptr, uint8_t idx, uint32_t header_addr) {
-        if constexpr (BENCHMARK_MODE) {
-            static_cast<EdmSenderT*>(conn_ptr)->send_payload_flush_blocking_from_address(
-                header_addr, sizeof(PACKET_HEADER_TYPE));
-        } else {
-            if (is_mux[idx]) {
-                static_cast<MuxConnectionType*>(conn_ptr)->send_payload_flush_blocking_from_address(
-                    header_addr, sizeof(PACKET_HEADER_TYPE));
-            } else {
-                static_cast<EdmSenderT*>(conn_ptr)->send_payload_flush_blocking_from_address(
-                    header_addr, sizeof(PACKET_HEADER_TYPE));
-            }
-        }
+        dispatch<BENCHMARK_MODE>(conn_ptr, idx, [header_addr](auto& conn) {
+            conn.send_payload_flush_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
+        });
     }
 
     // Combined: send payload + header
     template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void send_payload_with_header(
         void* conn_ptr, uint8_t idx, uint32_t payload_addr, size_t payload_size, uint32_t header_addr) {
-        if constexpr (BENCHMARK_MODE) {
-            auto* conn = static_cast<EdmSenderT*>(conn_ptr);
+        dispatch<BENCHMARK_MODE>(conn_ptr, idx, [payload_addr, payload_size, header_addr](auto& conn) {
             if (payload_size > 0) {
-                conn->send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
+                conn.send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
             }
-            conn->send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
-        } else {
-            if (is_mux[idx]) {
-                auto* conn = static_cast<MuxConnectionType*>(conn_ptr);
-                if (payload_size > 0) {
-                    conn->send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
-                }
-                conn->send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
-            } else {
-                auto* conn = static_cast<EdmSenderT*>(conn_ptr);
-                if (payload_size > 0) {
-                    conn->send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
-                }
-                conn->send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
-            }
-        }
+            conn.send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
+        });
     }
 };
 
@@ -762,11 +747,7 @@ struct LineSyncConfig {
         for (uint8_t i = 0; i < num_connections_; i++) {
             const uint8_t idx = connection_indices[i];
             connection_indices_[i] = idx;
-            if (connection_manager_->is_mux[idx]) {
-                connection_ptrs_[i] = &connection_manager_->get_mux_connection(idx);
-            } else {
-                connection_ptrs_[i] = &connection_manager_->get_fabric_connection(idx);
-            }
+            connection_ptrs_[i] = connection_manager_->get_connection_ptr(idx);
         }
     }
 
@@ -786,7 +767,7 @@ struct LineSyncConfig {
         for (uint8_t i = 0; i < num_connections_; i++) {
             connection_manager_->template wait_for_empty_write_slot<false>(connection_ptrs_[i], connection_indices_[i]);
             connection_manager_->template send_header_non_blocking<false>(
-                connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+                connection_ptrs_[i], connection_indices_[i], (uint32_t)(uintptr_t)packet_header);
         }
     }
 
@@ -1016,11 +997,7 @@ struct SenderKernelTrafficConfig {
         for (uint8_t i = 0; i < num_connections_; i++) {
             const uint8_t idx = connection_indices[i];
             connection_indices_[i] = idx;
-            if (connection_manager_->is_mux[idx]) {
-                connection_ptrs_[i] = &connection_manager_->get_mux_connection(idx);
-            } else {
-                connection_ptrs_[i] = &connection_manager_->get_fabric_connection(idx);
-            }
+            connection_ptrs_[i] = connection_manager_->get_connection_ptr(idx);
         }
         connection_idx_ = connection_indices_[0];
         connection_ptr_ = connection_ptrs_[0];
@@ -1157,7 +1134,7 @@ struct SenderKernelTrafficConfig {
                 }
                 // Send header
                 connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
-                    connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+                    connection_ptrs_[i], connection_indices_[i], (uint32_t)(uintptr_t)packet_header);
             }
         }
 
@@ -1807,11 +1784,7 @@ struct ReceiverCreditManager {
         enabled_ = true;
 
         // Cache connection pointer during initialization
-        if (connection_manager_->is_mux[connection_idx_]) {
-            connection_ptr_ = &connection_manager_->get_mux_connection(connection_idx_);
-        } else {
-            connection_ptr_ = &connection_manager_->get_fabric_connection(connection_idx_);
-        }
+        connection_ptr_ = connection_manager_->get_connection_ptr(connection_idx_);
 
         packet_header_ = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(credit_header_address);
         setup_packet_header<IS_2D_FABRIC>(arg_idx, credit_header_address);
@@ -1844,7 +1817,7 @@ private:
     FORCE_INLINE void send_credits() {
         connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
         connection_manager_->send_header_non_blocking<false>(
-            connection_ptr_, connection_idx_, (uint32_t)packet_header_);
+            connection_ptr_, connection_idx_, (uint32_t)(uintptr_t)packet_header_);
     }
 
     FORCE_INLINE void send_credits(uint32_t num_credits) {
@@ -1856,7 +1829,7 @@ private:
 
         connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
         connection_manager_->send_header_flush_blocking<false>(
-            connection_ptr_, connection_idx_, (uint32_t)packet_header_);
+            connection_ptr_, connection_idx_, (uint32_t)(uintptr_t)packet_header_);
     }
 
     FabricConnectionArray<>* connection_manager_ = nullptr;

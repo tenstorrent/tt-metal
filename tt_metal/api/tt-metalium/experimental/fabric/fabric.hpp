@@ -546,4 +546,6 @@ bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
+bool is_all_to_all_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+
 }  // namespace tt::tt_fabric

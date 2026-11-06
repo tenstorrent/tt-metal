@@ -16,5 +16,6 @@ namespace tt::tt_fabric {
 #define ROUTING_MODE_MESH 0x0020
 #define ROUTING_MODE_TORUS 0x0040
 #define ROUTING_MODE_LOW_LATENCY 0x0080
+#define ROUTING_MODE_ALL_TO_ALL 0x0400
 
 }  // namespace tt::tt_fabric

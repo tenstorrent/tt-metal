@@ -28,6 +28,20 @@
 // NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
 
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+// Re-targets a worker's NoC address onto the NoC the receiving router writes local-chip traffic on.
+// Under the NoC ATT, addresses are flat and independent of the NoC, so they pass through unchanged;
+// decoding them as legacy XY fields would corrupt the destination.
+FORCE_INLINE uint64_t to_edm_local_chip_noc_addr(uint64_t noc_address) {
+#if defined(NOC_ATT_ENABLED)
+    return noc_address;
+#else
+    const auto components = get_noc_address_components(noc_address);
+    return safe_get_noc_addr(components.first.x, components.first.y, components.second, edm_to_local_chip_noc);
+#endif
+}
+#endif
+
 // Helper for dependent static_assert that always evaluates to false
 template <class>
 inline constexpr bool always_false_v = false;
@@ -475,12 +489,7 @@ public:
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
-        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_command_header.noc_address);
         NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
         modified_command_header.noc_address = noc_addr;
 
@@ -498,12 +507,7 @@ public:
         static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
 #endif
         this->noc_send_type = NOC_UNICAST_READ;
-        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_command_header.noc_address);
         NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
         modified_command_header.noc_address = noc_addr;
 
@@ -518,12 +522,7 @@ public:
     Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
-        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_command_header.noc_address);
         NocUnicastInlineWriteCommandHeader modified_command_header = noc_unicast_command_header;
         modified_command_header.noc_address = noc_addr;
 
@@ -546,12 +545,7 @@ public:
     Derived& to_noc_unicast_atomic_inc(const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
-        auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_atomic_inc_command_header.noc_address);
         NocUnicastAtomicIncCommandHeader modified_command_header = noc_unicast_atomic_inc_command_header;
         modified_command_header.noc_address = noc_addr;
 
@@ -595,12 +589,7 @@ public:
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
-        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_command_header.noc_address);
 
         this->command_fields.unicast_write.noc_address = noc_addr;
         this->payload_size_bytes = payload_size_bytes;
@@ -617,12 +606,7 @@ public:
         static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
 #endif
         this->noc_send_type = NOC_UNICAST_READ;
-        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_command_header.noc_address);
 
         this->command_fields.unicast_read.noc_address = noc_addr;
         this->payload_size_bytes = payload_size_bytes;
@@ -646,12 +630,7 @@ public:
             expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
 
         for (uint8_t i = 0; i < chunk_count; i++) {
-            auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
-            auto noc_addr = safe_get_noc_addr(
-                noc_address_components.first.x,
-                noc_address_components.first.y,
-                noc_address_components.second,
-                edm_to_local_chip_noc);
+            auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_scatter_command_header.noc_address[i]);
             this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
         }
         for (uint8_t i = chunk_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
@@ -688,12 +667,8 @@ public:
         const uint8_t num_dests = sparse_mcast_command_header.num_dests;
         ASSERT(num_dests > 0 && num_dests <= NOC_SPARSE_MCAST_WRITE_MAX_DESTS);
         for (uint8_t i = 0; i < num_dests; i++) {
-            auto noc_address_components = get_noc_address_components(sparse_mcast_command_header.noc_address[i]);
-            this->command_fields.sparse_mcast_write.noc_address[i] = safe_get_noc_addr(
-                noc_address_components.first.x,
-                noc_address_components.first.y,
-                noc_address_components.second,
-                edm_to_local_chip_noc);
+            this->command_fields.sparse_mcast_write.noc_address[i] =
+                to_edm_local_chip_noc_addr(sparse_mcast_command_header.noc_address[i]);
         }
         const uint8_t num_chips = sparse_mcast_command_header.num_chips;
         ASSERT(num_chips > 0 && num_chips <= num_dests);
@@ -734,13 +709,8 @@ public:
         uint8_t chunk_encodings = 0;
         for (uint8_t i = 0; i < unicast_write_chunk_count; i++) {
             // NoC Address
-            const auto noc_address_components =
-                get_noc_address_components(noc_unicast_scatter_atomic_inc_fused_command_header.noc_address[i]);
-            const auto noc_addr = safe_get_noc_addr(
-                noc_address_components.first.x,
-                noc_address_components.first.y,
-                noc_address_components.second,
-                edm_to_local_chip_noc);
+            const auto noc_addr =
+                to_edm_local_chip_noc_addr(noc_unicast_scatter_atomic_inc_fused_command_header.noc_address[i]);
             this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
             // Chunk Encoding
             set_chunk_encoding(chunk_encodings, NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE, i);
@@ -748,13 +718,8 @@ public:
 
         // Set the semaphore increment chunk destination address and chunk encoding
         // NoC Address
-        const auto semaphore_noc_address_components =
-            get_noc_address_components(noc_unicast_scatter_atomic_inc_fused_command_header.semaphore_noc_address);
-        const auto semaphore_noc_addr = safe_get_noc_addr(
-            semaphore_noc_address_components.first.x,
-            semaphore_noc_address_components.first.y,
-            semaphore_noc_address_components.second,
-            edm_to_local_chip_noc);
+        const auto semaphore_noc_addr =
+            to_edm_local_chip_noc_addr(noc_unicast_scatter_atomic_inc_fused_command_header.semaphore_noc_address);
         this->command_fields.unicast_scatter_write.noc_address[chunk_count - 1] = semaphore_noc_addr;
         // Chunk Encoding
         static_assert(
@@ -809,12 +774,7 @@ public:
         const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
-        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_command_header.noc_address);
 
         this->command_fields.unicast_inline_write.noc_address = noc_addr;
         this->command_fields.unicast_inline_write.value = noc_unicast_command_header.value;
@@ -842,21 +802,10 @@ public:
         size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_FUSED_UNICAST_ATOMIC_INC;
-        auto noc_address_components =
-            get_noc_address_components(noc_fused_unicast_write_atomic_inc_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_fused_unicast_write_atomic_inc_command_header.noc_address);
 
-        auto semaphore_noc_address_components =
-            get_noc_address_components(noc_fused_unicast_write_atomic_inc_command_header.semaphore_noc_address);
-        auto semaphore_noc_addr = safe_get_noc_addr(
-            semaphore_noc_address_components.first.x,
-            semaphore_noc_address_components.first.y,
-            semaphore_noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto semaphore_noc_addr =
+            to_edm_local_chip_noc_addr(noc_fused_unicast_write_atomic_inc_command_header.semaphore_noc_address);
 
         this->command_fields.unicast_seminc_fused.noc_address = noc_addr;
         this->command_fields.unicast_seminc_fused.semaphore_noc_address = semaphore_noc_addr;
@@ -874,12 +823,7 @@ public:
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
-        auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
-        auto noc_addr = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        auto noc_addr = to_edm_local_chip_noc_addr(noc_unicast_atomic_inc_command_header.noc_address);
 
         this->command_fields.unicast_seminc.noc_address = noc_addr;
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;

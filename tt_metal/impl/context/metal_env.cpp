@@ -469,6 +469,15 @@ void MetalEnvImpl::initialize_fabric_config() {
     }
 
     auto& cp = this->get_control_plane();
+    // Fabric-over-NoC reaches every device directly, so it only implements the all-to-all topology. The
+    // converse does not hold: all-to-all is a logical topology that ethernet systems can implement too.
+    TT_FATAL(
+        !cp.is_fabric_over_noc() || this->fabric_config_ == tt_fabric::FabricConfig::FABRIC_ALL_TO_ALL,
+        "Fabric over NoC requires FabricConfig::FABRIC_ALL_TO_ALL, got {}",
+        enchantum::to_string(this->fabric_config_));
+    TT_FATAL(
+        cp.is_fabric_over_noc() || this->fabric_config_ != tt_fabric::FabricConfig::FABRIC_ALL_TO_ALL,
+        "FabricConfig::FABRIC_ALL_TO_ALL is not yet supported over ethernet fabric routers");
     if (cp.is_fabric_over_noc()) {
         // Horizon (QUASAR arch + HORIZON variant): no Ethernet fabric routers.
         // Routing tables are built from crossbar flat addresses via get_flat_address().

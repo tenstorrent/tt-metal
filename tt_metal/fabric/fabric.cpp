@@ -600,6 +600,10 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
+bool is_all_to_all_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_ALL_TO_ALL;
+}
+
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(

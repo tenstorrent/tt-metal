@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Horizon x2 fabric unicast write test — two separate MeshDevices.
-// SetFabricConfig(FABRIC_1D) is called before device open so that control_plane writes
+// SetFabricConfig(FABRIC_ALL_TO_ALL) is called before device open so that control_plane writes
 // fabric_over_noc_routing_l1_info_t to ROUTING_TABLE_BASE on every Tensix core.  No EDM
 // or mux kernels are needed: Horizon uses an always-on AXI crossbar, not ERISC routers.
 //
@@ -72,7 +72,7 @@ protected:
             mgd_path,
             {{tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 0), 0},
              {tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 1), 1}});
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_ALL_TO_ALL);
         QuasarMeshDeviceSingleCardFixture::SetUp();
     }
 
