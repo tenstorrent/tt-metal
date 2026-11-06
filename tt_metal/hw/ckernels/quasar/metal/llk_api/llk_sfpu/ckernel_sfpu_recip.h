@@ -60,6 +60,10 @@ inline void _init_reciprocal_() {
     }
 }
 
+// The stock reciprocal kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void reciprocal_bf16_tile_init() {}
+
 /**
  * @brief Compute the reciprocal (1/x) in-place over a Dest tile.
  *
