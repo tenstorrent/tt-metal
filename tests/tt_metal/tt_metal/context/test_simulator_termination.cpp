@@ -17,7 +17,6 @@
 
 #include "impl/context/simulator_termination.hpp"
 
-extern char** environ;
 
 namespace simulator_termination_test {
 
