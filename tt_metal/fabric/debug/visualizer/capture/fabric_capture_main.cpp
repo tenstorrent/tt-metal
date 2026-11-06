@@ -17,6 +17,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <cxxopts.hpp>
@@ -62,7 +63,8 @@ std::filesystem::path find_latest_manifest() {
     const std::filesystem::path logs_dir = get_env("TT_METAL_LOGS_PATH").value_or(std::filesystem::current_path());
     const auto [mpi_rank, world_size] = get_rank_and_world_size();
     const std::string file_name = visualizer::make_manifest_file_name(mpi_rank, world_size);
-    const std::optional<std::filesystem::path> run_directory = visualizer::find_latest_run_directory(logs_dir, file_name);
+    const std::optional<std::filesystem::path> run_directory =
+        visualizer::find_latest_run_directory(logs_dir, file_name);
     TT_FATAL(
         run_directory.has_value(),
         "Fabric capture: no run under {} has {}; give the manifest with --manifest",
@@ -71,14 +73,20 @@ std::filesystem::path find_latest_manifest() {
     return *run_directory / file_name;
 }
 
+// Whether an error's message is already in the log.
+bool was_logged(const std::exception& error) {
+    const std::string_view what = error.what();
+    return what.starts_with("TT_FATAL @") || what.starts_with("TT_THROW @");
+}
+
 int run_capture(const cxxopts::ParseResult& options) {
-    const std::filesystem::path manifest_path = options.count("manifest") != 0
+    const std::filesystem::path manifest_path = options.contains("manifest")
                                                     ? std::filesystem::path(options["manifest"].as<std::string>())
                                                     : find_latest_manifest();
     const capture::CaptureRequest request{
         .manifest_path = manifest_path,
         .capture_id =
-            options.count("capture-id") != 0 ? options["capture-id"].as<std::string>() : capture::make_capture_id(),
+            options.contains("capture-id") ? options["capture-id"].as<std::string>() : capture::make_capture_id(),
         .liveness_options =
             {
                 .num_rounds = options["liveness-rounds"].as<uint32_t>(),
@@ -115,19 +123,29 @@ int main(int argc, char** argv) {
         "The capture's id, which names its folder in the run's folder. Give every rank captured together the same one. "
         "Defaults to the UTC time now",
         cxxopts::value<std::string>())(
-        "liveness-rounds", "How many times to sample every router before reading any core", cxxopts::value<uint32_t>()->default_value("3"))(
+        "liveness-rounds",
+        "How many times to sample every router before reading any core",
+        cxxopts::value<uint32_t>()->default_value("3"))(
         "liveness-interval-ms", "The time between liveness rounds", cxxopts::value<uint32_t>()->default_value("1000"))(
         "h,help", "Print this help");
 
     try {
         const cxxopts::ParseResult options = parser.parse(argc, argv);
-        if (options.count("help") != 0) {
+        if (options.contains("help")) {
             std::cout << parser.help() << "\n";
             return k_exit_complete;
         }
         return run_capture(options);
+    } catch (const cxxopts::exceptions::exception& error) {
+        std::cerr << "fabric_capture: " << error.what() << "; see --help\n";
+        return k_exit_failed;
     } catch (const std::exception& error) {
-        std::cerr << "fabric_capture: failed: " << error.what() << "\n";
+        // Don't duplicate logged errors.
+        if (was_logged(error)) {
+            std::cerr << "fabric_capture: failed, and wrote no record\n";
+        } else {
+            std::cerr << "fabric_capture: failed, and wrote no record: " << error.what() << "\n";
+        }
         return k_exit_failed;
     }
 }
