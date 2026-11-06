@@ -5,10 +5,11 @@
 // TailA2A worker reader (RISCV_1, NoC0): my column slice of the owners' rows (row-major, 32 rows a row tile) and se's
 // tiles, row tile by row tile.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t W = get_compile_time_arg_val(0), SE = get_compile_time_arg_val(1);
     constexpr auto y_args = TensorAccessorArgs<2>();
     constexpr auto s_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
@@ -36,3 +37,5 @@ void kernel_main() {
         }
     }
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

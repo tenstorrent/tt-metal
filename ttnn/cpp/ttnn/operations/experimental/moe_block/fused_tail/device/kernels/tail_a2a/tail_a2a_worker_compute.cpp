@@ -4,6 +4,7 @@
 
 // TailA2A worker compute: tilize my slice; + se's tiles.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/cb_api.h"
@@ -13,7 +14,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t W = get_compile_time_arg_val(0), SE = get_compile_time_arg_val(1);
     const uint32_t RT = get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup(0, 2, 3);
@@ -51,3 +52,5 @@ void kernel_main() {
         }
     }
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

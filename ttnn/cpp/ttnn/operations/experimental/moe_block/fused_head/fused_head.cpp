@@ -289,6 +289,16 @@ const FusedHeadSetup& setup_fused_head(
             setup.patches.push_back(std::make_shared<HeadPatchStore>());
             setup.patches_padded.push_back(std::make_shared<HeadPatchStore>());
         }
+        if (loops > 1) {  // (token loops in one call: every loop's y, loop after loop; a program a split)
+            const auto& ys = setup.inputs.y.tensor_spec();
+            auto shape = ys.logical_shape();
+            shape[-2] *= loops;
+            setup.y_all = resources.persistent_tensor("fused_head/y_all", TensorSpec(shape, ys.tensor_layout()));
+            for (uint32_t i = 0; i < cfg.splits(); ++i) {
+                setup.patches_all.push_back(std::make_shared<HeadPatchStore>());
+                setup.patches_all_padded.push_back(std::make_shared<HeadPatchStore>());
+            }
+        }
         return setup;
     });
 }
@@ -328,7 +338,8 @@ FusedHeadOutputs fused_head(
     const std::optional<Tensor>& arena,
     const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
-    uint32_t loop) {
+    uint32_t loop,
+    bool all_loops) {
     using namespace fused_head_entry_detail;
     TT_FATAL(
         resources.config().pad_tokens == 0 || actual_start.has_value(),
@@ -341,17 +352,25 @@ FusedHeadOutputs fused_head(
         resources.config().splits(),
         loops);
     const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
+    all_loops = all_loops && loops > 1;
+    TT_FATAL(
+        !all_loops || loop % loops == 0,
+        "fused_head: every token loop in one call starts at a split's first loop, got loop {} of {}",
+        loop,
+        loops);
     FusedHeadParams params{
         .config = setup.config,
         .plan_key = resources.plan_key(),
         .model = setup.model,
         .words = setup.words,
         .arena = arena ? *arena : default_arena(resources, setup),
-        .patches = actual_start ? setup.patches_padded[loop] : setup.patches[loop],
+        .patches = all_loops ? (actual_start ? setup.patches_all_padded[loop / loops] : setup.patches_all[loop / loops])
+                             : (actual_start ? setup.patches_padded[loop] : setup.patches[loop]),
         .loops = loops,
-        .loop = loop};
+        .loop = loop,
+        .all_loops = all_loops};
     auto in = call_inputs(setup, x, weights, x_full);
-    in.y = setup.y_loops[loop % loops];
+    in.y = all_loops ? *setup.y_all : setup.y_loops[loop % loops];
     in.actual_start = actual_start;
     in.actual_end = actual_end;
     FusedHeadOutputs out{

@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The router cores' BRISC kernel (router_rows.hpp; under RA_PLAN also the routing planner, ra_plan.hpp).
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_addr.hpp"
 #ifdef RA_PLAN
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_plan.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_plan_dual.hpp"
 #endif
 
 #include <cstdint>
@@ -19,7 +20,7 @@ constexpr uint32_t HOLD = 2, BIAS = 5, BEST = 9;
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_rows.hpp"
 
 // args: the out address, my owner page, route scale bits, the joint rows' L1 scratch, the done word, the BEST page
-void kernel_main() {
+MB_LOOP_BODY {
 #if defined(RT_ROUTE) && defined(RT_VALID)
     // (a padded chunk's actual_start / actual_end, for the route words: into the route words' L1 (256 B) - the compute
     // writes them only after word 80, by when they are read - early, read once the rows are written, long after)
@@ -166,9 +167,11 @@ void kernel_main() {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows), RA_NP_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows) = 0;  // (re-arm: all increments landed)
         if (B) {
-            ra::plan(r0 + 3 + 2 * RA_NC_, B);  // (no instance here: fewer planner instances than router cores)
+            RA_PLAN_RUN(r0 + 3 + 2 * RA_NC_, B);  // (no instance here: fewer planner instances than router cores)
         }
     }
 #endif
     route_out(NIT - 1);  // (the last iteration's after the planner: off the routing chain)
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

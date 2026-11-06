@@ -102,6 +102,9 @@ class MoEBlock:
             )
         )
         self.chunk_words = None  # (a padded chunk's scalars given as ints: two persistent device words, rewritten)
+        # (token loops: the head and the tail each one call whose kernels loop over the loops' rows; False: a call a
+        # loop - the reference the one-call form is checked against)
+        self.one_call_loops = True
 
     def _plan(self, accumulators, max_tokens_per_expert, layout, n_acc):
         """The block's plans for the resources' token loops (raises where one does not fit)."""
@@ -277,6 +280,8 @@ class MoEBlock:
         mb, k = self.mb, self.loops
         rows, width = int(x.shape[-2]), int(x.shape[-1])
         r = rows // k
+        if k > 1 and self.one_call_loops:
+            return self._forward_one_call(x, weights, actual_start, actual_end, split)
         xs = [
             x
             if k == 1
@@ -345,6 +350,63 @@ class MoEBlock:
         for t in outs:
             ttnn.deallocate(t)
         return y
+
+    def _forward_one_call(self, x, weights, actual_start, actual_end, split: int) -> ttnn.Tensor:
+        """One split with token loops: the head and the tail each once over every loop's rows (their kernels loop),
+        the dispatch, the routed experts and the combine once."""
+        mb, k = self.mb, self.loops
+        # (the DRAM fallback's x_full: every loop's rows gathered over TP at once - before the arena)
+        x_full = (
+            ttnn.all_gather(x, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if self.x_dram else None
+        )
+        arena = ttnn.allocate_tensor_on_device(self.arena_spec, self.mesh_device)
+        self.arena_address = int(arena.buffer_address())
+        head = mb.fused_head(
+            x,
+            weights.head,
+            resources=self.resources,
+            dtypes=self.dtypes,
+            accumulators=self.accumulators,
+            x_full=x_full,
+            l1_free=self.l1_free,
+            arena=arena,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            loop=split * k,
+            all_loops=True,
+        )
+        if x_full is not None:
+            ttnn.deallocate(x_full)
+        self.last_head = head
+        if self.exchange_spec is None:
+            self.exchange_spec = (
+                False
+                if self.one_arena
+                else mb.routed_experts_combine_arena_spec(
+                    self.resources, rows_cap=int(head.table.shape[-2]) * 32, **self.expert_kw
+                )
+            )
+        if self.exchange_spec:
+            ttnn.deallocate(arena)
+            arena = ttnn.allocate_tensor_on_device(self.exchange_spec, self.mesh_device)
+        dispatched = mb.sparse_dispatch_2d(head.xbuf, head.route, self.resources, arena=arena)
+        y_own = mb.routed_experts_combine(
+            dispatched,
+            head.counts,
+            head.regions,
+            head.token_index,
+            head.table,
+            head.plan,
+            weights.expert_ids,
+            weights.gate_up,
+            weights.down,
+            self.resources,
+            arena=arena,
+            **self.expert_kw,
+        )
+        ttnn.deallocate(arena)
+        # (the tail once over every loop's owner rows - the combine's and the shared expert's, loop after loop)
+        return mb.fused_tail(y_own, head.se, resources=self.resources, w_up=weights.w_up, all_loops=True)
 
 
 def _short(ex) -> str:

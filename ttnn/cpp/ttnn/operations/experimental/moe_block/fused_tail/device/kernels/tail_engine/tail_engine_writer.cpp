@@ -6,12 +6,13 @@
 // credits, the CB pushes, the output writes. The landing, ring, E and exchange slots are CBs at the same address on
 // every engine core of every chip; their bases are read before this kernel pushes any of them.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "tail_engine_common.hpp"
 #include "api/debug/kernel_profiler.hpp"
 
 constexpr auto o_args = TensorAccessorArgs<11>();
 
-void kernel_main() {
+MB_LOOP_BODY {
     const uint32_t land = get_write_ptr(CB_L0), ring = get_write_ptr(CB_A);
     const uint32_t part = get_write_ptr(CB_PART), xrecv = get_write_ptr(CB_XRECV);
     size_t a = 0;
@@ -170,3 +171,5 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

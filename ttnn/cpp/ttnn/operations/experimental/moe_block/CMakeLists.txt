@@ -33,6 +33,7 @@ file(
     */device/kernels/*.cpp
     */device/kernels/*.hpp
     */device/kernels/*.h
+    common/kernels/*.hpp
 )
 target_sources(
     ttnn_op_experimental_moe_block

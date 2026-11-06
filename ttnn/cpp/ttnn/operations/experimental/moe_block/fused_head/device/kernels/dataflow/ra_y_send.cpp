@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The routing exchange's send in the first Y direction, on the watcher core (ra_send.hpp).
+#define MB_LOOP_HEADER_POOL
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
@@ -13,7 +15,7 @@ using namespace tt::tt_fabric;
 #include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_send.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     RASend rs;
     rs.init(0);
     size_t a = RASend::len(0);
@@ -65,3 +67,5 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

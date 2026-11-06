@@ -28,13 +28,16 @@ namespace ttnn::operations::experimental::moe_block::fused_tail {
 // y_own: the combine's owner rows [1, 1, S/N, Hr] (bf16 ROW_MAJOR, DRAM). shared_expert: the shared expert's output,
 // [1, 1, S/SP, H/TP] with a latent, [1, 1, S/N, H] (or none) without (bf16 TILE, DRAM). w_up: a latent model's
 // prepare_fused_tail_weights. Returns [1, 1, S/SP, H/TP] bf16 TILE (in `output` when given).
+// all_loops: every token loop (MoEBlockConfig.token_loops k) in this one call - y_own, shared_expert and the output
+// hold k loops' rows, one loop's after the other's; one program a chip whose kernels loop (mb_loop.hpp).
 Tensor fused_tail(
     const Tensor& y_own,
     const std::optional<Tensor>& shared_expert,
     MoEBlockResources& resources,
     const std::optional<Tensor>& w_up = std::nullopt,
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi2,
-    const std::optional<Tensor>& output = std::nullopt);
+    const std::optional<Tensor>& output = std::nullopt,
+    bool all_loops = false);
 
 // A latent model's up projection in the engine's layout: latent_up [H, Hr] (host, float32 or bfloat16) column-split
 // over TP (chip (r, c) takes output columns [c H/TP, (c + 1) H/TP)), the rmsnorm weight latent_norm [Hr] folded in

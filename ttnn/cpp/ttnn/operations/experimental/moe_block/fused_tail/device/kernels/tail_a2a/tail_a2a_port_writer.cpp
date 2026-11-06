@@ -5,10 +5,12 @@
 // TailA2A port sender (RISCV_0, NoC1): readies to the chips that send into my output through me; every destination's
 // ready awaited; my runs into the destinations' output pages; at the end every arrival I expect.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "tail_a2a_port_common.hpp"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#define MB_LOOP_HEADER_POOL
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 using namespace tt::tt_fabric;
 
@@ -27,7 +29,7 @@ inline void route_to(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_i
 
 constexpr uint32_t MAXD = 8;
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr auto out_args = TensorAccessorArgs<6>();
     size_t a = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(a++), me = get_arg_val<uint32_t>(a++),
@@ -117,3 +119,5 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

@@ -4,6 +4,7 @@
 
 // The router cores' compute kernel (router_rows.hpp; under RT_ROUTE also the dispatch prep's route words,
 // route_words.hpp).
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_addr.hpp"
 
 #include <cstdint>
@@ -56,7 +57,7 @@ inline void rt_key() {
 // args: nops, ops (entry << 8 | 2: a fin), per entry: arrivals to add (the fin: G - 1, from the zone's slots 0 ..);
 // then the top-K's done word. Every tile here is TRANSPOSED: logits^T [ET][32 tokens] - a
 // token is a column.
-void kernel_main() {
+MB_LOOP_BODY {
     // (the PACK -> MATH word: zero before anything - L1 scratch, PACK sets it only after the top-K)
     MATH((*reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 0));
     compute_kernel_hw_startup<SrcOrder::Reverse>(PSYNC, PSYNC, HOLD);  // (bf16 sources, as the logits matmul had)
@@ -301,3 +302,5 @@ void kernel_main() {
         }
     }  // (router iterations)
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

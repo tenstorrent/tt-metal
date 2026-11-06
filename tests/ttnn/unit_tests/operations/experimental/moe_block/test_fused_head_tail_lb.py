@@ -515,3 +515,52 @@ def test_fused_tail_perf(mesh_device, device_params, case):
     us = median_us(t)
     logger.info(f"PERF fused_tail {case.id}: median {us:.1f} us over {len(t)} replays")
     BASELINES.check(f"fused_tail {case.id}", us, case.margin)
+
+
+
+# ---------------------------------------------------------------------------------------------------- token loops
+@pytest.mark.timeout(1800)
+@PARAMS
+def test_fused_tail_loops_one_call(mesh_device, device_params, case):
+    """MoEBlockConfig.token_loops 2: the tail over both loops' rows in one call (all_loops, its kernels loop) is
+    bit-identical to a call a loop on each loop's rows (y_own, the shared expert's output and the output: loop 1's rows
+    after loop 0's)."""
+    _skip_unless_lb(mesh_device)
+    k = 2
+    if case.row_tokens % (32 * TP):
+        pytest.skip(f"{case.id}: a loop's rows a mesh row ({case.row_tokens}) not a multiple of {32 * TP}")
+    model = MODELS[case.model]
+    chunk = k * case.chunk  # (a loop: the case's rows)
+    cfg = mb.MoEBlockConfig(chunk_tokens=chunk, num_links=2, persist_l1_small=True)
+    cfg.token_loops, cfg.chunk_splits = k, 1
+    res = mb.MoEBlockResources(mesh_device, model.dims(), cfg, mb.MoEDtypes())
+    try:
+        w = Weights(model, case.seed)
+        g = torch.Generator().manual_seed(2000 + case.seed)
+        y = _to_owner(mesh_device, torch.randn(chunk, model.routed_width, generator=g).to(torch.bfloat16))
+        se_host = (torch.randn(chunk, model.H, generator=g) * 0.5).to(torch.bfloat16)
+        w_up = None
+        if model.latent:
+            se = _to_residual(mesh_device, se_host)
+            f32 = lambda t: ttnn.from_torch(t, dtype=ttnn.float32)  # noqa: E731
+            w_up = mb.prepare_fused_tail_weights(
+                f32(w.latent_up), f32(w.latent_norm), resources=res, dtype=ttnn.bfloat8_b
+            )
+        else:
+            se = _to_owner(mesh_device, se_host, layout=ttnn.TILE_LAYOUT)
+
+        def rows(t, i):
+            n, wd = int(t.shape[-2]) // k, int(t.shape[-1])
+            return ttnn.slice(t, [0, 0, i * n, 0], [1, 1, (i + 1) * n, wd], [1, 1, 1, 1])
+
+        ref = ttnn.concat([mb.fused_tail(rows(y, i), rows(se, i), resources=res, w_up=w_up) for i in range(k)], dim=2)
+        for _ in range(3):  # (repeated: the loop words re-armed between calls)
+            got = mb.fused_tail(y, se, resources=res, w_up=w_up, all_loops=True)
+            diff = sum(
+                int((ttnn.to_torch(a) != ttnn.to_torch(b)).sum())
+                for a, b in zip(ttnn.get_device_tensors(got), ttnn.get_device_tensors(ref))
+            )
+            logger.info(f"FUSED_TAIL one call {case.id} x {k} loops: {diff} elements differ from a call a loop")
+            assert diff == 0
+    finally:
+        res.release()

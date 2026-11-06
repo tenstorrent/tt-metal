@@ -166,6 +166,9 @@ void bind_fused_head(nb::module_& mod) {
             loop: this call's loop over the chunk when it runs as MoEBlockConfig.chunk_splits x token_loops head
                 calls (split x token_loops + its loop in the split; x: that call's rows of every chip). A split's
                 last loop plans every loop's tokens of the split.
+            all_loops: run every token loop of the split in this one call (loop: the split's first, split x
+                token_loops; x: every loop's rows of every chip, one loop's after the other's; se: every loop's) -
+                one program a chip whose kernels loop over the token slices.
 
         Returns:
             FusedHeadOutputs: se, rows, xbuf, route and the combine plan (counts, regions, token_index, table,
@@ -186,7 +189,8 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("arena") = nb::none(),
         nb::arg("actual_start") = nb::none(),
         nb::arg("actual_end") = nb::none(),
-        nb::arg("loop") = 0);
+        nb::arg("loop") = 0,
+        nb::arg("all_loops") = false);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_head

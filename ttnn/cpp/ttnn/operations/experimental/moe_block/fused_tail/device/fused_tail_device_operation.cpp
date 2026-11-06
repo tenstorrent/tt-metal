@@ -49,6 +49,7 @@ ttsl::hash::hash_t FusedTailDeviceOperation::compute_program_hash(
         attrs.plan_key,
         attrs.math_fidelity,
         attrs.nslot,
+        attrs.loops,
         attrs.output_memory_config,
         args.y_own.tensor_spec(),
         spec_of(args.shared_expert),
@@ -69,10 +70,10 @@ void FusedTailDeviceOperation::validate_on_program_cache_miss(
     if (attrs.kind == TailKind::Engine) {
         TT_FATAL(attrs.engine_plan != nullptr, "fused_tail: the engine plan is missing");
         const auto& g = attrs.engine_plan->geom;
-        check_shape(args.y_own, "y_own", g.rows / g.chunks, g.Hr);
+        check_shape(args.y_own, "y_own", g.rows / g.chunks * attrs.loops, g.Hr);
         TT_FATAL(args.shared_expert.has_value(), "fused_tail: a latent model's tail needs the shared expert's output");
         check_dram_interleaved(*args.shared_expert, "shared_expert", Layout::TILE);
-        check_shape(*args.shared_expert, "shared_expert", g.rows, g.Ho);
+        check_shape(*args.shared_expert, "shared_expert", g.rows * attrs.loops, g.Ho);
         TT_FATAL(args.w_up.has_value(), "fused_tail: a latent model's tail needs w_up (prepare_fused_tail_weights)");
         TT_FATAL(
             args.w_up->buffer() != nullptr && args.w_up->memory_config().buffer_type() == BufferType::DRAM,
@@ -80,15 +81,17 @@ void FusedTailDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(attrs.a2a_plan != nullptr, "fused_tail: the a2a plan is missing");
         const auto& g = attrs.a2a_plan->geom;
-        check_shape(args.y_own, "y_own", g.S, g.H);
+        check_shape(args.y_own, "y_own", g.S * attrs.loops, g.H);
         if (args.shared_expert.has_value()) {
             check_dram_interleaved(*args.shared_expert, "shared_expert", Layout::TILE);
-            check_shape(*args.shared_expert, "shared_expert", g.S, g.H);
+            check_shape(*args.shared_expert, "shared_expert", g.S * attrs.loops, g.H);
         }
         TT_FATAL(!args.w_up.has_value(), "fused_tail: a model without a latent takes no w_up");
         TT_FATAL(
             args.arrival.has_value() && args.staging.has_value(), "fused_tail: the a2a's persistent words are missing");
     }
+    TT_FATAL(
+        attrs.loops == 1 || args.loop_words.has_value(), "fused_tail: token loops in one call need the loop words");
     if (args.output.has_value()) {
         TT_FATAL(
             args.output->tensor_spec() == compute_output_specs(attrs, args),
@@ -113,7 +116,7 @@ FusedTailDeviceOperation::spec_return_value_t FusedTailDeviceOperation::compute_
         cols = attrs.a2a_plan->geom.H / attrs.a2a_plan->geom.G;
     }
     return tt::tt_metal::TensorSpec(
-        ttnn::Shape({1, 1, rows, cols}),
+        ttnn::Shape({1, 1, rows * attrs.loops, cols}),
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), attrs.output_memory_config));
 }

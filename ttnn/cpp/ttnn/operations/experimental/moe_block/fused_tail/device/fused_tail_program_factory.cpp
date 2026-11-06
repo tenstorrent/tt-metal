@@ -9,6 +9,8 @@
 //  * the fence's ready / arrival words are persistent word tensors of the resources (not global semaphores);
 //  * TailA2A creates no port on a direction without a neighbour.
 
+#include <map>
+#include "ttnn/operations/experimental/moe_block/common/loop_program.hpp"
 #include "fused_tail_program_factory.hpp"
 
 #include <algorithm>
@@ -166,6 +168,72 @@ void patch_cached(
     }
 }
 
+// Token loops in one call (attrs.loops k > 1): each chip's program - loop 0's, built on the tensors' first loop rows -
+// merged with its own copies for loop 1 and the last loop, whose y_own / shared_expert / output args point a loop's
+// rows further (loop_program.hpp; the loops' programs differ in nothing else).
+tt::tt_metal::WorkloadDescriptor merge_loops(
+    tt::tt_metal::WorkloadDescriptor w,
+    const FusedTailParams& attrs,
+    const FusedTailInputs& args,
+    const Tensor& output) {
+    const uint32_t k = attrs.loops;
+    if (k <= 1) {
+        return w;
+    }
+    // (a loop's rows of an interleaved DRAM tensor: whole pages of every bank, l x stride a bank further)
+    std::map<const Buffer*, uint32_t> stride;
+    auto add = [&](const Tensor& t, const char* what) {
+        const auto* b = t.buffer();
+        const uint32_t pages = b->num_pages(), nb = b->allocator()->get_num_banks(b->buffer_type());
+        TT_FATAL(
+            !t.is_sharded() && pages % (k * nb) == 0,
+            "fused_tail: token loops in one call need {}'s pages ({}) interleaved, a whole number of every bank's ({} "
+            "banks) a loop ({} loops)",
+            what,
+            pages,
+            nb,
+            k);
+        stride[b] = static_cast<uint32_t>(pages / k / nb * b->aligned_page_size());
+    };
+    add(args.y_own, "y_own");
+    if (args.shared_expert.has_value()) {
+        add(*args.shared_expert, "shared_expert");
+    }
+    add(output, "the output");
+    auto* mesh = args.y_own.device();
+    auto shifted = [&](const ProgramDescriptor& d, uint32_t l) {
+        ProgramDescriptor p = d;
+        for (auto& kd : p.kernels) {
+            for (const auto& b : kd.buffer_bindings) {
+                if (const auto it = stride.find(b.buffer); it != stride.end()) {
+                    for (auto& [core, a] : kd.runtime_args) {
+                        if (core == b.core) {
+                            a.at(b.arg_idx) += l * it->second;
+                        }
+                    }
+                }
+            }
+            for (const auto& b : kd.common_buffer_bindings) {
+                if (const auto it = stride.find(b.buffer); it != stride.end()) {
+                    kd.common_runtime_args.at(b.arg_idx) += l * it->second;
+                }
+            }
+        }
+        return p;
+    };
+    const LoopProgramSpec spec{
+        .loops = k,
+        .words = static_cast<uint32_t>(args.loop_words->buffer()->address()),
+        .virt = [&](const CoreCoord& c) { return mesh->worker_core_from_logical_core(c); }};
+    for (auto& prog : w.programs) {
+        auto& d = prog.descriptor;
+        auto p1 = shifted(d, 1);
+        auto pl = shifted(d, k - 1);
+        d = merge_loop_programs(std::move(d), p1, pl, spec);
+    }
+    return w;
+}
+
 tt::tt_metal::WorkloadDescriptor engine_workload(
     const FusedTailParams& attrs,
     const FusedTailInputs& args,
@@ -185,7 +253,10 @@ TailEngineFactory::cached_mesh_workload_t TailEngineFactory::create_mesh_workloa
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const FusedTailInputs& tensor_args,
     Tensor& output) {
-    return to_cached(engine_workload(attrs, tensor_args, output, tensor_coords), tensor_args, output);
+    return to_cached(
+        merge_loops(engine_workload(attrs, tensor_args, output, tensor_coords), attrs, tensor_args, output),
+        tensor_args,
+        output);
 }
 
 void TailEngineFactory::override_runtime_arguments(
@@ -201,7 +272,10 @@ TailA2AFactory::cached_mesh_workload_t TailA2AFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const FusedTailInputs& tensor_args,
     Tensor& output) {
-    return to_cached(a2a_workload(attrs, tensor_args, output, tensor_coords), tensor_args, output);
+    return to_cached(
+        merge_loops(a2a_workload(attrs, tensor_args, output, tensor_coords), attrs, tensor_args, output),
+        tensor_args,
+        output);
 }
 
 void TailA2AFactory::override_runtime_arguments(

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/moe_block/common/loop_program.hpp"
 #include "head_program.hpp"
 
 #include <algorithm>
@@ -977,6 +978,10 @@ std::vector<HeadWordsSpec> head_words(const HeadModel& h) {
     if (h.NIT > 1) {
         out.push_back({"rit", cells(with(h.rcores, h.all_ports())), 4 * 2});
     }
+    // token loops in one program: the loop words of every core the program runs on (mb_loop.hpp)
+    if (h.loops > 1) {
+        out.push_back({"loops", head_arena_cores(h), kLoopWordsBytes / 4});
+    }
     return out;
 }
 
@@ -1313,6 +1318,13 @@ private:
         }
     }
     void planner_defines(KernelDescriptor& k, uint32_t ct0) const;
+    // token loops in one program with every planner instance on the planner-only cores: the router kernels compile no
+    // planner (ra_plan_dual.hpp RA_PLAN_NONE)
+    void router_planner_none(KernelDescriptor& k) const {
+        if (bufs.merged && bufs.loops > 1 && h.M <= 2 * h.npo) {
+            define(k, "RA_PLAN_NONE");
+        }
+    }
     // token loops: an earlier loop's planner plans no token (the exchange runs empty: the chips' barrier)
     bool idle_planner() const { return bufs.loop + 1 < bufs.loops; }
     const std::vector<int64_t>& pbases() const { return idle_planner() ? h.pbases_idle : h.pbases_off; }
@@ -2270,10 +2282,18 @@ void ChipProgram::routing_defines(KernelDescriptor& k) const {
 // router_stream._ra_src: the planner as ra::plan (RAP_* = RoutingStream.kernel_subs)
 void ChipProgram::planner_defines(KernelDescriptor& k, uint32_t ct0) const {
     define(k, "RA_PLAN");
-    const bool idle = idle_planner();
+    // (token loops in one program: both planners, the loop picks - ra_plan_dual.hpp; the defines below the last's)
+    const bool dual = bufs.merged && bufs.loops > 1;
+    const bool idle = !dual && idle_planner();
     if (idle) {  // (token loops: an earlier loop's planner plans no token - the exchange still runs, the chips' barrier
                  // between loops; the last plans every loop's)
         define(k, "RAP_SV0");
+    }
+    if (dual) {
+        define(k, "RAP_DUAL");
+        define(k, "RAPI_S", iv(kPlannerIdleS));
+        define(k, "RAPI_ROWS_CAP", iv(h.rows_cap_idle));
+        define(k, "RAPI_ENT_CAP", iv(h.inst_cap_idle));
     }
     routing_defines(k);
     for (const auto& [n, v] : std::vector<std::pair<std::string, int64_t>>{
@@ -2675,6 +2695,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         auto nk = kernel("dataflow/router_ncrisc.cpp", hcrs, dm(DataMovementProcessor::RISCV_1, NOC::NOC_0));
         eng_defs(nk);
         planner_defines(nk, n_ra0);
+        router_planner_none(nk);
         nk.compile_time_args = n_ct;
         mine(n_rt, nk);
         if (padded) {
@@ -2718,6 +2739,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         iter_defs(bk);
         append_accessor(bk.compile_time_args, bufs[SRC_ROUTE]);
         planner_defines(bk, b_ra0);
+        router_planner_none(bk);
         mine(b_rt, bk);
         if (padded) {
             define(bk, "RT_VALID");
@@ -2890,10 +2912,42 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
     if (patches) {
         patches->assign(model.N, HeadPatches{});
     }
+    // token loops in one program: loop l's buffers - x / x_full / y l strides further, the loop's offsets
+    auto loop_buffers = [&](uint32_t l) {
+        HeadBuffers b = buffers;
+        b.loop = l;
+        b.addresses[SRC_X] += l * buffers.x_stride;
+        if (b.addresses[SRC_X_FULL]) {
+            b.addresses[SRC_X_FULL] += l * buffers.xf_stride;
+        }
+        b.addresses[SRC_Y] += l * buffers.y_stride;
+        return b;
+    };
+    const bool merged = buffers.merged && buffers.loops > 1;
     for (const auto& c : coords) {
-        ChipProgram cp(model, buffers, {c[0], c[1]});
-        workload.programs.push_back(
-            {ttnn::MeshCoordinateRange(c, c), cp.build(patches ? &(*patches)[c[0] * model.C + c[1]] : nullptr)});
+        HeadPatches* pp = patches ? &(*patches)[c[0] * model.C + c[1]] : nullptr;
+        if (merged) {  // (loop 0's program, its args' deltas to loop 1 / the last loop as the kernels' loop tables)
+            const uint32_t k = buffers.loops;
+            const HeadBuffers b0 = loop_buffers(0), b1 = loop_buffers(1), bl = loop_buffers(k - 1);  // (ChipProgram
+            // keeps a reference)
+            ChipProgram c0(model, b0, {c[0], c[1]});
+            ChipProgram c1(model, b1, {c[0], c[1]});
+            auto p0 = c0.build(pp);
+            auto p1 = c1.build(nullptr);
+            ProgramDescriptor pl;
+            if (k > 2) {
+                ChipProgram cl(model, bl, {c[0], c[1]});
+                pl = cl.build(nullptr);
+            }
+            LoopProgramSpec spec{.loops = k, .words = buffers.loop_words, .virt = [&](const CoreCoord& lc) {
+                                     return model.mesh->worker_core_from_logical_core(lc);
+                                 }};
+            workload.programs.push_back(
+                {ttnn::MeshCoordinateRange(c, c), merge_loop_programs(std::move(p0), p1, k > 2 ? pl : p1, spec)});
+        } else {
+            ChipProgram cp(model, buffers, {c[0], c[1]});
+            workload.programs.push_back({ttnn::MeshCoordinateRange(c, c), cp.build(pp)});
+        }
     }
     return workload;
 }

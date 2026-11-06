@@ -6,6 +6,7 @@
 // all of my half's K in DEST (my finished columns kept, the partner's sent), the half's sum of squares, and the
 // previous step's out = (mine + the partner's) x rsqrt(sum / Hr + eps) + se.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
@@ -45,7 +46,7 @@ ALWI void mm4(uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t ids
     MATH((llk_math_matmul<MathFidelity::HiFi4, MM_THROTTLE>(idst, 1, 1)));
 }
 
-void kernel_main() {
+MB_LOOP_BODY {
     // args: pn, my finished columns' offset in mine (fo) and count (fn), my share [sk0, sk1), steps, own steps, the W'
     // K range bounds 0, .., KH
     const uint32_t pn = get_arg_val<uint32_t>(0), fo = get_arg_val<uint32_t>(1), fn = get_arg_val<uint32_t>(2);
@@ -220,3 +221,5 @@ void kernel_main() {
         out_step();
     }
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

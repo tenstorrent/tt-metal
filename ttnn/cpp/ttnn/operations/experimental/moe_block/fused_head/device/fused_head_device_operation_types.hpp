@@ -45,6 +45,9 @@ struct FusedHeadParams {
     // cached program each: its tokens' offsets in the routing rows, route words and dispatch buffer; a split's last
     // loop plans every loop's tokens of the split)
     uint32_t loops = 1, loop = 0;
+    // token loops in one program: this call runs every loop of its split (loop: the split's first, split x k) - x
+    // and y hold every loop's rows, the kernels loop (mb_loop.hpp)
+    bool all_loops = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple("plan_key");
     auto attribute_values() const { return std::forward_as_tuple(plan_key); }

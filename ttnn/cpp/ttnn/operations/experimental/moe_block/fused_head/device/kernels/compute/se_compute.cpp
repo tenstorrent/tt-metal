@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The shared expert's matmul cores' compute kernel (one kernel a column group).
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/se_defs.hpp"
 
 #include <cstdint>
@@ -69,7 +70,7 @@ ALWI void rmm(uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t ids
     UNPACK((llk_unpack_AB_matmul(in0, in1, i0, i1, ct, 1, kt)));
     MATH((llk_math_matmul<MathFidelity::HiFi3, MM_THROTTLE>(idst, ct, 1)));
 }
-void kernel_main() {
+MB_LOOP_BODY {
     compute_kernel_hw_startup<SrcOrder::Reverse>(XIN, WIN, HOWN);
     {  // the router's logits first (every chain starts here): my expert tiles x my MT rows over the chip's K slice
         DeviceZoneScopedN("SE-RTRMM");
@@ -459,3 +460,5 @@ void kernel_main() {
         }
     }
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

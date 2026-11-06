@@ -5,15 +5,17 @@
 // TailEngine gather port sender (RISCV_0, NoC1): the fence (my ready to the port that writes into this chip; the next
 // chip's ready before I write there), then every packet of my units into the next chip's owners.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "tail_engine_port_common.hpp"
 #include "api/debug/kernel_profiler.hpp"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#define MB_LOOP_HEADER_POOL
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 using namespace tt::tt_fabric;
 
-void kernel_main() {
+MB_LOOP_BODY {
     const uint32_t land = get_write_ptr(CB_LAND);
     size_t a = 0;
     const uint32_t sl = get_write_ptr(CB_WD), ready = get_arg_val<uint32_t>(a++);  // (the next chip's landed words)
@@ -94,3 +96,5 @@ void kernel_main() {
     }
     conn.close();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

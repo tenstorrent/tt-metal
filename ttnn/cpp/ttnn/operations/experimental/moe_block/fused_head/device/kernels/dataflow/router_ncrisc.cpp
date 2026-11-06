@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The router cores' NCRISC kernel (router_rows.hpp; under RA_PLAN also the routing planner, ra_plan.hpp).
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_addr.hpp"
 #ifdef RA_PLAN
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_plan.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_plan_dual.hpp"
 #endif
 
 #include <cstdint>
@@ -21,7 +22,7 @@ constexpr uint32_t ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11, K = get_compile_time_
 // args: bias^T, expert index tiles; my rows [G]; the arrivals (na: every other chip's partial of my owner
 // rows, slot = its source index) and their words (a word a slot, 16 B apart); the slots in their fixed sum order [G -
 // 1]
-void kernel_main() {
+MB_LOOP_BODY {
     const uint32_t b_addr = get_arg_val<uint32_t>(0), i_addr = get_arg_val<uint32_t>(1);
     const uint32_t r0 = 2, na = get_arg_val<uint32_t>(r0 + G);
     volatile tt_l1_ptr uint32_t* ctr =
@@ -118,8 +119,10 @@ void kernel_main() {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2), RA_NP_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2) = 0;
         if (B) {
-            ra::plan(rr + 2, B);  // (no instance here when the chip has fewer experts than planner RISCs)
+            RA_PLAN_RUN(rr + 2, B);  // (no instance here when the chip has fewer experts than planner RISCs)
         }
     }
 #endif
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

@@ -5,13 +5,14 @@
 // TailA2A worker writer (RISCV_0, NoC1): my tiles - my own block's into the output, another chip's into z; then +1 on
 // every carrying port's z-ready word of the row tile (this call's words: once every carrying port zeroed them).
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
 // (fused_tail_program_factory's A2ACb: the z-ready words' CB - the same address on the ports; the zero gate's semaphore)
 constexpr uint32_t CB_ZR = 5, SZR = 0;
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr uint32_t W = get_compile_time_arg_val(0);
     constexpr auto o_args = TensorAccessorArgs<1>();
     constexpr auto z_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
@@ -47,3 +48,5 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

@@ -37,6 +37,8 @@ void bind_fused_tail(nb::module_& mod) {
             w_up: a latent model's prepare_fused_tail_weights (required with a latent, None without).
             math_fidelity: the up projection's fidelity (HiFi2; never LoFi). The squares' sums run at HiFi4.
             output: a preallocated output of the result's spec.
+            all_loops: every token loop (MoEBlockConfig.token_loops k) in this one call: y_own, shared_expert and the
+                output hold k loops' rows, one loop's after the other's; one program a chip whose kernels loop.
 
         Returns:
             [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM interleaved.
@@ -52,7 +54,8 @@ void bind_fused_tail(nb::module_& mod) {
         nb::arg("resources"),
         nb::arg("w_up") = nb::none(),
         nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::HiFi2,
-        nb::arg("output") = nb::none());
+        nb::arg("output") = nb::none(),
+        nb::arg("all_loops") = false);
 
     mod.def(
         "plan_fused_tail",

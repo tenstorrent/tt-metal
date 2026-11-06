@@ -5,13 +5,14 @@
 // TailEngine engine core, RISCV_0 on NoC0: every DRAM read (my W' K range, my own rows' shares, my se tiles) and the W'
 // multicast down my half column.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "tail_engine_common.hpp"
 #include "api/debug/kernel_profiler.hpp"
 
 constexpr auto z_args = TensorAccessorArgs<11>();  // (the combine's output: this chip's owned rows, row-major)
 constexpr auto s_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
 
-void kernel_main() {
+MB_LOOP_BODY {
     size_t a = 0;
     const uint32_t p = get_arg_val<uint32_t>(a++), pn = get_arg_val<uint32_t>(a++), kh0 = get_arg_val<uint32_t>(a++);
     const uint32_t w_addr = get_arg_val<uint32_t>(a++), wbank = get_arg_val<uint32_t>(a++),
@@ -140,3 +141,5 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

@@ -7,9 +7,10 @@
 // CB on the workers and the ports (one address on all of them), zeroed here, then every worker released (its zero
 // gate semaphore) before any of them counts a row tile in.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "tail_a2a_port_common.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     constexpr auto z_args = TensorAccessorArgs<6>();
     size_t a = 0;
     const uint32_t z_addr = get_arg_val<uint32_t>(a++), NW = get_arg_val<uint32_t>(a++);
@@ -57,3 +58,5 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

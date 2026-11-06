@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The x all-gather's reader on the port cores (xg_ct.hpp, xg_walk.hpp, xg_la_reader.hpp, xg_rs_reader.hpp).
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/xg_ct.hpp"
@@ -11,7 +12,7 @@ constexpr auto x_args = TensorAccessorArgs<14>();
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/xg_la_reader.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/xg_rs_reader.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     size_t a = 0;
     const uint32_t x_addr = get_arg_val<uint32_t>(a++), xown = get_arg_val<uint32_t>(a++),
                    v = get_arg_val<uint32_t>(a++);
@@ -72,3 +73,5 @@ void kernel_main() {
         rs_gather(rsa, pos, m, seen);
     }
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

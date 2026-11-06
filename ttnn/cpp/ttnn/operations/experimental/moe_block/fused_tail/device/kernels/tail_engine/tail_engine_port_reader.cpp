@@ -5,10 +5,11 @@
 // TailEngine gather port reader (RISCV_1, NoC0): my units' shares from this chip's owners (once landed / tilized
 // there), into the staging CB.
 
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "tail_engine_port_common.hpp"
 #include "api/debug/kernel_profiler.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     const uint32_t land = get_write_ptr(CB_LAND), poll = get_write_ptr(CB_POLL);
     size_t a = 0;
     const uint32_t sl = get_write_ptr(CB_WD);  // (the owners' landed words: this call's)
@@ -111,3 +112,5 @@ void kernel_main() {
     }
     land_pending();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

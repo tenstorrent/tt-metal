@@ -30,6 +30,9 @@ struct FusedTailParams {
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi2;  // the engine's up projection
     // The engine's ring slots: chosen from the free L1 when its plan was built, so hashed on its own.
     uint32_t nslot = 0;
+    // Token loops in one call (MoEBlockConfig.token_loops k): the call runs k loops' rows, one loop's after the
+    // other's in y_own, shared_expert and the output; one program a chip whose kernels loop (mb_loop.hpp). 1: one.
+    uint32_t loops = 1;
     MemoryConfig output_memory_config;
     // The plans (owned by the resources, built once). Hash-excluded: plan_key, nslot and the tensor specs determine
     // them.
@@ -37,9 +40,9 @@ struct FusedTailParams {
     std::shared_ptr<const TailA2APlan> a2a_plan;
 
     static constexpr auto attribute_names =
-        std::forward_as_tuple("kind", "plan_key", "math_fidelity", "nslot", "output_memory_config");
+        std::forward_as_tuple("kind", "plan_key", "math_fidelity", "nslot", "loops", "output_memory_config");
     auto attribute_values() const {
-        return std::forward_as_tuple(kind, plan_key, math_fidelity, nslot, output_memory_config);
+        return std::forward_as_tuple(kind, plan_key, math_fidelity, nslot, loops, output_memory_config);
     }
 };
 
@@ -52,6 +55,7 @@ struct FusedTailInputs {
     std::optional<Tensor> arrival;  // a2a: the ports' arrival counters
     std::optional<Tensor> staging;     // a2a: z [1, 1, S/N, H] TILE, DRAM (the blocks for other chips)
     std::optional<Tensor> output;      // preallocated output
+    std::optional<Tensor> loop_words;  // token loops in one call: the loop words of every core (mb_loop.hpp)
 };
 
 }  // namespace ttnn::operations::experimental::moe_block::fused_tail

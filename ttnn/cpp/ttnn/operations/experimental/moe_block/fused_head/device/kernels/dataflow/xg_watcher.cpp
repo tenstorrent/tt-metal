@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The x all-gather's watcher core (under W_RA0 also the routing exchange's send, ra_send.hpp).
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #ifdef W_RA0
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#define MB_LOOP_HEADER_POOL
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 using namespace tt::tt_fabric;
 #include "api/debug/kernel_profiler.hpp"
@@ -19,7 +21,7 @@ using namespace tt::tt_fabric;
 // (a stream counts every shard it sends: m entries + its index + 1): then XREADY + 1 on every engine core
 // (XREADY = m (G - 1) + k). args: chunks, the XREADY id, ranks G - 1, engine cores nc, counters ncnt; (counter address,
 // final) x ncnt; cores (x, y) x nc; per rank: nreq, (counter address, the entry's index, the stream's entries a chunk)
-void kernel_main() {
+MB_LOOP_BODY {
     size_t a = 0;
     const uint32_t nch = get_arg_val<uint32_t>(a++), sem = get_semaphore(get_arg_val<uint32_t>(a++));
     const uint32_t nk = get_arg_val<uint32_t>(a++), nc = get_arg_val<uint32_t>(a++), ncnt = get_arg_val<uint32_t>(a++);
@@ -61,3 +63,5 @@ void kernel_main() {
     }
 #endif
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

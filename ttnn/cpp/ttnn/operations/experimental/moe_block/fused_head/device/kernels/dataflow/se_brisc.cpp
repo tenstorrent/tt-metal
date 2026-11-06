@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The shared expert's matmul cores' BRISC kernel.
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/se_defs.hpp"
 
 #include <cstdint>
@@ -36,7 +37,7 @@ FORCE_INLINE uint32_t se_ra(uint32_t i) {
         default: return get_common_arg_val<uint32_t>(v + get_arg_val<uint32_t>(0));  // a column table
     }
 }
-void kernel_main() {
+MB_LOOP_BODY {
     size_t a = 0;
     // (mine first - then from x_addr to y's address the chip's: se_ra's common span)
     const uint32_t cx = se_ra(a++), cy = se_ra(a++);
@@ -285,3 +286,5 @@ void kernel_main() {
 #endif
     noc_async_atomic_barrier();
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

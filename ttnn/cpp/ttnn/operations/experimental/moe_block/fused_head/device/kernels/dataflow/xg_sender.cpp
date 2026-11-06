@@ -4,6 +4,8 @@
 
 // The x all-gather's sender on the port cores (xg_ct.hpp, xg_walk.hpp, xg_la_sender.hpp, xg_rs_sender.hpp,
 // router_lstream.hpp, ra_send.hpp).
+#define MB_LOOP_HEADER_POOL
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
@@ -19,7 +21,7 @@ using namespace tt::tt_fabric;
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/router_lstream.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_send.hpp"
 
-void kernel_main() {
+MB_LOOP_BODY {
     size_t a = 0;
     const uint32_t xown = get_arg_val<uint32_t>(a++), v = get_arg_val<uint32_t>(a++);
     const uint32_t arrival = get_arg_val<uint32_t>(a++), expect_in = get_arg_val<uint32_t>(a++);  // (my counter)
@@ -334,3 +336,5 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
 }
+
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

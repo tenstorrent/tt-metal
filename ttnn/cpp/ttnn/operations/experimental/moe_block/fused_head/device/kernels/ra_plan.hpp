@@ -12,29 +12,55 @@
 
 namespace ra {
 
-constexpr uint32_t S = RAP_S, K = RAP_K, EPC = RAP_EPC, R = RAP_R, C = RAP_C, N = R * C, ME = RAP_ME;
+constexpr uint32_t K = RAP_K, EPC = RAP_EPC, R = RAP_R, C = RAP_C, N = R * C, ME = RAP_ME;
 constexpr uint32_t A = RAP_A, L = RAP_L, P = RAP_P, TPP = RAP_TPP, M = RAP_M, NG = N * EPC, E0 = ME * EPC;
 constexpr uint32_t HBP = RAP_HBP, BB = RAP_BB, BBP = RAP_BBP, PCAP = RAP_PCAP, NPORT = RAP_NPORT;
-constexpr uint32_t ROWS_CAP = RAP_ROWS_CAP, ENT_CAP = RAP_ENT_CAP;  // (ENT_CAP: an instance's entries, worst case)
-constexpr uint32_t INST_ROWS = ENT_CAP + 32 * EPC < ROWS_CAP ? ENT_CAP + 32 * EPC : ROWS_CAP;  // (an instance's rows)
-constexpr uint32_t ROWB = 4 * K, PB = TPP * ROWB, PSZ = (PB + 63) / 64 * 64, NPG = S / TPP;
+constexpr uint32_t ROWB = 4 * K, PB = TPP * ROWB, PSZ = (PB + 63) / 64 * 64;
 constexpr uint32_t NOWN = (A + M - 1) / M;  // accumulators a core owns at most
 constexpr uint32_t al16(uint32_t v) { return (v + 15) / 16 * 16; }
 constexpr uint32_t al64(uint32_t v) { return (v + 63) / 64 * 64; }
-constexpr uint32_t TSM = NOWN * ((S + A - 1) / A);  // my home tokens at most
-constexpr uint32_t O_RT = 0, O_EX = al64(NPG * PSZ), O_NQ = O_EX + al64(4 * M * N), O_PRE = O_NQ + al64(4 * N);
-constexpr uint32_t O_STG = O_PRE + N * BBP, O_HDR = O_STG + al64(4 * TSM * K + 16 * N);
-constexpr uint32_t O_ENT = O_HDR + N * HBP, O_RUN = O_ENT + al64(4 * ENT_CAP + 128 * N * M);
-constexpr uint32_t O_ET = O_RUN + al64(4 * N * M);
-constexpr uint32_t O_TIDX = O_ET + al64(2 * EPC * S), O_TAB = O_TIDX + al64(4 * INST_ROWS);
-constexpr uint32_t O_WANT = O_TAB + al64(8 * INST_ROWS), O_PIN = O_WANT + al64(128 * NOWN);
-constexpr uint32_t O_PLAN = O_PIN + M * 64, O_CNT = O_PLAN + moe_block_plan_words::kPlanHeadBytes, O_RGN = O_CNT + al64(4 * (EPC + 32));
-constexpr uint32_t O_ROWS = O_RGN + al64(4 * (EPC + 32));
 constexpr uint32_t NOWND = (N + M - 1) / M;  // (destinations an instance owns the header totals of: d % M == q)
-constexpr uint32_t O_CX = O_ROWS + 64, O_PSUM = O_CX + N * BB, O_TOT = O_PSUM + NOWND * M * BB;
+// The tokens' layout of an instance's region: S tokens (RAP_S), ROWS_CAP / ENT_CAP (ENT_CAP: an instance's entries,
+// worst case). Token loops in one program (RAP_DUAL): an earlier loop's planner (RAPI_*: no token, a small region) or
+// the last loop's - the loop picks at run time; else compile-time.
+struct Lay {
+    uint32_t S, ROWS_CAP, ENT_CAP, INST_ROWS, NPG, TSM;
+    uint32_t O_RT, O_EX, O_NQ, O_PRE, O_STG, O_HDR, O_ENT, O_RUN, O_ET, O_TIDX, O_TAB, O_WANT, O_PIN, O_PLAN, O_CNT,
+        O_RGN, O_ROWS, O_CX, O_PSUM, O_TOT;
+    constexpr Lay(uint32_t s, uint32_t rows_cap, uint32_t ent_cap) :
+        S(s),
+        ROWS_CAP(rows_cap),
+        ENT_CAP(ent_cap),
+        INST_ROWS(ent_cap + 32 * EPC < rows_cap ? ent_cap + 32 * EPC : rows_cap),  // (an instance's rows)
+        NPG(s / TPP),
+        TSM(NOWN * ((s + A - 1) / A)),  // my home tokens at most
+        O_RT(0),
+        O_EX(al64(NPG * PSZ)),
+        O_NQ(O_EX + al64(4 * M * N)),
+        O_PRE(O_NQ + al64(4 * N)),
+        O_STG(O_PRE + N * BBP),
+        O_HDR(O_STG + al64(4 * TSM * K + 16 * N)),
+        O_ENT(O_HDR + N * HBP),
+        O_RUN(O_ENT + al64(4 * ENT_CAP + 128 * N * M)),
+        O_ET(O_RUN + al64(4 * N * M)),
+        O_TIDX(O_ET + al64(2 * EPC * S)),
+        O_TAB(O_TIDX + al64(4 * INST_ROWS)),
+        O_WANT(O_TAB + al64(8 * INST_ROWS)),
+        O_PIN(O_WANT + al64(128 * NOWN)),
+        O_PLAN(O_PIN + M * 64),
+        O_CNT(O_PLAN + moe_block_plan_words::kPlanHeadBytes),
+        O_RGN(O_CNT + al64(4 * (EPC + 32))),
+        O_ROWS(O_RGN + al64(4 * (EPC + 32))),
+        O_CX(O_ROWS + 64),
+        O_PSUM(O_CX + N * BB),
+        O_TOT(O_PSUM + NOWND * M * BB) {}
+};
 constexpr uint32_t LMW = 1024;  // local-memory counters: per global expert, later per (my expert, token) if they fit
 static_assert(NG <= LMW, "local counters: NG up to 1024");
-static_assert(S <= 2048 && EPC <= 64, "an entry: token (11 bits) | expert (6 bits) | weight (15 bits)");
+static_assert(RAP_S <= 2048 && EPC <= 64, "an entry: token (11 bits) | expert (6 bits) | weight (15 bits)");
+#ifdef RAP_DUAL
+static_assert(RAPI_S <= RAP_S, "an earlier loop's planner: fewer tokens than the last's");
+#endif
 static_assert(A <= moe_block_plan_words::kAccMax && N <= moe_block_plan_words::kMaxChips, "the plan's want[A][N]");
 constexpr auto rt_args = TensorAccessorArgs<RAP_CT0>();
 constexpr auto sl_args = TensorAccessorArgs<rt_args.next_compile_time_args_offset()>();
@@ -57,6 +83,26 @@ FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {  // DIRS index: 0 
 }
 
 FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
+#ifdef RAP_DUAL
+    const bool idle = !mb_loop::is_last();  // (an earlier token loop's: no token)
+    const Lay lay = idle ? Lay(RAPI_S, RAPI_ROWS_CAP, RAPI_ENT_CAP) : Lay(RAP_S, RAP_ROWS_CAP, RAP_ENT_CAP);
+#define RAP_LC const
+#else
+#ifdef RAP_SV0
+    constexpr bool idle = true;  // (an earlier token loop's own program: no token)
+#else
+    constexpr bool idle = false;
+#endif
+    constexpr Lay lay(RAP_S, RAP_ROWS_CAP, RAP_ENT_CAP);
+#define RAP_LC constexpr
+#endif
+    RAP_LC uint32_t S = lay.S, ROWS_CAP = lay.ROWS_CAP, ENT_CAP = lay.ENT_CAP, INST_ROWS = lay.INST_ROWS;
+    RAP_LC uint32_t NPG = lay.NPG, TSM = lay.TSM;
+    RAP_LC uint32_t O_RT = lay.O_RT, O_EX = lay.O_EX, O_NQ = lay.O_NQ, O_PRE = lay.O_PRE, O_STG = lay.O_STG;
+    RAP_LC uint32_t O_HDR = lay.O_HDR, O_ENT = lay.O_ENT, O_RUN = lay.O_RUN, O_ET = lay.O_ET, O_TIDX = lay.O_TIDX;
+    RAP_LC uint32_t O_TAB = lay.O_TAB, O_WANT = lay.O_WANT, O_PIN = lay.O_PIN, O_PLAN = lay.O_PLAN, O_CNT = lay.O_CNT;
+    RAP_LC uint32_t O_RGN = lay.O_RGN, O_ROWS = lay.O_ROWS, O_CX = lay.O_CX, O_PSUM = lay.O_PSUM, O_TOT = lay.O_TOT;
+#undef RAP_LC
     size_t a = a0;
     const uint32_t rt_addr = get_arg_val<uint32_t>(a++), sl_addr = get_arg_val<uint32_t>(a++);
     const uint32_t c0 = get_arg_val<uint32_t>(a++), c1 = get_arg_val<uint32_t>(a++);
@@ -96,17 +142,20 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     // arrivals need the invalidations this kernel already does; off again before returning, for the firmware)
     set_l1_data_cache<true>();
 
-#ifndef RAP_SV0  // (an earlier token loop's planner plans no token: no rows to read)
-    const auto rt = TensorAccessor(rt_args, rt_addr, PB);
-    for (uint32_t pg = 0; pg < NPG; ++pg) {
-        noc_async_read(rt.get_noc_addr(pg), B + O_RT + pg * PSZ, PB);
+    if (!idle) {  // (an earlier token loop's planner plans no token: no rows to read)
+        const auto rt = TensorAccessor(rt_args, rt_addr, PB);
+        for (uint32_t pg = 0; pg < NPG; ++pg) {
+            noc_async_read(rt.get_noc_addr(pg), B + O_RT + pg * PSZ, PB);
+        }
     }
-#endif
-#if defined(RT_VALID) && !defined(RAP_SV0)
+#if defined(RT_VALID)
     // (a padded chunk's actual_start / actual_end, into O_WANT: local scratch of step 4 - nothing writes it before)
-    const uint32_t vl1 = rt_valid_slot(B + O_WANT);
-    static_assert(O_PIN - O_WANT >= 128, "the scalars' slots: 64 B aligned in O_WANT, 128 B");
-    rt_valid_issue(vl1);
+    uint32_t vl1 = 0;
+    static_assert(al64(128 * NOWN) >= 128, "the scalars' slots: 64 B aligned in O_WANT, 128 B");
+    if (!idle) {
+        vl1 = rt_valid_slot(B + O_WANT);
+        rt_valid_issue(vl1);
+    }
 #endif
     volatile tt_l1_ptr uint32_t* calls = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(calls_addr);
     const uint32_t par = calls[0] & 1;
@@ -118,15 +167,13 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
-#ifdef RAP_SV0
     // (token loops, an earlier loop: no token planned - the exchange runs empty, the chips' barrier between loops;
     // the last loop plans every loop's tokens)
-    constexpr uint32_t SV = 0;
-#elif defined(RT_VALID)
+#if defined(RT_VALID)
     // (my real tokens of every token loop: 0 .. SV - 1; the rest are padding, unplanned)
-    const uint32_t SV = rt_valid_owned(vl1);
+    const uint32_t SV = idle ? 0 : rt_valid_owned(vl1);
 #else
-    constexpr uint32_t SV = S;
+    const uint32_t SV = idle ? 0 : S;
 #endif
     // (1) my home tokens (t % A owned by me): my entries per global expert
     auto row = [&](uint32_t t) __attribute__((always_inline)) {
@@ -315,7 +362,7 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     invalidate_l1_cache();
     uint32_t tot[EPC], reg[EPC], ent[N];
     // (every expert's total over the headers: two 16-bit lanes a word - a lane's sum <= N S, one entry a token)
-    static_assert(N * S < 65536, "packed expert totals");
+    static_assert(N * RAP_S < 65536, "packed expert totals");
     constexpr uint32_t EW = (EPC + 1) / 2;
     uint32_t tw[EW];
     for (uint32_t i = 0; i < EW; ++i) {

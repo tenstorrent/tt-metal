@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/moe_block/common/loop_program.hpp"
 #include "fused_tail.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
@@ -82,12 +83,16 @@ Tensor fused_tail(
     MoEBlockResources& resources,
     const std::optional<Tensor>& w_up,
     tt::tt_metal::MathFidelity math_fidelity,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    bool all_loops) {
     const auto& dims = resources.dims();
-    const uint32_t own_rows = y_own.logical_shape()[-2];
+    const uint32_t loops = all_loops ? std::max<uint32_t>(1, resources.config().loops()) : 1;
+    TT_FATAL(y_own.logical_shape()[-2] % loops == 0, "fused_tail: y_own's rows over {} token loops", loops);
+    const uint32_t own_rows = y_own.logical_shape()[-2] / loops;
     FusedTailParams params{
         .plan_key = resources.plan_key(),
         .math_fidelity = math_fidelity,
+        .loops = loops,
         .output_memory_config = output.has_value() ? output->memory_config() : ttnn::DRAM_MEMORY_CONFIG,
     };
     FusedTailInputs inputs{.y_own = y_own, .shared_expert = shared_expert, .w_up = w_up, .output = output};
@@ -102,6 +107,10 @@ Tensor fused_tail(
         // (the ports' ready: the fence's one persistent word - the engine's per-step words are a per-call CB, zeroed
         // each call behind the engine's zero gate, so no L1_SMALL grows with the rows)
         inputs.ready = resources.persistent_words("fused_tail/engine_ready", plan->port_cores, 4);
+        if (loops > 1) {
+            inputs.loop_words = resources.persistent_words(
+                "fused_tail/engine_loops", plan->engine_cores.merge(plan->port_cores), kLoopWordsBytes / 4);
+        }
     } else {
         TT_FATAL(!w_up.has_value(), "fused_tail: a model without a latent takes no w_up");
         const auto& plan = resources.plan<A2APlanPtr>("fused_tail/a2a_plan", [&] {
@@ -113,6 +122,14 @@ Tensor fused_tail(
         // (the fence's arrival and ready words; the z-ready words are a per-call CB on the ports)
         inputs.arrival = resources.persistent_words("fused_tail/a2a_arrival", plan->port_union, 4);
         inputs.ready = resources.persistent_words("fused_tail/a2a_ready", plan->port_union, 4);
+        if (loops > 1) {
+            std::vector<CoreRange> wr;
+            for (const auto& c : plan->workers) {
+                wr.emplace_back(c, c);
+            }
+            inputs.loop_words = resources.persistent_words(
+                "fused_tail/a2a_loops", CoreRangeSet(wr).merge(plan->port_union), kLoopWordsBytes / 4);
+        }
         inputs.staging = resources.persistent_tensor(
             "fused_tail/a2a_z",
             tt::tt_metal::TensorSpec(

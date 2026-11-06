@@ -307,12 +307,15 @@ inline std::vector<std::pair<uint32_t, uint32_t>> head_free_cells(
     }
     return out;
 }
-// token loops: how many planner-only cores a head with nc router cores takes, of `free` free cells
-inline uint32_t planner_only_cores(uint32_t loops, uint32_t nc, size_t free) {
-    if (loops <= 1 || nc >= kPlannerCores) {
+// token loops: how many planner-only cores a head with nc router cores takes, of `free` free cells - up to every
+// instance's (14 at most, two a core): with them all past the router cores, the router kernels carry no planner (one
+// program running every loop holds both planners - an earlier loop's and the last's - and the router cores' would not
+// fit the kernel config buffer)
+inline uint32_t planner_only_cores(uint32_t loops, uint32_t /*nc*/, size_t free) {
+    if (loops <= 1) {
         return 0;
     }
-    return static_cast<uint32_t>(std::min<size_t>(free, kPlannerCores - nc));
+    return static_cast<uint32_t>(std::min<size_t>(free, kPlannerCores));
 }
 // an earlier token loop's planner plans no token: sized for one row tile
 inline constexpr uint32_t kPlannerIdleS = 32;

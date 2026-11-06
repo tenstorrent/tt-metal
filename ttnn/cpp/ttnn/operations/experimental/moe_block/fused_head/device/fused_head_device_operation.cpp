@@ -55,7 +55,8 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         args.w.tensor_spec(),
         args.w_router.tensor_spec(),
         args.actual_start.has_value(),
-        attrs.loop);
+        attrs.loop,
+        attrs.all_loops);
 }
 
 FusedHeadDeviceOperation::program_factory_t FusedHeadDeviceOperation::select_program_factory(
@@ -69,10 +70,11 @@ void FusedHeadDeviceOperation::validate_on_program_cache_miss(
     const auto s = head_tensor_shapes(*attrs.model);
     check_dram(args.x, "x");
     const auto& xs = args.x.logical_shape();
+    const uint32_t nl = attrs.all_loops ? attrs.loops : 1;  // (the loops the call runs)
     TT_FATAL(
-        xs[-2] == attrs.config.shape.rows && xs[-1] == attrs.config.shape.H / attrs.config.shape.G,
+        xs[-2] == attrs.config.shape.rows * nl && xs[-1] == attrs.config.shape.H / attrs.config.shape.G,
         "fused_head: x must be [.., {}, {}] a chip, got {}",
-        attrs.config.shape.rows,
+        attrs.config.shape.rows * nl,
         attrs.config.shape.H / attrs.config.shape.G,
         xs);
     TT_FATAL(args.x.layout() == Layout::TILE && args.x.dtype() == DataType::BFLOAT16, "fused_head: x is bf16 TILE");
@@ -111,10 +113,15 @@ void FusedHeadDeviceOperation::validate_on_program_cache_miss(
         }
     }
     TT_FATAL(
-        args.y.logical_shape()[-2] == s.y_rows && args.y.logical_shape()[-1] == s.y_cols,
+        args.y.logical_shape()[-2] == s.y_rows * nl && args.y.logical_shape()[-1] == s.y_cols,
         "fused_head: y must be [{}, {}]",
-        s.y_rows,
+        s.y_rows * nl,
         s.y_cols);
+    TT_FATAL(
+        !attrs.all_loops || attrs.loop % attrs.loops == 0,
+        "fused_head: every token loop in one call starts at a split's first loop, got loop {} of {}",
+        attrs.loop,
+        attrs.loops);
 }
 
 void FusedHeadDeviceOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&) {}
@@ -164,6 +171,34 @@ HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& a)
     b.loops = attrs.loops;
     b.loop = attrs.loop % attrs.loops;
     b.split = attrs.loop / attrs.loops;
+    if (attrs.all_loops && attrs.loops > 1) {
+        // (a loop's rows of an interleaved DRAM tensor l x stride a bank further: whole pages of every bank a loop)
+        auto stride = [&](const Tensor& t, const char* what) -> uint32_t {
+            TT_FATAL(!t.is_sharded(), "fused_head: token loops in one call take {} interleaved", what);
+            const auto* buf = t.buffer();
+            const uint32_t pages = buf->num_pages(), nb = buf->allocator()->get_num_banks(buf->buffer_type());
+            TT_FATAL(
+                pages % (attrs.loops * nb) == 0,
+                "fused_head: token loops in one call need {}'s pages ({}) a whole number of every bank's ({} banks) a "
+                "loop ({} loops)",
+                what,
+                pages,
+                nb,
+                attrs.loops);
+            return static_cast<uint32_t>(pages / attrs.loops / nb * buf->aligned_page_size());
+        };
+        b.merged = true;
+        b.x_stride = stride(a.x, "x");
+        b.xf_stride = a.x_full ? stride(*a.x_full, "x_full") : 0;
+        b.y_stride = stride(a.y, "y");
+        const auto specs = head_words(*attrs.model);
+        for (size_t i = 0; i < specs.size(); ++i) {
+            if (specs[i].name == "loops") {
+                b.loop_words = attrs.words.at(i);
+            }
+        }
+        TT_FATAL(b.loop_words != 0, "fused_head: no loop words for token loops in one call");
+    }
     return b;
 }
 
