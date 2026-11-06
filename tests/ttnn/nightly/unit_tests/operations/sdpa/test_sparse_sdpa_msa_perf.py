@@ -20,7 +20,7 @@ from loguru import logger
 import ttnn
 
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import make_msa_inputs, run_op_msa_native
 
 # CI selects these by marker on the IOMMU-enabled BH sku (see ops_unit_tests.yaml); broad non-IOMMU jobs
@@ -37,7 +37,7 @@ MSA_PERF_MARGIN = 0.05
 def _assert_msa_duration(device, run_fn, expected_ms, label):
     """Profile one dispatch of the op with the real-time device profiler and assert its device kernel duration
     is within +/- MSA_PERF_MARGIN of expected_ms. Returns the op output for the shape check."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not is_perf_profiler_active():
         # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
         # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
         # sprint / ring-joint perf checks.

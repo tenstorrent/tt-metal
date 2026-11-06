@@ -18,7 +18,9 @@ using tt::tt_metal::detail::ProgramImpl;
 namespace tt::tt_metal {
 
 DataCollector::DataCollector(MetalEnvImpl& env) :
-    env_(env), program_metadata_recording_enabled_(env.get_rtoptions().get_profiler_enabled()) {}
+    env_(env),
+    program_metadata_recording_enabled_(
+        env.get_rtoptions().get_profiler_enabled() || env.get_rtoptions().get_streaming_profiler_enabled()) {}
 
 // Class to track stats for DispatchData
 class DispatchStats {
@@ -225,7 +227,8 @@ void DataCollector::NotifyRealtimeProfilerDeactivated(uint32_t chip_id) {
     std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
     realtime_profiler_active_chips_.erase(chip_id);
     program_metadata_recording_enabled_.store(
-        env_.get_rtoptions().get_profiler_enabled() || !realtime_profiler_active_chips_.empty(),
+        env_.get_rtoptions().get_profiler_enabled() || env_.get_rtoptions().get_streaming_profiler_enabled() ||
+            !realtime_profiler_active_chips_.empty(),
         std::memory_order_relaxed);
 }
 

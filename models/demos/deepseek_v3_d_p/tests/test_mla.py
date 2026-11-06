@@ -54,7 +54,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -582,7 +582,7 @@ def _run_chunked_prefill(
     # Same exclusion, same reason: a reference run pays a CPU torch pass this measurement does not want.
     if profile and reference is not None:
         pytest.skip("profile needs reference=None (func) -- accuracy is the cpu/trace path's job")
-    if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
+    if profile and not is_perf_profiler_active():
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
     sp_axis, tp_axis = 0, 1
     if topology is None:
