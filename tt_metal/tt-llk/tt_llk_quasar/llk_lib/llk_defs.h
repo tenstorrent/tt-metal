@@ -255,14 +255,15 @@ enum class SfpuType : std::uint32_t
 // p_sfpu::sfpmem, so never pack these values into a Quasar instruction word.
 enum class InstrModLoadStore
 {
-    DEFAULT       = 0,
-    FP16A         = 1,
-    FP16B         = 2,
-    FP32          = 3,
-    INT32         = 4,
-    INT8          = 5,
-    UINT16        = 6, // load/store the 16-bit Dest view (Dst16b)
-    HI16          = 7,
+    DEFAULT = 0,
+    FP16A   = 1,
+    FP16B   = 2,
+    FP32    = 3,
+    INT32   = 4,
+    INT8    = 5,
+    UINT16  = 6, // load/store the 16-bit Dest view (Dst16b)
+    HI16    = 7,
+    // Modes 8-11 are intentionally left out, including the ISA's LO16 (9).
     INT32_2S_COMP = 12,
     INT8_2S_COMP  = 13,
     LO16_ONLY     = 14,
