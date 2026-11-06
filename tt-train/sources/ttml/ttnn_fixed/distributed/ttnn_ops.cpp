@@ -246,14 +246,22 @@ ttnn::Tensor ring_shift(
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
-    // No host synchronization around the transfer. Each socket endpoint keeps its state (write/read pointers,
-    // bytes_sent/bytes_acked) in a config buffer in the L1 of its socket core, (0, 0) here, which lives as long as
-    // the cached socket. Each send/recv op resumes from that state and the peers update each other's counters over
-    // the fabric, so a device waits only for its ring neighbours rather than for the whole mesh, and the host keeps
-    // enqueuing while the data moves. The data itself goes through a FIFO in the receiver's DRAM.
+    // No host synchronization around the transfer; this is safe only under the block-size invariant below. Each
+    // socket endpoint keeps its state (write/read pointers, bytes_sent/bytes_acked) in a config buffer in the L1 of
+    // its socket core, (0, 0) here, which lives as long as the cached socket. Each send/recv op resumes from that
+    // state and the peers update each other's counters over the fabric, so a device waits only for its ring
+    // neighbours rather than for the whole mesh, and the host keeps enqueuing while the data moves. The data itself
+    // goes through a FIFO in the receiver's DRAM.
     // The two phases are what keep this deadlock-free when a send has to block on FIFO space: in phase 1 the recv
     // it waits for is the odd receiver's first op of this shift, and in phase 2 the even receiver's recv only
     // follows its own phase-1 send, which in turn only waits on such a first op.
+    // Block-size invariant: a sender can start the next shift on a socket while its receiver still holds unread data
+    // from this one. Each send/recv op aligns the socket's write/read pointer up to its block size and does not count
+    // the skipped bytes in bytes_sent/bytes_acked (set_*_socket_page_size in socket_api.h). If consecutive ops on a
+    // socket use different block sizes, the sender can see more free space than there is and, filling the FIFO,
+    // overwrite the oldest unread data. A block is as many whole pages as fit in the fabric max payload
+    // (send_async_op_program_factory.cpp): with the default 4352 B payload, both the bf16 and the fp32 tiles ring
+    // attention shifts use 4096 B blocks.
     // Phase 1: Even positions send, odd positions receive
     const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
