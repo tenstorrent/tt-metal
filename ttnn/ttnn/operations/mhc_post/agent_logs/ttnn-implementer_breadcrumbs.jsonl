@@ -9,3 +9,4 @@
 {"event":"device_print_observation","refinement":2,"detail":"lane probe: processing only SFPU vector 2k leaves odd tokens raw -> BH load = 4 rows x 8 even|odd cols; dense layout built","ts":"2026-11-06T18:52:14+00:00"}
 {"event":"hypothesis","refinement":2,"detail":"collapse-stats 59us; ablation: no hc roundtrip+no y = 160.6us; culprit = volatile word permutes on BRISC (fixed: 209.8->192.6us)","ts":"2026-11-06T18:52:14+00:00"}
 {"event":"test_run","refinement":2,"result":"pass","detail":"golden collapse 62/62; regression 26/27 (test_hc_scalars_are_runtime: reference itself violates HC_COLSUM for hc_eps=1.1e-5)","ts":"2026-11-06T18:52:14+00:00"}
+{"event":"test_run","refinement":3,"status":"pass","focus_ns_before":193518,"focus_ns_after":138113,"golden":"collapse+stats 124 pass, plain 332/332, regression 26/27 (pre-existing hc_eps gate)","ts":"2026-11-06T19:31:26+00:00"}

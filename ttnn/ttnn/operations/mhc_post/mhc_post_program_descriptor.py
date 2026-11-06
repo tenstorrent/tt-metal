@@ -28,9 +28,24 @@ TILE = 32
 FP32_TILE_BYTES = 4096
 
 L1_CB_BUDGET = 900 * 1024
+# Block rule (Refinement 3, measured on device): block_c = min(L1 cap, the coarsest block leaving
+# >= MIN_PIPELINE_BLOCKS blocks in the core's pipeline, BLOCK_C_TARGET[stream tile bytes]). The target
+# caps the block at the size that keeps reader / compute / writer overlapped; it differs by stream
+# dtype. Measured:
+#   bf16 (2 KiB tiles), collapse HiFi2 R=5/Q=22: block_c 1 / 2 / 4 = 137 / 136 / 186 us (T160),
+#     403 / 396 / 483 us (T640); plain T640/C7168: 1 / 2 / 3 / 4 = 305 / 312 / 420 / 427 us.
+#   fp32 (4 KiB tiles), plain: T640/C7168 block_c 2 / 3 / 4 / 8 = 617 / 457 / 479 / 517 us;
+#     T4096/C1792 996 / 738 / 754 / 776 us; T640/C1792 150 / 146 / 157 (4) us; T160/C5120 (the
+#     MIN_PIPELINE_BLOCKS bound gives 2) 2 / 3 = 94 / 109 us.
 MIN_PIPELINE_BLOCKS = 4
+BLOCK_C_TARGET = {2048: 2, 4096: 3}  # keyed by the X stream tile size (bf16 / fp32)
 W_RESIDENT_BUDGET = 384 * 1024  # fused: resident W slice bound (choose_split constraint)
-COMBINE_FANIN = 16  # fused: partials per leader (> FANIN column groups -> two-level tree)
+# Fused split objective: a core's fixed per-row cost (coefficient expansion, ss seed / finish, the
+# partial ship and combine, the rotating hc tail) in byte-equivalents of the per-c-tile stream cost.
+# Fit on device (collapse, T160 / T640, C5120, 7 + 6 splits): ~20 us per row vs ~11 us per
+# (row, c-tile) unit of 18 KiB -> ~33 KiB. Plain mode has no combine and keeps the pure byte cost.
+FUSED_ROW_OVERHEAD_BYTES = 33 * 1024
+COMBINE_FANINS = (8, 16, 32)  # fused: partials per leader, smallest that fits MAX_SEMAPHORES
 COMBINE_DEPTH = 2  # fused: gather slot sets in flight per consumer
 COMBINE_LAG = 1  # fused: a row is combined after the mix of row + LAG (root: + 2*LAG)
 MAX_SEMAPHORES = 16  # per-core semaphore ids available to one program
@@ -44,7 +59,7 @@ PROJ_EXACT_PASSES = 16
 PROJ_EXACT_FIDELITIES = (ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
 IO_DEPTH = 2  # cb_f_tiles / cb_x_tiles depth, in blocks
 OUT_DEPTH = 2  # cb_out_tiles depth, in blocks (design: 1; 2 measured -8..10% on DM-bound shapes)
-COEF_DEPTH = 1  # cb_coef_cols depth, in rows
+COEF_DEPTH = 2  # cb_coef_cols depth, in rows (2: the reader expands row r+1 while compute mixes row r)
 BLOCK_ROWS = 1  # rows per block (see op_design.md "Why block_rows = 1")
 
 # CB indices (semantic names; any distinct values)
@@ -100,16 +115,32 @@ def _n_coef_cols(mode, n=N_STREAMS):
 # ---------------------------------------------------------------------------
 
 
-def choose_split(Rt, Ct, *, f_tile, x_tile, n_src, G, fused=False, n=N_STREAMS):
-    """(R, Q) minimizing the busiest core's DRAM bytes. Tie-break: smaller R·Q, then smaller Q.
+def _bank_spread(Rt, Ct, R, Q, banks, n=N_STREAMS):
+    """Distinct DRAM banks the cores' first stream pages land on (interleaved page p -> bank p % banks).
+    Every core walks its range in the same order, so cores whose starts share a bank keep sharing
+    banks block after block."""
+    starts = {((g_r * Rt // R) * n * Ct + g_c * Ct // Q) % banks for g_r in range(R) for g_c in range(Q)}
+    return min(len(starts), banks)
+
+
+def choose_split(Rt, Ct, *, f_tile, x_tile, n_src, G, fused=False, n=N_STREAMS, dram_banks=1):
+    """(R, Q) minimizing the busiest core's cost. Tie-break: more distinct DRAM start banks
+    (`_bank_spread`), then smaller R·Q, then smaller Q.
+
+    Cost = busiest core's streamed bytes (F, X, X' and its coefficient source tiles), plus, in the
+    fused modes, FUSED_ROW_OVERHEAD_BYTES per row the core owns. The fused W slice is not in the cost:
+    it streams under the first row's mix (reader issues it per block) and is only a residency
+    constraint. Among equal-cost splits, bank spread first: plain T160/C5120 (Ct = 160 = 0 mod 8)
+    Q=20 puts every core's start on bank 0 -> 84.9 us; Q=21 / Q=22 spread them -> 74.0 / 73.4 us at
+    the same busiest-core work. Then the fewest cores: each extra core re-reads the shared
+    coefficient pages (plain fp32 T1/C7168 separate coefficients: Q=75 48.7 us, Q=110 53.2 us).
 
     Fused modes keep the core's W slice resident. The preferred bound is W_RESIDENT_BUDGET; when
     no split of a small grid (max_grid) meets it, the bound relaxes to "the whole fused inventory
     fits L1_CB_BUDGET at block_c = 1" — same function for stats and collapse (mode-invariant), and a
     no-op wherever the preferred bound is feasible."""
     unit_bytes = f_tile + 2 * n * x_tile
-    row_bytes = n_src * FP32_TILE_BYTES
-    w_bytes_per_c = n * FP32_TILE_BYTES if fused else 0
+    row_bytes = n_src * FP32_TILE_BYTES + (FUSED_ROW_OVERHEAD_BYTES if fused else 0)
 
     def w_fits_budget(ct_max, Q):
         return n * ct_max * FP32_TILE_BYTES <= W_RESIDENT_BUDGET
@@ -125,8 +156,10 @@ def choose_split(Rt, Ct, *, f_tile, x_tile, n_src, G, fused=False, n=N_STREAMS):
                 ct_max = -(-Ct // Q)
                 if not feasible(ct_max, Q):
                     continue
-                cost = rt_max * (ct_max * unit_bytes + row_bytes) + ct_max * w_bytes_per_c
-                key = (cost, R * Q, Q)
+                if fused and combine_fanin(Q) is None:
+                    continue
+                cost = rt_max * (ct_max * unit_bytes + row_bytes)
+                key = (cost, -_bank_spread(Rt, Ct, R, Q, dram_banks), R * Q, Q)
                 if best is None or key < best[0]:
                     best = (key, R, Q)
         if best is not None:
@@ -142,9 +175,24 @@ def plain_per_c_bytes(f_tile, x_tile, n=N_STREAMS):
     return IO_DEPTH * f_tile + IO_DEPTH * n * x_tile + OUT_DEPTH * n * x_tile
 
 
+def _n_semaphores(Q, fanin):
+    return 2 * COMBINE_DEPTH + 1 + -(-Q // fanin)
+
+
+def combine_fanin(Q):
+    """Partials per leader: the smallest COMBINE_FANINS entry whose tree fits MAX_SEMAPHORES (None if
+    none does). Smaller fan-in = more leaders = more rotating roots for the hc tail (measured
+    R=5/Q=22 collapse: fan-in 8 / 16 / 32 = 136 / 140 / 170 us at T160)."""
+    for fanin in COMBINE_FANINS:
+        if _n_semaphores(Q, fanin) <= MAX_SEMAPHORES:
+            return fanin
+    return None
+
+
 def combine_geometry(Q):
     """(slots, num_groups): leader gather slots and the number of leader groups (tree width)."""
-    return min(COMBINE_FANIN, Q), -(-Q // COMBINE_FANIN)
+    fanin = combine_fanin(Q) or COMBINE_FANINS[-1]
+    return min(fanin, Q), -(-Q // fanin)
 
 
 def fused_fixed_bytes(core_c_max, Q, n=N_STREAMS):
@@ -179,10 +227,10 @@ def fused_per_c_bytes(f_tile, x_tile, n=N_STREAMS):
     return plain_per_c_bytes(f_tile, x_tile, n) + 2 * n * bf16 + bf16  # + cb_xprime_masked
 
 
-def choose_block_c(core_c_max, core_rows_max, *, fixed_bytes, per_c_bytes):
+def choose_block_c(core_c_max, core_rows_max, *, fixed_bytes, per_c_bytes, x_tile):
     block_c_cap = max(1, (L1_CB_BUDGET - fixed_bytes) // per_c_bytes)
     nb = max(-(-core_c_max // block_c_cap), min(core_c_max, -(-MIN_PIPELINE_BLOCKS // core_rows_max)))
-    return -(-core_c_max // nb)
+    return max(1, min(-(-core_c_max // nb), BLOCK_C_TARGET.get(x_tile, 2)))
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +340,8 @@ def create_program_descriptor(
     if max_grid is not None:
         gx, gy = max(1, min(max_grid.x, gx)), max(1, min(max_grid.y, gy))
     G = gx * gy
+    dram_grid = device.dram_grid_size()
+    dram_banks = max(1, dram_grid.x * dram_grid.y)
 
     f_tile = _tile_bytes(input_tensor.dtype)
     x_tile = _tile_bytes(residual.dtype)
@@ -303,7 +353,14 @@ def create_program_descriptor(
     # Split / block sizing: the fused modes cost and size against the stats/collapse inventory
     # (mode-invariant), plain against its own.
     R, Q = choose_split(
-        Rt, Ct, f_tile=f_tile, x_tile=x_tile, n_src=_n_src("stats" if fused else mode, coef_source), G=G, fused=fused
+        Rt,
+        Ct,
+        f_tile=f_tile,
+        x_tile=x_tile,
+        n_src=_n_src("stats" if fused else mode, coef_source),
+        G=G,
+        fused=fused,
+        dram_banks=dram_banks,
     )
     core_rows_max = -(-Rt // R)
     core_c_max = -(-Ct // Q)
@@ -313,12 +370,13 @@ def create_program_descriptor(
     else:
         fixed_bytes = plain_fixed_bytes(_n_src(mode, coef_source), n_coef_cols)
         per_c_bytes = plain_per_c_bytes(f_tile, x_tile)
-    block_c = choose_block_c(core_c_max, core_rows_max, fixed_bytes=fixed_bytes, per_c_bytes=per_c_bytes)
+    block_c = choose_block_c(core_c_max, core_rows_max, fixed_bytes=fixed_bytes, per_c_bytes=per_c_bytes, x_tile=x_tile)
     num_cores = R * Q
     core_ranges = _core_ranges(num_cores, gx)
 
     slots, num_groups = combine_geometry(Q)
-    n_sems = 2 * COMBINE_DEPTH + 1 + num_groups
+    fanin = combine_fanin(Q) or COMBINE_FANINS[-1]
+    n_sems = _n_semaphores(Q, fanin)
     if fused and n_sems > MAX_SEMAPHORES:
         raise RuntimeError(f"mhc_post: Q={Q} needs {n_sems} semaphores (> {MAX_SEMAPHORES})")
     SEM_GATHER = 0  # [COMBINE_DEPTH] leader gather arrivals, per slot set
@@ -382,7 +440,7 @@ def create_program_descriptor(
         CB_COMB_ACC,
         CB_STATS_ROW,
         Q,
-        COMBINE_FANIN,
+        fanin,
         COMBINE_DEPTH,
         COMBINE_LAG,
         SEM_GATHER,
@@ -464,10 +522,10 @@ def create_program_descriptor(
         writer_args += [y_addr, h_addr]
         if fused:
             base = g_r * Q
-            grp = g_c // COMBINE_FANIN
-            g0 = grp * COMBINE_FANIN
-            members = [v for q in range(g0, min(Q, g0 + COMBINE_FANIN)) for v in phys(base + q)]
-            leaders = [v for g in range(num_groups) for v in phys(base + g * COMBINE_FANIN)]
+            grp = g_c // fanin
+            g0 = grp * fanin
+            members = [v for q in range(g0, min(Q, g0 + fanin)) for v in phys(base + q)]
+            leaders = [v for g in range(num_groups) for v in phys(base + g * fanin)]
             reader_args += members + leaders  # grants: to my group (leader) / to every leader (root)
             writer_args += leaders  # my leader = leaders[grp]; roots = leaders[r % num_groups]
         reader_rt[x][y] = reader_args

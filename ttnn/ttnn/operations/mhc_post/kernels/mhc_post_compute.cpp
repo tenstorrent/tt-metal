@@ -437,7 +437,8 @@ void kernel_main() {
 
         // Matmul boot (SrcOrder::Reverse); the chain elements re-init themselves.
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_xprime_mm, cb_w_slice, cb_proj_block);
-        w_buf.wait_front(n * num_c);  // resident W slice for the whole kernel
+        // The resident W slice arrives per block during the first row (the reader overlaps it with
+        // that row's F / X reads); each first-row projection waits the cumulative count.
         if constexpr (proj_passes > 1) {
             masks_buf.wait_front(proj_passes);  // resident exact-projection masks
         }
@@ -561,6 +562,9 @@ void kernel_main() {
                     }
                     const bool last_block = (b + 1 == num_blocks);
                     const uint32_t w_base = b * n * block_c;
+                    if (r == 0) {
+                        w_buf.wait_front(n * (w_base / n + extent));
+                    }
                     if constexpr (proj_passes == 1) {
                         project_block(extent, w_base, xprime_buf, w_buf, proj_block_buf);
                         accumulate_partial(b == 0, last_block);

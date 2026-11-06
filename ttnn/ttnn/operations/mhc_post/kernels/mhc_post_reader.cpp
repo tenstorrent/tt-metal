@@ -130,23 +130,15 @@ void kernel_main() {
     // --- fused: resident W slice, block-major [b][j][c] (compact K = n * extent per block) ---
     const auto geo = mhc_post_combine::Geometry::of(g_c, Q, COMBINE_FANIN);
     uint32_t lead_granted = 0, lead_pushed = 0, root_granted = 0, root_pushed = 0;
+    // The slice is reserved once here and filled per block on the first row (issue_block), so the
+    // W stream overlaps the first row's mix instead of serializing ahead of it; compute waits the
+    // cumulative count before each first-row projection.
+    const uint32_t w_tile_bytes = fused ? get_tile_size(cb_w_slice) : x_tile_bytes;
+    const auto w_acc = TensorAccessor(w_args, w_addr, w_tile_bytes);
+    uint32_t w_l1 = 0;
     if constexpr (fused) {
-        const uint32_t w_tile_bytes = get_tile_size(cb_w_slice);
-        const auto w_acc = TensorAccessor(w_args, w_addr, w_tile_bytes);
         cb_reserve_back(cb_w_slice, n * num_c);
-        uint32_t w_l1 = get_write_ptr(cb_w_slice);
-        for (uint32_t b = 0; b < num_blocks; ++b) {
-            const uint32_t c0 = c_start + b * block_c;
-            const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
-            for (uint32_t j = 0; j < n; ++j) {
-                for (uint32_t c = 0; c < extent; ++c) {
-                    noc_async_read_tile(j * tensor_c_tiles + c0 + c, w_acc, w_l1);
-                    w_l1 += w_tile_bytes;
-                }
-            }
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_w_slice, n * num_c);
+        w_l1 = get_write_ptr(cb_w_slice);
         if constexpr (proj_passes > 1) {
             // Exact-projection masks: tile j = 1.0 (bf16) at columns j and j + 16, 0 elsewhere.
             // Zeroed by the NoC; only the 64 pattern lanes per tile are written by the RISC.
@@ -216,8 +208,9 @@ void kernel_main() {
         }
     };
 
-    // Issue the reads of one F/X block (nominal reserve; only valid tiles read). No barrier.
-    auto issue_block = [&](uint32_t row, uint32_t b) {
+    // Issue the reads of one F/X block (nominal reserve; only valid tiles read) and, on the first
+    // row, the block's compact W slice [j][c]. No barrier.
+    auto issue_block = [&](uint32_t row, uint32_t b, bool first_row) {
         const uint32_t c0 = c_start + b * block_c;
         const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
         cb_reserve_back(cb_f_tiles, block_c);
@@ -237,10 +230,26 @@ void kernel_main() {
                 x_dst += x_tile_bytes;
             }
         }
+        if constexpr (fused) {
+            if (first_row) {
+                for (uint32_t j = 0; j < n; ++j) {
+                    for (uint32_t c = 0; c < extent; ++c) {
+                        noc_async_read_tile(j * tensor_c_tiles + c0 + c, w_acc, w_l1);
+                        w_l1 += w_tile_bytes;
+                    }
+                }
+            }
+        }
     };
-    auto push_block = [&]() {
+    auto push_block = [&](uint32_t b, bool first_row) {
         cb_push_back(cb_f_tiles, block_c);
         cb_push_back(cb_x_tiles, n * block_c);
+        if constexpr (fused) {
+            if (first_row) {
+                const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
+                cb_push_back(cb_w_slice, n * extent);
+            }
+        }
     };
 
     const uint32_t total = fused ? num_rows + 2 * COMBINE_LAG : num_rows;
@@ -261,7 +270,7 @@ void kernel_main() {
         if constexpr (collapse && pre_slot != 0 && pre_slot != comb_slot) {
             noc_async_read_tile(row * pre_width_tiles, pre_acc, src_pre_l1);  // P at columns 0..n-1
         }
-        issue_block(row, 0);
+        issue_block(row, 0, r == 0);
         if constexpr (fused) {
             grant(r);
         }
@@ -275,13 +284,13 @@ void kernel_main() {
             expand_coefficients(src_pre_l1, 0, coef_l1 + PRE_COEF_BASE * coef_tile_bytes, n);
         }
         cb_push_back(cb_coef_cols, n_coef_cols);
-        push_block();
+        push_block(0, r == 0);
 
         // load_block for the rest of the row.
         for (uint32_t b = 1; b < num_blocks; ++b) {
-            issue_block(row, b);
+            issue_block(row, b, r == 0);
             noc_async_read_barrier();
-            push_block();
+            push_block(b, r == 0);
         }
         if constexpr (fused) {
             collect_post_row(r);

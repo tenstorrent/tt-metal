@@ -149,7 +149,7 @@ Refinements 1 and 2 exist to land every one of these values in `SUPPORTED`.
 - Perf at T160/C5120 HiFi2: collapse 192 µs vs stats 152 µs. The rest is writer lane permutes (~11 µs),
   the y chain (~9 µs) and the hc SFPU (~5 µs); see the changelog for the levers.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile: block / split knob co-tune
+### [x] Refinement 3 — Speed up the perf-flagged profile: block / split knob co-tune
 
 **Type**: perf
 
@@ -178,6 +178,24 @@ collapse the same `(R, Q, block_c)`, or `test_fused_modes_agree` breaks.
 - Its gates still hold, and the golden suite is green.
 - No regression across the config-spanning guard set: one representative per distinct kernel path × mode
   (plain / stats / collapse) × dtype combo × coef_source.
+
+**Outcome**:
+- Flagged config (T160 C5120 bf16 collapse packed HiFi2): **193.5 → 138.1 µs** device kernel (−29 %; target 46.5 µs).
+  Stats 152.4 → 108.0, plain bf16 84.8 → 74.2; T640: collapse 636 → 362, stats 561 → 333, plain 343 → 231.
+  Plain fp32 guard shapes: 0.84–1.00× (no regression).
+- Levers (all kept, all live knobs): `choose_split` cost adds `FUSED_ROW_OVERHEAD_BYTES` per row and drops W
+  bytes (W is a residency constraint only), tie-break = DRAM-bank spread of the core starts then fewest cores
+  → focus split R=2/Q=54 → R=5/Q=21. The reader streams W per block under the first row's mix (it was read
+  and barriered before any F/X). `COEF_DEPTH` 1 → 2. Block rule = old `MIN_PIPELINE_BLOCKS` bound capped by
+  `BLOCK_C_TARGET` (2 for bf16, 3 for fp32 streams). Fan-in = smallest of (8, 16, 32) fitting the semaphores.
+  `IO_DEPTH = 3` / `OUT_DEPTH = 3` measured flat or worse, so they stay at 2.
+- Bottleneck now: the fit across 13 splits is ~20 µs fixed per row on a core plus ~11 µs per (row, c-tile)
+  unit, i.e. ~2.7 µs per output tile. That is the SFPU mix chain (Refinement 5). W also crosses DRAM 5×
+  (13 MB) at R=5, which is Refinement 4's w-mcast.
+- Not done, and why: the bank-aligned column-start hot-spot is avoided via the split tie-break, not fixed.
+  A per-core rotated block walk would fix it at any Q, but it changes the stats accumulation order, so it
+  is left for the tournament. Plain fp32 T160 is 100.6 µs at Q=22 vs 111 µs at Q=21 (aggregate-DRAM-bound
+  there); a mode/dtype-aware core-count preference could take it.
 
 ### [ ] Refinement 4 — Speed up the perf-flagged profile: reuse multicast (W and coefficients)
 

@@ -196,3 +196,62 @@
       `eval/golden_tests/mhc_post/helpers.py`. I did not distort the hc output to meet it.
 - **Tests added**: `test_mhc_post_perf.py::test_perf_bf16_packed` gains `mode=collapse`. Probe
   `probes/probe_010.py` (y tile-error map) and the lane-mapping probe are recorded above.
+
+## Refinement 3 — Speed up the perf-flagged profile: block / split knob co-tune
+- Date: 2026-11-06
+- What was done:
+  - Measured 40+ (R, Q, block_c, fan-in, depth) variants on device with a monkeypatching sweep
+    (`test_mhc_post_knob_sweep.py`, one dispatch per variant).
+  - `choose_split`, fused modes: cost = busiest core's streamed bytes + `FUSED_ROW_OVERHEAD_BYTES` (33 KiB) per
+    owned row. The fit on device is ~20 µs per row vs ~11 µs per 18 KiB (row, c-tile) unit. W is dropped
+    from the cost and stays a residency constraint, because it now streams under the first row. Mode-invariant:
+    stats and collapse see the same inputs.
+  - Tie-break, all modes: more distinct DRAM start banks (`_bank_spread`, banks from
+    `device.dram_grid_size()`), then fewest cores, then smaller Q.
+    - Plain T160: Q=20 puts every core's start on bank 0 (84.9 µs); Q=21/22 measure 74.0/73.4 µs.
+    - Plain fp32 T1/C7168 with separate coefficients: Q=75 is 48.7 µs, Q=110 is 53.2 µs, because every core
+      re-reads the shared coefficient pages.
+  - Reader: the resident W slice is filled per block during the first row (cumulative `cb_push_back`). The
+    compute waits the cumulative count before each first-row projection. W was previously read and barriered
+    before the first F/X block (165 → 136 µs at R=5/Q=22).
+  - `COEF_DEPTH` 1 → 2: the reader no longer stalls at row boundaries (T640 collapse 428 → 397 µs).
+  - `choose_block_c`: the old `MIN_PIPELINE_BLOCKS` bound, capped at `BLOCK_C_TARGET` = 2 (bf16 streams) or 3
+    (fp32 streams).
+    - bf16: block_c 4 costs +35 %, 3 costs +12–17 %.
+    - fp32 at multi-row shapes: 3 beats 2 by 25 % (T640/C7168: 617 / 457 µs).
+  - Combine fan-in derived per call: `combine_fanin(Q)` = smallest of (8, 16, 32) fitting `MAX_SEMAPHORES`
+    (fan-in 8 vs 16: 136 vs 140 µs at the focus, 169 vs 179 µs at R=2).
+  - Reused: every kernel path, CB and helper call. Added: a host cost term, the tie-break, per-block W pushes,
+    and the knob constants.
+- Perf (device kernel ns, Blackhole, 110-core grid; `test_mhc_post_perf.py`, before → after):
+
+  | Shape | plain | stats | collapse |
+  |---|---|---|---|
+  | bf16 packed HiFi2 T160 | 84.8 → 74.2 µs | 152.4 → 108.0 µs | **193.5 → 138.1 µs** |
+  | bf16 packed HiFi4 T160 | 84.7 → 74.2 µs | 275.7 → 204.5 µs | 312.4 → 236.7 µs |
+  | bf16 packed HiFi2 T640 | 342.7 → 231.3 µs | 561.1 → 332.8 µs | 636.2 → 362.0 µs |
+  | bf16 packed HiFi4 T640 | 343.1 → 230.9 µs | 877.1 → 657.3 µs | 949.8 → 726.9 µs |
+
+  Plain fp32, separate coefficients: T160/C5120 126.3 → 111.1 µs; T640/C1792 146.4 → 146.6 µs; T640/C7168
+  550.0 → 460.3 µs; T1/C7168 49.3 → 49.5 µs; T4096/C1792 822.2 → 736.2 µs.
+- Flat or worse (kept at the current value):
+  - `IO_DEPTH`/`OUT_DEPTH` 3: 136 → 150 µs at the focus.
+  - Coarser blocks: block_c 3 / 4 / 8.
+  - R=1 splits: 240–260 µs at T160; 880 µs at T640.
+- Accuracy achieved: unchanged gates (stats / X' bits mode-invariant; collapse hc ≤ 1e-5 rel per part, y PCC ≥ 0.99995)
+  on every golden cell run below.
+- Golden test progress (targeted slices):
+  - `test_golden.py -k "collapse or stats"`: 124 passed / 348 skipped (INVALID).
+  - `-k plain`: 332 / 332.
+  - `test_regression.py`: 26 / 27. The one failure is the pre-existing `test_hc_scalars_are_runtime` `hc_eps`
+    gate defect recorded in Refinement 2.
+  - Unit `test_mhc_post.py`: 30 / 30.
+- Issues encountered / findings:
+  - The op is per-core latency- / compute-bound, not DRAM-bound: 29.5 MB in 138 µs ≈ 215 GB/s.
+  - Remaining levers:
+    - the SFPU mix (~2.7 µs per output tile; Refinement 5);
+    - w-mcast: W is now read 5× (Refinement 4);
+    - a rotated per-core block walk, which would fix bank-aligned starts at any Q (it changes the stats
+      accumulation order, so it is not taken here).
+- Tests added: `tests/ttnn/unit_tests/operations/mhc_post/test_mhc_post_knob_sweep.py` (`MHC_SWEEP="R,Q,block_c,fanin[,io,out,coef];..."`,
+  `MHC_T/MHC_C/MHC_MODE/MHC_DT/MHC_SEP`; without env it dispatches the default config once).
