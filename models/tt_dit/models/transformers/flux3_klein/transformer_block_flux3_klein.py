@@ -25,6 +25,40 @@ HEADS = 24
 HEAD_DIM = 128
 MLP_RATIO = 3
 SDPA_Q_CHUNK_MAX = 128
+# Ring SDPA (q, k) chunks by the PER-DEVICE row count the kernel tiles (SP8 x TP4). The shared table is keyed by the
+# logical length, which includes the caption's valid text rows, so no served Klein length ever matched it. Each
+# (head, q chunk) is one unit of work on the 108-core SDPA grid; q is picked so the units fill whole rounds, and k
+# divides the shard. Lengths not listed keep the shared rule (q clamped to SDPA_Q_CHUNK_MAX).
+RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
+    # 2048x2048: 6 heads x 16 q chunks = 96 units, one round (q 128: 120 units, two rounds); -11.5 % denoise
+    2560: (160, 512),
+    # 2048x2048 + 1 reference: 6 x 16 = 96 units, one round (q 128: 144 units, two rounds); -11.7 % denoise
+    3072: (192, 512),
+    # 2048x2048 + 1 reference with a 2048-row text bucket: 6 x 18 = 108 units, one round; -16.4 % denoise vs today
+    2816: (160, 512),
+    # 4096x4096 + 1 reference with a 2048-row text bucket: k 640 divides the shard (14 chunks); -1.7 % denoise
+    8960: (128, 640),
+}
+
+
+class Flux3KleinAttention(Attention):
+    def forward(self, *, sequence_1: ttnn.Tensor, **kwargs):
+        self._local_rows = int(sequence_1.shape[-2])
+        return super().forward(sequence_1=sequence_1, **kwargs)
+
+    def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
+        chunks = RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(getattr(self, "_local_rows", None))
+        if chunks is None:
+            return super().get_ring_sdpa_program_config(per_device_seq_len)
+        key = ("local", self._local_rows)
+        if key not in self.ring_sdpa_program_config:
+            self.ring_sdpa_program_config[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
+                q_chunk_size=chunks[0],
+                k_chunk_size=chunks[1],
+                exp_approx_mode=self.ring_sdpa_exp_approx,
+            )
+        return self.ring_sdpa_program_config[key]
 
 
 class Flux3KleinTransformerBlock(Module):
@@ -45,7 +79,7 @@ class Flux3KleinTransformerBlock(Module):
         mlp_hidden_dim = MLP_RATIO * HIDDEN
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.attn = Attention(
+        self.attn = Flux3KleinAttention(
             query_dim=HIDDEN,
             head_dim=HEAD_DIM,
             heads=HEADS,
