@@ -157,12 +157,14 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
             get_telemetry_table(tile);
         }
 
+        std::cout << "Sleeping for 3 seconds...\n";
         for(int i = 0; i < 20; ++i) {
             if (g_shutdown.load() == true) {
                 goto done;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
+        std::cout << "Done Sleeping...\n";
     }
    
 done:
