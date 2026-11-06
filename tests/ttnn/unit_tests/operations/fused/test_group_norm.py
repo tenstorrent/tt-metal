@@ -1714,10 +1714,12 @@ def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
     )
 
 
-# Runs nightly only (#62486): the op synthesizes the negative mask only when L1 is too tight for the
-# normal layout, and the ballast below is sized for this 128x128 input, so the shape cannot shrink.
-# The nightly wrapper parametrizes it with (1, 640, 128, 128, 32) and l1_small_size 47000.
-def run_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups):
+# Stays in sanity at full size (#62486): it is the only test that builds the writer's
+# NEGATIVE_MASK_SYNTHESIZE branch. The op synthesizes the negative mask only when L1 is too tight for
+# the normal layout, and the ballast below is sized for this 128x128 input, so the shape cannot shrink.
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
+def test_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups):
     """
     Exercises NEGATIVE_MASK_SYNTHESIZE with no mask tensors passed at all. The L1 ballast
     below leaves the overlap as the only layout that fits, so the call completing is the

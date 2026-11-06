@@ -404,12 +404,6 @@ def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
     base.test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups)
 
 
-@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
-def test_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups):
-    base.run_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups)
-
-
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.DRAM_GRID_SIZE_SHAPES)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid):
