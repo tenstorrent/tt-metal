@@ -499,9 +499,8 @@ MeshDevice* MeshBuffer::device() const {
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    // A built entry needs neither the lock nor a reference to the MeshDevice: fan-outs fetch every device's entry at
-    // once. Until some MeshDevice closes, the one checked when the entries were cached is still alive. A close that
-    // overlaps the call is not caught; callers keep the MeshDevice open, as they must to use the returned buffer.
+    // Built entries skip the lock and the MeshDevice reference while no MeshDevice has closed since they were cached.
+    // A close that overlaps the call is not caught: callers keep the MeshDevice open, as they must for the result.
     const size_t index = device_coord.to_linear_index(buffers_.shape());
     const uint64_t generation = MeshDeviceImpl::close_generation();
     if (built_device_buffers_ && cache_generation_.load(std::memory_order_acquire) == generation) {
