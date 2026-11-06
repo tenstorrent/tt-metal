@@ -222,7 +222,7 @@ def build_and_serialize_kv_chunk_table(
         assert dflash_caches is None, "pass the drafter either as local tensors or as a staged spec, not both"
         all_caches.append(("dflash_staged", dflash_spec))
     if kda is not None:
-        assert index_kv_cache is None, "a DSA index cache and KDA state slabs in one table is not a supported layout"
+        # Kimi-K3.1 has both: the block-cyclic caches take "00" (kvpe) and "01" (index), the KDA slabs follow.
         all_caches.extend((kind, kda) for kind in KDA_TABLE_KINDS)
     if index_kv_cache is not None or dflash_caches is not None or dflash_spec is not None or kda is not None:
         return _build_and_serialize_merged_kv_chunk_table(
