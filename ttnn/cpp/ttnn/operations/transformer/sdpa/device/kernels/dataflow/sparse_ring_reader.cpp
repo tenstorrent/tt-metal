@@ -343,6 +343,16 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     const auto in_dense_rt = [&](uint32_t g) { return in_dense(g); };
+    // Group delivery args: the resident group's [role, producer x, y, receivers, rectangles, (5 words each, producer
+    // only)], then (dense units) the dense group's in the same form.
+    [[maybe_unused]] const uint32_t res_g_base = group_members_base + 2 * group_n_members;
+    [[maybe_unused]] const uint32_t dense_g_base =
+        dense_owners > 0 && group_mcast
+            ? res_g_base + 5 + (get_arg_val<uint32_t>(res_g_base) == 1 ? 5 * get_arg_val<uint32_t>(res_g_base + 4) : 0)
+            : 0;
+    [[maybe_unused]] constexpr uint32_t dense_sender_sem = get_named_compile_time_arg_val("dense_sem_sender");
+    [[maybe_unused]] constexpr uint32_t dense_receiver_sem = get_named_compile_time_arg_val("dense_sem_receiver");
+    [[maybe_unused]] constexpr uint32_t dense_valid_sem = get_named_compile_time_arg_val("dense_sem_valid");
     // Every pass's Q starts at cb_q_in's base when there are several passes or dense batches after them.
     constexpr bool pad_q = num_q_passes > 1 || dense_owners > 0;
     // A dense batch: units of one owner against the local shard, Q from q (own shard) or the dense-Q buffer.
@@ -725,9 +735,15 @@ void kernel_main() {
             // The credit lookahead must stay one piece: then the shared credit sum reaches receivers x p only if
             // every consumer has credited p; a deeper lookahead lets a fast consumer's credits stand in for a slow
             // one's and the multicast overwrites a page the slow core has not popped.
-            [[maybe_unused]] const uint32_t g_base = group_members_base + 2 * group_n_members;
-            [[maybe_unused]] const uint32_t g_role =
-                group_mcast && dense == nullptr ? get_arg_val<uint32_t>(g_base) : 0;
+            // Dense batches stream through the core's dense group (the cores holding the same head's dense units):
+            // its own args after the resident group's and its own semaphores.
+            const bool dense_group = dense_owners > 0 && dense != nullptr;
+            [[maybe_unused]] const uint32_t g_base = dense_group ? dense_g_base : res_g_base;
+            [[maybe_unused]] const uint32_t g_role = group_mcast ? get_arg_val<uint32_t>(g_base) : 0;
+            [[maybe_unused]] const uint32_t g_sender_sem = dense_group ? dense_sender_sem : head_sender_semaphore_id;
+            [[maybe_unused]] const uint32_t g_receiver_sem =
+                dense_group ? dense_receiver_sem : head_receiver_semaphore_id;
+            [[maybe_unused]] const uint32_t g_valid_sem = dense_group ? dense_valid_sem : head_valid_semaphore_id;
             [[maybe_unused]] uint32_t g_granted = 0;  // pieces credited this iteration
             [[maybe_unused]] uint32_t g_ahead = 0;    // pieces credited, not yet pushed
             const auto g_try_grant = [&](bool blocking) -> bool {
@@ -746,7 +762,7 @@ void kernel_main() {
                 cb_v.reserve_back(v_need);
                 ++g_ahead;
                 ++g_granted;
-                Semaphore<>(head_sender_semaphore_id)
+                Semaphore<>(g_sender_sem)
                     .up(noc, get_arg_val<uint32_t>(g_base + 1), get_arg_val<uint32_t>(g_base + 2), 1);
                 return true;
             };
@@ -762,7 +778,7 @@ void kernel_main() {
                         g_try_grant(true);
                     }
                     {
-                        Semaphore<>(head_receiver_semaphore_id).wait_min(res_group_pieces + 1);
+                        Semaphore<>(g_receiver_sem).wait_min(res_group_pieces + 1);
                     }
                     cb_k.push_back(k_chunk_tiles);
                     cb_v.push_back(v_chunk_tiles);
@@ -798,8 +814,8 @@ void kernel_main() {
                 const uint32_t n_recv = get_arg_val<uint32_t>(g_base + 3);
                 const uint32_t n_rects = get_arg_val<uint32_t>(g_base + 4);
                 {
-                    Semaphore<>(head_sender_semaphore_id).wait_min(n_recv * res_group_pieces);
-                    Semaphore<> count_src(head_valid_semaphore_id);
+                    Semaphore<>(g_sender_sem).wait_min(n_recv * res_group_pieces);
+                    Semaphore<> count_src(g_valid_sem);
                     count_src.set(res_group_pieces);
                     for (uint32_t r = 0; r < n_rects; ++r) {
                         const uint32_t a = g_base + 5 + 5 * r;
@@ -828,7 +844,7 @@ void kernel_main() {
                             {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = v_addr},
                             /*linked=*/true);
                         count_src.relay_multicast(
-                            noc, Semaphore<>(head_receiver_semaphore_id), x0, y0, x1, y1, n_dests, /*linked=*/false);
+                            noc, Semaphore<>(g_receiver_sem), x0, y0, x1, y1, n_dests, /*linked=*/false);
                     }
                     noc.async_writes_flushed();
                 }
@@ -1023,12 +1039,31 @@ void kernel_main() {
         const auto recv_reader = TensorAccessor(dense_recv_args, get_arg_val<uint32_t>(dense_base + 4));
         constexpr uint32_t partial_tile_bytes = get_tile_size(cb_dense_in);
         bool any_arrivals = false;
+        constexpr uint32_t n_dense_blocks = get_named_compile_time_arg_val("dense_blocks_total");
+        // The K/V CBs back to their base with dummy entries (compute pops them the same way, by kv_pos), so the dense
+        // groups' members, whose resident streams differed, are in pointer lockstep again; the dense groups count
+        // their pieces from 0 on their own semaphores.
+        {
+            CircularBuffer cb_k(cb_k_in);
+            CircularBuffer cb_v(cb_v_in);
+            constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
+            const auto& k_intf = get_local_cb_interface(cb_k_in);
+            const uint32_t entry_bytes = k_chunk_tiles * k_tile_bytes;
+            const uint32_t pos = (cb_k.get_write_ptr() - (k_intf.fifo_limit - k_intf.fifo_size)) / entry_bytes;
+            for (uint32_t e = pos; e != 0 && e < kv_cb_pages; ++e) {
+                cb_k.reserve_back(k_chunk_tiles);
+                cb_k.push_back(k_chunk_tiles);
+                cb_v.reserve_back(v_chunk_tiles);
+                cb_v.push_back(v_chunk_tiles);
+            }
+            res_group_pieces = 0;
+        }
         sparse_dense::for_each_batch(
             dense_owners,
             dense_base + 5,
             get_arg_val<uint32_t>(dense_base),
             get_arg_val<uint32_t>(dense_base + 1),
-            NH,
+            n_dense_blocks,
             resident_slots,
             [](uint32_t a) { return get_arg_val<uint32_t>(a); },
             [&](uint32_t k, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool first, bool) {
@@ -1038,10 +1073,9 @@ void kernel_main() {
                 db.q_row_offset = o.slab_out_row - o.slab_row_start;
                 db.q_row_end = o.slab_out_row + o.slab_rows;
                 for (uint32_t u = u0; u < u1; ++u) {
-                    const uint32_t idx = u - o.unit_start;
-                    db.heads[u - u0] = idx / o.n_blocks;
-                    db.blocks[u - u0] =
-                        sparse_dense::dense_block(o.shard, idx % o.n_blocks, mask_nb, mask_nb_pad, in_dense_rt);
+                    db.heads[u - u0] = u / n_dense_blocks;
+                    db.blocks[u - u0] = sparse_dense::dense_block(
+                        o.shard, u % n_dense_blocks - o.block_offset, mask_nb, mask_nb_pad, in_dense_rt);
                 }
                 run_iteration(ring_index, 0, 0, &db);
                 if constexpr (!dense_debug) {

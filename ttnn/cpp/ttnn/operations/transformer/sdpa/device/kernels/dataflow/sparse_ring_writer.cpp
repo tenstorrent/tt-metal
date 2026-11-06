@@ -191,18 +191,19 @@ void kernel_main() {
             dense_base + 5,
             get_arg_val<uint32_t>(dense_base),
             get_arg_val<uint32_t>(dense_base + 1),
-            NH,
+            get_named_compile_time_arg_val("dense_blocks_total"),
             get_named_compile_time_arg_val("resident_slots"),
             [](uint32_t a) { return get_arg_val<uint32_t>(a); },
             [&](uint32_t k, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool, bool last) {
                 const bool emit = dense_debug || o.role != sparse_dense::kRoleOwner;
                 for (uint32_t u = u0; u < u1; ++u) {
                     if (!emit) {
-                        const uint32_t idx = u - o.unit_start;
+                        constexpr uint32_t n_dense_blocks = get_named_compile_time_arg_val("dense_blocks_total");
                         write_q_block(
-                            sparse_dense::dense_block(o.shard, idx % o.n_blocks, mask_nb, mask_nb_pad, in_dense),
+                            sparse_dense::dense_block(
+                                o.shard, u % n_dense_blocks - o.block_offset, mask_nb, mask_nb_pad, in_dense),
                             0,
-                            idx / o.n_blocks);
+                            u / n_dense_blocks);
                         continue;
                     }
                     for (uint32_t t = 0; t < kPartialTiles; ++t) {

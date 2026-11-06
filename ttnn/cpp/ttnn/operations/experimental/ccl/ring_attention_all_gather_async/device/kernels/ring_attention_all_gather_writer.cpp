@@ -660,8 +660,8 @@ void kernel_main() {
         const uint32_t ready_addr = arg(3);
         const uint32_t arrival_addr = arg(4);
         const uint32_t n_cores = arg(5);
-        const uint32_t base = arg(6);
-        const uint32_t extra = arg(7);
+        const uint32_t cores_per_head = arg(6);
+        const uint32_t n_dense_blocks = arg(7);
         const uint32_t grid_x = arg(8);
         const uint32_t grid_y = arg(9);
         const uint32_t recv_side = arg(10);
@@ -688,13 +688,19 @@ void kernel_main() {
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_arrival, unicast_route_info);
         for (uint32_t sidx = 0; sidx < n_sends; ++sidx) {
             const uint32_t k = get_arg_val<uint32_t>(sends + 3 * sidx);
-            const uint32_t us = get_arg_val<uint32_t>(sends + 3 * sidx + 1);
-            const uint32_t ue = get_arg_val<uint32_t>(sends + 3 * sidx + 2);
+            const uint32_t block_offset = get_arg_val<uint32_t>(sends + 3 * sidx + 1);
+            const uint32_t n_blocks = get_arg_val<uint32_t>(sends + 3 * sidx + 2);
             for (uint32_t c = link; c < n_cores; c += stride) {
-                const uint32_t c_start = c * base + (c < extra ? c : extra);
-                const uint32_t c_end = c_start + base + (c < extra ? 1 : 0);
+                // Core c's units (head c / cores_per_head) and the owner's run in that head.
+                const uint32_t h = c / cores_per_head;
+                const uint32_t ci = c % cores_per_head;
+                const uint32_t base = n_dense_blocks / cores_per_head;
+                const uint32_t extra = n_dense_blocks % cores_per_head;
+                const uint32_t c_start = h * n_dense_blocks + ci * base + (ci < extra ? ci : extra);
+                const uint32_t c_end = c_start + base + (ci < extra ? 1 : 0);
+                const uint32_t us = h * n_dense_blocks + block_offset;
                 const uint32_t lo = c_start > us ? c_start : us;
-                const uint32_t hi = c_end < ue ? c_end : ue;
+                const uint32_t hi = c_end < us + n_blocks ? c_end : us + n_blocks;
                 if (lo >= hi) {
                     continue;
                 }

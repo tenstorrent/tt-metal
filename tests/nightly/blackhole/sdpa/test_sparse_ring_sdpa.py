@@ -840,7 +840,8 @@ PARTIAL_TILES = (BLOCK // 32) * (D // 32) + 2 * (BLOCK // 32)
 
 
 def dense_units(geo, S, ranges):
-    """[(owner shard, its dense local Q blocks)], in the op's unit order (owner, then head, then block)."""
+    """[(owner shard, its dense local Q blocks)], in shard order. The op's units are head-major: head, then these
+    blocks in order."""
     nb, nb_pad = geo.nb(), geo.nb_pad()
     out = []
     for s in range(S):
@@ -858,22 +859,19 @@ def merge_partials(case, parts, ranges):
     sq, vt = BLOCK // 32, D // 32
     out = torch.full((1, case.H, S * geo.rows, D), float("nan"))
     tp = parts.shape[1]
-    u = 0
-    for o, blocks in dense_units(geo, S, ranges):
-        for h in range(HEADS_PER_DEVICE):
-            for b in blocks:
-                for t in range(tp):
-                    tiles = parts[:, t, u * PARTIAL_TILES * 32 : (u + 1) * PARTIAL_TILES * 32].double()
-                    tiles = tiles.reshape(S, PARTIAL_TILES, 32, 32)
-                    o_raw = tiles[:, : sq * vt].reshape(S, sq, vt, 32, 32).permute(0, 1, 3, 2, 4).reshape(S, BLOCK, D)
-                    s_raw = tiles[:, sq * vt : sq * vt + sq].sum(-1).reshape(S, BLOCK)
-                    m = tiles[:, sq * vt + sq :, :, 0].reshape(S, BLOCK)
-                    w = torch.exp(case.scale * (m - m.max(0).values))
-                    res = (w[..., None] * o_raw).sum(0) / (w * s_raw).sum(0)[:, None]
-                    r0 = o * geo.rows + b * BLOCK
-                    n = min(BLOCK, geo.rows - b * BLOCK)
-                    out[0, t * HEADS_PER_DEVICE + h, r0 : r0 + n] = res[:n].float()
-                u += 1
+    units = [(h, o, b) for h in range(HEADS_PER_DEVICE) for o, blocks in dense_units(geo, S, ranges) for b in blocks]
+    for u, (h, o, b) in enumerate(units):
+        for t in range(tp):
+            tiles = parts[:, t, u * PARTIAL_TILES * 32 : (u + 1) * PARTIAL_TILES * 32].double()
+            tiles = tiles.reshape(S, PARTIAL_TILES, 32, 32)
+            o_raw = tiles[:, : sq * vt].reshape(S, sq, vt, 32, 32).permute(0, 1, 3, 2, 4).reshape(S, BLOCK, D)
+            s_raw = tiles[:, sq * vt : sq * vt + sq].sum(-1).reshape(S, BLOCK)
+            m = tiles[:, sq * vt + sq :, :, 0].reshape(S, BLOCK)
+            w = torch.exp(case.scale * (m - m.max(0).values))
+            res = (w[..., None] * o_raw).sum(0) / (w * s_raw).sum(0)[:, None]
+            r0 = o * geo.rows + b * BLOCK
+            n = min(BLOCK, geo.rows - b * BLOCK)
+            out[0, t * HEADS_PER_DEVICE + h, r0 : r0 + n] = res[:n].float()
     return out
 
 

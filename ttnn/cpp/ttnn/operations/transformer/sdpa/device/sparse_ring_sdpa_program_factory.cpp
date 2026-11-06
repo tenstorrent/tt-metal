@@ -254,11 +254,12 @@ struct DenseResources {
     GlobalSemaphore arrival;
 };
 
-// Dense units of the op: one plan per owner shard (a shard with a Q block in a range), in shard order.
+// Dense units of the op: one plan per owner shard (a shard with a Q block in a range), in shard order. Units are
+// head-major (sparse_dense_units.hpp): n_units = NH x the owners' dense blocks.
 struct DenseOwnerPlan {
     uint32_t shard;
     uint32_t n_blocks;
-    uint32_t unit_start;
+    uint32_t block_offset;
     uint32_t slab_out_row;
     uint32_t slab_row_start;
     uint32_t slab_rows;
@@ -278,6 +279,7 @@ std::vector<DenseOwnerPlan> dense_owner_plans(
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     const auto slabs = dense_q_slabs(args.dense_blocks, ring_size, nb_pad, local_tiles, args.block_tiles());
     uint32_t out_row = 0;
+    uint32_t n_dense_blocks = 0;
     for (uint32_t s = 0; s < ring_size; ++s) {
         uint32_t n = 0;
         for (uint32_t b = 0; b < nb; ++b) {
@@ -290,11 +292,12 @@ std::vector<DenseOwnerPlan> dense_owner_plans(
                      : 0u;
         }
         if (n > 0) {
-            plans.push_back({s, n, n_units, out_row, slabs[s].row_start, slabs[s].rows});
-            n_units += NH * n;
+            plans.push_back({s, n, n_dense_blocks, out_row, slabs[s].row_start, slabs[s].rows});
+            n_dense_blocks += n;
         }
         out_row += slabs[s].rows;
     }
+    n_units = NH * n_dense_blocks;
     return plans;
 }
 
@@ -489,7 +492,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                                                        : sparse_dense::kRoleEmitMinus;
         dense_records.insert(
             dense_records.end(),
-            {o.shard, o.n_blocks, o.unit_start, o.slab_out_row, o.slab_row_start, o.slab_rows, up_sides, role});
+            {o.shard, o.n_blocks, o.block_offset, o.slab_out_row, o.slab_row_start, o.slab_rows, up_sides, role});
     }
 
     log_debug(tt::LogOp, "B: {}, NH: {}, NHK: {}, NHV: {}, DH: {}, vDH: {}", B, NH, NHK, NHV, DH, vDH);
@@ -836,6 +839,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     }
     if (gqa_grouped_kv) {
         gqa_sems = ChainSemaphores::create(desc, core_grid_set);  // grouped K/V chain
+    }
+    // The dense groups' delivery (credits, delivered count, source word), apart from the resident groups'.
+    std::optional<ChainSemaphores> dense_sems;
+    if (dense_h && group_mcast) {
+        dense_sems = ChainSemaphores::create(desc, core_grid_set);
     }
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
@@ -1466,6 +1474,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // DRAM banks: a unit's partial is one bank's consecutive pages in the hop buffers.
         {"dense_banks", mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM)},
         {"dense_q_rows_t", dense_q_rows_t},
+        {"dense_blocks_total", std::max(1u, dense_units / NH)},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = named_args;
@@ -1478,6 +1487,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "dense_n_ranges", static_cast<uint32_t>(args.dense_blocks.size()));
     reader_kernel.named_compile_time_args.emplace_back("dense_keys", args.dense_keys ? 1u : 0u);
+    reader_kernel.named_compile_time_args.emplace_back("dense_sem_sender", dense_sems ? dense_sems->sender_id : 0u);
+    reader_kernel.named_compile_time_args.emplace_back("dense_sem_receiver", dense_sems ? dense_sems->receiver_id : 0u);
+    reader_kernel.named_compile_time_args.emplace_back("dense_sem_valid", dense_sems ? dense_sems->valid_id : 0u);
     writer_kernel.named_compile_time_args.emplace_back(
         "dense_n_ranges", static_cast<uint32_t>(args.dense_blocks.size()));
     compute_kernel.defines = kernel_defines;
@@ -1513,6 +1525,48 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // A group is a head chain's members; the producer (first member in core order) reads every piece from DRAM and
     // multicasts it to rectangles of consecutive NoC x on one row each, so no multicast lands outside the group.
     constexpr uint32_t kGroupMaxRects = 8;
+    // The receivers of a group as rectangles of consecutive NoC x on one row each (x0, y0, x1, y1, cores).
+    const auto group_rects = [&](const std::vector<uint32_t>& members, uint32_t producer) {
+        std::map<uint32_t, std::vector<uint32_t>> receiver_xs_by_row;
+        for (const uint32_t ci : members) {
+            if (ci != producer) {
+                receiver_xs_by_row[core_work[ci].physical_core.y].push_back(core_work[ci].physical_core.x);
+            }
+        }
+        std::vector<std::array<uint32_t, 5>> rects;
+        for (auto& [y, xs] : receiver_xs_by_row) {
+            std::sort(xs.begin(), xs.end());
+            size_t run_start = 0;
+            for (size_t k = 1; k <= xs.size(); ++k) {
+                if (k == xs.size() || xs[k] != xs[k - 1] + 1) {
+                    rects.push_back({xs[run_start], y, xs[k - 1], y, static_cast<uint32_t>(k - run_start)});
+                    run_start = k;
+                }
+            }
+        }
+        return rects;
+    };
+    const auto set_group_args = [&](std::vector<std::vector<uint32_t>>& out,
+                                    const std::vector<uint32_t>& members,
+                                    uint32_t producer,
+                                    const std::vector<std::array<uint32_t, 5>>& rects) {
+        const CoreCoord prod_phys = core_work[producer].physical_core;
+        for (const uint32_t ci : members) {
+            auto& a = out[ci];
+            a = {
+                ci == producer ? 1u : 2u,
+                static_cast<uint32_t>(prod_phys.x),
+                static_cast<uint32_t>(prod_phys.y),
+                static_cast<uint32_t>(members.size() - 1),
+                0u};
+            if (ci == producer) {
+                a[4] = static_cast<uint32_t>(rects.size());
+                for (const auto& r : rects) {
+                    a.insert(a.end(), r.begin(), r.end());
+                }
+            }
+        }
+    };
     std::vector<std::vector<uint32_t>> group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
     if (group_mcast) {
         for (uint32_t h = 0; h < static_cast<uint32_t>(head_segments.size()); ++h) {
@@ -1534,52 +1588,20 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 continue;
             }
             const uint32_t producer = *std::min_element(members.begin(), members.end());
-            const CoreCoord prod_phys = core_work[producer].physical_core;
-            std::map<uint32_t, std::vector<uint32_t>> receiver_xs_by_row;
-            for (const uint32_t ci : members) {
-                if (ci != producer) {
-                    receiver_xs_by_row[core_work[ci].physical_core.y].push_back(core_work[ci].physical_core.x);
-                }
-            }
-            std::vector<std::array<uint32_t, 5>> rects;
-            for (auto& [y, xs] : receiver_xs_by_row) {
-                std::sort(xs.begin(), xs.end());
-                size_t run_start = 0;
-                for (size_t k = 1; k <= xs.size(); ++k) {
-                    if (k == xs.size() || xs[k] != xs[k - 1] + 1) {
-                        rects.push_back({xs[run_start], y, xs[k - 1], y, static_cast<uint32_t>(k - run_start)});
-                        run_start = k;
-                    }
-                }
-            }
+            const auto rects = group_rects(members, producer);
             TT_FATAL(
                 rects.size() <= kGroupMaxRects,
                 "SparseRingSDPA group delivery: head {} needs {} multicast rectangles (at most {})",
                 h,
                 rects.size(),
                 kGroupMaxRects);
-            const uint32_t n_receivers = static_cast<uint32_t>(members.size() - 1);
-            for (const uint32_t ci : members) {
-                auto& a = group_args[ci];
-                a = {
-                    ci == producer ? 1u : 2u,
-                    static_cast<uint32_t>(prod_phys.x),
-                    static_cast<uint32_t>(prod_phys.y),
-                    n_receivers,
-                    0u};
-                if (ci == producer) {
-                    a[4] = static_cast<uint32_t>(rects.size());
-                    for (const auto& r : rects) {
-                        a.insert(a.end(), r.begin(), r.end());
-                    }
-                }
-            }
+            set_group_args(group_args, members, producer, rects);
             log_debug(
                 tt::LogOp,
                 "SparseRingSDPA group: head {} producer core {} -> {} receivers in {} rectangles",
                 h,
                 producer,
-                n_receivers,
+                members.size() - 1,
                 rects.size());
         }
         // Dense builds compile the head chain's transfers out of the reader (v_chain_moves): no member may be left
@@ -1592,9 +1614,58 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
     }
 
-    // Dense units: base or base + 1 per core, the first dense_units_extra cores one more, in flat core order.
-    const uint32_t dense_units_base = dense_units / num_cores;
-    const uint32_t dense_units_extra = dense_units % num_cores;
+    // Dense units: every head's n_dense_blocks units on dense_cores_per_head cores of their own (cores h x that ..,
+    // base or base + 1 units each, the first ones one more), so a head's cores share its local pieces in one dense
+    // group; the cores past NH x dense_cores_per_head hold none.
+    const uint32_t n_dense_blocks = dense_units / NH;
+    const uint32_t dense_cores_per_head = dense_h ? num_cores / NH : 0;
+    TT_FATAL(!dense_h || dense_cores_per_head > 0, "SparseRingSDPA: dense_blocks need a core per head");
+    const auto dense_range = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
+        if (!dense_h || i >= NH * dense_cores_per_head) {
+            return {0, 0};
+        }
+        const uint32_t h = i / dense_cores_per_head;
+        const uint32_t c = i % dense_cores_per_head;
+        const uint32_t base = n_dense_blocks / dense_cores_per_head;
+        const uint32_t extra = n_dense_blocks % dense_cores_per_head;
+        const uint32_t start = h * n_dense_blocks + c * base + std::min(c, extra);
+        return {start, start + base + (c < extra ? 1u : 0u)};
+    };
+    // Dense groups: a head's cores with units, when each runs the same batches per owner (sparse_dense::for_each_batch
+    // over resident_slots): they stream identical piece sequences, and a batch waits for one owner's arrivals on every
+    // member, so the owners' hop chains stay independent. Else they read their own pieces.
+    std::vector<std::vector<uint32_t>> dense_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
+    if (dense_sems.has_value()) {
+        const auto n_batches = [&](uint32_t i) {
+            const auto [lo, hi] = dense_range(i);
+            std::vector<uint32_t> n;
+            for (const auto& o : owner_plans) {
+                const uint32_t start = (lo / std::max(1u, n_dense_blocks)) * n_dense_blocks + o.block_offset;
+                const uint32_t a = std::max(lo, start);
+                const uint32_t b = std::min(hi, start + o.n_blocks);
+                n.push_back(b > a ? tt::div_up(b - a, resident_slots) : 0u);
+            }
+            return n;
+        };
+        for (uint32_t h = 0; h < NH; ++h) {
+            std::vector<uint32_t> members;
+            for (uint32_t i = h * dense_cores_per_head; i < (h + 1) * dense_cores_per_head; ++i) {
+                if (dense_range(i).second > dense_range(i).first) {
+                    members.push_back(i);
+                }
+            }
+            if (members.size() < 2 || std::any_of(members.begin(), members.end(), [&](uint32_t i) {
+                    return n_batches(i) != n_batches(members.front());
+                })) {
+                continue;
+            }
+            const auto rects = group_rects(members, members.front());
+            if (rects.size() > kGroupMaxRects) {
+                continue;
+            }
+            set_group_args(dense_group_args, members, members.front(), rects);
+        }
+    }
     const uint32_t ready_plus_addr = dense_res != nullptr ? static_cast<uint32_t>(dense_res->ready_plus.address()) : 0;
     const uint32_t ready_minus_addr =
         dense_res != nullptr ? static_cast<uint32_t>(dense_res->ready_minus.address()) : 0;
@@ -1603,8 +1674,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        const uint32_t du_start = i * dense_units_base + std::min(i, dense_units_extra);
-        const uint32_t du_end = du_start + dense_units_base + (i < dense_units_extra ? 1u : 0u);
+        const auto [du_start, du_end] = dense_range(i);
 
         const auto& work = core_work.at(i);
         const uint32_t global_q_start = work.global_q_start;
@@ -1719,6 +1789,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             for (const uint32_t w : group_args[i]) {
                 reader_args.push_back(w);
             }
+            if (dense_h) {
+                for (const uint32_t w : dense_group_args[i]) {
+                    reader_args.push_back(w);
+                }
+            }
         }
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
@@ -1824,9 +1899,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         dr.ready_plus_addr = ready_plus_addr;
         dr.ready_minus_addr = ready_minus_addr;
         dr.arrival_addr = arrival_addr;
-        dr.n_cores = num_cores;
-        dr.units_base = dense_units_base;
-        dr.units_extra = dense_units_extra;
+        dr.n_cores = NH * dense_cores_per_head;  // the cores holding dense units, in flat order
+        dr.cores_per_head = dense_cores_per_head;
+        dr.n_dense_blocks = n_dense_blocks;
         for (uint32_t x = 0; x < grid_size.x; ++x) {
             dr.core_x.push_back(mesh_device->worker_core_from_logical_core({x, 0}).x);
         }
@@ -1845,8 +1920,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         dr.partial_tile_bytes = tt::tile_size(out_df);
         for (uint32_t k = 0; k < owner_plans.size(); ++k) {
             const uint32_t role = dense_records[k * sparse_dense::kRecordWords + 7];
-            const std::array<uint32_t, 3> send = {
-                k, owner_plans[k].unit_start, owner_plans[k].unit_start + NH * owner_plans[k].n_blocks};
+            const std::array<uint32_t, 3> send = {k, owner_plans[k].block_offset, owner_plans[k].n_blocks};
             if (role == sparse_dense::kRoleEmitPlus) {
                 dr.sends_plus.push_back(send);
             } else if (role == sparse_dense::kRoleEmitMinus) {

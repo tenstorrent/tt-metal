@@ -254,19 +254,31 @@ void kernel_main() {
     if constexpr (dense_owners > 0) {
         constexpr bool dense_debug = get_named_compile_time_arg_val("dense_debug") == 1;
         constexpr uint32_t cb_dense_in = get_named_compile_time_arg_val("cb_dense_in");
+        constexpr uint32_t n_dense_blocks = get_named_compile_time_arg_val("dense_blocks_total");
+        // The K/V CBs back to their base, past the reader's dummy entries: the dense groups' multicasts land at the
+        // producer's write address on every member.
+        constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
+        constexpr uint32_t v_entry_tiles = Sk_chunk_t * vDHt;
+        for (; kv_pos != 0; kv_pos = kv_pos + 1 == kv_cb_pages ? 0 : kv_pos + 1) {
+            CircularBuffer(cb_k_in).wait_front(kt_entry_tiles);
+            CircularBuffer(cb_k_in).pop_front(kt_entry_tiles);
+            CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+            CircularBuffer(cb_v_in).pop_front(v_entry_tiles);
+        }
         sparse_dense::for_each_batch(
             dense_owners,
             dense_args + 2,
             get_arg_val<uint32_t>(dense_args),
             get_arg_val<uint32_t>(dense_args + 1),
-            NH,
+            n_dense_blocks,
             resident_slots,
             [](uint32_t a) { return get_arg_val<uint32_t>(a); },
             [&](uint32_t, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool, bool) {
-                const uint32_t idx0 = u0 - o.unit_start;
+                // One head per batch: its chunks as Q chunks 32 h .. of a 32-chunk head (sdpa_ring_resident's
+                // res_head).
+                const uint32_t q0 = (u0 / n_dense_blocks) * 32;
                 uint32_t initialized_slots = 0;
-                run_ring_iteration(
-                    ring_index_runtime, idx0, idx0 + (u1 - u0), o.n_blocks, initialized_slots, false, true);
+                run_ring_iteration(ring_index_runtime, q0, q0 + (u1 - u0), 32, initialized_slots, false, true);
                 res_dense_finish<
                     Sq_chunk_t,
                     DHt,
