@@ -46,5 +46,15 @@
     "monitor": "bringup/artifacts/stage12-monitor-ci.py",
     "tool_session_id": 20102,
     "note": "Queueing is not a failed run; do not cancel or redispatch solely for queue time."
+  },
+  "release_route_decision_request": {
+    "at": "2026-11-06T05:12:13.370191+00:00",
+    "status": "pending_operator_response",
+    "choices": [
+      "provide local Docker prerequisites",
+      "authorize secondary dry/release on same machine"
+    ],
+    "reason": "agentic-serving Devices requires local dry/release absent operator exception",
+    "no_assumed_authorization": true
   }
 }
