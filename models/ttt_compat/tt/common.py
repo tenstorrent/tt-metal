@@ -52,6 +52,11 @@ class Mode(Enum):
     PREFILL = "prefill"
 
 
+class LayerNormTypes(Enum):
+    LAYERNORM = "LayerNorm"
+    RMSNORM = "RMSNorm"
+
+
 class HostEmbedding(torch.nn.Module):
     def __init__(self, model_args):
         super().__init__()

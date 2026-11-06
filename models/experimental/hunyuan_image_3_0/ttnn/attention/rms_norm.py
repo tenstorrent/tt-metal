@@ -8,8 +8,8 @@ import os
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.common import Mode
+from models.common.layernorm import LayerNorm
+from models.tt_transformers.tt.common import Mode, LayerNormTypes
 
 from ..parallel_utils import rmsnorm_shard_config
 
@@ -56,11 +56,12 @@ class HunyuanTtRMSNorm(LightweightModule):
         # backbone runs bf8 matmul weights (mixed precision — see MEMORY_FIT_PLAN.md).
         if weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
             weight_dtype = ttnn.bfloat16
-        self._norm = RMSNorm(
+        self._norm = LayerNorm(
             device=device,
             dim=dim,
             state_dict=state_dict,
             weight_key=key,
+            norm_type=LayerNormTypes.RMSNORM,
             layer_num=None,
             eps=eps,
             weight_dtype=weight_dtype,

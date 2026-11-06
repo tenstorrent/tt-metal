@@ -16,9 +16,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 
 
 def argmax_last(logits):
@@ -367,11 +367,12 @@ class Qwen36MTP:
 
     def _make_norm(self, state_dict, weight_key, cache, ag_key):
         """RMSNorm (zero-centered) wrapped in DistributedNorm under TP; plain RMSNorm otherwise."""
-        norm = RMSNorm(
+        norm = LayerNorm(
             device=self.device,
             dim=self.args.dim,
             state_dict=state_dict,
             weight_key=weight_key,
+            norm_type=LayerNormTypes.RMSNORM,
             state_dict_prefix="mtp.",
             weight_cache_path=cache,
             weight_dtype=ttnn.bfloat16,

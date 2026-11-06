@@ -6,8 +6,13 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.ttt_compat.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
-from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.ccl import (
+    tt_distributed_layernorm,
+    tt_distributed_rmsnorm,
+    tt_sharded_distributed_layernorm,
+    tt_sharded_distributed_rmsnorm,
+)
+from models.ttt_compat.tt.common import LayerNormTypes, Mode
 
 
 def galaxy_distributed_norm_core_grid(dim: int) -> tuple[int, int]:
@@ -62,7 +67,7 @@ class DistributedNorm(LightweightModule):
     def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
         if norm is None and TG:
             raise NotImplementedError("Gather-only DistributedNorm (norm=None) is not supported on Galaxy (TG)")
-        self.norm = norm
+        self.norm_type = norm.norm_type
         self.args = args
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
@@ -115,18 +120,39 @@ class DistributedNorm(LightweightModule):
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
 
         if self.TG:
-            if mode == Mode.DECODE:
-                return tt_sharded_distributed_rmsnorm(
+            # The Galaxy path bypasses norm.forward(), so pick the CCL helper to match.
+            if self.norm_type == LayerNormTypes.LAYERNORM:
+                if mode == Mode.DECODE:
+                    return tt_sharded_distributed_layernorm(
+                        x,
+                        epsilon=self.norm.eps,
+                        gamma=self.norm.weight_distributed,
+                        mesh_device=self.args.mesh_device,
+                        tt_ccl=self.tt_ccl,
+                        ln_sharded_input_memcfg=self.gather_in_mem_cfg,
+                        ln_sharded_progcfg=self.ln_prg_cfg,
+                        ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    )
+                return tt_distributed_layernorm(
                     x,
                     epsilon=self.norm.eps,
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
                     tt_ccl=self.tt_ccl,
-                    ln_sharded_input_memcfg=self.gather_in_mem_cfg,
-                    ln_sharded_progcfg=self.ln_prg_cfg,
-                    ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    compute_kernel_config=self.ln_cfg,
                 )
             else:
+                if mode == Mode.DECODE:
+                    return tt_sharded_distributed_rmsnorm(
+                        x,
+                        epsilon=self.norm.eps,
+                        gamma=self.norm.weight_distributed,
+                        mesh_device=self.args.mesh_device,
+                        tt_ccl=self.tt_ccl,
+                        ln_sharded_input_memcfg=self.gather_in_mem_cfg,
+                        ln_sharded_progcfg=self.ln_prg_cfg,
+                        ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    )
                 return tt_distributed_rmsnorm(
                     x,
                     epsilon=self.norm.eps,
