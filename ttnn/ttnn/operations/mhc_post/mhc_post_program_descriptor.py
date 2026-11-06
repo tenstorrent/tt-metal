@@ -340,7 +340,7 @@ def create_program_descriptor(
         row_start, row_end = (g_r * Rt) // R, ((g_r + 1) * Rt) // R
         c_start, c_end = (g_c * Ct) // Q, ((g_c + 1) * Ct) // Q
         num_rows, num_c = row_end - row_start, c_end - c_start
-        reader_rt[x][y] = [
+        reader_args = [
             input_tensor.buffer_address(),
             residual.buffer_address(),
             post.buffer_address(),
@@ -355,16 +355,18 @@ def create_program_descriptor(
             g_c,
             w_addr,
         ]
-        writer_rt[x][y] = [output_tensor.buffer_address(), row_start, num_rows, c_start, num_c, g_r, g_c, s_addr]
-        compute_rt[x][y] = [num_rows, num_c, g_c]
+        writer_args = [output_tensor.buffer_address(), row_start, num_rows, c_start, num_c, g_r, g_c, s_addr]
         if fused:
             base = g_r * Q
             grp = g_c // COMBINE_FANIN
             g0 = grp * COMBINE_FANIN
             members = [v for q in range(g0, min(Q, g0 + COMBINE_FANIN)) for v in phys(base + q)]
             leaders = [v for g in range(num_groups) for v in phys(base + g * COMBINE_FANIN)]
-            reader_rt[x][y] += members + leaders  # grants: to my group (leader) / to every leader (root)
-            writer_rt[x][y] += leaders  # my leader = leaders[grp]; roots = leaders[r % num_groups]
+            reader_args += members + leaders  # grants: to my group (leader) / to every leader (root)
+            writer_args += leaders  # my leader = leaders[grp]; roots = leaders[r % num_groups]
+        reader_rt[x][y] = reader_args
+        writer_rt[x][y] = writer_args
+        compute_rt[x][y] = [num_rows, num_c, g_c]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
