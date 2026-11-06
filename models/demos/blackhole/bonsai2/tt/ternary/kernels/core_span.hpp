@@ -10,7 +10,13 @@
 #endif
 
 FORCE_INLINE uint32_t core_index(uint32_t grid_x) {
+#ifdef RX_INFO
+    // the decode weight stream's receiver layout (bonsai2/tt/stream/stream.py): this core's receiver index
+    (void)grid_x;
+    return reinterpret_cast<volatile uint32_t*>(RX_INFO)[0];
+#else
     return (uint32_t)get_absolute_logical_y() * grid_x + (uint32_t)get_absolute_logical_x();
+#endif
 }
 
 // Output tiles [first, first + n) of this core: Nt tiles in units of `unit` tiles, split as evenly as possible with

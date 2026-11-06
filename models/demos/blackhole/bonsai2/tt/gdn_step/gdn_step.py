@@ -13,7 +13,7 @@ import struct
 import torch
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_range_crs
+from models.demos.blackhole.bonsai2.tt.core_ranges import core_xy, row_major_range_crs
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/gdn_step/kernels/"
 # the reader kernel on both data-movement RISCs, each issuing part of the small reads (BONSAI_STEP_SPLIT=0: off)
@@ -84,7 +84,7 @@ class GDNStep:
         )  # L1: the out projection's fused rotation reads it while that op streams its weights
         grid = device.compute_with_storage_grid_size()
         f0 = self.first_core
-        coords = [ttnn.CoreCoord((f0 + j) % grid.x, (f0 + j) // grid.x) for j in range(nv)]
+        coords = [core_xy(f0 + j, grid.x) for j in range(nv)]
         crs = row_major_range_crs(f0, f0 + nv, grid.x)
         # One set of runtime args for all cores (each kernel finds its head from its core index): per-core args
         # cost the dispatcher one write per core per kernel.

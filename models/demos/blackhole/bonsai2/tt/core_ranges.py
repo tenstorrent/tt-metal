@@ -8,10 +8,70 @@ row-major order are at most two rectangles (the full rows, then the partial row)
 
 import ttnn
 
+_LAYOUT = None  # receiver order (stream.py): core i is _LAYOUT[i] instead of (i % grid_x, i // grid_x)
+
+
+_DEFINES = []
+_GENERIC_OP = None
+
+
+def set_layout(order, defines=()):
+    """Place cores by `order` (a list of CoreCoord) instead of row-major, and add `defines` (the kernels' way to find
+    their place, e.g. stream.py RX_INFO) to every generic_op kernel; None: row-major again."""
+    global _LAYOUT, _DEFINES, _GENERIC_OP
+    _LAYOUT = list(order) if order is not None else None
+    _DEFINES = list(defines) if order is not None else []
+    if _GENERIC_OP is None:
+        _GENERIC_OP = ttnn.generic_op
+
+        def generic_op(tensors, program, *args, **kwargs):
+            if _DEFINES:
+                for k in program.kernels:
+                    have = {d[0] for d in k.defines}
+                    k.defines = list(k.defines) + [d for d in _DEFINES if d[0] not in have]
+            return _GENERIC_OP(tensors, program, *args, **kwargs)
+
+        ttnn.generic_op = generic_op
+
+
+def core_xy(i: int, grid_x: int) -> ttnn.CoreCoord:
+    if _LAYOUT is not None:
+        return _LAYOUT[i]
+    return ttnn.CoreCoord(i % grid_x, i // grid_x)
+
+
+def rects(cores) -> ttnn.CoreRangeSet:
+    """Cells as rectangles: runs along each row, then equal runs of adjacent rows merged."""
+    rows = {}
+    for c in cores:
+        rows.setdefault(c.y, []).append(c.x)
+    runs = []  # (y, x0, x1)
+    for y in sorted(rows):
+        xs = sorted(rows[y])
+        start = prev = xs[0]
+        for x in xs[1:] + [None]:
+            if x is not None and x == prev + 1:
+                prev = x
+                continue
+            runs.append((y, start, prev))
+            if x is not None:
+                start = prev = x
+    merged = []  # [x0, x1, y0, y1]
+    for y, x0, x1 in runs:
+        for m in merged:
+            if m[0] == x0 and m[1] == x1 and m[3] == y - 1:
+                m[3] = y
+                break
+        else:
+            merged.append([x0, x1, y, y])
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(a, c), ttnn.CoreCoord(b, d)) for a, b, c, d in merged])
+
 
 def row_major_crs(n: int, grid_x: int) -> ttnn.CoreRangeSet:
     """Cores 0 .. n - 1, core c at (c % grid_x, c // grid_x), as at most two rectangles."""
     assert n > 0
+    if _LAYOUT is not None:
+        return rects(_LAYOUT[:n])
     rows, rest = divmod(n, grid_x)
     ranges = []
     if rows:
@@ -44,6 +104,8 @@ def virtual_rects(device, crs):
 def row_major_range_crs(first: int, last: int, grid_x: int) -> ttnn.CoreRangeSet:
     """Cores first .. last - 1 (row-major, grid_x wide) as at most three rectangles."""
     assert last > first
+    if _LAYOUT is not None:
+        return rects(_LAYOUT[first:last])
     ranges, c = [], first
     while c < last:
         y, x = divmod(c, grid_x)

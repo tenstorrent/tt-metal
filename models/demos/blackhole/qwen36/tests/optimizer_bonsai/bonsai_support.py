@@ -92,6 +92,9 @@ def build_model(device, n_layers=None):
 
             swap_in_ternary_mlp(model)
     page_table = torch.arange(NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
+    if os.environ.get("BONSAI_MEMVIEW") == "1":
+        mv = ttnn.get_memory_view(device, ttnn.BufferType.DRAM)
+        print("MEMVIEW", {a: getattr(mv, a) for a in dir(mv) if not a.startswith("_")}, flush=True)
     return model, page_table
 
 

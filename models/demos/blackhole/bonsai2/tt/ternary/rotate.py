@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
+from models.demos.blackhole.bonsai2.tt.core_ranges import core_xy, row_major_crs
 from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import hadamard
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/ternary/kernels/"
@@ -58,7 +58,7 @@ class DecodeRotation:
         device, K, B, C = self.device, self.K, self.B, self.copies
         out = _xr_alloc(device, K, C)
         grid = device.compute_with_storage_grid_size()
-        coords = [ttnn.CoreCoord(b % grid.x, b // grid.x) for b in range(B)]
+        coords = [core_xy(b, grid.x) for b in range(B)]
         crs = row_major_crs(len(coords), grid.x)
 
         def cb(index, fmt, page, pages):
@@ -153,7 +153,7 @@ class DecodeRotation:
 
         B, K = self.B, self.K
         crs = row_major_range_crs(first, first + B, grid_x)
-        coords = [ttnn.CoreCoord(c % grid_x, c // grid_x) for c in range(first, first + B)]
+        coords = [core_xy(c, grid_x) for c in range(first, first + B)]
         cbm = self.FUSED_CBS
 
         def cb(index, fmt, page, pages):
@@ -276,7 +276,7 @@ class NormRotation:
         bf, f32 = ttnn.bfloat16, ttnn.float32
         noc_xy = []  # the B cores' NOC coordinates: each sends its sum-of-squares partial to the others
         for c in range(B):
-            v = device.worker_core_from_logical_core(ttnn.CoreCoord(c % grid.x, c // grid.x))
+            v = device.worker_core_from_logical_core(core_xy(c, grid.x))
             noc_xy += [v.x, v.y]
         rd_ct = (
             ttnn.TensorAccessorArgs(x).get_compile_time_args()
@@ -367,7 +367,7 @@ class NormRotation:
         bf, f32 = ttnn.bfloat16, ttnn.float32
         noc_xy = []
         for c in range(first, first + P):
-            v = device.worker_core_from_logical_core(ttnn.CoreCoord(c % grid_x, c // grid_x))
+            v = device.worker_core_from_logical_core(core_xy(c, grid_x))
             noc_xy += [v.x, v.y]
         xnt = u
         defs = [(k, str(v)) for k, v in cbm.items()] + [("NR_FIRST", str(first)), ("NR_BPC", str(bpc))]

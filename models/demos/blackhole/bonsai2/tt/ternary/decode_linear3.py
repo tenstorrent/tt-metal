@@ -15,7 +15,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs, virtual_rects
+from models.demos.blackhole.bonsai2.tt.core_ranges import core_xy, row_major_crs, virtual_rects
 from models.demos.blackhole.bonsai2.tt.ternary.pack import TILE, pack_ternary_tiles
 
 KBLOCK = 128
@@ -150,7 +150,9 @@ class TernaryDecodeLinear3:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         grid = device.compute_with_storage_grid_size()
-        return cls(K, N, w, None, cores or grid.x * grid.y, False, True, True, ppr)
+        lin = cls(K, N, w, None, cores or grid.x * grid.y, False, True, True, ppr)
+        lin.rec_host = rec  # for stream_pages
+        return lin
 
     @classmethod
     def from_host(cls, device, t_kn, s_nb, cores=None, scale_fp32=False, group16=False, inline_scales=False):
@@ -201,6 +203,7 @@ class TernaryDecodeLinear3:
         out_l1=False,
         stage=None,
         x_local=False,
+        stream=None,
     ):
         """stage: this linear's weights already copied into L1 by stage_kernels(stage) in an earlier op.
         split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
@@ -271,11 +274,13 @@ class TernaryDecodeLinear3:
         # 125.8 -> 119.2)
         per = -(-(Nt // unit) // min(self.cores, Nt // unit))
         cores = -(-(Nt // unit) // per)
+        if getattr(self, "spread", False):  # every core (weight stream: each sender's receivers all take part)
+            cores = min(self.cores, Nt // unit)
         base, extra = divmod(Nt // unit, cores)
         coords, spans, start = [], [], 0
         for c in range(cores):
             n = unit * (base + (1 if c < extra else 0))
-            coords.append(ttnn.CoreCoord(c % grid.x, c // grid.x))
+            coords.append(core_xy(c, grid.x))
             spans.append((start, n))
             start += n
         crs = row_major_crs(cores, grid.x)  # rectangles: one range per core costs ~50 us per launch
@@ -332,6 +337,13 @@ class TernaryDecodeLinear3:
             rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             dm_defines = list(dm_defines) + [("COMMON_ARGS", "1")]
             extra_defines = list(extra_defines) + [("COMMON_ARGS", "1")]
+        if stream is not None:
+            # weights from the weight-stream ring (bonsai2/tt/stream; this linear's pages added to its Plan)
+            assert COMMON_ARGS and self.inline_scales and not getattr(self, "page_split", PAGE_SPLIT)
+            sd = [("W_STREAM", "1"), ("STREAM_ARG", str(len(rd_c)))] + stream.defines()
+            dm_defines = list(dm_defines) + sd
+            extra_defines = list(extra_defines) + stream.defines()
+            rd_c = rd_c + stream.consumer_args()
         if stage is not None:
             assert COMMON_ARGS
             dm_defines = list(dm_defines) + [
@@ -356,7 +368,7 @@ class TernaryDecodeLinear3:
             rotation, rx, ru, rsig = rot
             spare = grid.x * grid.y - cores  # a NormRotation spreads its blocks over these; a DecodeRotation needs B
             assert spare > 0 and (spare >= rotation.B or hasattr(rotation, "eps")), (cores, rotation.B)
-            hub = device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
+            hub = device.worker_core_from_logical_core(core_xy(0, grid.x))
             rkern, rcbs, rins, rsems = rotation.fused_parts(
                 rx, ru, rsig, cores, grid.x, (hub.x, hub.y), xl1.buffer_address(), spare=spare
             )
@@ -433,6 +445,8 @@ class TernaryDecodeLinear3:
         """(cores, max output tiles per core) of __call__'s split (unit 1)."""
         Nt = self.N // TILE
         per = -(-Nt // min(self.cores, Nt))
+        if getattr(self, "spread", False):
+            return min(self.cores, Nt), per
         return -(-Nt // per), per
 
     def alloc_stage(self, device):
@@ -470,6 +484,19 @@ class TernaryDecodeLinear3:
             )
             for parity in (0, 1)
         ]
+
+    def stream_pages(self, device):
+        """{receiver index: this linear's 4-KB record pages it reads} (for stream.Plan.add), as __call__ splits it."""
+        rec = np.asarray(self.rec_host).reshape(-1, 1024)
+        cores, _ = self._cores(device)
+        Nt = self.N // TILE
+        base, extra = divmod(Nt, cores)
+        out, start = {}, 0
+        for c in range(cores):
+            n = base + (1 if c < extra else 0)
+            out[c] = rec[start * self.ppr : (start + n) * self.ppr]
+            start += n
+        return out
 
     def rotated(
         self,

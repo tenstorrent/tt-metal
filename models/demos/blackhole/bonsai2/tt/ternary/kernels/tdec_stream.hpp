@@ -146,6 +146,87 @@ FORCE_INLINE void stream_records(
     noc_async_read_set_trid(0);
 }
 
+#ifdef W_STREAM
+#include "../../stream/kernels/rx_stream.hpp"
+// W_STREAM: this core's records come from its weight-stream ring (stream.py), in order, RX_SLOT / 4096 pages per slot
+// (the last slot padded); the reader takes them all, record i into cb0 (even i) or cb1 (odd i), as the two RISCs'
+// DRAM streams would. x_cb / hub: as stream_records.
+template <uint32_t ppr>
+FORCE_INLINE void stream_ring(
+    uint32_t cb0,
+    uint32_t cb1,
+    uint32_t num_nt,
+    uint32_t ring,
+    uint32_t rcount,
+    uint32_t freed,
+    uint32_t x_cb = 0xFFFFFFFFu,
+    uint32_t x_pages = 0,
+    uint32_t r_cb = 0xFFFFFFFFu,
+    uint32_t r_pages = 0,
+    XHub* hub = nullptr) {
+    constexpr uint32_t PAGE = 4096, CBP = PAGE / 256, PPS = RX_SLOT / PAGE;
+    RxRing rx = rx_open(ring, rcount, freed);
+    const uint32_t pages = num_nt * ppr;
+    for (uint32_t q0 = 0; q0 < pages; q0 += PPS) {
+        while (!rx_ready(rx)) {
+            if (hub != nullptr && !hub->done) {
+                xhub_poll(*hub, false);
+            }
+        }
+        const uint32_t src = rx.ring + (rx.c % RX_RING_SLOTS) * RX_SLOT;
+        const uint32_t n = pages - q0 < PPS ? pages - q0 : PPS;
+        // the slot's pages: one read per page, one barrier; a CB's pages in one slot belong to one record, so they
+        // are contiguous from its write pointer (records start at a half of the two-record CB)
+        uint32_t cnt[2] = {0, 0};
+        for (uint32_t k = 0; k < n; ++k) {
+            const uint32_t q = q0 + k;
+            const uint32_t side = (q / ppr) & 1;
+            const uint32_t cb = side ? cb1 : cb0;
+            if (hub != nullptr && !hub->done) {
+                while (!cb_pages_reservable_at_back(cb, (cnt[side] + 1) * CBP)) {
+                    xhub_poll(*hub, false);
+                    if (hub->done) {
+                        break;
+                    }
+                }
+            }
+            cb_reserve_back(cb, (cnt[side] + 1) * CBP);
+            noc_async_read(get_noc_addr(src + k * PAGE), get_write_ptr(cb) + cnt[side] * PAGE, PAGE);
+            ++cnt[side];
+        }
+        noc_async_read_barrier();
+        if (cnt[0]) {
+            cb_push_back(cb0, cnt[0] * CBP);
+        }
+        if (cnt[1]) {
+            cb_push_back(cb1, cnt[1] * CBP);
+        }
+        rx_release(rx);
+        if (x_cb != 0xFFFFFFFFu) {  // x' (and the residual) issued by the caller: landed with the first slot
+            cb_push_back(x_cb, x_pages);
+            if (r_cb != 0xFFFFFFFFu) {
+                cb_push_back(r_cb, r_pages);
+            }
+            x_cb = 0xFFFFFFFFu;
+        }
+        if (hub != nullptr && !hub->done) {
+            xhub_poll(*hub, false);
+        }
+    }
+    if (hub != nullptr) {
+        xhub_poll(*hub, true);
+    }
+    if (x_cb != 0xFFFFFFFFu) {
+        noc_async_read_barrier();
+        cb_push_back(x_cb, x_pages);
+        if (r_cb != 0xFFFFFFFFu) {
+            cb_push_back(r_cb, r_pages);
+        }
+    }
+    rx_close(rx);
+}
+#endif
+
 // PAGE_SPLIT: the two RISCs take alternate 4-KB pages of this core's records (NCRISC the even ones, BRISC the odd
 // ones), so both stream for any number of output tiles per core (whole records by parity left one RISC idle on a
 // core with one tile: 285 GB/s). The compute walks the pages in order, alternating between c_1 and c_6.

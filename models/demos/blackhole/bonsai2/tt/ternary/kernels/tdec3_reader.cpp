@@ -115,6 +115,26 @@ void kernel_main() {
 #else
     const auto w = TensorAccessor(w_args, w_addr, 4096);
 #endif
+#ifdef W_STREAM
+    // the weights from this core's weight-stream ring (common args STREAM_ARG..: ring, rcount, freed array)
+    (void)w;
+#define RING_OR_DRAM(XCB, XP, RCB, RP, HUB)           \
+    stream_ring<ppr>(                                 \
+        tt::CBIndex::c_1,                             \
+        tt::CBIndex::c_6,                             \
+        num_nt,                                       \
+        get_common_arg_val<uint32_t>(STREAM_ARG),     \
+        get_common_arg_val<uint32_t>(STREAM_ARG + 1), \
+        get_common_arg_val<uint32_t>(STREAM_ARG + 3), \
+        XCB,                                          \
+        XP,                                           \
+        RCB,                                          \
+        RP,                                           \
+        HUB)
+#else
+#define RING_OR_DRAM(XCB, XP, RCB, RP, HUB) \
+    stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy, XCB, XP, RCB, RP, HUB)
+#endif
 #ifdef PAGE_SPLIT
     stream_pages<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0);
 #else
@@ -141,17 +161,17 @@ void kernel_main() {
 #endif
             false,
             false};
-        stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy, 0xFFFFFFFFu, 0, 0xFFFFFFFFu, 0, &hub);
+        RING_OR_DRAM(0xFFFFFFFFu, 0, 0xFFFFFFFFu, 0, &hub);
     }
 #elif defined(X_PAGED) && defined(INLINE_SCALES)
     // x' (and the residual) come from L1: start the weight stream at once, push them when they land
 #ifdef RESIDUAL
-    stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy, cb_x, Kt, tt::CBIndex::c_3, num_nt);
+    RING_OR_DRAM(cb_x, Kt, tt::CBIndex::c_3, num_nt, nullptr);
 #else
-    stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy, cb_x, Kt);
+    RING_OR_DRAM(cb_x, Kt, 0xFFFFFFFFu, 0, nullptr);
 #endif
 #else
-    stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy);
+    RING_OR_DRAM(0xFFFFFFFFu, 0, 0xFFFFFFFFu, 0, nullptr);
 #endif
 #endif
 }

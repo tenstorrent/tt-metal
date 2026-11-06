@@ -9,7 +9,7 @@ import struct
 import torch
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
+from models.demos.blackhole.bonsai2.tt.core_ranges import core_xy, row_major_crs
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/tprefill/kernels/"
 
@@ -126,7 +126,7 @@ def kv_shards(device, H, D):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                ttnn.CoreRangeSet({ttnn.CoreRange(core_xy(0, 1), core_xy(0, 1))}),
                 [32, D],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
