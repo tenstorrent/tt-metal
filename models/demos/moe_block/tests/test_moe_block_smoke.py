@@ -3,8 +3,11 @@
 
 """MoEBlock (models/demos/moe_block/tt/moe_block.py) end to end on an 8x4 Galaxy mesh: head -> dispatch -> experts +
 combine -> tail with the shared arena, on zero / uninitialized weights. Checks that the four ops plan, build and launch
-together (the arena spec accepted by the head and the combine, the output's shape) and reports the block's host time a
-forward on program-cache hits. No numerics (the ops' own tests check those bit-exact).
+together (the arena spec accepted by the head and the combine, the output's shape) and gates the block's host time a
+forward on program-cache hits: the median of op_checks.PERF_RUNS (5) runs, each the best of HOST_TRIES timings of
+HOST_CALLS forwards (few: the command queue never fills, so no forward waits on the device; the best of a few: a timing
+the host's other threads slowed - up to 2x on the Galaxy's host - is dropped), against smoke_perf_baselines.json (per machine; MOE_PERF_RECORD=1
+records it; not on the mock Galaxy). No numerics (the ops' own tests check those bit-exact).
 
 Needs an 8x4 Galaxy, or the mock Galaxy (plan, build and launch only):
 
@@ -14,6 +17,7 @@ blackhole_galaxy.yaml pytest models/demos/moe_block/tests/test_moe_block_smoke.p
 
 import importlib.util
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -23,10 +27,16 @@ import torch
 import ttnn
 from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
+from op_checks import PerfBaselines, median_of_runs  # noqa: E402
+
 R, C = 8, 4
 CHUNK = 5120
 ACCUMULATORS = 11  # (what the combine planner gives GLM-5.3 at 8x4, chunk 5120: the block derives it)
-CALLS = 20
+HOST_CALLS = 4  # (forwards a timing)
+HOST_TRIES = 3  # (timings a run: its best)
+HOST_MARGIN = 0.15  # (host time: noisier than device time)
+BASELINES = PerfBaselines(Path(__file__).with_name("smoke_perf_baselines.json"))
 REPO = Path(__file__).resolve().parents[4]
 MOCK = "blackhole_galaxy" in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", "")
 
@@ -105,14 +115,27 @@ def test_moe_block_smoke(mesh):
         y = block(x, weights)  # (a miss on every op)
         assert tuple(y.shape) == (1, 1, CHUNK // R, H // C), y.shape
         ttnn.deallocate(y)
-        block(x, weights)
-        ttnn.synchronize_device(mesh)
-        t0 = time.perf_counter()
-        for _ in range(CALLS):
-            ttnn.deallocate(block(x, weights))
-        us = (time.perf_counter() - t0) / CALLS * 1e6
-        ttnn.synchronize_device(mesh)
-        print(f"MoEBlock glm53 {R}x{C} chunk {CHUNK}: {us:.1f} us of host a forward (program-cache hits, untraced)")
+        ttnn.deallocate(block(x, weights))
+
+        def timing():
+            ttnn.synchronize_device(mesh)
+            t0 = time.perf_counter()
+            for _ in range(HOST_CALLS):
+                ttnn.deallocate(block(x, weights))
+            us = (time.perf_counter() - t0) / HOST_CALLS * 1e6
+            ttnn.synchronize_device(mesh)
+            return us
+
+        def host_us():
+            return min(timing() for _ in range(HOST_TRIES))
+
+        us, runs = median_of_runs(host_us)
+        print(
+            f"MoEBlock glm53 {R}x{C} chunk {CHUNK}: {us:.1f} us of host a forward (program-cache hits, untraced; "
+            f"median of {', '.join(f'{r:.0f}' for r in runs)})"
+        )
+        if not MOCK:
+            BASELINES.check(f"glm53 {R}x{C} {CHUNK} host a forward", us, HOST_MARGIN)
         experts.close()
     finally:
         res.release()

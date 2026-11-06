@@ -15,9 +15,9 @@ test_moe_block_accuracy: the block's output vs the model's host reference (rando
 test_moe_block_determinism: `calls` eager calls, then `calls` replays of a captured trace, every output bit-identical to
     the first - compared on the device, one scalar a chip read back (op_checks.DeterminismMarker). Runs with the
     combine's snap (q 2^-14): without it the combine's fp32 sums depend on the rows' arrival order.
-test_moe_block_perf: `calls` traced replays on the real-time program profiler, each op's device time (its slowest chip,
-    the median over the replays) no slower than the case's number + margin; a case without numbers logs what it measured
-    and skips.
+test_moe_block_perf: traced replays on the real-time program profiler, each op's device time (its slowest chip,
+    the median over op_checks.PERF_RUNS (5) replays) no slower than its baseline + margin; baselines in
+    moe_block_perf_baselines.json, per machine and case (MOE_PERF_RECORD=1 records them).
 
 4x4 cases run on half a Galaxy: TT_MESH_GRAPH_DESC_PATH (the sub-torus descriptor) and TT_VISIBLE_DEVICES set as for
 test_k3_moe_block's 4x4 runs. Kimi-K3 Weka cases need $KIMI_K3_CKPT and the golden trace ($KIMI_K3_GOLDEN_TRACE or the
@@ -25,7 +25,7 @@ default) - they skip without them, and fail in CI."""
 
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -51,8 +51,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests/ttnn/unit_te
 from op_checks import (  # noqa: E402
     BLOCK_OPS,
     DeterminismMarker,
+    PERF_RUNS,
     MeshBarrier,
-    assert_not_slower,
+    PerfBaselines,
     median_us,
     op_device_times,
     traced_op_device_times,
@@ -339,8 +340,7 @@ class BlockCase:
     weights: str = "random"  # "random" | "weka" (Kimi-K3: the layer's real weights, the golden trace's activations)
     layer: int = 1  # (weka: the model layer)
     pcc: Optional[float] = None  # (None: the model's floor; weka: K3_GOLDEN_PCC)
-    perf_us: dict = field(default_factory=dict)  # op -> expected traced device us (slowest chip); empty: report only
-    perf_margin: float = 0.05
+    perf_margin: float = 0.05  # (the baselines: moe_block_perf_baselines.json)
     calls: int = 10
     # a padded chunk (actual_start, actual_end): main's chunked-prefill metadata - the chunk's real tokens, in main's
     # rotated layout over the SP rows (chunk_layout.rotated_chunk_positions); None: every row real
@@ -562,6 +562,9 @@ def test_moe_block_determinism(case, mesh_device, device_params):
     det.assert_identical(f"{case.id}: {case.calls} eager calls + {case.calls} traced replays")
 
 
+BASELINES = PerfBaselines(Path(__file__).with_name("moe_block_perf_baselines.json"))
+
+
 def _spread(t):
     """{op: [ns]} -> 'op median (min-max) us | ...'"""
     return " | ".join(
@@ -579,7 +582,7 @@ def test_moe_block_perf(case, mesh_device, device_params):
     ttnn.deallocate(run())  # (weights, programs)
 
     def eager():
-        for _ in range(case.calls):
+        for _ in range(PERF_RUNS):
             ttnn.deallocate(run())
 
     # (eager, logged only: a chip's program that starts late on host dispatch shows the wait as device time)
@@ -600,13 +603,12 @@ def test_moe_block_perf(case, mesh_device, device_params):
     run()
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)  # (a warm replay)
-    t = traced_op_device_times(mesh_device, tid, case.calls)
+    t = traced_op_device_times(mesh_device, tid, PERF_RUNS)
     ttnn.release_trace(mesh_device, tid)
     if barrier is not None:
         barrier.close()
     measured = {op: median_us(t[op]) for op in BLOCK_OPS}
     logger.info(f"PERF {case.id} traced: " + _spread(t))
-    if not case.perf_us:
-        pytest.skip(f"{case.id}: no expected device times yet - measured {measured}")
-    for op, expected in case.perf_us.items():
-        assert_not_slower(f"{case.id} {op}", measured[op], expected, case.perf_margin)
+    for op in BLOCK_OPS:
+        if t[op]:  # (an op the block did not run: none)
+            BASELINES.check(f"{case.id} {op}", measured[op], case.perf_margin)

@@ -17,7 +17,7 @@ module: the experts packed and converted to bfp4, the reference's bfp4-grid copi
 inputs, x); every test reopens the mesh and only uploads them. 4x4 cases run on half a Galaxy, set up as the block
 tests' 4x4 runs; a case whose block needs token loops is skipped (one head call a chunk here)."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import pytest
 import torch
 from loguru import logger
@@ -34,7 +34,7 @@ mb = ttnn.experimental.moe_block
 fw = flat_weights_module()
 
 SNAP = 2.0**-14
-CALLS = 10  # (determinism / perf calls)
+CALLS = 10  # (determinism calls; perf: op_checks.PERF_RUNS)
 SAMPLE = 64  # tokens a chip checked against torch
 PCC = 0.99
 ROUTINGS = ("uniform", "zipf")
@@ -46,8 +46,7 @@ class Case:
     model: str  # test_moe_block_models.MODELS key
     mesh: str = "8x4"  # test_moe_block_models.MESHES key
     chunk: int = 5120
-    perf_us: dict = field(default_factory=dict)  # routing -> expected traced device us (slowest chip); empty: report
-    perf_margin: float = 0.05
+    perf_margin: float = 0.05  # (the baselines: experts_combine_perf_baselines.json)
     seed: int = 5
 
     @property

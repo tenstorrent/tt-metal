@@ -10,12 +10,18 @@ program profiler (no Tracy build, no CSVs).
   the end (tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py test_sparse_sdpa_determinism's pattern).
 * op_device_times: the device time of each op of a run, the op found by a path in its kernels' sources (the programs a
   run dispatches, merged over the chips: the slowest chip's time).
-* assert_not_slower: a perf gate that fails on a slowdown past the margin and only reports a speedup."""
+* assert_not_slower: a perf gate that fails on a slowdown past the margin and only reports a speedup.
+* PERF_RUNS / PerfBaselines: every perf number is the median of PERF_RUNS (5) measurements, checked against its
+  baseline in a JSON file beside the test, keyed by the machine (ttnn.cluster.get_cluster_type()) and a label;
+  MOE_PERF_RECORD=1 writes the measured medians as the baselines instead of checking them."""
 
+import json
 import os
 import statistics
 import sys
 from pathlib import Path
+
+import pytest
 
 from loguru import logger
 
@@ -164,10 +170,66 @@ def median_us(ns_list):
     return statistics.median(ns_list) / 1e3 if ns_list else float("nan")
 
 
-def assert_not_slower(label: str, measured_us: float, expected_us: float, margin: float):
-    """Fails past expected * (1 + margin); a run faster than expected * (1 - margin) passes with a note to re-baseline."""
-    upper, lower = expected_us * (1 + margin), expected_us * (1 - margin)
-    logger.info(f"PERF {label}: {measured_us:.1f} us (expected {expected_us:.1f} +{margin:.0%})")
+# Absolute slack on top of the relative margin: a short op's run-to-run spread is a few us whatever its length (GLM 8x4
+# 10240's ~80 us tail: 78 - 86 us between runs), which a 5% margin alone does not hold.
+SLACK_US = 10.0
+
+
+def assert_not_slower(label: str, measured_us: float, expected_us: float, margin: float, slack_us: float = SLACK_US):
+    """Fails past expected * (1 + margin) + slack_us; a run faster than expected * (1 - margin) - slack_us passes with
+    a note to re-baseline."""
+    upper, lower = expected_us * (1 + margin) + slack_us, expected_us * (1 - margin) - slack_us
+    logger.info(f"PERF {label}: {measured_us:.1f} us (expected {expected_us:.1f} +{margin:.0%} +{slack_us:.0f} us)")
     assert measured_us <= upper, f"{label}: {measured_us:.1f} us is slower than {upper:.1f} us"
     if measured_us < lower:
         logger.warning(f"PERF {label}: {measured_us:.1f} us is faster than {lower:.1f} us - lower the baseline")
+
+
+# Every perf measurement: the median of this many runs (traced replays, eager calls or host-timed repetitions).
+PERF_RUNS = 5
+RECORD = os.environ.get("MOE_PERF_RECORD", "0") == "1"
+
+
+def machine() -> str:
+    """The baselines' machine key: the cluster type (BLACKHOLE_GALAXY, P150_X8 (LoudBox), ...)."""
+    try:
+        return str(ttnn.cluster.get_cluster_type()).split(".")[-1]
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+class PerfBaselines:
+    """Perf baselines in a JSON file: {machine: {label: us}}. check() gates a measured median against its baseline
+    (assert_not_slower); with MOE_PERF_RECORD=1 it stores the measurement instead. A label without a baseline on this
+    machine fails - every perf case carries one (record it on the machine the test runs on)."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def _load(self) -> dict:
+        return json.loads(self.path.read_text()) if self.path.exists() else {}
+
+    def expected(self, label: str):
+        return self._load().get(machine(), {}).get(label)
+
+    def check(self, label: str, measured_us: float, margin: float = 0.05, slack_us: float = SLACK_US):
+        if RECORD:
+            data = self._load()
+            data.setdefault(machine(), {})[label] = round(float(measured_us), 1)
+            data = {m: dict(sorted(v.items())) for m, v in sorted(data.items())}
+            self.path.write_text(json.dumps(data, indent=1) + "\n")
+            logger.info(f"PERF {label}: {measured_us:.1f} us recorded as the {machine()} baseline in {self.path.name}")
+            return
+        expected = self.expected(label)
+        if expected is None:
+            pytest.fail(
+                f"no {machine()} baseline for {label} in {self.path.name}: measured {measured_us:.1f} us "
+                "(MOE_PERF_RECORD=1 records it)"
+            )
+        assert_not_slower(label, measured_us, expected, margin, slack_us)
+
+
+def median_of_runs(measure, runs: int = PERF_RUNS):
+    """measure() run `runs` times: (median, every run's value) - for numbers measured a run at a time (host time)."""
+    values = [measure() for _ in range(runs)]
+    return statistics.median(values), values

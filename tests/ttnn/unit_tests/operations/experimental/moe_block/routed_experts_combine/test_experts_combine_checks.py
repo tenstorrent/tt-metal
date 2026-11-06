@@ -13,8 +13,8 @@ block_stages.py.
 * test_experts_combine_determinism: CALLS calls on the same inputs, bit-identical on the device.
 * test_experts_combine_reroute: routing A, then B, then A again on the same op and buffers - each right, and the second
   A bit-identical to the first (nothing of a call's routing left in the next).
-* test_experts_combine_perf: CALLS traced replays (a barrier ahead of the op in the trace: every chip starts it
-  together), the op's slowest chip, median; a case without a number logs what it measured and skips.
+* test_experts_combine_perf: PERF_RUNS (5) traced replays (a barrier ahead of the op in the trace: every chip starts
+  it together), the op's slowest chip, median, against its baseline in experts_combine_perf_baselines.json.
 """
 
 import sys
@@ -38,13 +38,15 @@ from block_stages import (  # noqa: E402
 from op_checks import (  # noqa: E402
     BLOCK_OPS,
     DeterminismMarker,
+    PERF_RUNS,
     MeshBarrier,
-    assert_not_slower,
+    PerfBaselines,
     median_us,
     traced_op_device_times,
 )
 
 OPS = {"routed_experts_combine": BLOCK_OPS["routed_experts_combine"]}
+BASELINES = PerfBaselines(Path(__file__).with_name("experts_combine_perf_baselines.json"))
 
 
 # ---------------------------------------------------------------------------------------------------- the tests
@@ -107,7 +109,7 @@ def test_experts_combine_perf(case, routing, mesh_device, device_params, host_we
         op()
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)  # (a warm replay)
-        t = traced_op_device_times(mesh_device, tid, CALLS, OPS)["routed_experts_combine"]
+        t = traced_op_device_times(mesh_device, tid, PERF_RUNS, OPS)["routed_experts_combine"]
         ttnn.release_trace(mesh_device, tid)
     finally:
         barrier.close()
@@ -115,6 +117,4 @@ def test_experts_combine_perf(case, routing, mesh_device, device_params, host_we
     us = median_us(t)
     label = f"experts + combine {case.id} {routing}"
     logger.info(f"PERF {label}: median {us:.1f} us (min {min(t) / 1e3:.1f}, max {max(t) / 1e3:.1f}) x{len(t)}")
-    if routing not in case.perf_us:
-        pytest.skip(f"no baseline for {label}: measured {us:.1f} us")
-    assert_not_slower(label, us, case.perf_us[routing], case.perf_margin)
+    BASELINES.check(label, us, case.perf_margin)

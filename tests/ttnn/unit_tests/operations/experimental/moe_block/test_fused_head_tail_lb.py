@@ -4,7 +4,7 @@
 each op on its own (no dispatch, no experts, no combine) - accuracy, determinism and device time, each its own test.
 
 A case is a model config (MODELS: GLM-5.3, Kimi-K3 - the block's dims, the host reference's activation) at a test
-config (the tokens a mesh row, 640 or 320: chunk = SP x that; the expected device times).
+config (the tokens a mesh row, 640 or 384: chunk = SP x that - a multiple of 32 x TP, the head's rows rule).
 
 fused_head, against torch on the same weights (the shared expert's on the bf8 grid, the router's bf16):
   * se: the shared expert's output (GLM: the owners' rows [S, H]; K3: the residual's layout [rows, H / TP]);
@@ -18,8 +18,9 @@ fused_tail, from random owner rows and shared-expert output:
   * K3 (engine): out = rmsnorm(y_own) * norm @ latent_up^T + se.
 Determinism: CALLS calls on the same inputs, float outputs folded on the device (op_checks.DeterminismMarker), the
 small integer outputs (routing rows, route words, plan tensors) compared on the host.
-Perf: CALLS traced replays on the real-time program profiler, the op's slowest chip, median; a case without a number
-logs what it measured and skips."""
+Perf: op_checks.PERF_RUNS (5) traced replays on the real-time program profiler, the op's slowest chip, median, against
+its baseline in fused_head_tail_perf_baselines.json (per machine: the LoudBox's, or a Galaxy's 2x4 tray;
+MOE_PERF_RECORD=1 records it)."""
 
 import importlib.util
 import sys
@@ -38,8 +39,9 @@ REPO = HERE.parents[5]
 sys.path.insert(0, str(HERE))
 from op_checks import (  # noqa: E402
     BLOCK_OPS,
+    PERF_RUNS,
     DeterminismMarker,
-    assert_not_slower,
+    PerfBaselines,
     median_us,
     traced_op_device_times,
 )
@@ -59,7 +61,8 @@ weights_py = _load(
 mb = ttnn.experimental.moe_block
 
 SP, TP = 2, 4
-CALLS = 10
+CALLS = 10  # (determinism calls; perf: PERF_RUNS)
+BASELINES = PerfBaselines(HERE / "fused_head_tail_perf_baselines.json")
 HEAD_OPS = {"fused_head": BLOCK_OPS["fused_head"]}
 TAIL_OPS = {"fused_tail": BLOCK_OPS["fused_tail"]}
 
@@ -113,9 +116,7 @@ MODELS = {
 class Case:
     model: str
     row_tokens: int  # tokens a mesh row (chunk = SP x row_tokens)
-    head_us: float | None = None
-    tail_us: float | None = None
-    margin: float = 0.05
+    margin: float = 0.05  # (the baselines: fused_head_tail_perf_baselines.json)
     seed: int = 3
 
     @property
@@ -127,7 +128,9 @@ class Case:
         return f"{self.model}-row{self.row_tokens}"
 
 
-CASES = [Case("glm53", 640), Case("glm53", 320), Case("k3", 640), Case("k3", 320)]
+# (Kimi-K3 is not a case: a latent model needs a torus axis (MoEBlockResources fails fast - on the plain 2D fabric its
+# first call hangs), and the LoudBox's 2x4 has none)
+CASES = [Case("glm53", 640), Case("glm53", 384)]
 
 
 def _payload(model):
@@ -408,15 +411,13 @@ def test_fused_head_perf(mesh_device, device_params, case):
         head()
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-        t = traced_op_device_times(mesh_device, tid, CALLS, HEAD_OPS)["fused_head"]
+        t = traced_op_device_times(mesh_device, tid, PERF_RUNS, HEAD_OPS)["fused_head"]
         ttnn.release_trace(mesh_device, tid)
     finally:
         head.close()
     us = median_us(t)
     logger.info(f"PERF fused_head {case.id}: median {us:.1f} us over {len(t)} replays")
-    if case.head_us is None:
-        pytest.skip(f"no fused_head baseline for {case.id}: measured {us:.1f} us")
-    assert_not_slower(f"fused_head {case.id}", us, case.head_us, case.margin)
+    BASELINES.check(f"fused_head {case.id}", us, case.margin)
 
 
 # ---------------------------------------------------------------------------------------------------- tail
@@ -506,13 +507,11 @@ def test_fused_tail_perf(mesh_device, device_params, case):
         out = tail()
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-        t = traced_op_device_times(mesh_device, tid, CALLS, TAIL_OPS)["fused_tail"]
+        t = traced_op_device_times(mesh_device, tid, PERF_RUNS, TAIL_OPS)["fused_tail"]
         ttnn.release_trace(mesh_device, tid)
         ttnn.deallocate(out)
     finally:
         tail.close()
     us = median_us(t)
     logger.info(f"PERF fused_tail {case.id}: median {us:.1f} us over {len(t)} replays")
-    if case.tail_us is None:
-        pytest.skip(f"no fused_tail baseline for {case.id}: measured {us:.1f} us")
-    assert_not_slower(f"fused_tail {case.id}", us, case.tail_us, case.margin)
+    BASELINES.check(f"fused_tail {case.id}", us, case.margin)

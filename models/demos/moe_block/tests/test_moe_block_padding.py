@@ -21,10 +21,13 @@ MOE_PAD_CHUNK=2560 runs it).
 
 MOE_PAD_CHUNK: the chunk (1280; 2560 fits too, 5120 not on the LoudBox's grid).
 test_padding_perf (TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1, TT_METAL_PROFILER_CPP_POST_PROCESS=1):
-the traced forward's device time with 40% real + identical padding, with / without the span, and fully real."""
+the traced forward's device time with 40% real + identical padding, with / without the span, and fully real - each the
+median of op_checks.PERF_RUNS (5) replays, the forward and each program against its baseline in
+padding_perf_baselines.json (per machine; MOE_PERF_RECORD=1 records them)."""
 
 import importlib.util
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,6 +36,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
+from op_checks import PERF_RUNS, PerfBaselines  # noqa: E402
+
+BASELINES = PerfBaselines(Path(__file__).with_name("padding_perf_baselines.json"))
 
 R, C = 2, 4
 CHUNK = int(os.environ.get("MOE_PAD_CHUNK", "1280"))
@@ -444,7 +452,7 @@ def test_padded_traced(setup):
 KERNEL_DURATION = "DEVICE KERNEL DURATION [ns]"
 
 
-def _device_us(s, rows, span, calls=15):
+def _device_us(s, rows, span, calls=PERF_RUNS):
     """Traced (no host gaps): the forward's device time a chip - its tail's end less its head's start, the same clock -
     max over chips, and each program's kernel time (max over chips); medians of calls replays. us."""
     mesh, block = s["mesh"], s["block"]
@@ -491,6 +499,9 @@ def test_padding_perf(setup):
         span, us = _device_us(s, rows, sp)
         parts = ", ".join(f"{n} {u:.1f}" for n, u in zip(names, us))
         logger.info(f"MOE_PAD (e) chunk {CHUNK}, {what}: forward {span:.1f} us a chip (traced); programs: {parts}")
+        BASELINES.check(f"chunk {CHUNK} {what}: forward", span, 0.05)
+        for n, u in zip(names, us):
+            BASELINES.check(f"chunk {CHUNK} {what}: {n}", u, 0.05)
 
     V = CHUNK * 2 // 5
     run("100% real, no span", s["base"], None)

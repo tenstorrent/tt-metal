@@ -9,8 +9,8 @@ device time the op is expected to take there.
 
 * test_flat_expert_accuracy: every routed row against a torch reference of the bfp4-quantized weights.
 * test_flat_expert_determinism: CALLS calls on the same inputs, bit-identical on the device (op_checks.DeterminismMarker).
-* test_flat_expert_perf: the op's device time from the real-time profiler (median over CALLS calls); with no baseline
-  for the case the test reports the measurement and skips.
+* test_flat_expert_perf: the op's device time from the real-time profiler (the median of op_checks.PERF_RUNS (5)
+  calls) against its baseline in flat_expert_perf_baselines.json (per machine; MOE_PERF_RECORD=1 records it).
 
 Weights: flat_cases.weight_sets (seeded random, N_W sets round-robin over the experts)."""
 
@@ -29,7 +29,7 @@ from models.common.utility_functions import comp_pcc
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[6]
 sys.path.insert(0, str(HERE.parent))
-from op_checks import DeterminismMarker, assert_not_slower, median_us, op_device_times  # noqa: E402
+from op_checks import PERF_RUNS, DeterminismMarker, PerfBaselines, median_us, op_device_times  # noqa: E402
 
 
 def _load(name, path):
@@ -46,8 +46,9 @@ weights_py = _load(
 )
 
 FLAT_OPS = {"flat_routed_expert": "moe_block/flat_routed_expert/device/kernels"}
-CALLS = 10
+CALLS = 10  # (determinism calls; perf: PERF_RUNS)
 PCC = 0.99
+BASELINES = PerfBaselines(HERE / "flat_expert_perf_baselines.json")
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -105,8 +106,7 @@ class FlatCase:
     stage: str  # flat_cases.STAGES key: the mesh the per-chip load is taken from
     chunk: int  # tokens a chunk (the capacity per expert: an expert can take every token)
     routing: str  # ROUTINGS key
-    perf_us: float | None = None  # expected device time (None: report only)
-    perf_margin: float = 0.05
+    perf_margin: float = 0.05  # (the baseline: flat_expert_perf_baselines.json)
     seed: int = 1
     marks: tuple = field(default=())
 
@@ -268,19 +268,17 @@ def test_flat_expert_perf(device, case):
     ttnn.deallocate(op(*args))  # (warm: program build)
 
     def run():
-        for _ in range(CALLS):
+        for _ in range(PERF_RUNS):
             ttnn.deallocate(op(*args))
 
     times = op_device_times(device, run, FLAT_OPS)
     t, other = times["flat_routed_expert"], times["other"]
     if other:
         logger.info(f"PERF {case.id}: {len(other)} other programs (the lead's), {sum(other) / 1e3:.0f} us in all")
-    # (the profiler window can also catch the warm call's record: keep the last CALLS)
-    assert len(t) >= CALLS, f"{case.id}: {len(t)} flat_routed_expert programs profiled, expected {CALLS}"
-    t = t[-CALLS:]
+    # (the profiler window can also catch the warm call's record: keep the last PERF_RUNS)
+    assert len(t) >= PERF_RUNS, f"{case.id}: {len(t)} flat_routed_expert programs profiled, expected {PERF_RUNS}"
+    t = t[-PERF_RUNS:]
     us = median_us(t)
     logger.info(f"PERF {case.id}: flat_routed_expert median {us:.1f} us (min {min(t) / 1e3:.1f}, max {max(t) / 1e3:.1f})")
     op.close()
-    if case.perf_us is None:
-        pytest.skip(f"no baseline for {case.id}: measured {us:.1f} us")
-    assert_not_slower(f"flat expert {case.id}", us, case.perf_us, case.perf_margin)
+    BASELINES.check(f"flat expert {case.id}", us, case.perf_margin)

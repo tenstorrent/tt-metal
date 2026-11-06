@@ -12,19 +12,23 @@ packings (test_moe_block_models.M3_PRODUCTION), timed two ways for each implemen
   combine / reduce-scatter), x [1, 1, S/SP, H] a chip (the layer's pre-MLP all-gather's output), bf4 experts
   (EXPERT_DTYPE's default), the padded chunks through its PrefillChunk padding config.
 
-Per case, CALLS calls back to back, one sync: the wall time a call (what a layer costs the pipeline - it counts overlap,
+Per case, runs of CALLS calls back to back, one sync each: the wall time a call (what a layer costs the pipeline - it counts overlap,
 e.g. TtMoe's shared expert beside its dispatch, and host dispatch) and each program group's device time a call (its
 slowest chip, grouped by the ttnn op directory its kernels come from):
 * eager, both (M3 runs its prefill untraced: TtPrefillRuntime.use_trace False - its shared-expert overlap switches the
   sub-device manager mid-forward, which a trace capture cannot hold: TT_FATAL, then the device is lost);
 * traced replays, the block only.
 TtMiniMaxMoE frees its input after dispatch (the layer's tensor in the model), so each TtMoe call takes its own copy,
-made before the timed calls. Report only: no gate.
+made before the timed calls. Every number is the median of op_checks.PERF_RUNS (5) runs (wall: runs of CALLS calls;
+device: single calls, each on its own profiler window); the wall and device times a call are gated against
+m3_moe_perf_baselines.json (per machine; MOE_PERF_RECORD=1 records them).
 Random weights, every expert distinct. Run as test_moe_block_models' 2x4 cases (its descriptor, one tray)."""
 
 import statistics
+import sys
 import time
 from collections import defaultdict
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -36,7 +40,13 @@ from models.common.utility_functions import is_blackhole
 from models.demos.moe_block.tests.test_moe_block_models import M3_PRODUCTION, MESHES, MODELS, _setup
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 
-CALLS = 10
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
+from op_checks import PERF_RUNS, PerfBaselines, median_of_runs  # noqa: E402
+
+CALLS = 10  # (calls a timed wall run)
+WALL_MARGIN, DEVICE_MARGIN = 0.10, 0.05
+EAGER_MARGIN = 0.20  # (eager numbers carry host dispatch: a program that waits on the host shows it as device time)
+BASELINES = PerfBaselines(Path(__file__).with_name("m3_moe_perf_baselines.json"))
 CASES = [c for c in M3_PRODUCTION]
 
 
@@ -58,14 +68,19 @@ def _traced(mesh_device, fn, label):
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     for _ in range(2):  # (warm replays)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-    t0 = time.perf_counter()
-    for _ in range(CALLS):
-        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
-    ttnn.synchronize_device(mesh_device)
-    wall = (time.perf_counter() - t0) / CALLS * 1e6
+
+    def wall_run():
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(CALLS):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - t0) / CALLS * 1e6
+
+    wall, _ = median_of_runs(wall_run)
     per = defaultdict(list)
     totals = []
-    for _ in range(CALLS):  # (each replay on its own profiler window: a trace's programs keep one runtime id)
+    for _ in range(PERF_RUNS):  # (each replay on its own profiler window: a trace's programs keep one runtime id)
         _, progs = profile_realtime_program_merged(
             mesh_device, lambda: ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
         )
@@ -86,26 +101,32 @@ def _traced(mesh_device, fn, label):
 
 
 def _eager(mesh_device, fn, make_arg, label):
-    """CALLS eager calls of fn(arg), each on its own arg made beforehand: (wall us a call, {group: device us a call})."""
-    args = [make_arg() for _ in range(CALLS)]
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter()
-    for a in args:
-        ttnn.deallocate(fn(a))
-    ttnn.synchronize_device(mesh_device)
-    wall = (time.perf_counter() - t0) / CALLS * 1e6
-    args = [make_arg() for _ in range(CALLS)]
-    ttnn.synchronize_device(mesh_device)
+    """Eager calls of fn(arg), each on its own arg made beforehand: (wall us a call: the median of PERF_RUNS runs of
+    CALLS calls, {group: device us a call}, device us a call: medians over PERF_RUNS single calls)."""
 
-    def run():
+    def wall_run():
+        args = [make_arg() for _ in range(CALLS)]
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
         for a in args:
             ttnn.deallocate(fn(a))
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - t0) / CALLS * 1e6
 
-    _, progs = profile_realtime_program_merged(mesh_device, run)
-    sums = defaultdict(float)
-    for e in progs.values():
-        sums[_group(e["kernel_sources"])] += e["duration_ns"] / 1e3 / CALLS
-    dev = sum(sums.values())
+    wall, _ = median_of_runs(wall_run)
+    per, totals = defaultdict(list), []
+    for _ in range(PERF_RUNS):
+        a = make_arg()
+        ttnn.synchronize_device(mesh_device)
+        _, progs = profile_realtime_program_merged(mesh_device, lambda: ttnn.deallocate(fn(a)))
+        one = defaultdict(float)
+        for e in progs.values():
+            one[_group(e["kernel_sources"])] += e["duration_ns"] / 1e3
+        for g, v in one.items():
+            per[g].append(v)
+        totals.append(sum(one.values()))
+    sums = {g: statistics.median(v) for g, v in per.items()}
+    dev = statistics.median(totals)
     logger.info(
         f"E2E {label} eager: wall {wall:.0f} us a call, device programs {dev:.0f} us | "
         + " | ".join(f"{g} {v:.0f}" for g, v in sorted(sums.items(), key=lambda kv: -kv[1]))
@@ -198,6 +219,10 @@ def test_m3_moe_e2e_perf(impl, case, mesh_device, device_params):
         fn, make_arg = (lambda x: mlp(x, chunks=chunks)), (lambda: ttnn.clone(x_tt))
     for _ in range(2):  # (weights, programs, the padding config)
         ttnn.deallocate(fn(make_arg()))
-    _eager(mesh_device, fn, make_arg, label)
+    wall, _, dev = _eager(mesh_device, fn, make_arg, label)
+    BASELINES.check(f"{label} eager wall", wall, EAGER_MARGIN)
+    BASELINES.check(f"{label} eager device", dev, EAGER_MARGIN)
     if impl == "moe_block":
-        _traced(mesh_device, run, label)
+        wall, _, dev, _ = _traced(mesh_device, run, label)
+        BASELINES.check(f"{label} traced wall", wall, WALL_MARGIN)
+        BASELINES.check(f"{label} traced device", dev, DEVICE_MARGIN)
