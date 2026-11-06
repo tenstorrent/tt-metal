@@ -109,24 +109,19 @@ void kernel_main() {
     generate_mask<dfb::mask, one>(one, ids_per_batch / 32, k - 1);
     // get random number
     dfb_rand.wait_front(1);
-    const CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
-    // Two elements of the random tile are independent integer digits in [0, 256] (floored on the
-    // SFPU; exact in BF16). A draw of exactly 256 (the inclusive upper endpoint, probability ~0)
-    // is clamped to 255 so both digits are 8-bit. The threshold is the lattice point
-    // (hi * 256 + lo) / 65536 in [0, 1 - 2^-16], uniform over 65536 equiprobable values.
-    // Elements 0 and 1 are the first two draws of the tile's first row: element 0 is lane 0 of
-    // rand_tile's first SFPU store, element 1 is lane 0 of its second store, which lands because
-    // rand() programs its dest address mode on every call. A dead low digit would collapse the
-    // threshold to hi / 256 and bring the 1/256 tail cutoff back
-    // (test_sampling_low_digit_reaches_the_tail).
-    constexpr uint32_t RAND_HI_ELEMENT = 0;
-    constexpr uint32_t RAND_LO_ELEMENT = 1;
-    constexpr float RAND_DIGIT_MAX = 255.0f;
-    constexpr float RAND_LATTICE_SCALE = 1.0f / 65536.0f;
-    float rand_hi = bf16_to_f32(rand_values[RAND_HI_ELEMENT]);
-    float rand_lo = bf16_to_f32(rand_values[RAND_LO_ELEMENT]);
-    rand_hi = rand_hi > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_hi;
-    rand_lo = rand_lo > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_lo;
+    const CoreLocalMem<volatile uint32_t> rand_values(dfb_rand.get_read_ptr());
+    // The random tile is now generated at full FP32 resolution, so a single element is the
+    // threshold directly: no bfloat16 grid, no 255/256 cap, no lattice assembly. Element 0 is
+    // the first draw of the tile's first row.
+    constexpr uint32_t RAND_ELEMENT = 0;
+    uint32_t rand_bits = rand_values[RAND_ELEMENT];
+    float rand_f;
+    __builtin_memcpy(&rand_f, &rand_bits, sizeof(float));
+    if (rand_f >= 1.0f) {
+        rand_f = 0.99999994f;  // largest float < 1.0f
+    } else if (rand_f < 0.0f) {
+        rand_f = 0.0f;
+    }
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
@@ -198,15 +193,18 @@ void kernel_main() {
         end_id_local_phase_1 = start_id_local_phase_1 + (kept_tokens - FACE_WIDTH);
     }
 
-    // Stochastic sampling in float32
-    const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
+    // Stochastic sampling in float32, compared on unnormalized cumulative mass:
+    // cum_sum_f repeats the top-p loop's additions, so it ends at cum_prob_f; comparing against
+    // rand_f * cum_prob_f avoids per-token division/reciprocal rounding that can leave a
+    // normalized CDF slightly below 1.0 and fall through to the first token.
+    const float threshold_f = rand_f * cum_prob_f;
     float cum_sum_f = 0.0f;
     uint32_t sampled_index = final_indices[local_indices[start_id_local_phase_0]];
     bool index_found = false;
 
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
-        cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
-        if (cum_sum_f > rand_f) {
+        cum_sum_f += bf16_to_f32(local_values[i]);
+        if (cum_sum_f > threshold_f) {
             sampled_index = final_indices[local_indices[i]];
             index_found = true;
             break;
@@ -214,8 +212,8 @@ void kernel_main() {
     }
     if (!index_found) {
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
-            cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
-            if (cum_sum_f > rand_f) {
+            cum_sum_f += bf16_to_f32(local_values[i]);
+            if (cum_sum_f > threshold_f) {
                 sampled_index = final_indices[local_indices[i]];
                 break;
             }

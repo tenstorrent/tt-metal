@@ -34,13 +34,12 @@ void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb_id));
 
-    // The random threshold reaches the writer as BF16 (8-bit mantissa), which near 1.0 means
-    // ~1/256 resolution: tokens whose cumulative slice lies in the last 0.4% of the mass could
-    // never be drawn and the rest of the tail was under-sampled (unit test
-    // test_sampling_distribution.py). Each element is drawn in [0, 256] and FLOORED on the SFPU
-    // before packing, so every element is an exact integer digit 0..256 in BF16 (integers up to
-    // 256 are exact). The writer combines two such digits into a 16-bit lattice threshold.
-    constexpr uint32_t rand_scale = 0x43800000U;  // 256.0f
+    // The random threshold is generated at full FP32 resolution: rand_tile fills the tile with
+    // uniform floats in [0, 1) and packs them into a Float32 circular buffer, so the writer
+    // compares the FP32 cumulative probability against an FP32 threshold (no bfloat16 grid, no
+    // 255/256 cap). Keeping the threshold in Float32 is what lets tail tokens be drawn at their
+    // true probability.
+    constexpr uint32_t rand_scale = 0x3f800000U;  // 1.0f
     constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {
@@ -50,8 +49,6 @@ void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     tile_regs_acquire();
     rand_tile(0, rand_from, rand_scale);
-    rounding_op_tile_init();
-    floor_tile(0);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, dfb_id, 0);
