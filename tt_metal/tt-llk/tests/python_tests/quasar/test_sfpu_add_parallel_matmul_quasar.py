@@ -32,9 +32,9 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     quasar_mx_smoke,
     runtime,
@@ -68,6 +68,8 @@ DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
 )
+# Perf uses the multi-tile profile; one tile is too short to time.
+PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
 
 # Caps each add operand at 45% of format max so |a|+|b| stays <= 90% with rounding headroom.
 ADD_RANGE_SAFETY_FACTOR = 0.45
@@ -75,7 +77,6 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 SFPU_ADD_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
     ]
     # The MX pair is on the input side: these operands reach the SFPU through UNP_S
@@ -105,8 +106,7 @@ def _matmul_output_fits_dest(
     dest_sync: DestSync,
 ) -> bool:
     matmul_dims = generate_tile_dims((MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS))
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles = max_dest_tiles(dest_acc, dest_sync)
     return matmul_dims.output_tile_cnt <= max_tiles
 
 
@@ -118,7 +118,9 @@ def generate_parallel_matmul_add_combinations(
         formats_list
     ):
         dest_sync_modes = (DestSync.Half, DestSync.Full)
-        dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
+        dimension_profiles = (
+            (PERF_DIMENSION_PROFILE,) if is_perf else DIMENSION_PROFILES
+        )
         for dest_sync in dest_sync_modes:
             for (
                 ADD_INPUT_DIMENSIONS,

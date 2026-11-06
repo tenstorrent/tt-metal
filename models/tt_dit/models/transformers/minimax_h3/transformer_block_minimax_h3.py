@@ -358,7 +358,7 @@ class MiniMaxH3TransformerBlock(Module):
         # Async only supports Ring topology"), so a line-cabled mesh has to take the unfused path
         # below. Gated here rather than left to fail, because the assert fires on the first denoise
         # step of the first request -- long after warmup reports the model loaded.
-        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
+        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2]) if self.use_fused_agmm else None
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
         # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
         # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole

@@ -13,6 +13,10 @@ void kernel_main() {
     std::uint32_t addr = get_arg(args::address);
     std::uint32_t value = get_arg(args::value);
 
+#ifdef ARCH_QUASAR
+    // invalidate_l1_cache() is a no-op on Quasar DM cores, so read the host's write through the uncached alias
+    addr += MEM_L1_UNCACHED_BASE;
+#endif
     volatile tt_l1_ptr std::uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(addr);
     while (ptr[0] != value) {
         invalidate_l1_cache();

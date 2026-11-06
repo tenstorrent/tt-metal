@@ -47,6 +47,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from model_tracer.object_addresses import strip_object_addresses
+
 # =============================================================================
 # Capture parsing
 # =============================================================================
@@ -325,7 +327,7 @@ def parse_argument(text: str):
         # Object repr (compute_kernel_config, mesh mapper) or a host torch tensor:
         # not reconstructible. Strip the heap address, otherwise two identical
         # calls from different layers look like different cases.
-        return {"k": "skip", "repr": re.sub(r" at 0x[0-9a-f]+", "", text)}
+        return {"k": "skip", "repr": strip_object_addresses(text)}
 
     try:
         return {"k": "lit", "v": parse_literal(text)}
@@ -601,6 +603,19 @@ def {test_name}(ttnn_mesh_device, reset_seeds, case):
 '''
 
 
+# Ops the model runs through the Quasar fork with no program config on Quasar: their files also run every case
+# that way (graph_case.run_case_without_program_config).
+_NO_PROGRAM_CONFIG_OPS = frozenset({"ttnn.linear", "ttnn.matmul"})
+
+_NO_PROGRAM_CONFIG_TEST = """
+
+@G.with_default_mesh()
+@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+def {test_name}_no_program_config(ttnn_mesh_device, reset_seeds, case):
+    G.run_case_without_program_config(case, ttnn_mesh_device)
+"""
+
+
 def _fmt(value, indent=0):
     """Compact, diff-friendly repr: one dict per line, nested dicts inline."""
     pad = " " * indent
@@ -753,6 +768,8 @@ def write_op_file(out_dir: Path, capture: Path, op: str, cases, raw_count, dropp
         cases=render_cases(cases),
         test_name=stem,
     )
+    if op in _NO_PROGRAM_CONFIG_OPS:
+        text += _NO_PROGRAM_CONFIG_TEST.format(test_name=stem)
     path = out_dir / f"{stem}.py"
     path.write_text(text)
     return path

@@ -79,7 +79,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
     }
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     DataflowBufferSpec in_dfb{
         .unique_id = MCI_IN,
@@ -111,7 +111,10 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             .accessor_name = "src",
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        // The DM kernels credit the DFBs explicitly. A whole-row ring (one entry per tile of the padded width)
+        // exceeds the 8-bit implicit-sync descriptor past 255 tiles and a prime width (e.g. 263) can never
+        // be split across transaction ids, so implicit sync is switched off here as in tilize_with_val_padding.
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     /** writer
@@ -141,7 +144,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
                          input_dfb_data_format == tt::DataFormat::Int32)},
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "start_stick_id", "n_block_reps"}},
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     /** compute
