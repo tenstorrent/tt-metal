@@ -208,6 +208,7 @@ class PrefillRuntime:
             # Packed rows need the batched last-token extract, which reads the model's own (packed) hidden layout.
             packed_batched_prefill=(
                 bool(getattr(self.config.model, "supports_packed_batched_prefill", False))
+                and __import__("os").environ.get("TT_PHI35_NO_PACK") != "1"
                 and self.config.batched_prefill_batched_extract
             ),
         )

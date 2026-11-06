@@ -476,6 +476,9 @@ def _padded_prefill_length(sequence_length: int) -> int:
     if sequence_length <= 128:
         return 128
     if sequence_length <= 1024:
+        step = int(__import__("os").environ.get("TT_PHI35_PREFILL_STEP", "0") or 0)
+        if step:
+            return -(-sequence_length // step) * step
         return 1024
     return 1 << (sequence_length - 1).bit_length()
 

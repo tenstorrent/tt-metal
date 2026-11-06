@@ -118,9 +118,9 @@ class Phi35MiniGenerator:
         max_model_len: int = 0,
         max_num_seqs: int = 1,
     ) -> int:
-        """Return the unpadded per-submesh KV token budget for vLLM sizing."""
+        """Return the unpadded per-submesh KV token budget for vLLM sizing: every seat can hold a full-length request."""
 
-        return int(max_model_len)
+        return int(max_model_len) * max(1, int(max_num_seqs) // max(1, int(tt_data_parallel)))
 
     @classmethod
     def initialize_vllm_model(
