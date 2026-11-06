@@ -104,8 +104,8 @@
         "note": "These fields were missing or noncanonical in original ledger. Current conservative planning values are not claimed as forecasts made before the completed effort."
       },
       "confirm": {
-        "method": "Distinct real histories replayed with pool counters and measured per-user call time, then normal rung",
-        "success": "Choose concurrency fitting pool/host and reduce projected release time without changed outputs"
+        "method": "Four genuine native histories prove capacity/reuse, followed by measured same-cohort scored C2/C4 comparison on stock route; paired exactness only for changes claimed exact",
+        "success": "Choose concurrency fitting pool/host with measured faster completion and valid scored comparison; scores reported without threshold, trajectory/workload differences and uncertainty explicitly retained"
       },
       "plan": "runs/agent-capacity-and-contention/plan.md",
       "box_hours": 0.25,
@@ -139,6 +139,13 @@
         "evidence": "runs/agent-capacity-and-contention/candidate-validation.json; runs/agent-capacity-and-contention/host-admission-preparation.json",
         "admission": "Not yet device-validated; no C4 dispatch. Static16CPU/249.31GB host, C4SWEdeclared4CPU/16G, networknominal31. Current headroom unknown.",
         "acceptance": "Stock replay capacity only, then same-cohort scored C4/C2 pair; normal C2 rungs do not wait."
+      },
+      "replay_selection": {
+        "at": "2026-11-06T13:06:02.153916+00:00",
+        "rule": "First four in frozen SWE5 cohort order with complete native recorded call+usage coverage and >=3calls; Astropy only deterministic fifth fallback for reconstruction/shape, never by score or runtime",
+        "scores_seen": false,
+        "excluded_history_reasons_required": true,
+        "actual_scored_cohort_changed": false
       }
     },
     {
@@ -1850,6 +1857,67 @@
         "within_box": true
       },
       "evidence": "runs/current-runtime-benchmark/result.json"
+    },
+    {
+      "problem": "native-token-retention",
+      "owner": "harness_registration",
+      "goal": "Identify stock optional exact generated-token retention through native agent artifacts to diagnose future capped loops",
+      "plan": "runs/native-token-retention/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated",
+        "reason": "Host-only capability investigation; no speed credit or runtime mutation"
+      },
+      "unblocks": [
+        "exact recurring-loop onset evidence"
+      ],
+      "confirm": {
+        "method": "Trace pinned protocol/parser/native response serialization and scope; paired exactness plan if supported",
+        "success": "Supported complete token-ID provenance without generation change, or precise unsupported result"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "started_at": "2026-11-06T13:20:15.926240+00:00",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": {
+        "supported": "return_token_ids true retained for parsed native calls; complete engine response sequence",
+        "limitation": "FormatError responses remain discarded",
+        "next": "Separate paired exactness/config confirmation effort"
+      },
+      "evidence": "runs/native-token-retention/result.json"
+    },
+    {
+      "problem": "native-token-retention-confirmation",
+      "owner": "harness_registration",
+      "goal": "Accept model-specific exact output-ID retention after paired generation exactness and real native serialization checks",
+      "plan": "runs/native-token-retention-confirmation/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0.12,
+        "basis": "guess",
+        "reason": "B8startup226s plus short deterministic off/on pair, readiness/client and cleanup"
+      },
+      "unblocks": [
+        "exact parsed-loop onset evidence"
+      ],
+      "confirm": {
+        "method": "Full60 B8 same-seed response option off/on output pair plus installed LiteLLM/mini serialization; isolated source config tests/hooks",
+        "success": "Native reasoning/content/tool arguments, finish and usage equal off/on; source-equivalent SamplingParams; complete on-side IDs retained through actual LiteLLM/mini serialization. Off-side raw IDs unavailable, so no off/on raw-ID equality claim."
+      },
+      "box_hours": 0.2,
+      "status": "running",
+      "started_at": "2026-11-06T13:24:35.576019+00:00"
     }
   ],
   "rankings": [
@@ -4294,6 +4362,155 @@
         }
       ],
       "reason": "Current B1 route/phase-export validated within box, no runtime change or causal speed claim. CI image reuse confirms on next eligible normal rung. Validity constraints still precede speed work."
+    },
+    {
+      "after": "native-token-retention-investigation-start",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "native-token-retention",
+          "unblocks": [
+            "exact recurring-loop onset evidence"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Missing raw token IDs limited prior loop diagnosis. Host-only stock capability investigation addresses this validity evidence gap without changing serving or delaying normal rungs; no new live loop claim. Existing priorities otherwise unchanged."
+    },
+    {
+      "after": "native-token-retention-source-proof-and-paired-confirmation-plan",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "native-token-retention-confirmation",
+          "unblocks": [
+            "exact parsed-loop onset evidence"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.12,
+          "basis": "guess"
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Supported stock request flag may preserve exact parsed-loop tokens. Short paired confirmation before optional model-entry change; no speed credit and no delay to eligible normalrungs. FormatError retention remains outside this change."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

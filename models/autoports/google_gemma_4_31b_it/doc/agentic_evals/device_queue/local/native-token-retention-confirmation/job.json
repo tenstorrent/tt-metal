@@ -1,0 +1,14 @@
+{
+  "owner": "coordinator",
+  "effort": "native-token-retention-confirmation",
+  "start": "2026-11-06T13:29:47.471385+00:00",
+  "status": "running",
+  "planned_clients": 1,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Confirm metadata on actual SWE B8 route; no performance selection claim.",
+  "predicted_hours": 0.12,
+  "box_hours": 0.2,
+  "command": "bash bringup/artifacts/native-token-retention/launch-local.sh",
+  "owners_before": []
+}

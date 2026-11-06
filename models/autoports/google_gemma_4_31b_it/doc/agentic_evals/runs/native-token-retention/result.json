@@ -1,0 +1,64 @@
+{
+  "status": "supported_for_successfully_parsed_native_responses; unsupported_for_FormatError_response_retention_by_config_alone",
+  "device_hours": 0,
+  "change_proposal": {
+    "file": "TTI reference_config/evals/eval_config.py",
+    "scope": "only fresh autoport SWE HarborEvalConfig agent_kwargs.config.model.model_kwargs.extra_body",
+    "merge": {
+      "return_token_ids": true
+    },
+    "preserve": "top_k20, chat_template_kwargs.enable_thinking true, T1,top_p0.95,max32768,timeout3600; include_reasoning defaulttrue; nonstreaming default"
+  },
+  "saved_generated_ids_path": "native trajectory messages[i].extra.response.choices[0].provider_specific_fields.token_ids",
+  "coverage": "Whole engine output.token_ids before reasoning/tool parsing, including reasoning and tool/control tokens; not a retokenization of visible tool text.",
+  "source_chain": [
+    {
+      "source": "installed vLLM entrypoints/openai/chat_completion/protocol.py:259,416-425",
+      "fact": "include_reasoning defaults true; return_token_ids adds IDs, with documented streaming delta semantics."
+    },
+    {
+      "source": "installed vLLM entrypoints/openai/chat_completion/serving.py:977-1006,1119-1123,1197-1199",
+      "fact": "Nonstream response emits entire output.token_ids and prompt IDs. Parser splits visible reasoning/tool fields separately. include_reasoning=false suppresses choice IDs."
+    },
+    {
+      "source": "installed vLLM entrypoints/openai/chat_completion/serving.py:691-711,742-757",
+      "fact": "Streaming emits delta IDs even for otherwise empty parser/control-token deltas; hidden reasoning suppresses metadata. Existing mini flow uses nonstreaming; do not switch it."
+    },
+    {
+      "source": "bringup/artifacts/native-token-retention/openai.py:353-372,1024-1038",
+      "fact": "Exact CI LiteLLM1.108.1 forwards extra_body as OpenAI SDK option, then converts dumped response."
+    },
+    {
+      "source": "bringup/artifacts/native-token-retention/convert_dict_to_response.py:58,825-836;types/utils.py Choices",
+      "fact": "Unknown choice token_ids retained under provider_specific_fields; declared field participates in model_dump. No whitelist removal of token_ids."
+    },
+    {
+      "source": "bringup/artifacts/parser-protocol-mini-swe/src/minisweagent/models/litellm_model.py:61-69,79-93,115-118",
+      "fact": "model_kwargs passed to litellm.completion; successfully parsed actions and response.model_dump stored in message.extra. Action parsing happens before response assignment and throws FormatError: raw response lost in that case."
+    },
+    {
+      "source": "bringup/artifacts/parser-protocol-harbor/src/harbor/agents/installed/mini_swe_agent.py:889-928",
+      "fact": "Custom model config is serialized to mini config file; extra_body preserved except model override removal."
+    },
+    {
+      "source": "bringup/artifacts/stage12-swe-activation-live.log:1629",
+      "fact": "Actual completed CI installed LiteLLM1.108.1. Exact wheel three source files downloaded privately for source inspection only; not installed."
+    }
+  ],
+  "prefill_and_sampling": "return_token_ids is response metadata, not a SamplingParams policy; existing full42823-prefix native replays already returned exactprompt/raw IDs through stock B8 route. No model/plugin changes required; it does not change chunked prefill or host-compatible sampling rules. Paired live equality remains unconfirmed for adding this flag to ordinary mini requests.",
+  "existing_live_examples": [
+    "bringup/artifacts/django-cap-loop/native-replay-seed0/summary.json",
+    "bringup/artifacts/django-cap-loop/native-replay-seed1/summary.json"
+  ],
+  "limitations": [
+    "Cannot recover original11 FormatError calls or future parser-rejected raw responses through mini config alone. Generic error-retention change would be separate scope.",
+    "Prompt IDs are also returned by vLLM, increasing private response storage; top-level LiteLLM prompt-ID retention is not required/proven here.",
+    "Streaming engine support does not prove streaming mini serialization; keep existing nonstream route.",
+    "No quality verdict, measured speed effect or GPQA loop inference. No publication/source edit/launch."
+  ],
+  "proposed_confirmation": {
+    "authorization": "separate coordinator approval required before hardware",
+    "test": "One generic native-tool prompt, same frozen full60B8 route and deterministic seed, run with flagfalse and flagtrue at unchanged release sampling. Compare full emitted tool/reasoning text, finish and usage, and exact token IDs via existing automatic phase/log evidence only if available for baseline; otherwise compare text/usage and flagtrue IDs to direct response. Feed flagtrue raw response through exact LiteLLM1.108.1 conversion and actual mini query mocked _query, assert trajectory model_dump provider_specific_fields IDs byte-for-byte equal directraw IDs. Never execute tool command. Also hostmock FormatError proves retention gap.",
+    "cost": "No hardware estimate measured; short generic pair only, could share next authorized existing-server confirmation without delaying rung."
+  }
+}

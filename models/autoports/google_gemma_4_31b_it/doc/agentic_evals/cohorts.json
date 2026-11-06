@@ -278,6 +278,13 @@
       "smoke2-swe-activation-repair": [
         "pylint-dev__pylint-7080",
         "django__django-11265"
+      ],
+      "server-sized-swe-c2": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265",
+        "psf__requests-1766",
+        "pydata__xarray-4966",
+        "astropy__astropy-14598"
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562736+00:00",
@@ -293,6 +300,12 @@
         "source_run": "smoke2-swe-native-parser",
         "reason": "Same frozen smoke; validity retry before larger rung."
       }
+    },
+    "server_sized_selection": {
+      "at": "2026-11-06T13:17:20.041677+00:00",
+      "rule": "Preserve nightly task list to avoid shrinking after nightly; measured current capacityC2; run validates repeated server-sized workload at same C2/B8, not claim of higher capacity",
+      "source_rung": "nightly",
+      "tasks": 5
     }
   },
   "terminal_bench_2_1": {
@@ -329,10 +342,28 @@
         "terminal-bench/sparql-university",
         "terminal-bench/dna-insert",
         "terminal-bench/video-processing"
+      ],
+      "server-sized-terminal-native-c2": [
+        "terminal-bench/llm-inference-batching-scheduler",
+        "terminal-bench/mailman",
+        "terminal-bench/db-wal-recovery",
+        "terminal-bench/winning-avg-corewars",
+        "terminal-bench/feal-linear-cryptanalysis",
+        "terminal-bench/fix-code-vulnerability",
+        "terminal-bench/constraints-scheduling",
+        "terminal-bench/sparql-university",
+        "terminal-bench/dna-insert",
+        "terminal-bench/video-processing"
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562738+00:00",
     "selection_note": "Inputs has no task_lists; requested tool suites absent from model config. GPQA has no explicit nightly task list, so skill default10 is used rather than an implicit full-dataset run.",
-    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score."
+    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score.",
+    "server_sized_selection": {
+      "at": "2026-11-06T13:17:20.041677+00:00",
+      "rule": "Preserve nightly task list to avoid shrinking after nightly; measured current capacityC2; run validates repeated server-sized workload at same C2/B8, not claim of higher capacity",
+      "source_rung": "nightly",
+      "tasks": 10
+    }
   }
 }

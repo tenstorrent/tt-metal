@@ -10,7 +10,13 @@ from pathlib import Path
 MODEL_ROOT = Path("models/autoports/google_gemma_4_31b_it")
 EXTRACTOR = MODEL_ROOT / "doc/agentic_evals/runs/harbor-replay-extraction/extract.py"
 PIN = "842da3794eaa0b77d5f08bae87a17459d91ff475"
-SELECTED = ["pylint-dev__pylint-7080", "django__django-11265", "psf__requests-1766", "pydata__xarray-4966"]
+COHORT = [
+    "pylint-dev__pylint-7080",
+    "django__django-11265",
+    "psf__requests-1766",
+    "pydata__xarray-4966",
+    "astropy__astropy-14598",
+]
 
 
 def main():
@@ -22,23 +28,52 @@ def main():
     assert args.output.resolve().is_relative_to(Path("bringup/artifacts").resolve())
     assert not args.output.exists(), "Never overwrite earlier extraction evidence"
     cohorts = json.loads((MODEL_ROOT / "doc/agentic_evals/cohorts.json").read_text())
-    assert cohorts["swe_bench_verified"]["rungs"]["nightly"][:4] == SELECTED
+    assert cohorts["swe_bench_verified"]["rungs"]["nightly"] == COHORT
     spec = importlib.util.spec_from_file_location("native_extract", EXTRACTOR)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     prepared = []
-    for task in SELECTED:
+    excluded = []
+    for task in COHORT:
+        if len(prepared) == 4:
+            break
         matches = [
             p
             for p in args.collected.rglob("mini-swe-agent.trajectory.json")
             if p.parent.parent.name.startswith(task + "__")
         ]
-        assert len(matches) == 1, f"{task}: need exactly one recorded trial, got {len(matches)}"
+        if len(matches) != 1:
+            excluded.append({"task": task, "reason": "native_trial_count_not_one", "count": len(matches)})
+            continue
         source = matches[0]
         data = json.loads(source.read_text())
-        rows, omitted = module.reconstruct(data, allow_recorded_subset=False)
         assistants = [m for m in data["messages"] if m.get("role") == "assistant"]
-        assert len(rows) == len(assistants) >= 3
+        api_calls = data["info"]["model_stats"]["api_calls"]
+        if len(assistants) != api_calls or len(assistants) < 3:
+            excluded.append(
+                {
+                    "task": task,
+                    "reason": "recorded_call_coverage",
+                    "recorded_calls": len(assistants),
+                    "api_calls": api_calls,
+                }
+            )
+            continue
+        missing = [
+            i
+            for i, m in enumerate(assistants)
+            if not m.get("extra", {}).get("response")
+            or not all(
+                isinstance((m["extra"]["response"].get("usage") or {}).get(k), int)
+                for k in ["prompt_tokens", "completion_tokens"]
+            )
+        ]
+        if missing:
+            excluded.append({"task": task, "reason": "missing_native_response_or_usage", "call_indices": missing})
+            continue
+        # Unsupported schema/sampling remains a hard error, never a selection criterion.
+        rows, omitted = module.reconstruct(data, allow_recorded_subset=False)
+        assert len(rows) == len(assistants)
         usage = []
         for i, (row, message) in enumerate(zip(rows, assistants)):
             response = message["extra"]["response"]
@@ -65,7 +100,12 @@ def main():
     manifest = {
         "run_id": 42210467509,
         "kind": "reconstructed_stock_LiteLLM_inputs_not_wire_capture",
-        "selection": "first four frozen nightly task IDs; scores not inspected",
+        "selection": "first four complete native call/usage histories in frozen five-task order; fallback solely for missing retention, never score/runtime",
+        "frozen_order": COHORT,
+        "excluded": excluded,
+        "unneeded_after_four": COHORT[COHORT.index(prepared[-1][0]) + 1 :] if len(prepared) == 4 else [],
+        "status": "prepared" if len(prepared) == 4 else "insufficient_complete_histories",
+        "eligible_tasks": [x[0] for x in prepared],
         "tasks": [],
         "tokenizer_revision_for_future_parity": PIN,
         "capacity_only": True,
@@ -76,6 +116,9 @@ def main():
             "No model template token-count or actual API parity claim until separately checked.",
         ],
     }
+    if len(prepared) < 4:
+        (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        raise SystemExit("Fewer than four complete histories; exclusions saved, no replay files emitted")
     for task, source, rows, http, usage, omitted in prepared:
         for group, values in [("native-full", rows), ("native-peak3", rows[-3:]), ("http-peak3", http)]:
             target = args.output / group / (task + ".jsonl")
