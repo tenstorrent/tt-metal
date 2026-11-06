@@ -49,7 +49,10 @@ sfpi_inline void e2m1_init()
     sfpi::vConstIntPrgm1 = 0x1C;
 }
 
-// Phase 1 of MXFP4 and NVFP4. TI = tile index inside the scale page's group of K-tiles.
+// Phase 1 of MXFP4 and NVFP4. TI = tile index inside the scale page's group of K-tiles. S of (a, b, h) is byte
+// 2h + b of scale row 0, word parity a (NVFP4: UE4M3, k-half h; MXFP4: E8M0, byte 2 (TI % 2) + b). A transpose gives
+// row group g = 2b + a the word of parity a and a per-lane shift picks byte b, so one conversion yields the S of all
+// four row groups; a transpose of four copies then broadcasts row group g's S to every lane.
 template <int FMT, int TI>
 sfpi_inline void fp4_params()
 {
@@ -57,35 +60,46 @@ sfpi_inline void fp4_params()
     {
         params_init();
     }
-#pragma GCC unroll 2
-    for (int a = 0; a < 2; a++)
+    vUInt w0 = ldu(CO + scale_row<FMT>() / 2);
+    vUInt w1 = ldu(CO + scale_row<FMT>() / 2 + 1);
+    vUInt w2 = w0;
+    vUInt w3 = w1;
+    transp4(w0, w1, w2, w3);
+    // Left shift that brings byte base + b of row group g (b = g / 2 = lane / 16) to bits 25..31.
+    constexpr int base = FMT == NVFP4 ? 0 : 2 * (TI % 2);
+    const vUInt sh     = vUInt(25 - 8 * base) - ((sfpi::as<vUInt>(sfpi::vConstTileId) >> 5u) << 3u);
+    if constexpr (FMT == MXFP4)
     {
-        if constexpr (FMT == MXFP4)
-        {
-            // Row 0 byte 2 * (TI % 2) + b: E8M0 of column b for tile TI of the pair.
-            vUInt r0, r1, r2, r3;
-            rep4<FMT>(0, a, r0, r1, r2, r3);
-#pragma GCC unroll 2
-            for (int b = 0; b < 2; b++)
-            {
-                sfpi::dst_reg[PS + pidx(a, b, 0)] = e8m0_half(bits(r0, 16 * (TI % 2) + 8 * b, 8));
-            }
-        }
-        else if constexpr (FMT == NVFP4)
-        {
-            // Row 0 byte 2h + b: UE4M3 of column b, k-half h.
-            vUInt r0, r1, r2, r3;
-            rep4<FMT>(0, a, r0, r1, r2, r3);
-#pragma GCC unroll 2
-            for (int h = 0; h < 2; h++)
-            {
-#pragma GCC unroll 2
-                for (int b = 0; b < 2; b++)
-                {
-                    sfpi::dst_reg[PS + pidx(a, b, h)] = ue4m3_half(bits(r0, 8 * (2 * h + b), 7));
-                }
-            }
-        }
+        vFloat s0 = e8m0_half((w0 << (sh - 1u)) >> 24u);
+        vFloat s1 = s0;
+        vFloat s2 = s0;
+        vFloat s3 = s0;
+        transp4(s0, s1, s2, s3);
+        sfpi::dst_reg[PS + pidx(0, 0, 0)] = s0;
+        sfpi::dst_reg[PS + pidx(1, 0, 0)] = s1;
+        sfpi::dst_reg[PS + pidx(0, 1, 0)] = s2;
+        sfpi::dst_reg[PS + pidx(1, 1, 0)] = s3;
+    }
+    else
+    {
+        // One SFPTRANSP broadcasts both k-halves: LRegs 0..3 (h = 0) and 4..7 (h = 1) transpose as two 4x4 blocks.
+        vFloat a0 = ue4m3_half((w0 << sh) >> 25u);
+        vFloat b0 = ue4m3_half((w0 << (sh - 16u)) >> 25u);
+        vFloat a1 = a0;
+        vFloat a2 = a0;
+        vFloat a3 = a0;
+        vFloat b1 = b0;
+        vFloat b2 = b0;
+        vFloat b3 = b0;
+        sfpi::subvec_transp(a0, a1, a2, a3, b0, b1, b2, b3);
+        sfpi::dst_reg[PS + pidx(0, 0, 0)] = a0;
+        sfpi::dst_reg[PS + pidx(1, 0, 0)] = a1;
+        sfpi::dst_reg[PS + pidx(0, 1, 0)] = a2;
+        sfpi::dst_reg[PS + pidx(1, 1, 0)] = a3;
+        sfpi::dst_reg[PS + pidx(0, 0, 1)] = b0;
+        sfpi::dst_reg[PS + pidx(1, 0, 1)] = b1;
+        sfpi::dst_reg[PS + pidx(0, 1, 1)] = b2;
+        sfpi::dst_reg[PS + pidx(1, 1, 1)] = b3;
     }
 }
 
