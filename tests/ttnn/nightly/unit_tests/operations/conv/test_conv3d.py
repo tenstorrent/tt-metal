@@ -1505,6 +1505,7 @@ def test_conv3d_zero_divisor_args_raise(device, expect_error, stride, groups, me
         )
 
 
+@pytest.mark.use_module_device
 @skip_for_blackhole("C_in blocking not supported on Blackhole - reduction path produces incorrect results")
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, blocking",
@@ -1588,6 +1589,7 @@ def test_conv3d_qwen_shapes(
     assert pcc_passed, pcc_message
 
 
+@pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "C_in, C_out, kernel, T",
     [(512, 512, 11, 400), (2048, 1024, 7, 80)],
@@ -1604,13 +1606,17 @@ CACHE_SHAPES = [
 ]
 
 
+@pytest.mark.use_module_device
 @pytest.mark.parametrize("input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode", CACHE_SHAPES)
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_address_large(
     device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode
 ):
     run_conv3d_cache_address(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode)
 
 
+@pytest.mark.use_module_device
 @pytest.mark.parametrize("input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode", CACHE_SHAPES)
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_hash_large(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode):
     run_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode)
