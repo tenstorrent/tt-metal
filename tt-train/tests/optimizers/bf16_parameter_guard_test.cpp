@@ -2,11 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <utility>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -14,6 +19,7 @@
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
 #include "optimizers/muon_composite.hpp"
+#include "optimizers/no_op.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
 #include "test_utils/program_cache.hpp"
@@ -144,4 +150,31 @@ TEST_F(Fp32GradientIntoBf16OptimizerTest, AdamWComposite) {
 
 TEST_F(Fp32GradientIntoBf16OptimizerTest, MuonComposite) {
     expect_the_step_of_the_bf16_cast<optimizers::MuonComposite>(optimizers::MuonConfig{.lr = 0.05F});
+}
+
+// zero_grad keeps a zero gradient on each parameter that had one: in fp32 for a parameter that accumulates its gradient
+// in fp32, so the next add needs no cast of the zeros, and in the value's dtype otherwise, as before.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradInstallsZerosInTheAccumulationDtype) {
+    using Factory = std::function<std::unique_ptr<optimizers::OptimizerBase>(const serialization::NamedParameters &)>;
+    const std::array<std::pair<const char *, Factory>, 4> optimizers = {{
+        {"SGD", [](const auto &p) { return std::make_unique<optimizers::SGD>(p, optimizers::SGDConfig{}); }},
+        {"SGDComposite",
+         [](const auto &p) { return std::make_unique<optimizers::SGDComposite>(p, optimizers::SGDCompositeConfig{}); }},
+        {"MuonComposite",
+         [](const auto &p) { return std::make_unique<optimizers::MuonComposite>(p, optimizers::MuonConfig{}); }},
+        {"NoOp", [](const auto &p) { return std::make_unique<optimizers::NoOp>(p); }},
+    }};
+    auto *device = &autograd::ctx().get_device();
+    const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 13U), device);
+    for (const auto &[name, make_optimizer] : optimizers) {
+        for (const bool fp32 : {true, false}) {
+            SCOPED_TRACE(fmt::format("{}, fp32 accumulation {}", name, fp32));
+            const auto parameters = parameter_with_grad(grad);
+            parameters.at("theta")->set_accumulate_grad_in_fp32(fp32);
+            make_optimizer(parameters)->zero_grad();
+            const auto &zeros = parameters.at("theta")->get_grad();
+            EXPECT_EQ(zeros.dtype(), fp32 ? ttnn::DataType::FLOAT32 : ttnn::DataType::BFLOAT16);
+            EXPECT_EQ(core::to_vector(zeros), std::vector<float>(zeros.logical_volume(), 0.0F));
+        }
+    }
 }
