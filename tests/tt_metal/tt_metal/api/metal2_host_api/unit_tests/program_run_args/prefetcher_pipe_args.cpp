@@ -493,7 +493,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeReceiverWithoutRelayBindsBothP
 // so every later use of the pipe is rejected instead of reading freed memory.
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_PipeOutlivingSpaceIsDetached) {
     std::optional<PrefetcherPipeSpace> space = CreatePrefetcherPipeSpace(
-        *mesh_device_,
+        mesh_device_->mesh_command_queue(0),
         PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(pipe_sender_node)),
             .receiver_domain = CoreRangeSet(pipe_receiver_nodes),

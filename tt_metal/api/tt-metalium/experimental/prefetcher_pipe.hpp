@@ -53,8 +53,8 @@ class PrefetcherPipeSpaceImpl;
  * there.
  *
  * Host programming model (Metal 2.0):
- *   auto space = CreatePrefetcherPipeSpace(device, {.sender_cores = ..., .receiver_domain = ...,
- *                                                   .ring_size = R, .max_receivers_per_pipe = N});
+ *   auto space = CreatePrefetcherPipeSpace(mesh_cq, {.sender_cores = ..., .receiver_domain = ...,
+ *                                                    .ring_size = R, .max_receivers_per_pipe = N});
  *   PrefetcherPipe pipe = space.create_pipe(sender_core, receiver_cores);
  *   // ProgramSpec declares a PrefetcherPipeParameter with the same receivers / ring size (the
  *   // sender is the pipe's, not the spec's); kernels bind it via
@@ -279,9 +279,6 @@ private:
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(
     distributed::MeshCommandQueue& mesh_cq, const PrefetcherPipeSpaceConfig& config);
 
-// As above, on `device.mesh_command_queue()`.
-PrefetcherPipeSpace CreatePrefetcherPipeSpace(distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config);
-
 /**
  * @brief Reserve L1 for several spaces at once, so that they share one buffer_address() and one
  * config_address(), as pipes carved from one space do.
@@ -295,10 +292,6 @@ PrefetcherPipeSpace CreatePrefetcherPipeSpace(distributed::MeshDevice& device, c
  */
 std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
     distributed::MeshCommandQueue& mesh_cq, std::span<const PrefetcherPipeSpaceConfig> configs);
-
-// As above, on `device.mesh_command_queue()`.
-std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
-    distributed::MeshDevice& device, std::span<const PrefetcherPipeSpaceConfig> configs);
 
 // Select DRAM senders from `bank_to_receivers` and carve one pipe per selected sender from an
 // existing space. Each input pair names a DRAM bank and the complete worker receiver set served
