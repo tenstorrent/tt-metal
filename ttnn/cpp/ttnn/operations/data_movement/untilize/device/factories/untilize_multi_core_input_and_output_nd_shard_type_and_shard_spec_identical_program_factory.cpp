@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;

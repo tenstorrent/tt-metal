@@ -113,7 +113,7 @@ NpHaloScatterSetup setup_interior_scatter(
         return setup;
     }
 
-    Buffer* padded_buf = tensor_args.padded_output.value().buffer();
+    const auto* padded_buf = &tensor_args.padded_output.value().mesh_buffer();
     const uint32_t Hd_i = geom.input_halo_dim_size;      // interior H (input is unpadded in repack mode)
     const uint32_t Wd_i = geom.num_sticks_per_halo_dim;  // interior W
     const uint32_t Hp_i = Hd_i + 2 * op.np_padding_h;

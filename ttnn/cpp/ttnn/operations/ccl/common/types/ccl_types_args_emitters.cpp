@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 using namespace tt::tt_metal;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/tensor/tensor.hpp"

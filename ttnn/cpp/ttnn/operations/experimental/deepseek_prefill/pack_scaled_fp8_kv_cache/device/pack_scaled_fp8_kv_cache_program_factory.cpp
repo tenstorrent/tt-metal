@@ -19,10 +19,10 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
     using namespace tt;
     using namespace tt::tt_metal;
 
-    auto* latent_buffer = args.latent.buffer();
-    auto* scale_buffer = args.scales.buffer();
-    auto* rope_buffer = args.rope.buffer();
-    auto* output_buffer = output.buffer();
+    const auto* latent_buffer = &args.latent.mesh_buffer();
+    const auto* scale_buffer = &args.scales.mesh_buffer();
+    const auto* rope_buffer = &args.rope.mesh_buffer();
+    const auto* output_buffer = &output.mesh_buffer();
     const uint32_t rows = args.latent.logical_volume() / packed::LATENT_WIDTH;
 
     Program program;

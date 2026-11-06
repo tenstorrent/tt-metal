@@ -233,7 +233,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());

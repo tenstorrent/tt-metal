@@ -98,10 +98,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
 
-    auto* const in0_buffer = a.buffer();
-    auto* const in1_buffer = b.buffer();
-    auto* const sparsity_buffer = sparsity.buffer();
-    auto* const out_buffer = output_tensor.buffer();
+    const auto* const in0_buffer = &a.mesh_buffer();
+    const auto* const in1_buffer = &b.mesh_buffer();
+    const auto* const sparsity_buffer = &sparsity.mesh_buffer();
+    const auto* const out_buffer = &output_tensor.mesh_buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
@@ -780,10 +780,10 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
-    auto* src_buffer_a = tensor_args.input_tensors.at(0).buffer();
-    auto* src_buffer_b = tensor_args.input_tensors.at(1).buffer();
-    auto* sparsity_buffer = tensor_args.input_tensors.at(2).buffer();
-    auto* dst_buffer = tensor_return_value.at(0).buffer();
+    const auto* src_buffer_a = &tensor_args.input_tensors.at(0).mesh_buffer();
+    const auto* src_buffer_b = &tensor_args.input_tensors.at(1).mesh_buffer();
+    const auto* sparsity_buffer = &tensor_args.input_tensors.at(2).mesh_buffer();
+    const auto* dst_buffer = &tensor_return_value.at(0).mesh_buffer();
 
     // Manually unroll sender core
     // in0 sender

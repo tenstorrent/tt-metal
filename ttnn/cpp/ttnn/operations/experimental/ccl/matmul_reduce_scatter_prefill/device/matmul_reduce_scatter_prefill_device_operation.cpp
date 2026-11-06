@@ -61,9 +61,10 @@ void check_on_full_mesh(const Tensor& t, const distributed::MeshDevice* mesh, st
 // The same per-bank range of the same bank kind: an allocation, or a view of one (a view wraps the address in a buffer
 // of its own, so comparing Buffer pointers misses it).
 bool shares_memory(const Tensor& a, const Tensor& b) {
-    const Buffer* x = a.buffer();
-    const Buffer* y = b.buffer();
-    return x->buffer_type() == y->buffer_type() && x->address() < y->address() + y->aligned_size_per_bank() &&
+    const auto* x = &a.mesh_buffer();
+    const auto* y = &b.mesh_buffer();
+    return x->device_local_config().buffer_type == y->device_local_config().buffer_type &&
+           x->address() < y->address() + y->aligned_size_per_bank() &&
            y->address() < x->address() + x->aligned_size_per_bank();
 }
 

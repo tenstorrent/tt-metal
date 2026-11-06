@@ -87,8 +87,8 @@ bool use_direct_reduce_scatter(
     }
     // Size gate: physical per-device input bytes, so block-float dtypes are counted as they actually
     // land in DRAM rather than by logical element count.
-    const auto* buffer = input_tensor.buffer();
-    return buffer != nullptr && static_cast<uint64_t>(buffer->size()) <= k_direct_rs_max_input_bytes;
+    const auto* buffer = &input_tensor.mesh_buffer();
+    return buffer != nullptr && static_cast<uint64_t>(buffer->device_local_size()) <= k_direct_rs_max_input_bytes;
 }
 
 }  // namespace

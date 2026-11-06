@@ -96,8 +96,8 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     const bool use_scratch = local_is_output && unaligned;
 
     const bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
-    auto* remote_buffer = remote_tensor.buffer();
-    auto remote_buffer_type = remote_buffer->buffer_type();
+    const auto* remote_buffer = &remote_tensor.mesh_buffer();
+    auto remote_buffer_type = remote_buffer->device_local_config().buffer_type;
 
     // ------------------------------------------------------------------
     // Per-core runtime argument generation (stateful walk over remote cores).

@@ -36,7 +36,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores) {
-    auto* output_buffer = output_tensor.buffer();
+    const auto* output_buffer = &output_tensor.mesh_buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < actual_input_shape.rank(); i++) {
