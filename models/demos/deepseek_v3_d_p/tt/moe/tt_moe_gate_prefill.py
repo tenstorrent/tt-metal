@@ -672,17 +672,19 @@ class TtMoEGatePrefill(LightweightModule):
         # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
         # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
         self.tt_ccl = get_tt_ccl(mesh_device)
-        self._ar_reduce_kernel_config = ttnn.init_device_compute_kernel_config(
+        self._gather_reduce_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self._hbag_semaphores = {}
+        self._tp_gather_semaphores = {}
         if mesh_device.shape[config.ccl_config["TP_AXIS"]] > 1:
             ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
-            self._hbag_semaphores = dict(ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore)
+            self._tp_gather_semaphores = dict(
+                ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore
+            )
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
         # Memoization of the per-(actual_isl, padding_side, actual_start) padding_config built on HOST.
@@ -941,15 +943,15 @@ class TtMoEGatePrefill(LightweightModule):
 
         tp_axis = self.config.ccl_config["TP_AXIS"]
         tp = self.mesh_device.shape[tp_axis]
-        hbag_ar = tp > 1 and len(x.shape) == 2
+        use_gather_reduce = tp > 1 and len(x.shape) == 2
         logits = ttnn.matmul(
             x,
             self.weight,
             compute_kernel_config=self.config.mm_configs["COMPUTE_CONFIG"],
             program_config=program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if hbag_ar else ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if use_gather_reduce else ttnn.L1_MEMORY_CONFIG,
         )
-        if hbag_ar:
+        if use_gather_reduce:
             rows, n = logits.shape[-2], logits.shape[-1]
             gathered = ttnn.experimental.high_bw_all_gather(
                 ttnn.reshape(logits, (1, 1, rows, n)),
@@ -959,14 +961,14 @@ class TtMoEGatePrefill(LightweightModule):
                 ),
                 cluster_axis=tp_axis,
                 num_links=self.config.ccl_config["NUM_LINKS"],
-                **self._hbag_semaphores,
+                **self._tp_gather_semaphores,
             )
             ttnn.deallocate(logits)
             summed = ttnn.experimental.fast_reduce_nc(
                 gathered,
                 dims=[1],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self._ar_reduce_kernel_config,
+                compute_kernel_config=self._gather_reduce_kernel_config,
             )
             return ttnn.reshape(summed, (rows, n))
         if tp > 1:
