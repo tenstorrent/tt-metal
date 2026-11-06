@@ -48,9 +48,11 @@ void kernel_main() {
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_ATTENTION_SINK);
     constexpr uint32_t cb_sink_scratch = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SINK_SCRATCH);
     constexpr bool split_k = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::SPLIT_K) != 0;
-    constexpr uint32_t cb_send_out = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SEND_OUT);
-    constexpr uint32_t cb_send_max = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SEND_MAX);
-    constexpr uint32_t cb_send_sum = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SEND_SUM);
+    constexpr uint32_t cb_head_out = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_HEAD_OUT);
+    constexpr uint32_t cb_head_max = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_HEAD_MAX);
+    constexpr uint32_t cb_head_sum = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_HEAD_SUM);
+    constexpr uint32_t cb_head_ready = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_HEAD_READY);
+    constexpr uint32_t cb_head_ack = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_HEAD_ACK);
     constexpr uint32_t cb_recv_out = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_RECV_OUT);
     constexpr uint32_t cb_recv_max = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_RECV_MAX);
     constexpr uint32_t cb_recv_sum = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_RECV_SUM);
@@ -151,17 +153,23 @@ void kernel_main() {
     }
 
     // split-K: the neighbour (core i+1) NoC-writes its HEAD state straight into our cb_recv_* bases, which are the
-    // same L1 addresses on every core (identical CB layout); capture them before any local FIFO movement.
+    // same L1 addresses on every core (identical CB layout); capture them before any local FIFO movement. Our own
+    // HEAD state is sent from the bases of compute's cb_head_* buffers, which hold exactly one block each.
     experimental::CB recv_out_cb(cb_recv_out), recv_max_cb(cb_recv_max), recv_sum_cb(cb_recv_sum);
-    experimental::CB send_out_cb(cb_send_out), send_max_cb(cb_send_max), send_sum_cb(cb_send_sum);
+    experimental::CB head_out_cb(cb_head_out), head_max_cb(cb_head_max), head_sum_cb(cb_head_sum);
+    experimental::CB head_ready_cb(cb_head_ready), head_ack_cb(cb_head_ack);
     experimental::CB merge_ctrl_cb(cb_merge_ctrl);
     constexpr uint32_t sqt = H / tt::constants::TILE_HEIGHT;
     constexpr uint32_t state_tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);  // bf16 flash state
     uint32_t recv_out_l1 = 0, recv_max_l1 = 0, recv_sum_l1 = 0;
+    uint32_t head_out_l1 = 0, head_max_l1 = 0, head_sum_l1 = 0;
     if constexpr (split_k) {
         recv_out_l1 = recv_out_cb.get_write_ptr();
         recv_max_l1 = recv_max_cb.get_write_ptr();
         recv_sum_l1 = recv_sum_cb.get_write_ptr();
+        head_out_l1 = head_out_cb.get_read_ptr();
+        head_max_l1 = head_max_cb.get_read_ptr();
+        head_sum_l1 = head_sum_cb.get_read_ptr();
     }
     const uint32_t head_segs = head_c0 != 0 ? 1u : 0u;
     const uint32_t n_segs = head_segs + tok_count + (tail_c1 != 0 ? 1u : 0u);
@@ -225,26 +233,18 @@ void kernel_main() {
                 if (empty) {
                     noc_semaphore_inc(prev_sem, sparse_sdpa::SPLIT_PARTIAL_EMPTY);
                 } else {
-                    send_out_cb.wait_front(sqt * vDHt);
-                    send_max_cb.wait_front(sqt);
-                    send_sum_cb.wait_front(sqt);
+                    head_ready_cb.wait_front(1);
                     noc_async_write(
-                        send_out_cb.get_read_ptr(),
-                        get_noc_addr(prev_noc_x, prev_noc_y, recv_out_l1),
-                        sqt * vDHt * state_tile_bytes);
+                        head_out_l1, get_noc_addr(prev_noc_x, prev_noc_y, recv_out_l1), sqt * vDHt * state_tile_bytes);
                     noc_async_write(
-                        send_max_cb.get_read_ptr(),
-                        get_noc_addr(prev_noc_x, prev_noc_y, recv_max_l1),
-                        sqt * state_tile_bytes);
+                        head_max_l1, get_noc_addr(prev_noc_x, prev_noc_y, recv_max_l1), sqt * state_tile_bytes);
                     noc_async_write(
-                        send_sum_cb.get_read_ptr(),
-                        get_noc_addr(prev_noc_x, prev_noc_y, recv_sum_l1),
-                        sqt * state_tile_bytes);
+                        head_sum_l1, get_noc_addr(prev_noc_x, prev_noc_y, recv_sum_l1), sqt * state_tile_bytes);
                     noc_async_write_barrier();
                     noc_semaphore_inc(prev_sem, sparse_sdpa::SPLIT_PARTIAL_VALID);
-                    send_out_cb.pop_front(sqt * vDHt);
-                    send_max_cb.pop_front(sqt);
-                    send_sum_cb.pop_front(sqt);
+                    head_ready_cb.pop_front(1);
+                    head_ack_cb.reserve_back(1);
+                    head_ack_cb.push_back(1);
                 }
                 noc_async_atomic_barrier();
                 continue;  // core i-1 writes this token's output

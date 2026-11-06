@@ -89,34 +89,6 @@ ALWI void tilize_packed_field() {
     tilize_uninit(input_cb, output_cb);
 }
 
-// Copy `ntiles` bf16 tiles in_cb -> out_cb through DST (split-K HEAD state hand-off to the writer).
-template <uint32_t dst_batch>
-ALWI void copy_state_tiles(uint32_t in_cb, uint32_t out_cb, uint32_t ntiles) {
-    CircularBuffer in(in_cb), out(out_cb);
-    in.wait_front(ntiles);
-    out.reserve_back(ntiles);
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(out_cb);
-    pack_reconfig_l1_acc(0);
-    configure_single_tile_pack(out_cb);
-    copy_init(in_cb);
-    for (uint32_t t = 0; t < ntiles; t += dst_batch) {
-        const uint32_t n = (ntiles - t) < dst_batch ? (ntiles - t) : dst_batch;
-        tile_regs_acquire();
-        for (uint32_t j = 0; j < n; ++j) {
-            copy_tile(in_cb, t + j, j);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t j = 0; j < n; ++j) {
-            pack_tile(j, out_cb);
-        }
-        tile_regs_release();
-    }
-    out.push_back(ntiles);
-    in.pop_front(ntiles);
-}
-
 void kernel_main() {
     constexpr bool sink_per_row = true;  // sparse query rows represent different heads
     constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::USE_ATTENTION_SINK) != 0;
@@ -155,9 +127,8 @@ void kernel_main() {
     constexpr uint32_t cb_k_latent_tile = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_K_LATENT_TILE);
     constexpr uint32_t cb_k_rope_tile = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_K_ROPE_TILE);
     constexpr bool split_k = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::SPLIT_K) != 0;
-    constexpr uint32_t cb_send_out = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_SEND_OUT);
-    constexpr uint32_t cb_send_max = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_SEND_MAX);
-    constexpr uint32_t cb_send_sum = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_SEND_SUM);
+    constexpr uint32_t cb_head_ready = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_HEAD_READY);
+    constexpr uint32_t cb_head_ack = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_HEAD_ACK);
     constexpr uint32_t cb_recv_out = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_RECV_OUT);
     constexpr uint32_t cb_recv_max = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_RECV_MAX);
     constexpr uint32_t cb_recv_sum = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_RECV_SUM);
@@ -215,10 +186,12 @@ void kernel_main() {
         // tilize Q rows -> [Sqt, DHt]
         compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
 
-        // Flash running state, ping-pong. Reset every token; all buffers start empty.
-        CircularBuffer max_prev(cb_max_a), max_cur(cb_max_b);
-        CircularBuffer sum_prev(cb_sum_a), sum_cur(cb_sum_b);
-        CircularBuffer out_prev(cb_out_a), out_cur(cb_out_b);
+        // Flash running state, ping-pong. Reset every token; all buffers start empty. A split-K HEAD starts so that
+        // its last chunk lands in the b buffers, which the writer sends from.
+        const bool cur_a = split_k && seg_kind == sparse_sdpa::seg_kind::HEAD && num_active_chunks % 2 == 0;
+        CircularBuffer max_prev(cur_a ? cb_max_b : cb_max_a), max_cur(cur_a ? cb_max_a : cb_max_b);
+        CircularBuffer sum_prev(cur_a ? cb_sum_b : cb_sum_a), sum_cur(cur_a ? cb_sum_a : cb_sum_b);
+        CircularBuffer out_prev(cur_a ? cb_out_b : cb_out_a), out_cur(cur_a ? cb_out_a : cb_out_b);
 
         for (uint32_t chunk = 0; chunk < num_active_chunks; ++chunk) {
             if constexpr (scaled_kv) {
@@ -543,10 +516,16 @@ void kernel_main() {
             out_cur.push_back(Sqt * vDHt);
 
             if (is_last && split_k && seg_kind == sparse_sdpa::seg_kind::HEAD) {
-                // split-K HEAD: hand the unnormalized state to the writer (-> core i-1, which merges it).
-                copy_state_tiles<dst_size>(out_cur.get_cb_id(), cb_send_out, Sqt * vDHt);
-                copy_state_tiles<dst_size>(sum_cur.get_cb_id(), cb_send_sum, Sqt);
-                copy_state_tiles<dst_size>(max_cur.get_cb_id(), cb_send_max, Sqt);
+                // split-K HEAD: the writer sends the unnormalized state from these buffers to core i-1 (which merges
+                // it). Pop them only after its ack, so the next segment cannot overwrite them first.
+                CircularBuffer head_ready(cb_head_ready), head_ack(cb_head_ack);
+                head_ready.reserve_back(1);
+                head_ready.push_back(1);
+                head_ack.wait_front(1);
+                head_ack.pop_front(1);
+                out_cur.pop_front(Sqt * vDHt);
+                sum_cur.pop_front(Sqt);
+                max_cur.pop_front(Sqt);
             } else if (is_last && split_k && seg_kind == sparse_sdpa::seg_kind::TAIL) {
                 // split-K TAIL: merge core i+1's HEAD state X into ours R, then normalize as usual.
                 //   m = max(m_R, m_X); c_R = exp((m_R-m)*s); c_X = exp((m_X-m)*s)

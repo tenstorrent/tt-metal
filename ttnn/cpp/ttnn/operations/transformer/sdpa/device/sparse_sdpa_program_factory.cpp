@@ -52,10 +52,9 @@ enum SparseCB : uint32_t {
     cb_attention_sink,  // persistent first-column vector: one sink scalar per head
     cb_sink_scratch,    // writer scratch for gathering sink scalars
     // split-K (sparse_sdpa_common.hpp seg_kind): this core's HEAD flash state out, the neighbour's HEAD state in
-    cb_send_out,  // [Sqt, vDHt] unnormalized out (compute -> writer -> core i-1)
-    cb_send_max,  // [Sqt] running max
-    cb_send_sum,  // [Sqt] partial row-sum
-    cb_recv_out,  // core i+1's HEAD state, NoC-written straight into these CBs' base
+    cb_head_ready,  // compute -> writer: the HEAD state is in cb_out_b / cb_max_b / cb_sum_b
+    cb_head_ack,    // writer -> compute: the HEAD state was sent, compute can pop it
+    cb_recv_out,    // core i+1's HEAD state, NoC-written straight into these CBs' base
     cb_recv_max,
     cb_recv_sum,
     cb_merge_ctrl,  // writer -> compute: the neighbour's semaphore value (SPLIT_PARTIAL_*)
@@ -225,13 +224,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     }
     if (split_k) {
         const size_t whole_token_cbs = desc.cbs.size();
-        for (uint32_t id : {cb_send_out, cb_recv_out}) {
-            cb(id, tile_bytes, Sqt * vDHt, bf);
-        }
-        for (uint32_t id : {cb_send_max, cb_send_sum, cb_recv_max, cb_recv_sum, cb_corr2}) {
+        cb(cb_recv_out, tile_bytes, Sqt * vDHt, bf);
+        for (uint32_t id : {cb_recv_max, cb_recv_sum, cb_corr2}) {
             cb(id, tile_bytes, Sqt, bf);
         }
         cb(cb_merge_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, 1, bf);
+        for (uint32_t id : {cb_head_ready, cb_head_ack}) {
+            cb(id, ::sparse_sdpa::ACK_PAGE_BYTES, 1, bf);
+        }
         // Keep the whole-token split when the merge CBs do not fit in L1 (e.g. large H with large k_chunk).
         // ProgramImpl::allocate_circular_buffers places each CB at the DRAM alignment, not the L1 one.
         const uint64_t cb_align = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
@@ -305,9 +305,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_ct.insert(
         writer_ct.end(),
         {static_cast<uint32_t>(split_k),
-         cb_send_out,
-         cb_send_max,
-         cb_send_sum,
+         cb_out_b,
+         cb_max_b,
+         cb_sum_b,
+         cb_head_ready,
+         cb_head_ack,
          cb_recv_out,
          cb_recv_max,
          cb_recv_sum,
@@ -393,9 +395,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_ct.insert(
         compute_ct.end(),
         {static_cast<uint32_t>(split_k),
-         cb_send_out,
-         cb_send_max,
-         cb_send_sum,
+         cb_head_ready,
+         cb_head_ack,
          cb_recv_out,
          cb_recv_max,
          cb_recv_sum,
