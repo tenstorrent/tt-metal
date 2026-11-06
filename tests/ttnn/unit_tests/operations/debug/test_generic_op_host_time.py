@@ -178,7 +178,6 @@ def test_per_call_host_time_against_the_program_descriptor_form(device, cores):
     descriptor = descriptor_program(input_tensor, output_tensor, core_set, core_list)
     spec = program_spec(input_tensor, output_tensor, core_set)
     run_args = program_run_args(input_tensor, output_tensor, core_list)
-    spec_hash = E.compute_program_spec_hash(spec)
 
     # Both forms compute the same output.
     assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(ttnn.generic_op(io_tensors, descriptor)), 0.999)
@@ -187,9 +186,6 @@ def test_per_call_host_time_against_the_program_descriptor_form(device, cores):
     times = {
         "ProgramDescriptor": per_call_us(device, lambda: ttnn.generic_op(io_tensors, descriptor)),
         "ProgramSpec": per_call_us(device, lambda: E.generic_op(io_tensors, spec, run_args)),
-        "ProgramSpec, custom hash": per_call_us(
-            device, lambda: E.generic_op(io_tensors, spec, run_args, custom_program_hash=spec_hash)
-        ),
         "ProgramDescriptor, rebuilt each call": per_call_us(
             device,
             lambda: ttnn.generic_op(io_tensors, descriptor_program(input_tensor, output_tensor, core_set, core_list)),
