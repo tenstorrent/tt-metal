@@ -27,7 +27,7 @@ from loguru import logger
 from ttnn.operations.ccl import MoEActivationFunction
 
 import ttnn
-from models.common.moe.moe_compute_helpers import _swiglu_reference
+from models.common.moe.compute_helpers import _swiglu_reference
 from models.common.moe.tt_moe_decode import TTMoEDecode
 from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.common.utility_functions import is_blackhole
