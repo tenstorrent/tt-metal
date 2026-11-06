@@ -85,11 +85,66 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
             ++i;
         }
     };
-    check(in.q, "q", {BHT, 1u, K});
-    check(in.k, "k", {BHT, 1u, K});
-    check(in.v, "v", {BHT, 1u, V});
-    check(in.g, "g", {BHT, 1u, 1u});  // the log decay; the kernel takes exp(g)
-    check(in.beta, "beta", {BHT, 1u, 1u});
+    // The layer tensors: TILE, 32x32 tiles, interleaved, bf16 or fp32 (q, k, v of one dtype), on q's device. The
+    // reader addresses their pages from these dims, so every dim is checked.
+    auto check_input = [&](const Tensor& t, const char* name, std::initializer_list<uint32_t> expected) {
+        TT_FATAL(
+            t.storage_type() == StorageType::DEVICE && t.is_allocated(),
+            "fused_recurrent_gated_delta_rule: {} must be allocated on device",
+            name);
+        TT_FATAL(t.device() == device, "fused_recurrent_gated_delta_rule: {} must be on the same device as q", name);
+        TT_FATAL(!t.is_sharded(), "fused_recurrent_gated_delta_rule: {} must be interleaved, not sharded", name);
+        TT_FATAL(t.layout() == Layout::TILE, "fused_recurrent_gated_delta_rule: {} must be TILE layout", name);
+        TT_FATAL(
+            t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16,
+            "fused_recurrent_gated_delta_rule: {} must be bf16 or fp32, got {}",
+            name,
+            t.dtype());
+        const auto tile_shape = t.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == TILE_HEIGHT && tile_shape[1] == TILE_WIDTH,
+            "fused_recurrent_gated_delta_rule: {} must use 32x32 tiles, got {}x{}",
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+        const auto& shape = t.logical_shape();
+        TT_FATAL(
+            shape.rank() == expected.size(),
+            "fused_recurrent_gated_delta_rule: {} must be rank {}, got rank {}",
+            name,
+            expected.size(),
+            shape.rank());
+        size_t i = 0;
+        for (uint32_t e : expected) {
+            TT_FATAL(
+                static_cast<uint32_t>(shape[i]) == e,
+                "fused_recurrent_gated_delta_rule: {} dim[{}] must be {}, got {}",
+                name,
+                i,
+                e,
+                shape[i]);
+            ++i;
+        }
+    };
+    TT_FATAL(
+        attrs.H >= 1 && attrs.HV % attrs.H == 0 && attrs.B * attrs.HV == attrs.BH,
+        "fused_recurrent_gated_delta_rule: HV ({}) must be a multiple of H ({}) and B*HV ({}*{}) must equal BH ({})",
+        attrs.HV,
+        attrs.H,
+        attrs.B,
+        attrs.HV,
+        attrs.BH);
+    check_input(in.q, "q", {attrs.B, attrs.T, attrs.H, K});
+    check_input(in.k, "k", {attrs.B, attrs.T, attrs.H, K});
+    check_input(in.v, "v", {attrs.B, attrs.T, attrs.HV, V});
+    check_input(in.g, "g", {attrs.B, attrs.T, attrs.HV});  // the log decay; the kernel takes exp(g)
+    check_input(in.beta, "beta", {attrs.B, attrs.T, attrs.HV});
+    TT_FATAL(
+        in.k.dtype() == in.q.dtype() && in.v.dtype() == in.q.dtype(),
+        "fused_recurrent_gated_delta_rule: q, k and v must share one dtype, got {} {} {}",
+        in.q.dtype(),
+        in.k.dtype(),
+        in.v.dtype());
     // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
     const bool ring = in.initial_state_block_idx.has_value();
     TT_FATAL(
@@ -200,6 +255,9 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
     const std::optional<Tensor>& initial_state_block_idx,
+    uint32_t B,
+    uint32_t H,
+    uint32_t HV,
     uint32_t T,
     bool output_final_state,
     bool output_per_token_state,
@@ -208,22 +266,23 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = FusedRecurrentGatedDeltaRuleDeviceOperation;
 
-    const auto& q_shape = q.logical_shape();  // [BH*T, 1, K]
-    const auto& v_shape = v.logical_shape();  // [BH*T, 1, V]
+    const auto& q_shape = q.logical_shape();  // [B, T, H, K]
+    const auto& v_shape = v.logical_shape();  // [B, T, HV, V]
     TT_FATAL(T >= 1, "fused_recurrent_gated_delta_rule: T must be >= 1, got {}", T);
     TT_FATAL(
-        q_shape.rank() == 3 && v_shape.rank() == 3,
-        "fused_recurrent_gated_delta_rule: q and v must be rank 3, got ranks {} and {}",
+        q_shape.rank() == 4 && v_shape.rank() == 4,
+        "fused_recurrent_gated_delta_rule: q and v must be rank 4, got ranks {} and {}",
         q_shape.rank(),
         v_shape.rank());
-    const uint32_t BHT = q_shape[0];
-    TT_FATAL(BHT % T == 0, "q dim0 ({}) must be divisible by T ({})", BHT, T);
 
     auto attrs = OperationType::operation_attributes_t{
-        .BH = BHT / T,
+        .B = B,
+        .H = H,
+        .HV = HV,
+        .BH = B * HV,
         .T = T,
-        .key_dim = q_shape[2],
-        .val_dim = v_shape[2],
+        .key_dim = q_shape[3],
+        .val_dim = v_shape[3],
         .output_final_state = output_final_state,
         .output_per_token_state = output_per_token_state,
         .inplace_final_state = inplace_final_state,

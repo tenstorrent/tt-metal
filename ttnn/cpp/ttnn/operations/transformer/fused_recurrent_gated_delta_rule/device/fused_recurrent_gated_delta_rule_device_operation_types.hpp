@@ -22,6 +22,9 @@
 namespace ttnn::prim {
 
 struct FusedRecurrentGatedDeltaRuleParams {
+    uint32_t B;        // batch rows of the call
+    uint32_t H;        // key heads; value head hv reads key head hv / (HV / H)
+    uint32_t HV;       // value heads
     uint32_t BH;       // B * HV  (one Tensix core per head)
     uint32_t T;        // number of tokens processed sequentially per head
     uint32_t key_dim;  // K (multiple of 32)
@@ -35,13 +38,13 @@ struct FusedRecurrentGatedDeltaRuleParams {
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-// All device-op input tensors are fp32, TILE layout, interleaved (DRAM or L1).
-// Head-split, L2-norm, q-scale and the per-token tile layout are done host-side; the compute kernel
-// does the recurrence, exp(g) included.
-//   q, k : [BH*T, 1, K]   (q already scaled by `scale`; both already L2-normalized over K)
-//   v    : [BH*T, 1, V]
-//   g    : [BH*T, 1, 1]   (the log decay g_t, one scalar per (head, token) in tile element [0,0])
-//   beta : [BH*T, 1, 1]
+// The input tensors are the layer's own: TILE layout, 32x32 tiles, interleaved (DRAM or L1), bf16 or fp32 (q, k and
+// v of one dtype; g and beta each bf16 or fp32). The reader gathers each core's rows and does the GQA mapping; the
+// compute kernel does the recurrence, exp(g) included. The L2-norm and the q-scale are still host ops.
+//   q, k : [B, T, H, K]   (q already scaled by `scale`; both already L2-normalized over K)
+//   v    : [B, T, HV, V]
+//   g    : [B, T, HV]     (the log decay g_t)
+//   beta : [B, T, HV]
 //   initial_state: [BH, K, V] or absent (zeros); with inplace_final_state the caller's [Bs, HV, K, V] (Bs*HV >= BH),
 //                  which is also the state output.
 //
