@@ -1,0 +1,8 @@
+mm_fanin: Tests: 10 executed, 0 failed;Tests: 10 executed, 0 failed;
+mm_fanin_1e: Tests: 10 executed, 0 failed;Tests: 10 executed, 0 failed;
+mm_sanity_line: Tests: 12 executed, 0 failed;Tests: 12 executed, 0 failed;
+mm_alloc_line: Tests: 25 executed, 0 failed;Tests: 25 executed, 0 failed;
+allvc: Tests: 4 executed, 0 failed;Tests: 4 executed, 0 failed;
+allvc_1e: Tests: 4 executed, 0 failed;Tests: 4 executed, 0 failed;
+allvc_os: Tests: 4 executed, 0 failed;Tests: 4 executed, 0 failed;
+allvc_small: Tests: 4 executed, 0 failed;Tests: 4 executed, 0 failed;

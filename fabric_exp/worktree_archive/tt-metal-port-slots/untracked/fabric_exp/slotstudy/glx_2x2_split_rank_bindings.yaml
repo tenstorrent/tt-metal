@@ -1,0 +1,15 @@
+# Copied 2026-11-01 for the slot study from the VC2 line agent's harness; only the MGD path changed.
+# Two processes on one Blackhole Galaxy node, one 2x2 mesh each (glx_2x2_split_mgd.textproto). TT_VISIBLE_DEVICES are
+# cluster-descriptor chip ids (as the P150 split's, fabric_exp/vc1): chips {0,1,4,5} and {2,3,6,7} of the first tray.
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,4,5"
+
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "2,3,6,7"
+
+mesh_graph_desc_path: "fabric_exp/slotstudy/glx_2x2_split_mgd.textproto"

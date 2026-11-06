@@ -1,0 +1,6 @@
+{
+ "sha": "2fc06852f489560679c4a168fd806f7f0d45d3b7",
+ "patches": [],
+ "local_changes": [],
+ "note": "final port tip 2fc06852f48 (= 288afd237a7 minus the stray tt_metal/pre-compiled symlink; sources identical). Built in place 2026-11-04 07:43 at 288afd237a7 with CCACHE_DISABLE=1, the symlink replaced by this tree's own precompiled firmware, then checked out at 2fc06852f48 (no rebuild needed); manifest tree name and result labels keep the 288afd2 name"
+}

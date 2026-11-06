@@ -1,0 +1,127 @@
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+index 51600c659c4..9652d230798 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+@@ -35,6 +35,28 @@ static_assert(
+ static_assert(
+     NUM_FABRIC_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_FABRIC_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
+ 
++// LOCAL (fabric_exp, quick test of the write gap; never committed): the study's one-segment stream-benchmark loop
++// (fabric_exp/streams/port, streams_p3f) for a single-config benchmark. Sends the header already in the current slot
++// again by returning the slot to the router (credit-only update), without copying it; VC0 / VC1's adapter only.
++// Copied from the study's sender (aagarwal/fabric-router-study, send_stream_benchmark) for one segment: the slot
++// table, the flat lap and the wait counting are kept; idle segments and the stream-counter write are left out.
++template <typename EdmSenderT>
++FORCE_INLINE bool replay_current_slot(EdmSenderT* conn) {
++    if constexpr (std::is_same_v<EdmSenderT, WorkerToFabricEdmSender>) {
++        tt::tt_fabric::fabric_detail::update_credits_and_slots<true>(conn);
++        return true;
++    } else {
++        return false;
++    }
++}
++constexpr bool RUNS_STREAM_LOOP = BENCHMARK_MODE && NUM_TRAFFIC_CONFIGS == 1;
++constexpr uint32_t MAX_STREAM_SLOTS = 256;
++constexpr uint8_t STREAM_SLOT_EMPTY = 0xFF;
++uint8_t stream_slot_segment[RUNS_STREAM_LOOP ? MAX_STREAM_SLOTS : 1];
++constexpr uint32_t MAX_FLAT_LAP = 64;
++uint8_t stream_lap_segment[RUNS_STREAM_LOOP ? MAX_FLAT_LAP : 1];
++uint32_t stream_lap_header[RUNS_STREAM_LOOP ? MAX_FLAT_LAP : 1];
++
+ void kernel_main() {
+     size_t rt_args_idx = 0;
+     size_t local_args_idx = 0;  // Initialize local args index
+@@ -100,9 +122,91 @@ void kernel_main() {
+     uint64_t start_timestamp = get_timestamp();
+     constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
+ 
++    // LOCAL (quick test): the study's stream-benchmark loop as a one-segment stream, stream_repeat = num_packets, count
++    // 1. The connection object lives in L1 and every free-slot check invalidates Blackhole's small L1 cache, so the
++    // loop works on a copy in local memory, checks for free slots only once it has used up the ones it knows about,
++    // and writes the copy back for close_connections. Every slot holds this config's header after its first lap, so
++    // later packets only return the slot (credit-only update).
++    auto send_packets_stream_loop = [&]() {
++        // One segment: stream_counts[0] = 1, stream_repeat = num_packets.
++        constexpr uint8_t segment_count = 1;
++        const uint32_t stream_counts[segment_count] = {1};
++        const uint32_t stream_repeat = sender_config->traffic_config_ptrs[0]->metadata.num_packets;
++
++        auto* conn_l1 = static_cast<EdmSenderType*>(sender_config->traffic_config_ptrs[0]->connection_ptr_);
++        EdmSenderType local_conn = *conn_l1;
++        auto* conn = &local_conn;
++        ASSERT(conn->num_buffers_per_channel <= MAX_STREAM_SLOTS);
++        for (uint32_t slot = 0; slot < conn->num_buffers_per_channel; slot++) {
++            stream_slot_segment[slot] = STREAM_SLOT_EMPTY;
++        }
++
++        conn->setup_stateful_send_cmd_bufs();
++        uint32_t header_copies = 0;
++        uint32_t slot_waits = 0;
++        uint64_t wait_cycles = 0;
++        uint32_t free_slots = 0;
++
++        auto send_packet = [&](uint8_t segment, uint32_t header_address) __attribute__((always_inline)) {
++            if (free_slots == 0) {
++                free_slots = conn->get_num_free_write_slots();
++                if (free_slots == 0) {
++                    slot_waits++;
++                    const uint64_t wait_start = get_timestamp();
++                    do {
++                        free_slots = conn->get_num_free_write_slots();
++                    } while (free_slots == 0);
++                    wait_cycles += get_timestamp() - wait_start;
++                }
++            }
++            free_slots--;
++            const uint8_t slot = conn->buffer_slot_index.get();
++            if (stream_slot_segment[slot] == segment && replay_current_slot(conn)) {
++                return;
++            }
++            conn->send_current_slot_stateful_non_blocking_from_address(header_address, sizeof(PACKET_HEADER_TYPE));
++            stream_slot_segment[slot] = segment;
++            header_copies++;
++        };
++
++        uint32_t lap_length = 0;
++        for (uint8_t segment = 0; segment < segment_count; segment++) {
++            lap_length += stream_counts[segment];
++        }
++
++        const uint64_t loop_start = get_timestamp();
++        uint32_t position = 0;
++        for (uint8_t segment = 0; segment < segment_count; segment++) {
++            const uint32_t header_address = (uint32_t)sender_config->traffic_config_ptrs[segment]->packet_header;
++            for (uint32_t i = 0; i < stream_counts[segment]; i++) {
++                stream_lap_segment[position] = segment;
++                stream_lap_header[position] = header_address;
++                position++;
++            }
++        }
++        const uint32_t total_packets = stream_repeat * lap_length;
++        position = 0;
++        for (uint32_t packet = 0; packet < total_packets; packet++) {
++            send_packet(stream_lap_segment[position], stream_lap_header[position]);
++            position = position + 1 == lap_length ? 0 : position + 1;
++        }
++        uint64_t busy_cycles = get_timestamp() - loop_start - wait_cycles;
++        *conn_l1 = local_conn;
++
++        for (uint8_t segment = 0; segment < segment_count; segment++) {
++            sender_config->traffic_config_ptrs[segment]->num_packets_processed = stream_repeat * stream_counts[segment];
++        }
++        // The study writes header_copies, slot_waits and busy_cycles to its stream-counter region here; the port's
++        // host does not read that region, so the write is left out.
++        (void)header_copies;
++        (void)slot_waits;
++        (void)busy_cycles;
++    };
++
+     if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
+-        // Stateful sends optimized for single traffic config tests
+-        send_packets_stateful();
++        // Stateful sends optimized for single traffic config tests (quick test: the stream loop instead)
++        send_packets_stream_loop();
++        (void)send_packets_stateful;
+     } else {
+         while (packets_left_to_send) {
+             packets_left_to_send = false;

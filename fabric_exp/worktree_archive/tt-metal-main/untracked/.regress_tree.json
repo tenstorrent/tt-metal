@@ -1,0 +1,7 @@
+{
+ "sha": "d2bd12fcf1f1aac1203b735bf12540a34a8c2fc1",
+ "patches": [
+  "fabric_exp/testplan/patches/main_no_bw_telemetry.patch: tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp (test harness only: TT_FABRIC_NO_BW_TELEMETRY switch; user OK 2026-11-03; only test_tt_fabric rebuilt 21:29)"
+ ],
+ "note": "origin/main d2bd12f + the patch above; libraries, router and kernels are pure d2bd12f"
+}

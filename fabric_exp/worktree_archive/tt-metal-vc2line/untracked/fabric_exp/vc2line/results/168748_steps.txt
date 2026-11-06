@@ -1,0 +1,6 @@
+node=bh-glx-110-a02u14 job=168748 start=2026-11-02T19:14:04Z tree=vc2l_g3a steps=line line_1e nbr_vc2 nbr_sanity ring ring_small ring_1e tst_line
+!!! bh-glx-110-a02u14: other users' processes that may hold the device; stopping:
+ubuntu                     03:02 /usr/bin/python3.10(mitogen:ctr-bhoddinott@Daniel-Hoddinott's-Mac:71411)
+ubuntu                     03:02 /usr/bin/python3.10(mitogen:ctr-bhoddinott@Daniel-Hoddinott's-Mac:71411)
+ubuntu                     02:57 /usr/bin/python3(mitogen:ctr-bhoddinott@Daniel-Hoddinott's-Mac:71411)
+ubuntu                     02:55 /usr/bin/python3(mitogen:ctr-bhoddinott@Daniel-Hoddinott's-Mac:71411)

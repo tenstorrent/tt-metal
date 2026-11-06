@@ -1,0 +1,56 @@
+# Pass 2 of the link-L throughput rows (VC2_LINE_BRINGUP.md, "Full VCs and total throughput"; the report's all-three-VCs
+# line item): glx_full_split.yaml's L* tests in reverse order (all three VCs, VC0 + VC2, then each VC alone) and sizes
+# largest first, so that an order effect would show against pass 1. Same flows, packets and settings as glx_full_split.yaml.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+
+Tests:
+  - name: "LAll"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [4352, 1024, 256]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [1, 3]}}]}
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "LVC0VC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [4352, 1024, 256]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "LVC1"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [4352, 1024, 256]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "LVC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [4352, 1024, 256]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "LVC0"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [4352, 1024, 256]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}

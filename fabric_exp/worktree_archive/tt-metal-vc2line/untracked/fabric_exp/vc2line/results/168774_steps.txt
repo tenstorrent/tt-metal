@@ -1,0 +1,38 @@
+=== tt-smi -glx_reset (before the steps) 19:33:14: 6.6.0
+reset: exit 0, Blackhole chips listed: 64
+=== mm_fanin (19:33:57): glx_vc2_fanin.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3
+mm_fanin: exit 0 in 70 s; per rank:       2 Tests: 10 executed, 0 failed;
+=== mm_fanin_1e (19:35:07): glx_vc2_fanin.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+mm_fanin_1e: exit 0 in 50 s; per rank:       2 Tests: 10 executed, 0 failed;
+=== mm_sanity_line (19:35:57): vc1_sanity.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1
+mm_sanity_line: exit 0 in 50 s; per rank:       2 Tests: 12 executed, 0 failed;
+=== mm_alloc_line (19:36:47): vc1_alloc.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1
+mm_alloc_line: exit 0 in 60 s; per rank:       2 Tests: 25 executed, 0 failed;
+=== mm_vc2_line (19:37:47): test_fabric_vc2_at_least_2x2_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1
+mm_vc2_line: exit 134 in 30 s; per rank: NO RESULT
+=== allvc (19:38:17): glx_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3
+allvc: exit 0 in 40 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== allvc_1e (19:38:57): glx_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+allvc_1e: exit 0 in 50 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== allvc_os (19:39:47): glx_allvc.yaml, timeout 600 s 
+allvc_os: exit 0 in 50 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== allvc_small (19:40:37): glx_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=0,7,16,4,4,4,2,4
+allvc_small: exit 0 in 50 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== mm_sanity44 (19:41:27): vc1_sanity.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3
+mm_sanity44: exit 134 in 10 s; per rank: NO RESULT
+=== mm_sanity_line44 (19:41:37): vc1_sanity.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1
+mm_sanity_line44: exit 134 in 10 s; per rank: NO RESULT
+=== mm_vc2_line44 (19:41:47): test_fabric_vc2_at_least_2x2_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1
+mm_vc2_line44: exit 134 in 10 s; per rank: NO RESULT
+=== allvc44 (19:41:57): glx44_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3
+allvc44: exit 134 in 10 s; per rank: NO RESULT
+=== allvc44_1e (19:42:07): glx44_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+allvc44_1e: exit 134 in 10 s; per rank: NO RESULT
+=== allvc_os44 (19:42:17): glx44_allvc.yaml, timeout 600 s 
+allvc_os44: exit 134 in 10 s; per rank: NO RESULT
+=== allvc_small44 (19:42:28): glx44_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=0,7,16,4,4,4,2,4
+allvc_small44: exit 134 in 10 s; per rank: NO RESULT
+=== allvc44_r2 (19:42:38): glx44_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3
+allvc44_r2: exit 134 in 10 s; per rank: NO RESULT
+=== hang capture capself_after_allvc44_r2 (19:42:48)
+hang capture: exit 0 (55M); output: /data/aagarwal/frs-glx/jobs/168774/results/capself_after_allvc44_r2

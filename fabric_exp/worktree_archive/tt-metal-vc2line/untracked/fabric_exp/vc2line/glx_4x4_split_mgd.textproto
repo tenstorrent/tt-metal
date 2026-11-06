@@ -1,0 +1,35 @@
+# One Blackhole Galaxy split into two 4x4 meshes (VC2_LINE_BRINGUP.md, meshes larger than 2x2): cluster-descriptor chips
+# 0-15 and 16-31. single_bh_galaxy_clus_desc as an 8x4 grid (rows of 4; found by embedding its links):
+#    0  4 12  8 |  1  5 13  9 |  2  6 14 10 |  3  7 15 11     mesh 0 (rows 0-3)
+#   27 31 23 19 | 26 30 22 18 | 25 29 21 17 | 24 28 20 16     mesh 1 (rows 4-7)
+# The meshes meet across rows 3/4 (3-27, 7-31, 15-23, 11-19) and over the Galaxy's other links between the halves (the
+# rows 0/7 wrap, 0-24 ...; 2-26, 6-30, 10-18, 14-22). Row 1 of mesh 0 has no link to mesh 1, so its routers are inside
+# the mesh (not edge routers): E/W routers there forward VC0 on the preset and VC1 (and VC2) too, the command-buffer-2
+# case that 2x2 meshes cannot reach.
+# Intra-mesh channels are STRICT (at least 2 links per mesh edge): rows of 4 are rings (the wrap links), so the mapper
+# may lay a row out in any rotation, and under RELAXED it took edges with fewer links than the control plane then requires
+# (job 168774 on bh-glx-110-a02u14: tray 3 loc 3/4 to tray 4 loc 3/4 have 1 link each; "Expected 2 eth links"). STRICT
+# makes it pick a rotation whose edges all have 2.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

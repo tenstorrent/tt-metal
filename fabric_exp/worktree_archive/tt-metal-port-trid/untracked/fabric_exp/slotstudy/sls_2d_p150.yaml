@@ -1,0 +1,140 @@
+# Slot study (SLOT_STUDY.md, 2026-11-01), P3 on the P150x8 (2x4 mesh, 400G): the 2D rows shared with the Galaxy
+# (sls_2d_glx.yaml), device ids row-major in rows of 4 ([0, 0..3] top row). 2D Mesh, VC0 only, one link; 1024 B and
+# 4352 B. TT_FABRIC_EXP_SLOTS_2D=worker,forwarding,receiver sets the depths. Rows: 1-hop E/W, N/S, E/W bidirectional;
+# 3-hop E/W (two forwarding routers); a row merge (3 flows into [0, 3]: the last link carries 1 worker + 2 forwarded
+# flows); a turn ([0, 0] -> [0, 7]: 1 N/S + 3 E/W hops); multicast all-to-all. 14 tests.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+
+  - name: "Sls1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "Sls1HopNS"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+
+  - name: "Sls1HopEWBidir"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+
+  - name: "Sls3HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "SlsRowMerge"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "SlsTurn4"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 7]
+
+  - name: "SlsMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 4352]
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+    patterns:
+      - type: all_to_all
+        iterations: 1

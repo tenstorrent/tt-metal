@@ -1,0 +1,932 @@
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
+index ce1ed11d653..4884179f847 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
+@@ -333,23 +333,47 @@ struct NocUnicastWriteFields {
+ };
+ 
+ struct NocUnicastAtomicIncFields {
++    // The host packs an optional flush override into the increment word's top two bits (see the host-side
++    // NocUnicastAtomicIncFields::get_args): bit 31 = override present, bit 30 = its value.
++    static constexpr uint32_t kFlushSetBit = 1u << 31;
++    static constexpr uint32_t kFlushValueBit = 1u << 30;
++
+     template <bool IS_SOURCE>
+     static NocUnicastAtomicIncFields build_from_args(size_t& arg_idx) {
+-        uint32_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
++        const uint32_t inc_word = get_local_arg_val<uint32_t>(arg_idx++);
+         uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
+         uint32_t dst_noc_encoding = 0;
+         if constexpr (IS_SOURCE) {
+             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
+         }
+-        return NocUnicastAtomicIncFields(atomic_inc_val, dst_address, dst_noc_encoding);
+-    }
+-
+-    NocUnicastAtomicIncFields(uint32_t atomic_inc_val, uint32_t dst_address, uint32_t dst_noc_encoding) :
+-        atomic_inc_val(atomic_inc_val), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
++        return NocUnicastAtomicIncFields(
++            inc_word & ~(kFlushSetBit | kFlushValueBit),
++            dst_address,
++            dst_noc_encoding,
++            (inc_word & kFlushSetBit) != 0,
++            (inc_word & kFlushValueBit) != 0);
++    }
++
++    NocUnicastAtomicIncFields(
++        uint32_t atomic_inc_val,
++        uint32_t dst_address,
++        uint32_t dst_noc_encoding,
++        bool flush_set = false,
++        bool flush_value = false) :
++        atomic_inc_val(atomic_inc_val),
++        dst_address(dst_address),
++        dst_noc_encoding(dst_noc_encoding),
++        flush_set(flush_set),
++        flush_value(flush_value) {}
++
++    // Flush flag for the packet header: the override when present, otherwise the given per-type default.
++    bool flush_or(bool default_flush) const { return flush_set ? flush_value : default_flush; }
+ 
+     uint32_t atomic_inc_val;
+     uint32_t dst_address;
+     uint32_t dst_noc_encoding;
++    bool flush_set;
++    bool flush_value;
+ };
+ 
+ struct NocUnicastWriteAtomicIncFields {
+@@ -1235,7 +1259,8 @@ inline void NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl(
+     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
+ 
+     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+-    config->packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
++    config->packet_header->to_noc_unicast_atomic_inc(
++        NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.flush_or(true)});
+ 
+     config->noc_fields_.atomic_inc_fields = fields;
+     config->payload_size_bytes = 0;
+@@ -1252,7 +1277,8 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
+     auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
+ 
+     // Test infra allocates the payload and atomic counter on the same core, so NOC ordering preserves
+-    // write-before-atomic without flushing the write pipeline.
++    // write-before-atomic without flushing the write pipeline. A pattern or stream segment can still request the
++    // flush ('flush: true') to measure the router's flushed path.
+     ASSERT(fields.write_fields.dst_noc_encoding == fields.atomic_inc_fields.dst_noc_encoding);
+ 
+     uint64_t write_noc_addr =
+@@ -1262,7 +1288,7 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
+ 
+     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
+         NocUnicastAtomicIncFusedCommandHeader{
+-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
++            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, fields.atomic_inc_fields.flush_or(false)},
+         fields.write_fields.payload_size_bytes);
+ 
+     config->noc_fields_.write_atomic_inc_fields = fields;
+@@ -1280,7 +1306,7 @@ inline void NocFusedSenderOperations<EdmSenderT>::update_header_impl(SenderKerne
+ 
+     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
+         NocUnicastAtomicIncFusedCommandHeader{
+-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
++            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, fields.atomic_inc_fields.flush_or(false)},
+         fields.write_fields.payload_size_bytes);
+ }
+ 
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp
+index be7da5a2248..7ef33cd1be0 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp
+@@ -15,6 +15,8 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(3);
+ constexpr uint8_t NUM_CREDIT_CONNECTIONS = get_compile_time_arg_val(4);
+ constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(5);
+ constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(6);
++// Sync tests: on entry, count this receiver in its chip's sync core (the start gate, TestContext::launch_programs)
++constexpr bool SIGNAL_READY = get_compile_time_arg_val(7);
+ 
+ using ReceiverKernelConfigType = ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS, NUM_CREDIT_CONNECTIONS, IS_2D_FABRIC>;
+ 
+@@ -47,6 +49,14 @@ void kernel_main() {
+     clear_test_results(receiver_config->get_result_buffer_address(), receiver_config->get_result_buffer_size());
+     write_test_status(receiver_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
+ 
++    // Senders start only once every receiver of the test is running: count this one in the chip's sync core (its NoC
++    // encoding and the receivers-ready address follow the mux termination args). Before any packet is read.
++    if constexpr (SIGNAL_READY) {
++        const uint32_t sync_core_noc_encoding = get_local_arg_val<uint32_t>(local_args_idx++);
++        const uint32_t receivers_ready_address = get_local_arg_val<uint32_t>(local_args_idx++);
++        noc_semaphore_inc(get_noc_addr_helper(sync_core_noc_encoding, receivers_ready_address), 1);
++    }
++
+     // Open credit connections (no-op if NUM_CREDIT_CONNECTIONS == 0)
+     receiver_config->open_credit_connections();
+ 
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+index f852684bdac..8a157f0dfe2 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+@@ -18,7 +18,11 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
+ constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
+ constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
+ constexpr uint8_t VC_ID = get_compile_time_arg_val(9);
+-constexpr bool STREAM_MODE = get_compile_time_arg_val(10);
++// 0: no stream; 1: a stream; 2: a stream with idle segments (after a segment's packets the worker may wait a number
++// of cycles, modelling compute gaps). One argument for both, so senders without idle segments build as before.
++constexpr uint32_t STREAM_ARG = get_compile_time_arg_val(10);
++constexpr bool STREAM_MODE = STREAM_ARG != 0;
++constexpr bool STREAM_IDLE = STREAM_ARG == 2;
+ 
+ // Select the EDM sender adapter type based on VC_ID:
+ // VC0/VC1 use WorkerToFabricEdmSender (stream ID 22), VC2 uses WorkerToFabricEdmSenderVC2 (stream ID 30)
+@@ -38,6 +42,7 @@ static_assert(
+ 
+ // A stream feeds one router.
+ static_assert(!STREAM_MODE || NUM_FABRIC_CONNECTIONS == 1, "A stream sender has exactly one fabric connection");
++static_assert(!STREAM_IDLE || STREAM_MODE, "Idle segments belong to a stream");
+ 
+ // A single-pattern benchmark sender runs the stream loop as a one-segment stream.
+ constexpr bool RUNS_STREAM_LOOP = STREAM_MODE || (BENCHMARK_MODE && NUM_TRAFFIC_CONFIGS == 1);
+@@ -56,14 +61,29 @@ uint8_t stream_slot_segment[RUNS_STREAM_LOOP ? MAX_STREAM_SLOTS : 1];
+ constexpr uint32_t MAX_FLAT_LAP = 64;
+ uint8_t stream_lap_segment[RUNS_STREAM_LOOP ? MAX_FLAT_LAP : 1];
+ uint32_t stream_lap_header[RUNS_STREAM_LOOP ? MAX_FLAT_LAP : 1];
++// Idle segments: cycles to wait after each segment's packets, and after each position of a flat lap (non-zero only
++// on a segment's last packet).
++uint32_t stream_segment_idle[STREAM_IDLE ? NUM_TRAFFIC_CONFIGS : 1];
++uint32_t stream_lap_idle[STREAM_IDLE ? MAX_FLAT_LAP : 1];
++
++// An idle segment: the worker sends nothing for `cycles` cycles on the clock the run is timed with, so the wait
++// counts in the run's elapsed time. Returns the cycles actually waited.
++FORCE_INLINE uint64_t stream_idle_wait(uint32_t cycles) {
++    const uint64_t start = get_timestamp();
++    uint64_t now = start;
++    while (now - start < cycles) {
++        now = get_timestamp();
++    }
++    return now - start;
++}
+ 
+ // Sends the header already in the current slot again by returning the slot to the router, without
+-// copying it. Only the VC0 adapter exposes the credit-only update, so other adapters return false
+-// and the caller copies the header instead.
+-template <typename EdmSenderT>
++// copying it. Only the VC0 adapter exposes the credit-only update, so other adapters (VC2's) return
++// false and the caller copies the header instead.
++template <bool STATEFUL_NOC = true, typename EdmSenderT>
+ FORCE_INLINE bool replay_current_slot(EdmSenderT* conn) {
+     if constexpr (std::is_same_v<EdmSenderT, WorkerToFabricEdmSender>) {
+-        tt::tt_fabric::fabric_detail::update_credits_and_slots</*STATEFUL_NOC=*/true>(conn);
++        tt::tt_fabric::fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
+         return true;
+     } else {
+         return false;
+@@ -92,6 +112,11 @@ void kernel_main() {
+         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+             stream_counts[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+         }
++        if constexpr (STREAM_IDLE) {
++            for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
++                stream_segment_idle[i] = get_local_arg_val<uint32_t>(local_args_idx++);
++            }
++        }
+     }
+ 
+     // Build mux termination manager from local args (uses advanced local_args_idx)
+@@ -171,6 +196,8 @@ void kernel_main() {
+         // Cycles spent waiting for a slot, timed only when a wait happens. The rest of the loop's time
+         // is the worker's own cost per packet, which a router-bound run otherwise hides.
+         uint64_t wait_cycles = 0;
++        // Cycles spent in idle segments, which are part of the run but not the worker's cost per packet.
++        uint64_t idle_cycles = 0;
+         // Slots known to be free since the last check. Checking costs a fence and an L1 read of the
+         // router's counter, so the loop checks only once it has used up the slots it knows about.
+         uint32_t free_slots = 0;
+@@ -211,6 +238,9 @@ void kernel_main() {
+                 for (uint32_t i = 0; i < stream_counts[segment]; i++) {
+                     stream_lap_segment[position] = segment;
+                     stream_lap_header[position] = header_address;
++                    if constexpr (STREAM_IDLE) {
++                        stream_lap_idle[position] = i + 1 == stream_counts[segment] ? stream_segment_idle[segment] : 0;
++                    }
+                     position++;
+                 }
+             }
+@@ -219,6 +249,11 @@ void kernel_main() {
+             position = 0;
+             for (uint32_t packet = 0; packet < total_packets; packet++) {
+                 send_packet(stream_lap_segment[position], stream_lap_header[position]);
++                if constexpr (STREAM_IDLE) {
++                    if (stream_lap_idle[position] != 0) {
++                        idle_cycles += stream_idle_wait(stream_lap_idle[position]);
++                    }
++                }
+                 position = position + 1 == lap_length ? 0 : position + 1;
+             }
+         } else {
+@@ -229,10 +264,18 @@ void kernel_main() {
+                     for (uint32_t i = 0; i < stream_counts[segment]; i++) {
+                         send_packet(segment, header_address);
+                     }
++                    if constexpr (STREAM_IDLE) {
++                        if (stream_segment_idle[segment] != 0) {
++                            idle_cycles += stream_idle_wait(stream_segment_idle[segment]);
++                        }
++                    }
+                 }
+             }
+         }
+-        const uint64_t busy_cycles = get_timestamp() - loop_start - wait_cycles;
++        uint64_t busy_cycles = get_timestamp() - loop_start - wait_cycles;
++        if constexpr (STREAM_IDLE) {
++            busy_cycles -= idle_cycles;
++        }
+         *conn_l1 = local_conn;
+ 
+         for (uint8_t segment = 0; segment < NUM_TRAFFIC_CONFIGS; segment++) {
+@@ -289,11 +332,9 @@ void kernel_main() {
+                     }
+                 }
+                 free_slots[c]--;
+-                if (sent[i] < conn.num_buffers_per_channel) {
++                if (sent[i] < conn.num_buffers_per_channel || !replay_current_slot</*STATEFUL_NOC=*/false>(&conn)) {
+                     conn.send_payload_flush_non_blocking_from_address(header_of[i], sizeof(PACKET_HEADER_TYPE));
+                     header_writes++;
+-                } else {
+-                    tt::tt_fabric::fabric_detail::update_credits_and_slots</*STATEFUL_NOC=*/false>(&conn);
+                 }
+                 sent[i]++;
+                 packets_left |= sent[i] < packets_of[i];
+@@ -325,6 +366,11 @@ void kernel_main() {
+                         write_progress();
+                     }
+                 }
++                if constexpr (STREAM_IDLE) {
++                    if (stream_segment_idle[segment] != 0) {
++                        stream_idle_wait(stream_segment_idle[segment]);
++                    }
++                }
+             }
+         }
+     };
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp
+index 6ab32666be3..5e6de9c962c 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp
+@@ -48,10 +48,20 @@ void kernel_main() {
+     MuxTerminationManager<HAS_MUX_CONNECTIONS, NUM_MUXES_TO_TERMINATE> mux_termination_manager(
+         local_args_idx, common_memory_map.mux_termination_sync_address);
+ 
++    // The host's start release word follows the mux termination args.
++    auto* start_release_ptr =
++        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_arg_val<uint32_t>(local_args_idx++));
++
+     // Clear test results area and mark as started
+     clear_test_results(sync_config->get_result_buffer_address(), sync_config->get_result_buffer_size());
+     write_test_status(sync_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
+ 
++    // Senders start when this core's syncs release them, so hold the syncs until every receiver of the test is
++    // running: the host sets the release word once all of them, on every host, have started
++    // (TestContext::launch_programs). The global sync spans only this mesh, and a receiver on another host can start
++    // after its sender has sent more packets than its buffer holds.
++    noc_semaphore_wait_min(start_release_ptr, 1);
++
+     // Perform global sync (master sync core) for start of sync
+     uint8_t local_sync_iter = 0, global_sync_iter = 0;
+     for (uint8_t i = 0; i < NUM_START_GLOBAL_SYNC_ITERS; i++) {
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
+index 7091e8b6c06..e291d5359d4 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
+@@ -63,13 +63,19 @@ struct ParsedDestinationConfig {
+     std::optional<uint32_t> atomic_inc_address;
+ };
+ 
+-// One entry of a traffic stream: a packet shape and how many packets of it each lap sends.
++// One entry of a traffic stream: a packet shape and how many packets of it each lap sends, or an idle gap.
+ // Unset fields are inherited from the pattern that carries the stream.
+ struct ParsedStreamSegment {
+     std::optional<NocSendType> ntype;
+     std::optional<uint32_t> size;
+     std::optional<uint32_t> atomic_inc_val;
++    // atomic_inc / fused_atomic_inc segments: whether the receiving router flushes earlier writes before the atomic.
++    // Unset keeps the per-type default (atomic_inc: true, fused_atomic_inc: false).
++    std::optional<bool> flush;
+     uint32_t count = 1;
++    // An idle segment ({idle: <cycles>}) sends nothing: the worker waits this many cycles before its next packet,
++    // which models compute between bursts. It sets no other field.
++    std::optional<uint32_t> idle;
+ };
+ 
+ // Upper bound on segments in one stream. Each segment becomes its own traffic config on the sender.
+@@ -82,6 +88,7 @@ struct ParsedTrafficPatternConfig {
+     std::optional<uint32_t> num_packets;
+     std::optional<ParsedDestinationConfig> destination;
+     std::optional<uint32_t> atomic_inc_val;
++    std::optional<bool> flush;  // see ParsedStreamSegment::flush
+     std::optional<uint32_t> mcast_start_hops;
+     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
+     // Ordered packet shapes sent in laps; expand_streams turns each segment into its own pattern.
+@@ -90,10 +97,12 @@ struct ParsedTrafficPatternConfig {
+ };
+ 
+ // Send order for a sender built from a stream: each lap sends counts[i] packets of pattern i, in
+-// pattern order, and the sender runs `repeat` laps.
++// pattern order, and the sender runs `repeat` laps. With idle segments, idle_after[i] is how many cycles the worker
++// waits after pattern i's packets in each lap (empty when the stream has no idle segments).
+ struct StreamProgram {
+     uint32_t repeat = 1;
+     std::vector<uint32_t> counts;
++    std::vector<uint32_t> idle_after;
+ };
+ 
+ struct ParsedSenderConfig {
+@@ -129,6 +138,7 @@ struct TrafficPatternConfig {
+     std::optional<uint32_t> num_packets;
+     std::optional<DestinationConfig> destination;
+     std::optional<uint32_t> atomic_inc_val;
++    std::optional<bool> flush;  // see ParsedStreamSegment::flush
+     std::optional<uint32_t> mcast_start_hops;
+     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+ 
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
+index c1172a8efbe..15cfd431210 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
+@@ -140,6 +140,9 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const
+     if (pattern_yaml["atomic_inc_val"]) {
+         config.atomic_inc_val = parse_scalar<uint32_t>(pattern_yaml["atomic_inc_val"]);
+     }
++    if (pattern_yaml["flush"]) {
++        config.flush = parse_scalar<bool>(pattern_yaml["flush"]);
++    }
+     if (pattern_yaml["mcast_start_hops"]) {
+         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
+     }
+@@ -182,6 +185,15 @@ std::vector<ParsedStreamSegment> YamlConfigParser::parse_stream(const YAML::Node
+         }
+ 
+         TT_FATAL(segment_yaml.IsMap(), "Expected each stream segment to be an ntype string or a map");
++        if (segment_yaml["idle"]) {
++            // An idle segment: the worker waits this many cycles and sends nothing.
++            TT_FATAL(
++                segment_yaml.size() == 1,
++                "An idle stream segment ({{idle: <cycles>}}) sets no other field; packet fields go on their own segments");
++            segment.idle = parse_scalar<uint32_t>(segment_yaml["idle"]);
++            segments.push_back(segment);
++            continue;
++        }
+         for (const auto& field : segment_yaml) {
+             const auto key = parse_scalar<std::string>(field.first);
+             if (key == "ntype") {
+@@ -191,12 +203,14 @@ std::vector<ParsedStreamSegment> YamlConfigParser::parse_stream(const YAML::Node
+                 segment.size = parse_scalar<uint32_t>(field.second);
+             } else if (key == "atomic_inc_val") {
+                 segment.atomic_inc_val = parse_scalar<uint32_t>(field.second);
++            } else if (key == "flush") {
++                segment.flush = parse_scalar<bool>(field.second);
+             } else if (key == "count") {
+                 segment.count = parse_scalar<uint32_t>(field.second);
+                 TT_FATAL(segment.count > 0, "A stream segment's 'count' must be at least 1");
+             } else {
+                 TT_THROW(
+-                    "Unsupported stream segment field '{}'. A segment sets ntype, size, atomic_inc_val and count; "
++                    "Unsupported stream segment field '{}'. A segment sets ntype, size, atomic_inc_val, flush and count; "
+                     "ftype, destination, mcast_start_hops and the packet count (repeat) apply to the whole stream",
+                     key);
+             }
+@@ -699,6 +713,9 @@ static auto pattern_field_values(const ParsedTrafficPatternConfig& pattern, GetF
+         return values;
+     }
+     for (const auto& segment : pattern.stream.value()) {
++        if (segment.idle.has_value()) {
++            continue;  // an idle segment sends nothing
++        }
+         const auto value = get_field(segment);
+         values.push_back(value.has_value() ? value : get_field(pattern));
+     }
+@@ -1371,6 +1388,7 @@ TrafficPatternConfig TestConfigBuilder::resolve_traffic_pattern(const ParsedTraf
+     resolved_pattern.size = parsed_pattern.size;
+     resolved_pattern.num_packets = parsed_pattern.num_packets;
+     resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
++    resolved_pattern.flush = parsed_pattern.flush;
+     resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
+     resolved_pattern.sender_credit_info = std::nullopt;
+     resolved_pattern.credit_return_batch_size = std::nullopt;
+@@ -1819,6 +1837,10 @@ void TestConfigBuilder::validate_pattern(const TrafficPatternConfig& pattern, co
+             !pattern.atomic_inc_val.has_value(),
+             "Test '{}': 'atomic_inc_val' should not be specified for 'unicast_write' ntype.",
+             test.name);
++        TT_FATAL(
++            !pattern.flush.has_value(),
++            "Test '{}': 'flush' should not be specified for 'unicast_write' ntype.",
++            test.name);
+     }
+ 
+     // 3. Validate payload size
+@@ -1977,6 +1999,12 @@ void TestConfigBuilder::validate_stream_senders(const TestConfig& test) const {
+                 test.name,
+                 sender.stream->counts.size(),
+                 sender.patterns.size());
++            TT_FATAL(
++                sender.stream->idle_after.empty() || sender.stream->idle_after.size() == sender.patterns.size(),
++                "Test '{}': stream program has {} idle entries for {} patterns",
++                test.name,
++                sender.stream->idle_after.size(),
++                sender.patterns.size());
+         }
+     }
+ 
+@@ -2910,7 +2938,20 @@ void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
+         StreamProgram program{.repeat = repeat};
+         std::vector<ParsedTrafficPatternConfig> segment_patterns;
+         segment_patterns.reserve(stream_pattern.stream->size());
++        // Idle segments become waits after the packet segment before them: idle_after[i] follows pattern i's packets
++        // in each lap. Idle at the start of the stream waits at the end of each lap instead (the same sequence, minus
++        // the very first wait). Consecutive idle segments add up.
++        std::vector<uint64_t> idle_after;
++        uint64_t leading_idle = 0;
+         for (const auto& segment : stream_pattern.stream.value()) {
++            if (segment.idle.has_value()) {
++                if (segment_patterns.empty()) {
++                    leading_idle += segment.idle.value();
++                } else {
++                    idle_after.back() += segment.idle.value();
++                }
++                continue;
++            }
+             ParsedTrafficPatternConfig pattern = stream_pattern;
+             pattern.stream.reset();
+             pattern.repeat.reset();
+@@ -2934,6 +2975,16 @@ void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
+                 // An atomic_inc_val set on the pattern is meant for the stream's atomic segments.
+                 pattern.atomic_inc_val.reset();
+             }
++            if (segment.flush.has_value()) {
++                TT_FATAL(
++                    !is_write_only,
++                    "Test '{}': a stream segment sets flush but its ntype sends no atomic increment",
++                    test.name);
++                pattern.flush = segment.flush;
++            } else if (is_write_only) {
++                // Like atomic_inc_val, a flush set on the pattern is meant for the stream's atomic segments.
++                pattern.flush.reset();
++            }
+ 
+             // atomic_inc carries no payload, so it counts as zero bytes in bandwidth results.
+             if (pattern.ntype == NocSendType::NOC_UNICAST_ATOMIC_INC) {
+@@ -2951,6 +3002,19 @@ void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
+ 
+             segment_patterns.push_back(std::move(pattern));
+             program.counts.push_back(segment.count);
++            idle_after.push_back(0);
++        }
++        TT_FATAL(!segment_patterns.empty(), "Test '{}': a stream needs at least one segment that sends packets", test.name);
++        idle_after.back() += leading_idle;
++        if (std::any_of(idle_after.begin(), idle_after.end(), [](uint64_t cycles) { return cycles != 0; })) {
++            for (const uint64_t cycles : idle_after) {
++                TT_FATAL(
++                    cycles <= std::numeric_limits<uint32_t>::max(),
++                    "Test '{}': a stream's idle segments add up to {} cycles in one place; at most 2^32 - 1",
++                    test.name,
++                    cycles);
++                program.idle_after.push_back(static_cast<uint32_t>(cycles));
++            }
+         }
+ 
+         // The sender kernel counts a stream's packets in 32 bits.
+@@ -3118,6 +3182,10 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TrafficPatternC
+         out << YAML::Key << "atomic_inc_val";
+         out << YAML::Value << config.atomic_inc_val.value();
+     }
++    if (config.flush) {
++        out << YAML::Key << "flush";
++        out << YAML::Value << config.flush.value();
++    }
+     if (config.mcast_start_hops) {
+         out << YAML::Key << "mcast_start_hops";
+         out << YAML::Value << config.mcast_start_hops.value();
+@@ -3159,6 +3227,10 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const SenderConfig& c
+         out << YAML::Value << YAML::BeginMap;
+         out << YAML::Key << "repeat" << YAML::Value << config.stream->repeat;
+         out << YAML::Key << "counts" << YAML::Value << YAML::Flow << config.stream->counts;
++        if (!config.stream->idle_after.empty()) {
++            // Cycles the worker waits after patterns[i]'s packets in each lap (idle segments).
++            out << YAML::Key << "idle_after" << YAML::Value << YAML::Flow << config.stream->idle_after;
++        }
+         out << YAML::EndMap;
+     }
+ 
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
+index 8853acbf5e3..0c3914e41b9 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
+@@ -249,6 +249,7 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
+     merged.size = specific.size.has_value() ? specific.size : base.size;
+     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
+     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
++    merged.flush = specific.flush.has_value() ? specific.flush : base.flush;
+     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
+     merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
+     if constexpr (requires { merged.stream; }) {
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+index 28af07c75a2..fcc4c23539c 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+@@ -5,6 +5,7 @@
+ #include <tt_stl/reflection.hpp>
+ #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp"
+ 
++#include <chrono>
+ #include <filesystem>
+ #include <thread>
+ 
+@@ -83,6 +84,103 @@ void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
+     }
+ }
+ 
++// A receiver that starts after its sender has sent more packets than its buffer holds finds its first packets
++// overwritten and waits for them forever. The global sync spans only one mesh, so across meshes (and hosts) it does not
++// order a receiver's start before its senders'. In a sync test each receiver counts itself in its chip's sync core on
++// entry, and the sync cores wait for a release that the host gives only once every receiver, on every host, has.
++void TestContext::launch_programs() {
++    fixture_->run_programs();
++
++    // Latency tests run no sync kernel, and a mock cluster runs no kernels. The test config and the cluster decide
++    // this, so every host takes the same branch and all of them reach the barrier.
++    if (!global_sync_ || performance_test_mode_ == PerformanceTestMode::LATENCY ||
++        tt::tt_metal::MetalContext::instance().get_cluster().is_mock_or_emulated()) {
++        return;
++    }
++    wait_for_local_receivers_to_start();
++    fixture_->barrier();
++    release_local_sync_cores();
++}
++
++// Each receiver kernel counts itself in its chip's sync core on entry (SIGNAL_READY), so a chip's receivers are all
++// running once that count reaches the chip's receiver count: one read per chip.
++void TestContext::wait_for_local_receivers_to_start() const {
++    constexpr auto timeout = std::chrono::seconds(30);
++    constexpr auto poll_interval = std::chrono::microseconds(100);
++
++    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
++    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
++    const uint32_t ready_address = sender_memory_map_.get_sync_receivers_ready_address();
++
++    struct PendingChip {
++        FabricNodeId node_id;
++        ChipId physical_chip_id;
++        CoreCoord sync_core;  // virtual
++        uint32_t receivers;
++    };
++    std::vector<PendingChip> pending;
++    for (const auto& [coord, test_device] : test_devices_) {
++        const auto num_receivers = static_cast<uint32_t>(test_device.get_receivers().size());
++        if (num_receivers == 0) {
++            continue;
++        }
++        const auto sync_cores = test_device.get_sync_kernel_cores();
++        TT_FATAL(
++            sync_cores.size() == 1,
++            "Sync test: device {} has receivers but {} sync cores (expected 1)",
++            test_device.get_node_id(),
++            sync_cores.size());
++        const auto& node_id = test_device.get_node_id();
++        pending.push_back(
++            {node_id,
++             control_plane.get_physical_chip_id_from_fabric_node_id(node_id),
++             fixture_->get_virtual_core_from_logical_core(sync_cores.front()),
++             num_receivers});
++    }
++
++    const auto deadline = std::chrono::steady_clock::now() + timeout;
++    while (true) {
++        std::erase_if(pending, [&](const PendingChip& chip) {
++            const auto ready =
++                cluster.read_core<uint32_t>(chip.physical_chip_id, chip.sync_core, ready_address, sizeof(uint32_t));
++            return ready.at(0) >= chip.receivers;
++        });
++        if (pending.empty()) {
++            return;
++        }
++        if (std::chrono::steady_clock::now() > deadline) {
++            // Release anyway: the test then runs as it did without the start gate, and the hang detection sees a
++            // receiver that never runs.
++            log_warning(
++                tt::LogTest,
++                "{} chip(s) have receivers not started after {}s (first: device {}); releasing the senders anyway",
++                pending.size(),
++                timeout.count(),
++                pending.front().node_id);
++            return;
++        }
++        std::this_thread::sleep_for(poll_interval);
++    }
++}
++
++void TestContext::release_local_sync_cores() const {
++    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
++    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
++    const uint32_t release_address = sender_memory_map_.get_sync_start_release_address();
++    const uint32_t release = 1;
++
++    for (const auto& [coord, test_device] : test_devices_) {
++        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(test_device.get_node_id());
++        for (const auto& core : test_device.get_sync_kernel_cores()) {
++            cluster.write_core(
++                &release,
++                sizeof(release),
++                tt_cxy_pair(physical_chip_id, fixture_->get_virtual_core_from_logical_core(core)),
++                release_address);
++        }
++    }
++}
++
+ void TestContext::wait_for_programs_with_progress() {
+     last_test_hung_ = false;
+ 
+@@ -656,6 +754,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
+                 .payload_size_bytes = pattern.size.value(),
+                 .num_packets = pattern.num_packets.value(),
+                 .atomic_inc_val = pattern.atomic_inc_val,
++                .flush = pattern.flush,
+                 .mcast_start_hops = pattern.mcast_start_hops,
+                 .enable_flow_control = config.enable_flow_control,
+                 .seed = config.seed,
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp
+index 20df2c121f7..abb718c6b53 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp
+@@ -134,7 +134,9 @@ public:
+ 
+     void compile_programs();
+ 
+-    void launch_programs() { fixture_->run_programs(); }
++    // Starts the test's programs. In a sync test, the sync cores hold the senders until the host releases them, once
++    // every receiver of the test, on every host, is running.
++    void launch_programs();
+ 
+     void wait_for_programs() { fixture_->wait_for_programs(); }
+ 
+@@ -251,6 +253,10 @@ private:
+ 
+     void validate_packet_sizes_for_policy(const TestConfig& config, uint32_t payload_chunk_size);
+ 
++    // Start gate of a sync test (launch_programs)
++    void wait_for_local_receivers_to_start() const;
++    void release_local_sync_cores() const;
++
+     // Track sync cores for each device
+     std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;
+     std::unordered_map<FabricNodeId, std::vector<CoreCoord>> device_local_sync_cores_;
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
+index bdff8baf789..544ead78427 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
+@@ -785,6 +785,12 @@ void TestDevice::set_sender_stream(tt::tt_metal::CoreCoord logical_core, const S
+         logical_core,
+         sender.configs_.size(),
+         stream.counts.size());
++    TT_FATAL(
++        stream.idle_after.empty() || stream.idle_after.size() == stream.counts.size(),
++        "Core {}: stream has {} idle entries for {} segments",
++        logical_core,
++        stream.idle_after.size(),
++        stream.counts.size());
+     sender.stream_ = stream;
+ }
+ 
+@@ -967,6 +973,9 @@ void TestDevice::create_sync_kernel() {
+         sync_connection_manager.generate_mux_termination_local_args_for_core(sync_core, device_info_provider_);
+     local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
+ 
++    // Start release word, set by the host once every receiver is running (TestContext::launch_programs)
++    local_args.push_back(sender_memory_map_->get_sync_start_release_address());
++
+     std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
+ 
+     // Only clear result buffer from host if progress monitoring is enabled
+@@ -975,6 +984,7 @@ void TestDevice::create_sync_kernel() {
+             {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()});
+     }
+ 
++    // Also clears the start release and the receivers-ready count
+     addresses_and_size_to_clear.push_back(
+         {sender_memory_map_->get_global_sync_address(), sender_memory_map_->get_global_sync_region_size()});
+     addresses_and_size_to_clear.push_back(
+@@ -1069,8 +1079,9 @@ void TestDevice::create_sender_kernels() {
+             has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
+             num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
+             sender_vc_id,                                        /* VC_ID */
+-            sender.stream_.has_value() ? 1u : 0u                 /* STREAM_MODE */
+-        };
++            !sender.stream_.has_value()          ? 0u             /* STREAM_MODE: 0 none, 1 stream, */
++            : sender.stream_->idle_after.empty() ? 1u             /* 2 stream with idle segments */
++                                                 : 2u};
+ 
+         // Runtime args with connection type information
+         std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
+@@ -1124,10 +1135,13 @@ void TestDevice::create_sender_kernels() {
+             local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
+         }
+ 
+-        // Stream program: lap count, then packets per lap for each traffic config in order.
++        // Stream program: lap count, then packets per lap for each traffic config in order, then (idle segments
++        // only) the cycles to wait after each traffic config's packets.
+         if (sender.stream_.has_value()) {
+             local_args.push_back(sender.stream_->repeat);
+             local_args.insert(local_args.end(), sender.stream_->counts.begin(), sender.stream_->counts.end());
++            local_args.insert(
++                local_args.end(), sender.stream_->idle_after.begin(), sender.stream_->idle_after.end());
+         }
+ 
+         // Add mux termination local args (empty vector if not a mux client)
+@@ -1184,6 +1198,19 @@ void TestDevice::create_receiver_kernels() {
+     TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
+     TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
+ 
++    // In a sync test every receiver counts itself in this chip's sync core on entry (the start gate,
++    // TestContext::launch_programs). A sync test runs one sync kernel on every chip (create_sync_kernel requires it).
++    const bool signal_ready = global_sync_ && !receivers_.empty();
++    uint32_t sync_core_noc_encoding = 0;
++    if (signal_ready) {
++        TT_FATAL(
++            sync_workers_.size() == 1,
++            "Sync test: device {} has receivers but {} sync cores (expected 1)",
++            fabric_node_id_,
++            sync_workers_.size());
++        sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sync_workers_.begin()->first);
++    }
++
+     for (const auto& [core, receiver] : this->receivers_) {
+         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
+         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
+@@ -1200,7 +1227,8 @@ void TestDevice::create_receiver_kernels() {
+             receiver_memory_map_->common.get_kernel_config_size(), /* KERNEL_CONFIG_BUFFER_SIZE */
+             (uint32_t)num_connections,                             /* NUM_CREDIT_CONNECTIONS */
+             has_mux_connections ? 1u : 0u,                         /* HAS_MUX_CONNECTIONS */
+-            num_muxes_to_terminate                                 /* NUM_MUXES_TO_TERMINATE */
++            num_muxes_to_terminate,                                /* NUM_MUXES_TO_TERMINATE */
++            signal_ready ? 1u : 0u                                 /* SIGNAL_READY */
+         };
+ 
+         // Runtime args: memory map args + credit connection args + traffic-to-connection mapping
+@@ -1277,6 +1305,12 @@ void TestDevice::create_receiver_kernels() {
+                  receiver_memory_map_->get_mux_termination_sync_size()});
+         }
+ 
++        // Where the receiver counts itself on entry (SIGNAL_READY): the chip's sync core
++        if (signal_ready) {
++            local_args.push_back(sync_core_noc_encoding);
++            local_args.push_back(sender_memory_map_->get_sync_receivers_ready_address());
++        }
++
+         receiver.create_kernel(
+             coord_,
+             ct_args,
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp
+index 52f8dd25db8..410686f7285 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp
+@@ -373,6 +373,17 @@ public:
+     const std::unordered_map<tt::tt_metal::CoreCoord, TestSender>& get_senders() const { return senders_; }
+     const std::unordered_map<tt::tt_metal::CoreCoord, TestReceiver>& get_receivers() const { return receivers_; }
+ 
++    // Cores running the sync kernel (one per device in a sync test, none otherwise)
++    std::vector<tt::tt_metal::CoreCoord> get_sync_kernel_cores() const {
++        std::vector<tt::tt_metal::CoreCoord> cores;
++        if (global_sync_) {
++            for (const auto& [core, _] : sync_workers_) {
++                cores.push_back(core);
++            }
++        }
++        return cores;
++    }
++
+     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_connections() const {
+         return connection_manager_.get_used_fabric_links();
+     }
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
+index def39a97dd7..48c375ff482 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
+@@ -278,9 +278,15 @@ struct SenderMemoryMap {
+         current_addr += PACKET_HEADER_BUFFER_SIZE;
+         packet_headers = BaseMemoryRegion(packet_header_base, PACKET_HEADER_BUFFER_SIZE);
+ 
+-        // global sync region
++        // global sync region, words: the sync core's global sync counter, the host's start release, and the count of
++        // this chip's receivers that have started
+         uint32_t global_sync_region_base = current_addr;
+         uint32_t global_sync_region_size = l1_alignment;
++        TT_FATAL(
++            global_sync_region_size >= 3 * sizeof(uint32_t),
++            "The global sync region ({} bytes) must hold the sync counter, the start release and the receivers-ready "
++            "count",
++            global_sync_region_size);
+         current_addr += global_sync_region_size;
+         global_sync_region = BaseMemoryRegion(global_sync_region_base, global_sync_region_size);
+ 
+@@ -324,6 +330,12 @@ struct SenderMemoryMap {
+ 
+     uint32_t get_global_sync_address() const { return global_sync_region.start; }
+     uint32_t get_local_sync_address() const { return local_sync_region.start; }
++    // Start gate of a sync test (TestContext::launch_programs), both words on the chip's sync core and cleared with the
++    // global sync region before launch. Each receiver kernel of the chip increments the receivers-ready count on entry;
++    // the host reads it, and once every receiver of the test, on every host, has started, it sets the release, which
++    // the sync kernel waits for before its first global sync.
++    uint32_t get_sync_start_release_address() const { return global_sync_region.start + sizeof(uint32_t); }
++    uint32_t get_sync_receivers_ready_address() const { return global_sync_region.start + 2 * sizeof(uint32_t); }
+ 
+     uint32_t get_global_sync_region_size() const { return global_sync_region.size; }
+     uint32_t get_local_sync_region_size() const { return local_sync_region.size; }
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_traffic.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_traffic.hpp
+index d047c1fceb0..3debce14aa2 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_traffic.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_traffic.hpp
+@@ -151,6 +151,12 @@ struct NocUnicastAtomicIncFields {
+         dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
+ 
+     void set_atomic_inc_val(uint32_t value) { this->atomic_inc_val = value; }
++    void set_flush(bool value) { this->flush = value; }
++
++    // The increment's argument word also carries the optional flush override in its top two bits
++    // (kFlushSetBit: an override is present, kFlushValueBit: its value); the kernel decodes and masks them.
++    static constexpr uint32_t kFlushSetBit = 1u << 31;
++    static constexpr uint32_t kFlushValueBit = 1u << 30;
+ 
+     template <bool IS_SOURCE>
+     std::vector<uint32_t> get_args() const {
+@@ -160,7 +166,15 @@ struct NocUnicastAtomicIncFields {
+                 throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
+             }
+         }
+-        std::vector<uint32_t> args = {atomic_inc_val.value_or(default_atomic_inc_val), dst_address};
++        uint32_t inc_word = atomic_inc_val.value_or(default_atomic_inc_val);
++        if (inc_word & (kFlushSetBit | kFlushValueBit)) {
++            log_fatal(tt::LogTest, "atomic_inc_val {} does not fit in 30 bits", inc_word);
++            throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
++        }
++        if (flush.has_value()) {
++            inc_word |= kFlushSetBit | (flush.value() ? kFlushValueBit : 0u);
++        }
++        std::vector<uint32_t> args = {inc_word, dst_address};
+         if (dst_noc_encoding.has_value()) {
+             args.push_back(dst_noc_encoding.value());
+         }
+@@ -168,6 +182,7 @@ struct NocUnicastAtomicIncFields {
+     }
+ 
+     std::optional<uint32_t> atomic_inc_val;
++    std::optional<bool> flush;
+     uint32_t dst_address;
+     std::optional<uint32_t> dst_noc_encoding;
+ };
+@@ -250,6 +265,7 @@ struct TrafficParameters {
+     size_t payload_size_bytes;
+     size_t num_packets;
+     std::optional<uint32_t> atomic_inc_val;
++    std::optional<bool> flush;
+     std::optional<uint32_t> mcast_start_hops;
+     bool enable_flow_control = false;
+ 
+@@ -420,6 +436,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
+             if (this->parameters.atomic_inc_val.has_value()) {
+                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+             }
++            if (this->parameters.flush.has_value()) {
++                atomic_inc_fields.set_flush(this->parameters.flush.value());
++            }
+             const auto atomic_inc_args = atomic_inc_fields.get_args<true>();
+             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+         } break;
+@@ -431,6 +450,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
+             if (this->parameters.atomic_inc_val.has_value()) {
+                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+             }
++            if (this->parameters.flush.has_value()) {
++                atomic_inc_fields.set_flush(this->parameters.flush.value());
++            }
+             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+             const auto fused_args = fused_fields.get_args<true>();
+             args.insert(args.end(), fused_args.begin(), fused_args.end());
+@@ -500,6 +522,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
+             if (this->parameters.atomic_inc_val.has_value()) {
+                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+             }
++            if (this->parameters.flush.has_value()) {
++                atomic_inc_fields.set_flush(this->parameters.flush.value());
++            }
+             const auto atomic_inc_args = atomic_inc_fields.get_args<false>();
+             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+             break;
+@@ -510,6 +535,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
+             if (this->parameters.atomic_inc_val.has_value()) {
+                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+             }
++            if (this->parameters.flush.has_value()) {
++                atomic_inc_fields.set_flush(this->parameters.flush.value());
++            }
+             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+             const auto fused_args = fused_fields.get_args<false>();
+             args.insert(args.end(), fused_args.begin(), fused_args.end());

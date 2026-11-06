@@ -1,0 +1,7 @@
+diff --git a/tt_metal/third_party/umd b/tt_metal/third_party/umd
+index 5da9fe5a5f5..7b508dbd9d8 160000
+--- a/tt_metal/third_party/umd
++++ b/tt_metal/third_party/umd
+@@ -1 +1 @@
+-Subproject commit 5da9fe5a5f5652a204ce1c54672d6c15beb92a5c
++Subproject commit 7b508dbd9d82558489a15c496fa0e7d2669ca2d7

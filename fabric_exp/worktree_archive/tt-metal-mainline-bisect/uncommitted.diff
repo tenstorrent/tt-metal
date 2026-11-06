@@ -1,0 +1,45 @@
+diff --git a/tt_metal/third_party/tracy b/tt_metal/third_party/tracy
+deleted file mode 160000
+index a8a54219404..00000000000
+--- a/tt_metal/third_party/tracy
++++ /dev/null
+@@ -1 +0,0 @@
+-Subproject commit a8a542194048195ca9c35725d7ebede33ccb028e
+diff --git a/tt_metal/third_party/tracy b/tt_metal/third_party/tracy
+new file mode 120000
+index 00000000000..9662a9ae255
+--- /dev/null
++++ b/tt_metal/third_party/tracy
+@@ -0,0 +1 @@
++/home/aagarwal/tt-metal-mainline/tt_metal/third_party/tracy
+\ No newline at end of file
+diff --git a/tt_metal/third_party/tt-cluster-descriptors b/tt_metal/third_party/tt-cluster-descriptors
+deleted file mode 160000
+index 187a384df8e..00000000000
+--- a/tt_metal/third_party/tt-cluster-descriptors
++++ /dev/null
+@@ -1 +0,0 @@
+-Subproject commit 187a384df8e0090edc8e720b8fcb9692f75b433b
+diff --git a/tt_metal/third_party/tt-cluster-descriptors b/tt_metal/third_party/tt-cluster-descriptors
+new file mode 120000
+index 00000000000..a7d2e86b628
+--- /dev/null
++++ b/tt_metal/third_party/tt-cluster-descriptors
+@@ -0,0 +1 @@
++/home/aagarwal/tt-metal-mainline/tt_metal/third_party/tt-cluster-descriptors
+\ No newline at end of file
+diff --git a/tt_metal/third_party/umd b/tt_metal/third_party/umd
+deleted file mode 160000
+index 7b508dbd9d8..00000000000
+--- a/tt_metal/third_party/umd
++++ /dev/null
+@@ -1 +0,0 @@
+-Subproject commit 7b508dbd9d82558489a15c496fa0e7d2669ca2d7
+diff --git a/tt_metal/third_party/umd b/tt_metal/third_party/umd
+new file mode 120000
+index 00000000000..30843d36abf
+--- /dev/null
++++ b/tt_metal/third_party/umd
+@@ -0,0 +1 @@
++/home/aagarwal/tt-metal-mainline/tt_metal/third_party/umd
+\ No newline at end of file

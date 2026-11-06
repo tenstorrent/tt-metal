@@ -1,0 +1,116 @@
+# Slot study, 2 KiB slots (SLOT_STUDY.md): line rate against payload on one Galaxy (8x4 mesh, 200G), 1-hop E/W and N/S
+# single flows, 200,000 packets, default slots of each configuration (logged). Three fabric configurations, one per
+# group pair: the default (4352 B slots), max_packet_size 2560 and 2048 (fabric_setup; the fabric is reopened when it
+# changes). Payloads never exceed the configuration's maximum.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+
+  - name: "LrEW_s4352"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 1536, 2048, 2304, 2560, 3072, 3584, 4096, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 200000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "LrNS_s4352"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 1536, 2048, 2304, 2560, 3072, 3584, 4096, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 200000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+
+  - name: "LrEW_s2560"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2560
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 1536, 2048, 2304, 2560]
+    defaults:
+      ftype: unicast
+      num_packets: 200000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "LrNS_s2560"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2560
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 1536, 2048, 2304, 2560]
+    defaults:
+      ftype: unicast
+      num_packets: 200000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+
+  - name: "LrEW_s2048"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 1536, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 200000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "LrNS_s2048"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 2048
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 1536, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 200000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]

@@ -1,0 +1,63 @@
+diff --git a/tt_metal/impl/streaming_profiler/sync/clock_map.cpp b/tt_metal/impl/streaming_profiler/sync/clock_map.cpp
+index 363f3dfd093..0caa6087332 100644
+--- a/tt_metal/impl/streaming_profiler/sync/clock_map.cpp
++++ b/tt_metal/impl/streaming_profiler/sync/clock_map.cpp
+@@ -226,10 +226,24 @@ std::optional<int64_t> ClockMap::place_tsc(Reader& reader, double root) const no
+ }
+ 
+ int64_t ClockMap::place_slow(Reader& reader, uint32_t dev, int64_t wall) const {
++    // LOCAL (fabric_exp/port_tune/cisp, the profiler split's no-hook arm; never committed): warnings (the first of each
++    // kind) instead of TT_FATAL, and the host clock's base for a time that cannot be placed, so a capture whose routers
++    // run no link-sync port closes cleanly. Its timeline is then wrong for the chips the links would have placed.
++    static std::atomic<bool> warned_root{false}, warned_tsc{false};
+     const std::optional<double> root = lookup(chips_[dev], reader.chips_[dev], wall);
+-    TT_FATAL(root, "streaming profiler: device {} has no placement node for its wall tick {}", dev, wall);
++    if (!root) {
++        if (!warned_root.exchange(true)) {
++            log_warning(tt::LogMetal, "streaming profiler: device {} has no placement node for its wall tick {}", dev, wall);
++        }
++        return tsc_base_;
++    }
+     const std::optional<int64_t> tsc = place_tsc(reader, *root);
+-    TT_FATAL(tsc, "streaming profiler: device {}'s wall tick {} has no host placement node", dev, wall);
++    if (!tsc) {
++        if (!warned_tsc.exchange(true)) {
++            log_warning(tt::LogMetal, "streaming profiler: device {}'s wall tick {} has no host placement node", dev, wall);
++        }
++        return tsc_base_;
++    }
+     return *tsc;
+ }
+ 
+diff --git a/tt_metal/impl/streaming_profiler/sync/clock_solver.cpp b/tt_metal/impl/streaming_profiler/sync/clock_solver.cpp
+index 6c1d81c779d..62ec492c9cb 100644
+--- a/tt_metal/impl/streaming_profiler/sync/clock_solver.cpp
++++ b/tt_metal/impl/streaming_profiler/sync/clock_solver.cpp
+@@ -359,8 +359,14 @@ void ClockSolver::report_parallel_links() const {
+     std::pair<uint32_t, uint32_t> worst_chips;
+     for (const std::vector<size_t>& parallel : std::views::values(by_pair)) {
+         const CaptureContext::Link& first = ctx_.links[parallel[0]];
++        if (!links_[parallel[0]].line) {
++            continue;  // LOCAL (cisp no-hook arm): an unsolved link has no line
++        }
+         const LineFit& first_line = *links_[parallel[0]].line;
+         for (size_t k = 1; k < parallel.size(); k++) {
++            if (!links_[parallel[k]].line) {
++                continue;  // LOCAL (cisp no-hook arm)
++            }
+             const double offset = links_[parallel[k]].line->at(first_line.x_mean);
+             const double apart_ns = std::abs(offset - first_line.y_mean) * kNsPerRefclk;
+             sum_squares += apart_ns * apart_ns;
+@@ -516,8 +522,10 @@ void ClockSolver::on_capture_end() {
+             solve(state, Window::Partial);
+         }
+         const CaptureContext::Link& link = ctx_.links[link_index];
+-        TT_FATAL(
+-            state.line,
++        // LOCAL (fabric_exp/port_tune/cisp, the profiler split's no-hook arm; never committed): a warning instead of
++        // TT_FATAL, so a capture whose routers run no link-sync port closes cleanly.
++        if (!state.line) log_warning(
++            tt::LogMetal,
+             "streaming profiler: link chip {} eth({},{}) -> chip {} eth({},{}) not solved: {} complete "
+             "rounds and {} waiting for their other port",
+             ctx_.devices[link.dev_a].chip_id,

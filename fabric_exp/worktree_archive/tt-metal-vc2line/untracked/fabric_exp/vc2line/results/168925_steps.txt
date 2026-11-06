@@ -1,0 +1,21 @@
+node=bh-glx-110-a09u02 job=168925 start=2026-11-02T20:57:00Z tree=vc2l_g3a steps=line line_1e nbr_vc2 nbr_sanity ring ring_small ring_1e tst_line
+tree copied 21:02:20
+=== tt-smi -glx_reset (before the steps) 21:02:20: 6.6.0
+reset: exit 0, Blackhole chips listed: 64
+=== line (21:03:04): glx_vc2_line.yaml, timeout 900 s 
+line: exit 0 in 80 s; Tests: 12 executed, 0 failed
+=== line_1e (21:04:24): glx_vc2_line.yaml, timeout 900 s TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+line_1e: exit 0 in 70 s; Tests: 12 executed, 0 failed
+=== nbr_vc2 (21:05:34): test_fabric_vc2_at_least_2x2_mesh.yaml, timeout 900 s 
+nbr_vc2: exit 0 in 120 s; Tests: 10 executed, 0 failed
+=== nbr_sanity (21:07:34): test_fabric_mesh_sanity_common.yaml, timeout 1500 s 
+nbr_sanity: exit 0 in 200 s; Tests: 96 executed, 0 failed
+=== ring (21:10:54): glx_vc2_ring.yaml, timeout 1200 s 
+ring: exit 0 in 90 s; Tests: 34 executed, 0 failed
+=== ring_small (21:12:24): glx_vc2_ring.yaml, timeout 1200 s TT_FABRIC_EXP_SLOTS_VC2=0,12,16,4,2,4 TT_FABRIC_EXP_LOG_SLOTS=1
+ring_small: exit 0 in 150 s; Tests: 34 executed, 0 failed
+=== ring_1e (21:14:54): glx_vc2_ring.yaml, timeout 1200 s TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+ring_1e: exit 0 in 90 s; Tests: 34 executed, 0 failed
+=== tst_line (21:16:24): glx_torus_stability_short.yaml, timeout 1800 s TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1
+tst_line: exit 0 in 230 s; Tests: 56 executed, 0 failed
+done 21:20:14
