@@ -231,9 +231,9 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations. Per-chunk median of
-    # CI runs 40424879138, 40532334659, 40610708699 (attempts 1 and 3) and 40737604734.
-    (61, 11, 10): [0.380, 0.384, 0.407, 0.436, 0.469, 0.499, 0.523, 0.553, 0.592, 0.624, 0.657],
+    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations, with the routed
+    # expert overlapped with combine_fabric2d. CI run 41067008100 / job 124125611366.
+    (61, 11, 10): [0.328, 0.338, 0.372, 0.399, 0.432, 0.462, 0.489, 0.523, 0.564, 0.604, 0.638],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -247,9 +247,9 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1. Cut on bh_sc1_high_power,
-    # CI run 41811923480 / job 126517738450.
-    (78, 11, 10): [0.343, 0.340, 0.348, 0.345, 0.350, 0.351, 0.347, 0.349, 0.356, 0.359, 0.367],
+    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1, sparse KV push in the shared layers.
+    # Cut on bh_sc1_high_power, CI run 42026848687 / job 127259026123.
+    (78, 11, 10): [0.358, 0.350, 0.352, 0.349, 0.353, 0.353, 0.349, 0.349, 0.355, 0.357, 0.364],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -291,29 +291,30 @@ MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] 
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, run 36924348392. Host-dispatch bound and flat with depth, so this
-    # row catches an eager-dispatch regression and cannot see MLA.
+    # Cut on bh_sc1_high_power (run 41067008100 / job 124125611317), with the routed expert overlapped
+    # with combine_fabric2d. Host-dispatch bound and flat with depth, so this row catches an
+    # eager-dispatch regression and cannot see MLA.
     (36, 20, 10): [
-        0.380,
-        0.379,
-        0.379,
-        0.377,
-        0.376,
-        0.376,
-        0.380,
-        0.383,
-        0.393,
-        0.379,
-        0.379,
-        0.383,
-        0.381,
-        0.381,
-        0.378,
-        0.384,
-        0.378,
-        0.381,
-        0.386,
-        0.381,
+        0.266,
+        0.266,
+        0.263,
+        0.263,
+        0.264,
+        0.264,
+        0.260,
+        0.264,
+        0.259,
+        0.261,
+        0.264,
+        0.266,
+        0.263,
+        0.264,
+        0.261,
+        0.262,
+        0.263,
+        0.260,
+        0.260,
+        0.261,
     ],
 }
 
@@ -2175,17 +2176,6 @@ def run_chunked_transformer_updated(
     # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
     # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
     # (no host readback), so it is capturable.
-    # The KDA recurrent/conv carries are the one piece of state a replay MUTATES, so they have to be
-    # zeroed in two places: after capture (which costs chunk 0 two extra forwards) and before each
-    # iteration, which would otherwise start where the previous one finished.
-    def _reset_kda_carries(reason):
-        kda_states = getattr(transformer, "kda_states", None)
-        if kda_states is None:
-            return
-        for slot in range(kda_states.num_slots):
-            kda_states.zero_slot(slot)
-        ttnn.synchronize_device(mesh_device)
-        logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
 
     trace_controller = None
     trace_input = None
@@ -2260,14 +2250,6 @@ def run_chunked_transformer_updated(
         # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
 
-        # Capture cost chunk 0 two EXTRA forwards (the warm/compile pass and the recorded pass).
-        # For a KV cache that is idempotent -- same positions, same tokens, same values. For a
-        # RECURRENT carry it is not: every forward advances it, so by the measured loop the carry
-        # has absorbed chunk 0 three times instead of once, and the error rides into every later
-        # chunk. Dense models never see this; Kimi-K3's KDA carries are the first recurrence here.
-        # Zero them so the replay starts from the same state the untraced path starts from.
-        _reset_kda_carries("after capture")
-
     if determinism_check and num_iters < 2:
         pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
     det_baseline = None
@@ -2275,11 +2257,6 @@ def run_chunked_transformer_updated(
 
     profiler.start("tt_forward")
     for it in range(num_iters):
-        # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
-        # otherwise starts where N-1 finished: a false failure under determinism_check, and worse
-        # under check_pcc, where the post-loop KV PCC then scores a cache conditioned on the prefix
-        # twice. num_iters=1 is unaffected (the carry is already zero at this point).
-        _reset_kda_carries(f"before iter {it}")
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
