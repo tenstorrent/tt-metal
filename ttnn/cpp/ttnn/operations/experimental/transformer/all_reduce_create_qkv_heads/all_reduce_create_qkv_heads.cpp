@@ -28,11 +28,20 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> all_reduce_cr
     bool use_noc1_only) {
     MemoryConfig out_memory_config = all_reduce_memory_config.value_or(input_tensor.memory_config());
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
+    TT_FATAL(num_heads > 0, "num_heads must be greater than 0");
 
     TT_FATAL(
         input_tensor.padded_shape().size() == 4,
         "Input Tensor dim must be 4 while given dim = {}",
         input_tensor.padded_shape().size());
+    // Bound the head count so the uint32_t sum below cannot wrap to 0.
+    const uint64_t input_width = input_tensor.padded_shape()[3];
+    TT_FATAL(
+        uint64_t{num_heads} + 2 * uint64_t{num_kv_heads_val} <= input_width,
+        "num_heads ({}) + 2 * num_kv_heads ({}) exceeds the input width ({})",
+        num_heads,
+        num_kv_heads_val,
+        input_width);
     TT_FATAL(
         input_tensor.padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,
         "Input shape {} must be divisible by num_heads + 2*num_kv_heads = {}",

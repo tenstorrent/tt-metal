@@ -561,3 +561,23 @@ def test_create_width_shard_by_head(
             n_local_kv_heads,
             head_dim,
         )
+
+
+def test_nlp_create_qkv_heads_decode_rejects_wrapping_head_counts(device, expect_error):
+    """num_heads + 2 * num_kv_heads must be bounded before the divisibility check so it cannot wrap to 0."""
+    num_heads, num_kv_heads, head_dim = 8, 1, 128
+    seq_len, batch = 1, 32
+
+    proj_output = torch.rand(1, seq_len, batch, (num_heads + 2 * num_kv_heads) * head_dim)
+    proj_output_tt = ttnn.from_torch(proj_output, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    proj_output_tt = proj_output_tt.to(device=device, mem_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    with expect_error(RuntimeError, "exceeds the input width"):
+        ttnn.experimental.nlp_create_qkv_heads_decode(
+            proj_output_tt, num_heads=2**32 - 2, num_kv_heads=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    with expect_error(RuntimeError, "num_heads must be greater than 0"):
+        ttnn.experimental.nlp_create_qkv_heads_decode(
+            proj_output_tt, num_heads=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
