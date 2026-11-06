@@ -243,10 +243,74 @@
         "success": "Published full60 B32 serving works and contention measured"
       },
       "box_hours": 0.25,
-      "status": "running",
+      "status": "done",
       "unblocks": [
         "release_serving_capacity"
-      ]
+      ],
+      "used_device_hours": 0.09848624527777777,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "success": true,
+        "requests_per_wave": 32,
+        "idle_tokens_per_second": 985.554416731418,
+        "busy_tokens_per_second": 645.0344483642087,
+        "host_metric": "process CPU/step, not wall/device time"
+      },
+      "evidence": "runs/local-host-contention/RESULT.md"
+    },
+    {
+      "problem": "nightly-registration-preparation",
+      "owner": "suite_registration",
+      "goal": "Immediate next-rung dispatch after valid smoke using exact frozen nightly lists",
+      "plan": "runs/nightly-preparation/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond",
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Stock-route exact task resolution and model-specific tests",
+        "success": "Exact nested lists, peer suites disabled, limits unchanged"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "source_patches_prepared": 3,
+        "tests_per_candidate": 23,
+        "ruff": "pass",
+        "published": false,
+        "dispatch": "requires valid smoke first"
+      },
+      "evidence": "runs/nightly-preparation/RESULT.md"
+    },
+    {
+      "problem": "local-long-context",
+      "owner": "local_serving_check",
+      "goal": "Verify synthetic smoke2 cache reuse/pool admission through131072 tokens per history",
+      "plan": "runs/local-long-context/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0.15,
+        "basis": "guess"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond"
+      ],
+      "confirm": {
+        "method": "Existing C2 growing test on B8 through131072, cache/trace/pool observations",
+        "success": "Every request succeeds or quantified physical shortfall"
+      },
+      "box_hours": 0.5,
+      "status": "running"
     }
   ],
   "rankings": [
@@ -540,6 +604,38 @@
         }
       ],
       "reason": "Validity first; client custom-weight path rejected downstream before requests. Existing CI jobs continue, no speed improvement claimed."
+    },
+    {
+      "after": "local-host-contention",
+      "order": [
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "local-long-context",
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "device_hours": 0.15,
+          "saving_hours": null
+        }
+      ],
+      "reason": "CI smoke builds and operator dry-run decision pending; primarydevice tests unmeasured long-history envelope, no speed tuning before validsmoke."
     }
   ]
 }

@@ -1,4 +1,7 @@
-Current resume status (2026-11-06 05:41 UTC): functional_at remains 0 for every suite; scores and intervals unavailable. Operator decision8 authorizes CI Docker tasks and resolves the earlier local-route blocker. Three smoke jobs are building. Local full60 B8 synthetic growing-context confirmation passed (76.469 s client process time; see runs/local-serving-check/RESULT.md). The B1 stock TTI client preflight found a downstream custom-model parser rejection before requests; AutoFix is investigating. Historical blocked findings below are preserved, not the current stage status.
+Current resume status (2026-11-06 05:49 UTC): functional_at is 0 for all three suites; scores, intervals and real-agent run hours remain unavailable. Three CI smoke jobs are building. Local TTI benchmark preflight passed (8/8 requests,128/128/C1,27.078s), syntheticB8 growing traffic passed through32768 tokens, and B32 contention passed (985.554tok/s idle,645.034 busy). See each effort RESULT for predictions and measurements. No release started. CI dry-run exception is pending an operator response; the earlier local Docker block was resolved by decision8.
+
+The earlier blocked-attempt report below is historical.
+
 
 # Stage 12 — blocked before smoke
 

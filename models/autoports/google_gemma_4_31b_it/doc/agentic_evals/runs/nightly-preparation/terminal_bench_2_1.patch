@@ -1,0 +1,88 @@
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -12057,16 +12057,27 @@
+                         },
+                     },
+                     task_names_map={
+-                        mode: [
++                        EvalLimitMode.SMOKE_TEST: [
+                             "terminal-bench/llm-inference-batching-scheduler",
+                             "terminal-bench/mailman",
+-                        ]
+-                        for mode in (EvalLimitMode.SMOKE_TEST, EvalLimitMode.CI_NIGHTLY)
++                        ],
++                        EvalLimitMode.CI_NIGHTLY: [
++                            "terminal-bench/llm-inference-batching-scheduler",
++                            "terminal-bench/mailman",
++                            "terminal-bench/db-wal-recovery",
++                            "terminal-bench/winning-avg-corewars",
++                            "terminal-bench/feal-linear-cryptanalysis",
++                            "terminal-bench/fix-code-vulnerability",
++                            "terminal-bench/constraints-scheduling",
++                            "terminal-bench/sparql-university",
++                            "terminal-bench/dna-insert",
++                            "terminal-bench/video-processing",
++                        ],
+                     },
+                 ),
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 2,
++                    EvalLimitMode.CI_NIGHTLY: 10,
+                 },
+             ),
+         ],
+--- a/tests/workflows/test_gemma4_autoport_smoke_suites.py
++++ b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+@@ -12,7 +12,6 @@
+ from llm_module.eval_command import build_eval_command
+ from reference_config.evals.eval_config import (
+     MINI_SWE_AGENT_VERSION,
+-    EvalLimitMode,
+     _eval_config_map,
+ )
+ 
+@@ -54,10 +53,7 @@
+         runtime_config=SimpleNamespace(limit_samples_mode=mode),
+     )
+     assert json.loads(command[command.index("--samples") + 1]) == {
+-        "r1_gpqa_diamond": []
+-        if mode == "ci-nightly"
+-        and TASKS[0].limit_samples_map[EvalLimitMode.CI_NIGHTLY] == 0
+-        else [152, 189]
++        "r1_gpqa_diamond": [] if mode == "ci-nightly" else [152, 189]
+     }
+     assert "--limit" not in command
+     args = command[command.index("--model_args") + 1]
+@@ -99,16 +95,29 @@
+     tmp_path, mode, index, names
+ ):
+     task = TASKS[index]
++    if mode == "ci-nightly" and task.task_name == "terminal_bench_2_1":
++        names = [
++            "terminal-bench/llm-inference-batching-scheduler",
++            "terminal-bench/mailman",
++            "terminal-bench/db-wal-recovery",
++            "terminal-bench/winning-avg-corewars",
++            "terminal-bench/feal-linear-cryptanalysis",
++            "terminal-bench/fix-code-vulnerability",
++            "terminal-bench/constraints-scheduling",
++            "terminal-bench/sparql-university",
++            "terminal-bench/dna-insert",
++            "terminal-bench/video-processing",
++        ]
+     config = build_harbor_config(
+         task,
+         ServerConnection(base_url="http://localhost", service_port=8000, model=MODEL),
+         DriverContext(output_dir=tmp_path),
+         runtime_config=SimpleNamespace(limit_samples_mode=mode),
+-        n_tasks=2,
++        n_tasks=len(names),
+     )
+     generated = json.loads(_write_harbor_config(config).read_text())
+     assert generated["datasets"][0]["task_names"] == names
+-    assert generated["datasets"][0]["n_tasks"] == 2
++    assert generated["datasets"][0]["n_tasks"] == len(names)
+     assert generated["n_concurrent_trials"] == 2
+     assert "override_cpus" not in generated["environment"]
+     assert "override_memory_mb" not in generated["environment"]

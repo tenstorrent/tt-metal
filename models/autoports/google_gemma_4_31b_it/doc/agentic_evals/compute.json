@@ -67,7 +67,7 @@
           "arm": "local-host-contention",
           "owner": "local_serving_check",
           "device": "local",
-          "status": "starting",
+          "status": "completed",
           "planned_clients": 32,
           "batch": 32,
           "max_num_seqs": 32,
@@ -77,9 +77,30 @@
           "purpose": "Confirm published full60 runtime at B32 and quantify CPU contention in current16CPU environment; synthetic only",
           "depends_on": "local-tti-benchmark-preflight devices closed",
           "start": "2026-11-06T05:42:38.778451+00:00",
+          "end": "2026-11-06T05:48:33.328934+00:00",
+          "exit_status": 1,
+          "timeout_seconds": 1200,
+          "client_exit_status": 0,
+          "exit_note": "Idle API shutdown after passing32-client waves",
+          "actual_hours": 0.09848624527777777
+        },
+        {
+          "arm": "local-long-context",
+          "owner": "local_serving_check",
+          "device": "local",
+          "status": "starting",
+          "planned_clients": 2,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "predicted_hours": 0.15,
+          "box_device_hours": 0.5,
+          "queued_at": "2026-11-06T05:48:16.053159+00:00",
+          "purpose": "Check cache reuse and pool admission past32768 up to131072 per conversation for smoke2 history envelope; synthetic not accuracy",
+          "depends_on": "local-host-contention devices closed",
+          "start": "2026-11-06T05:48:33.328934+00:00",
           "end": null,
           "exit_status": null,
-          "timeout_seconds": 1200
+          "timeout_seconds": 1800
         }
       ]
     },

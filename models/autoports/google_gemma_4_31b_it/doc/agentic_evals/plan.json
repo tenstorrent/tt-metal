@@ -228,6 +228,14 @@
       "benchmark_seconds": 27.078000201960094,
       "completed": 8,
       "result": "pass; direct stock launcher required; preflight only"
+    },
+    {
+      "arm": "local-host-contention",
+      "predicted_device_hours": 0.1,
+      "device_hold_hours": 0.09848624527777777,
+      "idle_window_seconds": 8.245105355978012,
+      "busy_window_seconds": 12.600877395947464,
+      "result": "pass; initial client readiness sequencing fixed before measurement"
     }
   ]
 }

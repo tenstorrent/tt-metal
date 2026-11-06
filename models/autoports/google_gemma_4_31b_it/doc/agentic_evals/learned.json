@@ -43,6 +43,14 @@
     {
       "fact": "Top-level custom-weights benchmark command emits an absolute model name rejected by downstream parser. Stock direct launcher with canonical model and generated runtime spec preserves pinned snapshot and exact matrix. No generic patch needed.",
       "evidence": "runs/ci-release-route/tokenizer-AUTOFIX.md; runs/local-tti-benchmark-preflight/result.json"
+    },
+    {
+      "fact": "Current16CPU environment: syntheticB32 decode delivery985.554tok/s idle,645.034 under16busyprocesses. ProcessCPU perstep is not hostwall latency; realagent generation share needed to price release hours.",
+      "evidence": "runs/local-host-contention/RESULT.md"
+    },
+    {
+      "fact": "GPQA common smoke-test globally takes3 doc_ids when available; exact2-task smoke needs config containing2. CI_NIGHTLY uses registered nightly list. Preserve original immutable smokeSHA when nightly config expands IDs.",
+      "evidence": "runs/nightly-preparation/RESULT.md"
     }
   ],
   "suite_timings": [],

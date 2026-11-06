@@ -70,6 +70,14 @@
       "batch": 32,
       "max_num_seqs": 32,
       "task_containers": 0
+    },
+    {
+      "run": "local-long-context",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "task_containers": 0,
+      "max_context_tested_target": 131072
     }
   ]
 }

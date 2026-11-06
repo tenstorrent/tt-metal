@@ -1,0 +1,18 @@
+{
+  "arm": "local-long-context",
+  "owner": "local_serving_check",
+  "device": "local",
+  "status": "starting",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_hours": 0.15,
+  "box_device_hours": 0.5,
+  "queued_at": "2026-11-06T05:48:16.053159+00:00",
+  "purpose": "Check cache reuse and pool admission past32768 up to131072 per conversation for smoke2 history envelope; synthetic not accuracy",
+  "depends_on": "local-host-contention devices closed",
+  "start": "2026-11-06T05:48:33.328934+00:00",
+  "end": null,
+  "exit_status": null,
+  "timeout_seconds": 1800
+}
