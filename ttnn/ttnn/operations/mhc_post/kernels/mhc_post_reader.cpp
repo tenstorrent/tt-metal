@@ -7,8 +7,8 @@
 //   load_coefficients(row): read the post / comb source tiles (one page each) into the
 //       reader-private scratch cb_coef_src, then expand every coefficient q into column 0
 //       of its own tile in cb_coef_cols (order: post_0..n-1, comb_{i,j} at n + i*n + j).
-//       The first F/X block of the row is issued before blocking on cb_coef_cols space
-//       (stall shadow: the DRAM latency hides under the previous row's last blocks).
+//       The coefficient page(s) are barriered (and multicast) alone; the row's first F/X block is
+//       then issued and the expansion runs while its reads are in flight (Perf 1).
 //   load_block(row, b): block_c F tiles + n*block_c X tiles (layout [i][c]), reads issued
 //       back-to-back, one barrier per block, nominal block_c counts pushed (ragged tail
 //       reads only its valid tiles).
@@ -30,6 +30,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_combine.hpp"
 
 namespace {
@@ -95,16 +96,39 @@ FORCE_INLINE uint32_t tile_word(uint32_t t, uint32_t c) {
 
 // Copy `count` coefficients from source column `src_col` onward into column 0 of consecutive
 // destination tiles starting at `dst_base` (32 tokens each). Only column 0 is meaningful.
+// Perf 1: plain __restrict__ pointers, 8 loads issued ahead of their 8 stores (4 batches of 8
+// tokens: face rows 0..7 / 8..15 of faces 0 and 2), bracketed by compiler barriers — the CB
+// reserve / push handshakes order the data. The previous volatile per-word copy serialized every
+// load before its store: 13.1 us per row at the focus shape, on the critical path (compute cannot
+// mix before the coefficients land); this form takes ~1-2 us. Only the batch is unrolled (the op
+// sits near the kernel-config-buffer text limit in profiler builds).
 FORCE_INLINE void expand_coefficients(uint32_t src_addr, uint32_t src_col, uint32_t dst_base, uint32_t count) {
-    constexpr uint32_t tile_words = 1024;
-    volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
-    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_base);
+    asm volatile("" ::: "memory");
+    const uint32_t* __restrict__ src = reinterpret_cast<const uint32_t*>(src_addr);
+    uint32_t* __restrict__ dst = reinterpret_cast<uint32_t*>(dst_base);
+#pragma GCC unroll 1
     for (uint32_t q = 0; q < count; ++q) {
-        volatile tt_l1_ptr uint32_t* dq = dst + q * tile_words;
-        for (uint32_t t = 0; t < 32; ++t) {
-            dq[tile_word(t, 0)] = src[tile_word(t, src_col + q)];
+        const uint32_t c = src_col + q;
+        const uint32_t* __restrict__ s = src + (c / FACE_DIM) * FACE_WORDS + (c % FACE_DIM);
+        uint32_t* __restrict__ d = dst + q * 1024;
+#pragma GCC unroll 1
+        for (uint32_t b = 0; b < 4; ++b) {
+            // batch b: face (b / 2) * 2 (0 or 2), face rows (b % 2) * 8 .. +7
+            const uint32_t off = (b / 2) * 2 * FACE_WORDS + (b % 2) * 8 * FACE_DIM;
+            const uint32_t* __restrict__ sb = s + off;
+            uint32_t* __restrict__ db = d + off;
+            uint32_t v[8];
+#pragma GCC unroll 8
+            for (uint32_t k = 0; k < 8; ++k) {
+                v[k] = sb[k * FACE_DIM];
+            }
+#pragma GCC unroll 8
+            for (uint32_t k = 0; k < 8; ++k) {
+                db[k * FACE_DIM] = v[k];
+            }
         }
     }
+    asm volatile("" ::: "memory");
 }
 
 }  // namespace
@@ -254,8 +278,12 @@ void kernel_main() {
     auto issue_block = [&](uint32_t row, uint32_t b, bool first_row) {
         const uint32_t c0 = c_start + b * block_c;
         const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
-        cb_reserve_back(cb_f_tiles, block_c);
-        cb_reserve_back(cb_x_tiles, n * block_c);
+        {
+            MaybeDeviceZoneScope("reader_in_reserve");  // back-pressure from compute
+            cb_reserve_back(cb_f_tiles, block_c);
+            cb_reserve_back(cb_x_tiles, n * block_c);
+        }
+        MaybeDeviceZoneScope("reader_issue");
         uint32_t f_l1 = get_write_ptr(cb_f_tiles);
         const uint32_t x_l1 = get_write_ptr(cb_x_tiles);
         const uint32_t f_page0 = row * tensor_c_tiles + c0;
@@ -290,6 +318,7 @@ void kernel_main() {
             if (first_row) {
                 const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
                 const uint32_t w_block_bytes = n * extent * w_tile_bytes;
+                MaybeDeviceZoneScope("reader_w_mcast");
                 if (w_tx.has_value()) {
                     w_tx->send(w_sent_l1, w_sent_l1, w_block_bytes);
                 } else if (w_rx.has_value()) {
@@ -305,15 +334,18 @@ void kernel_main() {
     for (uint32_t r = 0; r < total; ++r) {
         if (r >= num_rows) {
             if constexpr (fused) {
+                MaybeDeviceZoneScope("reader_collect");
                 collect_post_row(r);  // drain the trailing combines
             }
             continue;
         }
         const uint32_t row = row_start + r;
 
-        // load_coefficients: source reads (sender / roleless core) + the row's first block, one
-        // barrier, then the segment multicast.
+        // load_coefficients: source reads (sender / roleless core) and their own barrier, the segment
+        // multicast, then the row's first block is issued and the coefficients are expanded while
+        // its reads are in flight (Perf 1: coefficient-first ordering).
         if (coef_reads) {
+            MaybeDeviceZoneScope("reader_coef_issue");
             noc_async_read_tile(row * post_width_tiles + post_col / 32, post_acc, src_post_l1);
             if constexpr (comb_slot != 0) {
                 noc_async_read_tile(row * comb_width_tiles + comb_col / 32, comb_acc, src_comb_l1);
@@ -321,31 +353,48 @@ void kernel_main() {
             if constexpr (collapse && pre_slot != 0 && pre_slot != comb_slot) {
                 noc_async_read_tile(row * pre_width_tiles, pre_acc, src_pre_l1);  // P at columns 0..n-1
             }
+            noc_async_read_barrier();  // coefficient page(s) only
+        }
+        {
+            MaybeDeviceZoneScope("reader_coef_share");
+            share_coefficients();  // sender: after its read barrier; receiver: waits the multicast
         }
         issue_block(row, 0, r == 0);
         if constexpr (fused) {
+            MaybeDeviceZoneScope("reader_grant");
             grant(r);
         }
-        noc_async_read_barrier();
-        share_coefficients();
-
-        cb_reserve_back(cb_coef_cols, n_coef_cols);
-        const uint32_t coef_l1 = get_write_ptr(cb_coef_cols);
-        expand_coefficients(src_post_l1, post_col % 32, coef_l1, n);
-        expand_coefficients(src_comb_l1, comb_col % 32, coef_l1 + n * coef_tile_bytes, n * n);
-        if constexpr (collapse) {
-            expand_coefficients(src_pre_l1, 0, coef_l1 + PRE_COEF_BASE * coef_tile_bytes, n);
+        {
+            MaybeDeviceZoneScope("reader_coef_reserve");
+            cb_reserve_back(cb_coef_cols, n_coef_cols);
         }
-        cb_push_back(cb_coef_cols, n_coef_cols);
+        {
+            MaybeDeviceZoneScope("reader_coef_expand");
+            const uint32_t coef_l1 = get_write_ptr(cb_coef_cols);
+            expand_coefficients(src_post_l1, post_col % 32, coef_l1, n);
+            expand_coefficients(src_comb_l1, comb_col % 32, coef_l1 + n * coef_tile_bytes, n * n);
+            if constexpr (collapse) {
+                expand_coefficients(src_pre_l1, 0, coef_l1 + PRE_COEF_BASE * coef_tile_bytes, n);
+            }
+            cb_push_back(cb_coef_cols, n_coef_cols);
+        }
+        {
+            MaybeDeviceZoneScope("reader_barrier");
+            noc_async_read_barrier();  // block 0
+        }
         push_block(0, r == 0);
 
         // load_block for the rest of the row.
         for (uint32_t b = 1; b < num_blocks; ++b) {
             issue_block(row, b, r == 0);
-            noc_async_read_barrier();
+            {
+                MaybeDeviceZoneScope("reader_barrier");
+                noc_async_read_barrier();
+            }
             push_block(b, r == 0);
         }
         if constexpr (fused) {
+            MaybeDeviceZoneScope("reader_collect");
             collect_post_row(r);
         }
     }

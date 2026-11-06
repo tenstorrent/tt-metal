@@ -26,6 +26,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_combine.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_hc_sfpu.hpp"
 
@@ -177,8 +178,12 @@ void kernel_main() {
         const uint32_t row = hc_rows[hc_head];
         hc_head = (hc_head + 1) % LANE_SETS;
         --hc_count;
-        cb_wait_front(cb_hc_out, LANE_TILES);
-        noc_async_write_barrier();  // the previous hc page has left cb_hc_row
+        {
+            MaybeDeviceZoneScope("writer_hc_wait");
+            cb_wait_front(cb_hc_out, LANE_TILES);
+            noc_async_write_barrier();  // the previous hc page has left cb_hc_row
+        }
+        MaybeDeviceZoneScope("writer_hc_out");
         lanes_to_hc(get_read_ptr(cb_hc_out), get_write_ptr(cb_hc_row));
         cb_pop_front(cb_hc_out, LANE_TILES);
         noc_async_write_page(row, hc_acc, get_write_ptr(cb_hc_row));
@@ -195,7 +200,11 @@ void kernel_main() {
         ++hc_count;
     };
     auto write_stats = [&](uint32_t cb, uint32_t row) {
-        cb_wait_front(cb, 1);
+        {
+            MaybeDeviceZoneScope("writer_stats_wait");
+            cb_wait_front(cb, 1);
+        }
+        MaybeDeviceZoneScope("writer_stats");
         noc_async_write_page(row, stats_acc, get_read_ptr(cb));
         if constexpr (collapse) {
             push_lanes(get_read_ptr(cb), row);
@@ -207,15 +216,22 @@ void kernel_main() {
     auto post_row = [&](uint32_t r) {
         if (r < num_rows) {
             // ship_partial(r)
-            cb_wait_front(cb_ss_row, 1);
-            cb_wait_front(cb_partial, 1);
+            {
+                MaybeDeviceZoneScope("writer_partial_wait");
+                cb_wait_front(cb_ss_row, 1);
+                cb_wait_front(cb_partial, 1);
+            }
+            MaybeDeviceZoneScope("writer_ship_partial");
             volatile tt_l1_ptr uint32_t* part =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_partial));
             volatile tt_l1_ptr uint32_t* ss = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ss_row));
             for (uint32_t t = 0; t < 32; ++t) {
                 part[tile_word(t, SS_COL)] = ss[tile_word(t, 0)];
             }
-            noc_semaphore_wait_min(sem_ptr(SEM_LEAD_CREDIT), r + 1);
+            {
+                MaybeDeviceZoneScope("writer_credit_wait");
+                noc_semaphore_wait_min(sem_ptr(SEM_LEAD_CREDIT), r + 1);
+            }
             const uint32_t set = r % COMBINE_DEPTH;
             send_tile(
                 get_read_ptr(cb_partial),
@@ -231,8 +247,12 @@ void kernel_main() {
                 const uint32_t gr = geo.root_group(rl);
                 const uint32_t k = geo.root_ordinal(rl);
                 const uint32_t set = k % COMBINE_DEPTH;
-                cb_wait_front(cb_lead_out, 1);
-                noc_semaphore_wait_min(sem_ptr(SEM_ROOT_CREDIT + gr), k + 1);
+                {
+                    MaybeDeviceZoneScope("writer_lead_wait");
+                    cb_wait_front(cb_lead_out, 1);
+                    noc_semaphore_wait_min(sem_ptr(SEM_ROOT_CREDIT + gr), k + 1);
+                }
+                MaybeDeviceZoneScope("writer_lead_send");
                 send_tile(
                     get_read_ptr(cb_lead_out),
                     gr,
@@ -257,15 +277,19 @@ void kernel_main() {
             const uint32_t c0 = c_start + b * block_c;
             const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
             uint32_t k = 0;  // position in the compute-push order (j-major, c-minor)
-            for (uint32_t j = 0; j < n; ++j) {
-                const uint32_t page0 = (row * n + j) * tensor_c_tiles + c0;
-                for (uint32_t c = 0; c < extent; ++c, ++k) {
-                    cb_wait_front(cb_out_tiles, k + 1);
-                    noc_async_write_tile(page0 + c, out_acc, get_read_ptr(cb_out_tiles) + k * tile_bytes);
+            {
+                MaybeDeviceZoneScope("writer_out");  // per-tile waits on compute + write issue
+                for (uint32_t j = 0; j < n; ++j) {
+                    const uint32_t page0 = (row * n + j) * tensor_c_tiles + c0;
+                    for (uint32_t c = 0; c < extent; ++c, ++k) {
+                        cb_wait_front(cb_out_tiles, k + 1);
+                        noc_async_write_tile(page0 + c, out_acc, get_read_ptr(cb_out_tiles) + k * tile_bytes);
+                    }
                 }
+                cb_wait_front(cb_out_tiles, window);  // padding pages of a ragged tail
             }
-            cb_wait_front(cb_out_tiles, window);  // padding pages of a ragged tail
             if constexpr (collapse) {
+                MaybeDeviceZoneScope("writer_y");
                 const uint32_t y_page0 = row * tensor_c_tiles + c0;
                 for (uint32_t c = 0; c < extent; ++c) {
                     cb_wait_front(cb_y_tiles, c + 1);
@@ -273,7 +297,10 @@ void kernel_main() {
                 }
                 cb_wait_front(cb_y_tiles, block_c);  // padding pages of a ragged tail
             }
-            noc_async_write_barrier();
+            {
+                MaybeDeviceZoneScope("writer_barrier");
+                noc_async_write_barrier();
+            }
             cb_pop_front(cb_out_tiles, window);
             if constexpr (collapse) {
                 cb_pop_front(cb_y_tiles, block_c);
@@ -289,6 +316,7 @@ void kernel_main() {
             post_row(r);
         }
         if constexpr (collapse) {
+            MaybeDeviceZoneScope("writer_hc_tail");
             while (hc_count > 0) {
                 drain_hc(true);  // the trailing stats rows' hc
             }

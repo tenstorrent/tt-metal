@@ -54,6 +54,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/ternary/ternary.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_combine.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_hc_sfpu.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_mix_sfpu.hpp"
@@ -384,8 +385,12 @@ ALWI void collapse_block(uint32_t extent, DataflowBuffer& coef, DataflowBuffer& 
 
 // hc_row: the hc program in place over the LANE_TILES lane tiles (D0[, D1]).
 ALWI void hc_row(const uint32_t* params, DataflowBuffer& lanes, DataflowBuffer& out) {
-    lanes.wait_front(mhc_post_hc::LANE_TILES);
-    out.reserve_back(mhc_post_hc::LANE_TILES);
+    {
+        // zone "compute_hc_wait" dropped: kernel-text budget (profiler build)
+        lanes.wait_front(mhc_post_hc::LANE_TILES);
+        out.reserve_back(mhc_post_hc::LANE_TILES);
+    }
+    MaybeDeviceZoneScope("compute_hc");
     if constexpr (mhc_post_hc::LANE_TILES == 1) {
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
@@ -549,8 +554,12 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_f_tiles, cb_x_tiles, cb_out_tiles);
         DataflowBuffer packed_buf(mix_fused ? cb_coef_packed : cb_coef_cols);
         for (uint32_t r = 0; r < num_rows; ++r) {
-            coef_buf.wait_front(n_coef_cols);  // load_coefficients (consumer side)
+            {
+                // zone "compute_coef_wait" dropped: kernel-text budget (profiler build)
+                coef_buf.wait_front(n_coef_cols);  // load_coefficients (consumer side)
+            }
             if constexpr (mix_fused) {
+                // zone "compute_pack_coef" dropped: kernel-text budget (profiler build)
                 packed_buf.reserve_back(n_packed);
                 pack_coefficients(coef_buf, packed_buf);
                 packed_buf.push_back(n_packed);
@@ -558,12 +567,18 @@ void kernel_main() {
             }
             for (uint32_t b = 0; b < num_blocks; ++b) {
                 const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
-                f_buf.wait_front(block_c);
-                x_buf.wait_front(n * block_c);
-                if constexpr (mix_fused) {
-                    mix_block_fused<false>(extent, packed_buf, coef_buf, f_buf, x_buf, out_buf, out_buf, out_buf);
-                } else {
-                    mix_block(extent, coef_buf, f_buf, x_buf, out_buf, out_buf, out_buf);
+                {
+                    MaybeDeviceZoneScope("compute_in_wait");
+                    f_buf.wait_front(block_c);
+                    x_buf.wait_front(n * block_c);
+                }
+                {
+                    MaybeDeviceZoneScope("compute_mix");
+                    if constexpr (mix_fused) {
+                        mix_block_fused<false>(extent, packed_buf, coef_buf, f_buf, x_buf, out_buf, out_buf, out_buf);
+                    } else {
+                        mix_block(extent, coef_buf, f_buf, x_buf, out_buf, out_buf, out_buf);
+                    }
                 }
                 f_buf.pop_front(block_c);
                 x_buf.pop_front(n * block_c);
@@ -639,7 +654,11 @@ void kernel_main() {
         };
 
         auto leader_combine = [&]() {
-            gather_buf.wait_front(geo.slots);
+            {
+                // zone "compute_lead_gather_wait" dropped: kernel-text budget (profiler build)
+                gather_buf.wait_front(geo.slots);
+            }
+            MaybeDeviceZoneScope("compute_lead_combine");
             if constexpr (geo0.groups > 1) {
                 sum_slots<cb_gather, cb_lead_out>(geo.size, gather_buf, comb_acc_buf, lead_out_buf);
             } else {
@@ -653,7 +672,11 @@ void kernel_main() {
         auto root_combine = [&]() {
             if constexpr (geo0.groups > 1) {
                 DataflowBuffer root_buf(cb_root_gather);
-                root_buf.wait_front(geo0.groups);
+                {
+                    // zone "compute_root_gather_wait" dropped: kernel-text budget (profiler build)
+                    root_buf.wait_front(geo0.groups);
+                }
+                MaybeDeviceZoneScope("compute_root_combine");
                 sum_slots<cb_root_gather, cb_stats_row>(geo0.groups, root_buf, comb_acc_buf, stats_row_buf);
                 root_buf.pop_front(geo0.groups);
                 stats_done();
@@ -695,28 +718,40 @@ void kernel_main() {
         const uint32_t total = num_rows + 2 * COMBINE_LAG;
         for (uint32_t r = 0; r < total; ++r) {
             if (r < num_rows) {
-                coef_buf.wait_front(n_coef_cols);
-                if constexpr (mix_fused) {
-                    packed_buf.reserve_back(n_packed);
-                    pack_coefficients(coef_buf, packed_buf);
-                    packed_buf.push_back(n_packed);
-                    packed_buf.wait_front(n_packed);
+                {
+                    // zone "compute_coef_wait" dropped: kernel-text budget (profiler build)
+                    coef_buf.wait_front(n_coef_cols);
                 }
-                // ss_run <- 0 (row seed)
-                ckl::eltwise_chain(
-                    ckl::IterationShape::one_tile(),
-                    ckl::FillScalar<ckl::Dst::D0>{0.0f},
-                    PackTo<cb_ss_run>{ss_run_buf});
+                {
+                    // zone "compute_pack_coef" dropped: kernel-text budget (profiler build)
+                    if constexpr (mix_fused) {
+                        packed_buf.reserve_back(n_packed);
+                        pack_coefficients(coef_buf, packed_buf);
+                        packed_buf.push_back(n_packed);
+                        packed_buf.wait_front(n_packed);
+                    }
+                    // ss_run <- 0 (row seed)
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::FillScalar<ckl::Dst::D0>{0.0f},
+                        PackTo<cb_ss_run>{ss_run_buf});
+                }
                 for (uint32_t b = 0; b < num_blocks; ++b) {
                     const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
                     const uint32_t pad = block_c - extent;
-                    f_buf.wait_front(block_c);
-                    x_buf.wait_front(n * block_c);
-                    if constexpr (mix_fused) {
-                        mix_block_fused<true>(
-                            extent, packed_buf, coef_buf, f_buf, x_buf, out_buf, xprime_buf, ss_run_buf);
-                    } else {
-                        mix_block(extent, coef_buf, f_buf, x_buf, out_buf, xprime_buf, ss_run_buf);
+                    {
+                        MaybeDeviceZoneScope("compute_in_wait");
+                        f_buf.wait_front(block_c);
+                        x_buf.wait_front(n * block_c);
+                    }
+                    {
+                        MaybeDeviceZoneScope("compute_mix");
+                        if constexpr (mix_fused) {
+                            mix_block_fused<true>(
+                                extent, packed_buf, coef_buf, f_buf, x_buf, out_buf, xprime_buf, ss_run_buf);
+                        } else {
+                            mix_block(extent, coef_buf, f_buf, x_buf, out_buf, xprime_buf, ss_run_buf);
+                        }
                     }
                     f_buf.pop_front(block_c);
                     x_buf.pop_front(n * block_c);
@@ -728,6 +763,7 @@ void kernel_main() {
                         xprime_buf.push_back(n * pad);
                     }
                     if constexpr (collapse) {
+                        MaybeDeviceZoneScope("compute_collapse");
                         xprime_buf.wait_front(n * block_c);
                         if constexpr (mix_fused) {
                             collapse_block_fused(extent, packed_buf, xprime_buf, y_buf);
@@ -742,8 +778,10 @@ void kernel_main() {
                     const bool last_block = (b + 1 == num_blocks);
                     const uint32_t w_base = b * n * block_c;
                     if (r == 0) {
+                        // zone "compute_w_wait" dropped: kernel-text budget (profiler build)
                         w_buf.wait_front(n * (w_base / n + extent));
                     }
+                    MaybeDeviceZoneScope("compute_project");
                     if constexpr (proj_passes == 1) {
                         project_block(extent, w_base, xprime_buf, w_buf, proj_block_buf);
                         accumulate_partial(b == 0, last_block);
@@ -776,6 +814,7 @@ void kernel_main() {
                     }
                 }
                 // finish_row_partial: ss row sums -> column 0 of cb_ss_row
+                // zone "compute_finish_row" dropped: kernel-text budget (profiler build)
                 ckl::eltwise_chain(
                     ckl::IterationShape::one_tile(),
                     CopyRun<cb_ss_run, ckl::Dst::D0>{ss_run_buf},
