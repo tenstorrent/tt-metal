@@ -101,6 +101,13 @@
 #define PACK(...)
 #endif
 
+// Quasar SFPU thread (TRISC3): runs SrcS ops. Expands to nothing on the other three threads.
+#if defined(ARCH_QUASAR) && defined(TRISC_ISOLATE_SFPU)
+#define SFPU_SRCS(...) __VA_ARGS__
+#else
+#define SFPU_SRCS(...)
+#endif
+
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_AB_matmul_api.h"
