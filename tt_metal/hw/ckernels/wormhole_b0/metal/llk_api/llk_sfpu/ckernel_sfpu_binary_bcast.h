@@ -362,6 +362,27 @@ inline void _process_col_bcast_row_band_(
     TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, out_tile_offset + slot3);
 }
 
+// One half of a tile (the face pair {left, right}): its four row bands, each combined with column 0 of the
+// bcast tile's band at the same rows (the bcast column of row band b sits at the left face base + b * stride).
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_half_tile_(
+    std::uint32_t left_face_base,
+    std::uint32_t right_face_base,
+    std::uint32_t data_base,
+    std::uint32_t bcast_base,
+    std::uint32_t out_base) {
+    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
+        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
+
+        _process_col_bcast_row_band_<BINOP>(
+            /* bcast_col0_addr  */ bcast_base + left_face_base + band_off,
+            /* left_face_addr   */ left_face_base + band_off,
+            /* right_face_addr  */ right_face_base + band_off,
+            /* data_tile_offset */ data_base,
+            /* out_tile_offset  */ out_base);
+    }
+}
+
 // Top-level BCAST_COL driver for a single 32x32 tile.
 template <BinaryOp BINOP>
 inline void _calculate_sfpu_binary_bcast_col_full_tile_(
@@ -371,28 +392,45 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
     const std::uint32_t out_base = dst_index_out * DEST_TILE_SIZE_RAW;
 
     // Upper tile half (tile rows 0-15): face 0 = left, face 1 = right.
-    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
-        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
-
-        _process_col_bcast_row_band_<BINOP>(
-            /* bcast_col0_addr  */ bcast_base + FACE0_BASE + band_off,
-            /* left_face_addr   */ FACE0_BASE + band_off,
-            /* right_face_addr  */ FACE1_BASE + band_off,
-            /* data_tile_offset */ data_base,
-            /* out_tile_offset  */ out_base);
-    }
+    _calculate_sfpu_binary_bcast_col_half_tile_<BINOP>(FACE0_BASE, FACE1_BASE, data_base, bcast_base, out_base);
 
     // Lower tile half (tile rows 16-31): face 2 = left, face 3 = right.
-    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
-        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
+    _calculate_sfpu_binary_bcast_col_half_tile_<BINOP>(FACE2_BASE, FACE3_BASE, data_base, bcast_base, out_base);
+}
 
-        _process_col_bcast_row_band_<BINOP>(
-            /* bcast_col0_addr  */ bcast_base + FACE2_BASE + band_off,
-            /* left_face_addr   */ FACE2_BASE + band_off,
-            /* right_face_addr  */ FACE3_BASE + band_off,
-            /* data_tile_offset */ data_base,
-            /* out_tile_offset  */ out_base);
-    }
+// BCAST_COL over tile rows 0-15 only (the compute API's VectorMode::R): the upper half. Rows 16-31 of the data,
+// bcast and output tiles are neither read nor written.
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_rows_0_15_(
+    std::uint32_t dst_index_data, std::uint32_t dst_index_bcast, std::uint32_t dst_index_out) {
+    const std::uint32_t data_base = dst_index_data * DEST_TILE_SIZE_RAW;
+    const std::uint32_t bcast_base = dst_index_bcast * DEST_TILE_SIZE_RAW;
+    const std::uint32_t out_base = dst_index_out * DEST_TILE_SIZE_RAW;
+
+    _calculate_sfpu_binary_bcast_col_half_tile_<BINOP>(FACE0_BASE, FACE1_BASE, data_base, bcast_base, out_base);
+}
+
+// BCAST_COL over one 4-row band of the upper half: data rows 4 * data_band .. +3 (all 32 columns, faces 0 and 1)
+// combined with column 0 rows 4 * bcast_band .. +3 of the bcast tile (face 0). Nothing else is read or written,
+// so one column tile can carry several 4-row scalars for one data band (bands 0..3; the caller checks the range).
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_band_(
+    std::uint32_t dst_index_data,
+    std::uint32_t dst_index_bcast,
+    std::uint32_t dst_index_out,
+    std::uint32_t data_band,
+    std::uint32_t bcast_band) {
+    const std::uint32_t data_base = dst_index_data * DEST_TILE_SIZE_RAW;
+    const std::uint32_t bcast_base = dst_index_bcast * DEST_TILE_SIZE_RAW;
+    const std::uint32_t out_base = dst_index_out * DEST_TILE_SIZE_RAW;
+    const std::uint32_t data_off = data_band * ROW_BAND_STRIDE;
+
+    _process_col_bcast_row_band_<BINOP>(
+        /* bcast_col0_addr  */ bcast_base + FACE0_BASE + bcast_band * ROW_BAND_STRIDE,
+        /* left_face_addr   */ FACE0_BASE + data_off,
+        /* right_face_addr  */ FACE1_BASE + data_off,
+        /* data_tile_offset */ data_base,
+        /* out_tile_offset  */ out_base);
 }
 
 // LREG_DATA0..3 contain centred values; LREG_BCAST contains the broadcast inverse standard deviation.
