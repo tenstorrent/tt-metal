@@ -1051,7 +1051,7 @@ class Qwen36Model:
         if streaming and not (sharded_lm_head or self._ondev_argmax or return_hidden):
             # the final norm inside the LM head's op (its fused norm + rotation)
             sd = stream_decode.STATE
-            logits = sd.head.rotated(sd.final_nrot, x, lead=tuple(list(x.shape)[:-1]))
+            logits = sd.head.rotated(sd.final_nrot, x, lead=tuple(list(x.shape)[:-1]), host_pf=sd.head_pf())
             ttnn.deallocate(x)
             return logits
         x = self._final_norm_decode(x)
@@ -4289,6 +4289,7 @@ class Qwen36Model:
                         host = ttnn.from_torch(saved[key], dtype=dst.dtype, layout=ttnn.TILE_LAYOUT)
                         ttnn.copy_host_to_device_tensor(host, dst)
                     idx += 1
+            stream_decode.STATE.prefetch_first()  # the first GDN step's prefetched inputs, from the restored state
             return
         idx = 0
         for layer in self.layers:

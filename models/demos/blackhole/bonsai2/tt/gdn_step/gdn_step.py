@@ -223,7 +223,10 @@ class GDNStep:
                     compile_time_args=[nv],
                     runtime_args=cp,
                     common_runtime_args=cp_c,
-                    defines=list(self.compute_defines) + ([("STEP_AB_DOT", "1")] if ab_dot else []) + first,
+                    defines=list(self.compute_defines)
+                    + ([("STEP_AB_DOT", "1")] if ab_dot else [])
+                    + first
+                    + ([("STEP_OS", "1")] if os.environ.get("BONSAI_STEP_OS") == "1" else []),
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,

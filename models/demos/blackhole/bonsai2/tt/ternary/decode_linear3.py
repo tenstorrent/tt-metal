@@ -518,11 +518,17 @@ class TernaryDecodeLinear3:
             for parity in (0, 1)
         ]
 
-    def stream_pages(self, device):
-        """{receiver index: this linear's 4-KB record pages it reads} (for stream.Plan.add), as __call__ splits it."""
+    def stream_pages(self, device, order=None):
+        """{receiver index: this linear's 4-KB record pages it reads} (for stream.Plan.add), as __call__ splits it.
+        order: {receiver index: span position} (stream.Stream.span_order; the kernels' core_span RX_SPAN_NS)."""
         rec = np.asarray(self.rec_host).reshape(-1, 1024)
-        _, spans = self._spans()
-        return {c: rec[f * self.ppr : (f + n) * self.ppr] for c, (f, n) in enumerate(spans)}
+        cores, spans = self._spans()
+        pos = (lambda c: order[c]) if order is not None else (lambda c: c)
+        out = {}
+        for c in range(cores):
+            f, n = spans[pos(c)]
+            out[c] = rec[f * self.ppr : (f + n) * self.ppr]
+        return out
 
     def rotated(
         self,

@@ -12,6 +12,10 @@
 // every step keeps them zero), so the rank-1 update k^T (x) u is a plain matmul and the readouts need no masking.
 // Row sums use a matmul with an all-ones tile (every column of row 0 gets the sum); the conv's sum over rows 0-3
 // uses a matmul with E (row 0 = [1, 1, 1, 1, 0, ...]).
+#ifdef STEP_OS
+// a small binary (STEP_OS): the kernel-config ring holds it and the next op's together (gdn_step.py)
+#pragma GCC optimize("Os")
+#endif
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"

@@ -31,13 +31,16 @@ KERNELS = "models/demos/blackhole/bonsai2/tt/stream/kernels/"
 SLOT = 16384
 PAGE = 4096
 PPS = SLOT // PAGE  # 4-KB pages per slot
-RING_SLOTS = int(os.environ.get("STREAM_RING_SLOTS", "16"))  # 256 KB (40 slots: 20.99 ms, 16: 20.33)
+RING_SLOTS = int(os.environ.get("STREAM_RING_SLOTS", "24"))  # 384 KB (16: 18.55 ms, 24: 18.45, 32: 18.41; L1 is tight)
 STAGE = int(os.environ.get("STREAM_STAGE", "12"))
 BATCH = int(os.environ.get("STREAM_BATCH", "4"))
 NBANKS = 8
 PER_BANK = 2
 SCHED_CHUNK = 256
-BALANCE = float(os.environ.get("STREAM_BALANCE", "1.02"))  # a sender's load cap: mean x BALANCE
+BALANCE = float(os.environ.get("STREAM_BALANCE", "1.01"))  # a sender's load cap: mean x BALANCE
+MAX_GROUP = 10
+NEAR = int(os.environ.get("STREAM_NEAR", "6"))
+INTERLEAVE = os.environ.get("STREAM_INTERLEAVE", "0") == "1"
 SEG_SLOTS = int(
     os.environ.get("STREAM_SEG_SLOTS", "256")
 )  # slots per sender per segment (8 MB per bank: DRAM is fragmented)
@@ -71,7 +74,7 @@ def receiver_count(device):
 
 
 class Stream:
-    def __init__(self, device, slot=SLOT, ring_slots=RING_SLOTS, loads=None):
+    def __init__(self, device, slot=SLOT, ring_slots=RING_SLOTS, loads=None, span_ns=()):
         """loads: slots per receiver index for the whole step (Plan's work), to balance the senders' totals."""
         self.device, self.slot, self.S = device, slot, ring_slots
         grid = device.compute_with_storage_grid_size()
@@ -131,15 +134,24 @@ class Stream:
             self.groups = [[] for _ in range(NS)]
             idx = {(c.x, c.y): i for i, c in enumerate(self.rx_order)}
             load = [0] * NS
-            cap = None if loads is None else sum(loads) / NS * BALANCE
-            for c in sorted(self.rx_order, key=lambda c: (c.y, c.x)):
-                near = sorted(range(NS), key=lambda b: abs(self.senders[b].x - c.x) + abs(self.senders[b].y - c.y))
-                w = 0 if loads is None else loads[idx[(c.x, c.y)]]
-                fits = [b for b in near if len(self.groups[b]) < per and (cap is None or load[b] + w <= cap)]
-                b = fits[0] if fits else min((b for b in near if len(self.groups[b]) < per), key=lambda b: load[b])
-                self.groups[b].append(c)
-                load[b] += w
+            if loads is None:
+                for c in sorted(self.rx_order, key=lambda c: (c.y, c.x)):
+                    near = sorted(range(NS), key=lambda b: abs(self.senders[b].x - c.x) + abs(self.senders[b].y - c.y))
+                    b = next(b for b in near if len(self.groups[b]) < per)
+                    self.groups[b].append(c)
+            else:
+                # compact groups of `per` (receiver distance costs more than balance: by-load groups of any size
+                # drained the plan in 16.8 ms vs 15.8); the work is balanced by span_orders below
+                for c in sorted(self.rx_order, key=lambda c: (c.y, c.x)):
+                    near = sorted(range(NS), key=lambda b: abs(self.senders[b].x - c.x) + abs(self.senders[b].y - c.y))
+                    b = next(b for b in near if len(self.groups[b]) < per)
+                    self.groups[b].append(c)
+            per = max(len(g) for g in self.groups)
         self.per = per
+        if INTERLEAVE:
+            # receiver i of the order from sender group i % NS: every prefix (an op on its first n receivers) spreads
+            # over the senders evenly (each linear's work balances; the core sets are less rectangular)
+            self.rx_order = [g[k] for k in range(max(len(g) for g in self.groups)) for g in self.groups if k < len(g)]
         self.sender_crs = _crs(self.senders)
         self.receiver_crs = _crs(self.rx_order + self.idle)
         self.manager = device.create_sub_device_manager(
@@ -172,13 +184,28 @@ class Stream:
             sv = device.worker_core_from_logical_core(self.senders[b])
             for r, c in enumerate(g):
                 where[(c.x, c.y)] = (sv.x, sv.y, r)
+        # span orders (core_span.hpp RX_SPAN): for an op on the first n receivers, the order in which they take its
+        # output tiles; the ones that take one more come first, spread over the senders (each sender's r-th receiver
+        # in turn) so every sender's share of each linear balances
+        self.span_ns = list(span_ns)[:12]
+        g_of = {}
+        for b, g in enumerate(self.groups):
+            for r, c in enumerate(g):
+                g_of[(c.x, c.y)] = (r, b)
+        self.span_pos = {}  # n -> {receiver index: position}
+        for n in self.span_ns:
+            cores = self.rx_order[:n]
+            ordered = sorted(cores, key=lambda c: g_of[(c.x, c.y)])
+            self.span_pos[n] = {self.rx_index[(c.x, c.y)]: p for p, c in enumerate(ordered)}
         self.info = sharded(shard_order, 16)
         # each core writes its own record (not via the shard order of a host tensor)
         rt = ttnn.RuntimeArgs()
         for c in shard_order:
             k = (c.x, c.y)
             sx, sy, r = where.get(k, (0, 0, 0))
-            rt[c.x][c.y] = [self.info.buffer_address(), self.rx_index.get(k, 0xFFFF), sx, sy, r]
+            i = self.rx_index.get(k, 0xFFFF)
+            spans = [self.span_pos[n].get(i, 0xFFFF) for n in self.span_ns]
+            rt[c.x][c.y] = [self.info.buffer_address(), i, sx, sy, r] + spans
         ttnn.generic_op(
             [self.info, self.info],
             ttnn.ProgramDescriptor(
@@ -187,6 +214,7 @@ class Stream:
                         kernel_source=KERNELS + "rx_init.cpp",
                         core_ranges=self.receiver_crs,
                         compile_time_args=[],
+                        defines=[("NARGS", str(4 + len(self.span_ns)))],
                         runtime_args=rt,
                         config=ttnn.ReaderConfigDescriptor(),
                     )
@@ -235,11 +263,18 @@ class Stream:
         ]
 
     def defines(self):
-        return [
+        d = [
             ("RX_INFO", str(self.info.buffer_address())),
             ("RX_RING_SLOTS", str(self.S)),
             ("RX_SLOT", str(self.slot)),
         ]
+        if self.span_ns:
+            d.append(("RX_SPAN_NS", "{" + ",".join(str(n) for n in self.span_ns) + "}"))
+        return d
+
+    def span_order(self, n):
+        """{receiver index: span position} for an op on the first n receivers (None: in receiver order)."""
+        return self.span_pos.get(n)
 
     # ------------------------------------------------------------------ sender side
     def launch(self, plan, start=0):

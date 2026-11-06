@@ -78,9 +78,10 @@ def unpack_rope(packed):
         shape = list(packed.shape)
         lo, hi = [0] * len(shape), list(shape)
         hi[0] = n
-        cos = ttnn.slice(packed, lo, hi, sub_core_grids=grids)
+        l1 = ttnn.L1_MEMORY_CONFIG  # the norm + RoPE ops read them; a DRAM read waits behind the stream's
+        cos = ttnn.slice(packed, lo, hi, sub_core_grids=grids, memory_config=l1)
         lo[0], hi[0] = n, 2 * n
-        return cos, ttnn.slice(packed, lo, hi, sub_core_grids=grids)
+        return cos, ttnn.slice(packed, lo, hi, sub_core_grids=grids, memory_config=l1)
     return packed[0:n], packed[n : 2 * n]
 
 

@@ -23,7 +23,17 @@ FORCE_INLINE uint32_t core_index(uint32_t grid_x) {
 // the first (Nt / unit) % ncores cores taking one unit more (the host's split).
 FORCE_INLINE void core_span(
     uint32_t Nt, uint32_t ncores, uint32_t grid_x, uint32_t unit, uint32_t& first, uint32_t& n) {
-    const uint32_t c = core_index(grid_x);
+    uint32_t c = core_index(grid_x);
+#ifdef RX_SPAN_NS
+    // the weight stream's span order for ops on ncores receivers (stream.py span_ns: info words 4..)
+    constexpr uint32_t span_ns[] = RX_SPAN_NS;
+    for (uint32_t k = 0; k < sizeof(span_ns) / sizeof(span_ns[0]); ++k) {
+        if (span_ns[k] == ncores) {
+            c = reinterpret_cast<volatile uint32_t*>(RX_INFO)[4 + k];
+            break;
+        }
+    }
+#endif
     const uint32_t units = Nt / unit, base = units / ncores, extra = units % ncores;
     n = unit * (base + (c < extra ? 1 : 0));
     first = unit * (c * base + (c < extra ? c : extra));

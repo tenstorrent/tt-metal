@@ -14,7 +14,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.bonsai2.tt import core_ranges
-from models.demos.blackhole.bonsai2.tt.stream.stream import PPS, Plan, Stream, receiver_count
+from models.demos.blackhole.bonsai2.tt.stream.stream import Plan, Stream, receiver_count
 
 STATE = None
 
@@ -53,16 +53,20 @@ class StreamDecode:
             order += [(m.gateup, layer._bonsai_ff_nrot.B), (m.down, m.rot_hidden.B)]
         self.head = model.ternary_lm_head.lin
         order.append((self.head, self.final_nrot.B))
-        loads = [0] * n
-        pages = []
+        span_ns = set()
         for lin, B in order:
             lin.cores, lin.spread, lin.streamed = nl - B, True, True
-            p = lin.stream_pages(device)
-            pages.append(p)
-            for i, a in p.items():
-                loads[i] += -(-a.shape[0] // PPS)
-        self.st = st = Stream(device, loads=loads)  # receivers grouped so the senders' totals balance
+            span_ns.add(lin._spans()[0])
+        # (before the stream's sub-devices load: a copy op on the whole grid) the decode q / k norm + RoPE consts in
+        # L1 while the stream runs (a DRAM read waits behind the senders'); DRAM again for prefill (its CBs need that L1)
+        self.qkr = []
+        for layer in model.layers:
+            for op in (getattr(layer.attention.ternary, "pre_qkr", None) or {}).values():
+                self.qkr.append((op, op.consts, ttnn.to_memory_config(op.consts, ttnn.L1_MEMORY_CONFIG)))
+        # compact sender groups; each linear's tiles split in a sender-balanced order (Stream span_ns)
+        self.st = st = Stream(device, span_ns=sorted(span_ns, reverse=True))
         core_ranges.set_layout(st.rx_order, st.defines())
+        pages = [lin.stream_pages(device, st.span_order(lin._spans()[0])) for lin, _ in order]
         self.plan = Plan(st)
         self.takes = [self.plan.add(p) for p in pages]
         self.plan.build()
@@ -148,10 +152,14 @@ class StreamDecode:
             self._oplog = True
         self.st.activate()
         core_ranges.set_layout(self.st.rx_order, self.st.defines())
+        for op, _, l1 in self.qkr:
+            op.consts = l1
         self.on = True
 
     def deactivate(self):
         self.on = False
+        for op, dram, _ in getattr(self, "qkr", []):
+            op.consts = dram
         core_ranges.set_layout(None)
         self.st.deactivate()
 
@@ -183,9 +191,22 @@ class StreamDecode:
         self.pending, self.ready = None, i
         return spec
 
+    def prefetch_first(self):
+        """Fill the buffer for the first GDN layer now (e.g. after its state was restored from the host)."""
+        if self.gdns:
+            self.gdns[0][0].step.prefetch_op(self._spec(0))
+
+    def head_pf(self):
+        """The LM head's writer prefetches the first GDN layer's inputs for the next step (its state is final by
+        then): the step then starts without a prefetch op (BONSAI_HEAD_PF=0: off)."""
+        if not self.gdns or os.environ.get("BONSAI_HEAD_PF", "1") != "1":
+            return None
+        return self._spec(0)
+
     def launch(self):
         self.st.launch(self.plan)
-        self.pending, self.ready = None, None
+        # the previous step's LM head prefetched the first GDN layer (prefetch_first() after a state restore)
+        self.pending, self.ready = None, (0 if self.head_pf() is not None else None)
 
 
 def embed(table, ids):
