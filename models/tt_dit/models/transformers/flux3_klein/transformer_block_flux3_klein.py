@@ -113,7 +113,6 @@ class Flux3KleinTransformerBlock(Module):
         self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
         self._mesh_device = device
-        self._rows = None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in (("q_proj", "attn.to_q"), ("k_proj", "attn.to_k"), ("v_proj", "attn.to_v")):
@@ -144,11 +143,6 @@ class Flux3KleinTransformerBlock(Module):
         mod: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
         logical_length: int,
     ) -> ttnn.Tensor:
-        # Attention keeps the ring SDPA worker grid of its first forward; re-pick it when the row count changes
-        if x.shape[1] != self._rows:
-            self.attn.ring_sdpa_worker_grid = None
-            self._rows = x.shape[1]
-
         shift, scale_plus_one, gate = mod
         x_norm = ttnn.squeeze(self.norm(ttnn.unsqueeze(x, 0), dynamic_weight=scale_plus_one, dynamic_bias=shift), 0)
         attn, _ = self.attn.forward(sequence_1=x_norm, sequence_1_rope=rope, sequence_1_length=logical_length)

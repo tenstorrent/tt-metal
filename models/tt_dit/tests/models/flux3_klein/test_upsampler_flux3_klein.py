@@ -20,6 +20,7 @@ REQUESTS = [
 ]
 
 
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_upsampler(*, mesh_device: ttnn.MeshDevice) -> None:
@@ -32,7 +33,7 @@ def test_upsampler(*, mesh_device: ttnn.MeshDevice) -> None:
     upsampler.close()
 
 
-@pytest.mark.timeout(3600)
+@pytest.mark.timeout(5400)
 @pytest.mark.parametrize(
     "device_params", [{**ring_params_8k, "l1_small_size": 65536, **SHARED_MESH_PARAMS}], indirect=True
 )

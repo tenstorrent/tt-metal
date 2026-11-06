@@ -75,7 +75,7 @@ def _vae_kwargs(mesh_device, parallel_config, ccl_manager) -> dict:
 def _configure(module) -> None:
     if isinstance(module, Conv2d):
         # keeps the sliding-window config tensors out of L1_SMALL at 2K and 4K
-        module.conv_config_overrides["config_tensors_in_dram"] = True
+        module.config_tensors_in_dram = True
     if isinstance(module, VaeAttention):
         module.local_queries = True
     for _, child in module.named_children():
