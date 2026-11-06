@@ -30,7 +30,7 @@ namespace {
 
 constexpr std::string_view kTrashPrefix = ".jit-prune-trash.";
 // Ten years: far beyond any sensible setting, and small enough that no time arithmetic overflows.
-constexpr double kMaxSeconds = 10.0 * 365 * 24 * 3600;
+constexpr double kMaxSettingSeconds = 10.0 * 365 * 24 * 3600;
 
 double parse_number(const std::string& text, const char* name, double max) {
     std::size_t used = 0;
@@ -126,7 +126,7 @@ std::vector<fs::path> child_dirs(const fs::path& path) {
 }
 
 struct Usage {
-    std::int64_t last_used = 0;
+    std::int64_t last_used_epoch_seconds = 0;
     std::uint64_t bytes = 0;
 };
 
@@ -139,9 +139,9 @@ Usage measure(const fs::path& path) {
         return usage;
     }
     usage.bytes = static_cast<std::uint64_t>(info.st_blocks) * 512;
-    usage.last_used = info.st_mtime;
+    usage.last_used_epoch_seconds = info.st_mtime;
     if (!S_ISDIR(info.st_mode)) {
-        usage.last_used = std::max<std::int64_t>(info.st_mtime, info.st_atime);
+        usage.last_used_epoch_seconds = std::max<std::int64_t>(info.st_mtime, info.st_atime);
         return usage;
     }
     std::error_code ec;
@@ -149,7 +149,7 @@ Usage measure(const fs::path& path) {
     for (; !ec && it != fs::directory_iterator(); it.increment(ec)) {
         const Usage child = measure(it->path());
         usage.bytes += child.bytes;
-        usage.last_used = std::max(usage.last_used, child.last_used);
+        usage.last_used_epoch_seconds = std::max(usage.last_used_epoch_seconds, child.last_used_epoch_seconds);
     }
     return usage;
 }
@@ -173,13 +173,13 @@ CachePruneConfig CachePruneConfig::from_env(const GetEnvFn& get_env) {
         target = parse_number(*value, kCacheTargetFreePctEnv, 100.0);
     }
     if (auto value = read_env(get_env, kCacheMinIdleEnv)) {
-        config.min_idle =
-            std::chrono::seconds(static_cast<std::int64_t>(parse_number(*value, kCacheMinIdleEnv, kMaxSeconds)));
+        config.min_idle_seconds =
+            std::chrono::seconds(static_cast<std::int64_t>(parse_number(*value, kCacheMinIdleEnv, kMaxSettingSeconds)));
     }
     if (auto value = read_env(get_env, kCacheCheckIntervalEnv)) {
-        config.check_interval =
-            std::chrono::seconds(static_cast<std::int64_t>(parse_number(*value, kCacheCheckIntervalEnv, kMaxSeconds)));
-        if (config.check_interval.count() < 1) {
+        config.check_interval_seconds = std::chrono::seconds(
+            static_cast<std::int64_t>(parse_number(*value, kCacheCheckIntervalEnv, kMaxSettingSeconds)));
+        if (config.check_interval_seconds.count() < 1) {
             throw std::invalid_argument(std::string(kCacheCheckIntervalEnv) + " must be at least 1");
         }
     }
@@ -191,7 +191,7 @@ CachePruneConfig CachePruneConfig::from_env(const GetEnvFn& get_env) {
         }
         return config;
     }
-    config.stop_at_free_pct = target.value_or(std::min(config.start_below_free_pct + 10.0, 100.0));
+    config.stop_at_free_pct = target.value_or(std::min(config.start_below_free_pct + kDefaultPruneTargetGapPct, 100.0));
     if (config.stop_at_free_pct < config.start_below_free_pct) {
         throw std::invalid_argument(std::string(kCacheTargetFreePctEnv) + " must not be below " + kCacheMinFreePctEnv);
     }
@@ -236,12 +236,12 @@ void CachePruneConfig::validate_cache_root(const fs::path& root) const {
 }
 
 std::chrono::seconds next_prune_delay(
-    std::chrono::seconds previous, const CachePruneResult& result, const CachePruneConfig& config) {
+    std::chrono::seconds previous_delay_seconds, const CachePruneResult& result, const CachePruneConfig& config) {
     if (result.ran && result.freed_bytes == 0 && !result.interrupted) {
-        const std::chrono::seconds cap = std::max(kMaxPruneBackoff, config.check_interval);
-        return std::min(std::max(previous, config.check_interval) * 2, cap);
+        const std::chrono::seconds cap_seconds = std::max(kMaxPruneBackoffSeconds, config.check_interval_seconds);
+        return std::min(std::max(previous_delay_seconds, config.check_interval_seconds) * 2, cap_seconds);
     }
-    return config.check_interval;
+    return config.check_interval_seconds;
 }
 
 DiskSpace disk_space_from_counts(
@@ -310,8 +310,8 @@ void ServerCachePruner::stop() {
     }
 }
 
-bool ServerCachePruner::idle_enough(std::int64_t last_used, std::int64_t now) const {
-    return now - last_used >= static_cast<std::int64_t>(config_.min_idle.count());
+bool ServerCachePruner::idle_enough(std::int64_t last_used_epoch_seconds, std::int64_t now_epoch_seconds) const {
+    return now_epoch_seconds - last_used_epoch_seconds >= static_cast<std::int64_t>(config_.min_idle_seconds.count());
 }
 
 bool ServerCachePruner::in_use_locked(const fs::path& path) const {
@@ -330,7 +330,7 @@ bool ServerCachePruner::in_use_locked(const fs::path& path) const {
     return inside != in_use_.end() && inside->first.compare(0, prefix.size(), prefix) == 0;
 }
 
-ServerCachePruner::ScanResult ServerCachePruner::scan(std::int64_t now) const {
+ServerCachePruner::ScanResult ServerCachePruner::scan(std::int64_t now_epoch_seconds) const {
     ScanResult result;
     for (const auto& build_key : child_dirs(root_)) {
         if (!is_build_key(build_key)) {
@@ -348,8 +348,8 @@ ServerCachePruner::ScanResult ServerCachePruner::scan(std::int64_t now) const {
                     continue;
                 }
                 const Usage usage = measure(variant);
-                if (usage.bytes > 0 && idle_enough(usage.last_used, now)) {
-                    result.candidates.push_back({usage.last_used, usage.bytes, variant});
+                if (usage.bytes > 0 && idle_enough(usage.last_used_epoch_seconds, now_epoch_seconds)) {
+                    result.candidates.push_back({usage.last_used_epoch_seconds, usage.bytes, variant});
                 }
             }
         }
@@ -358,7 +358,7 @@ ServerCachePruner::ScanResult ServerCachePruner::scan(std::int64_t now) const {
 }
 
 ServerCachePruner::RemoveOutcome ServerCachePruner::remove(
-    const Candidate& candidate, std::int64_t now, std::uint64_t& freed, std::string& error) {
+    const Candidate& candidate, std::int64_t now_epoch_seconds, std::uint64_t& freed, std::string& error) {
     freed = 0;
     std::error_code ec;
     fs::path trash;
@@ -377,7 +377,7 @@ ServerCachePruner::RemoveOutcome ServerCachePruner::remove(
             error = "stat " + candidate.path.string() + ": " + std::generic_category().message(errno);
             return RemoveOutcome::Failed;
         }
-        if (!idle_enough(info.st_mtime, now)) {
+        if (!idle_enough(info.st_mtime, now_epoch_seconds)) {
             return RemoveOutcome::UsedSinceScan;
         }
         // Renaming within the same directory needs no new disk blocks, so it still works on a full
@@ -443,8 +443,8 @@ CachePruneResult ServerCachePruner::prune_once() {
         static_cast<std::uint64_t>(static_cast<long double>(space.capacity) * config_.stop_at_free_pct / 100.0L);
     auto still_needed = [&]() -> std::uint64_t { return target > space.available ? target - space.available : 0; };
 
-    const std::int64_t now = std::time(nullptr);
-    ScanResult scanned = scan(now);
+    const std::int64_t now_epoch_seconds = std::time(nullptr);
+    ScanResult scanned = scan(now_epoch_seconds);
 
     // Trash an earlier failed or interrupted delete left behind goes before anything live.
     if (!scanned.trash.empty()) {
@@ -457,7 +457,7 @@ CachePruneResult ServerCachePruner::prune_once() {
     }
 
     std::sort(scanned.candidates.begin(), scanned.candidates.end(), [](const Candidate& a, const Candidate& b) {
-        return a.last_used < b.last_used;
+        return a.last_used_epoch_seconds < b.last_used_epoch_seconds;
     });
     // Filesystems that free blocks lazily (btrfs, ZFS) can lag behind the deletes; stop at twice the
     // initial shortfall rather than delete the whole cache waiting for them to catch up.
@@ -470,7 +470,7 @@ CachePruneResult ServerCachePruner::prune_once() {
         }
         std::uint64_t freed = 0;
         std::string error;
-        switch (remove(candidate, now, freed, error)) {
+        switch (remove(candidate, now_epoch_seconds, freed, error)) {
             case RemoveOutcome::Deleted: ++result.deleted; break;
             case RemoveOutcome::Gone: break;
             case RemoveOutcome::InUse: ++result.skipped_in_use; break;
@@ -496,7 +496,7 @@ CachePruneResult ServerCachePruner::prune_once() {
 }
 
 void ServerCachePruner::run() {
-    std::chrono::seconds delay = config_.check_interval;
+    std::chrono::seconds delay_seconds = config_.check_interval_seconds;
     while (!stopping()) {
         CachePruneResult result;
         try {
@@ -504,12 +504,12 @@ void ServerCachePruner::run() {
         } catch (const std::exception& e) {
             log(std::string("Cache prune failed: ") + e.what());
         }
-        delay = next_prune_delay(delay, result, config_);
-        if (delay > config_.check_interval) {
-            log("Cache prune: freed nothing; next check in " + std::to_string(delay.count()) + " s");
+        delay_seconds = next_prune_delay(delay_seconds, result, config_);
+        if (delay_seconds > config_.check_interval_seconds) {
+            log("Cache prune: freed nothing; next check in " + std::to_string(delay_seconds.count()) + " s");
         }
         std::unique_lock lock(stop_mutex_);
-        if (stop_cv_.wait_for(lock, delay, [this] { return stopping(); })) {
+        if (stop_cv_.wait_for(lock, delay_seconds, [this] { return stopping(); })) {
             return;
         }
     }
@@ -529,7 +529,7 @@ void ServerCachePruner::log(const std::string& message) const {
 std::string ServerCachePruner::summary(const CachePruneResult& result) const {
     std::string text = "Cache prune: free space " + percent(result.free_pct_before) + " < " +
                        percent(config_.start_below_free_pct) + "; deleted " + std::to_string(result.deleted) +
-                       " kernel directories (" + megabytes(result.freed_bytes) + " MB); free space now " +
+                       " kernel directories (" + megabytes(result.freed_bytes) + " MB); free space now_epoch_seconds " +
                        percent(result.free_pct_after);
     std::vector<std::string> skipped;
     if (result.skipped_in_use > 0) {
@@ -554,7 +554,7 @@ std::string ServerCachePruner::summary(const CachePruneResult& result) const {
         text += ". Could not reach " + percent(config_.stop_at_free_pct) + ": " + megabytes(result.still_needed_bytes) +
                 " MB more is needed";
         if (skipped.empty()) {
-            text += ", but nothing else has been idle for " + std::to_string(config_.min_idle.count()) +
+            text += ", but nothing else has been idle for " + std::to_string(config_.min_idle_seconds.count()) +
                     " s (firmware and PCH are never deleted)";
         }
     }

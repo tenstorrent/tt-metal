@@ -29,7 +29,8 @@ namespace fs = std::filesystem;
 
 // Size of the simulated disk the tests prune: 1 TB (2^40 bytes, strictly 1 TiB).
 constexpr std::uint64_t kCapacity = 1ull << 40;
-constexpr std::time_t kHour = 3600;
+// One hour, in seconds (file timestamps and std::time are in seconds).
+constexpr std::time_t kSecondsPerHour = 3600;
 
 void write_file(const fs::path& path, std::size_t bytes) {
     fs::create_directories(path.parent_path());
@@ -70,9 +71,10 @@ protected:
                                              ::testing::UnitTest::GetInstance()->current_test_info()->name());
         fs::remove_all(root_);
         fs::create_directories(root_);
-        config_.start_below_free_pct = 20.0;
-        config_.stop_at_free_pct = 30.0;
-        config_.min_idle = std::chrono::seconds(kHour);
+        // The thresholds the README recommends.
+        config_.start_below_free_pct = 25.0;
+        config_.stop_at_free_pct = 40.0;
+        config_.min_idle_seconds = std::chrono::seconds(kSecondsPerHour);
     }
 
     void TearDown() override {
@@ -95,19 +97,19 @@ protected:
         write_file(dir / "brisc" / "brisc.elf", 64 * 1024);
         write_file(dir / "brisc" / "brisc.o", 32 * 1024);
         write_file(dir / "kernel_includes.hpp", 1024);
-        set_times(dir, std::time(nullptr) - hours_ago * kHour);
+        set_times(dir, std::time(nullptr) - hours_ago * kSecondsPerHour);
         return dir;
     }
 
     fs::path make_firmware(const std::string& build_key, int hours_ago) {
         const fs::path dir = root_ / build_key / "firmware" / "brisc";
         write_file(dir / "brisc_weakened.elf", 64 * 1024);
-        set_times(root_ / build_key / "firmware", std::time(nullptr) - hours_ago * kHour);
+        set_times(root_ / build_key / "firmware", std::time(nullptr) - hours_ago * kSecondsPerHour);
         return dir;
     }
 
     // A pruner whose filesystem starts with `free_pct` free space, or `needed` bytes short of the
-    // 30% target when that is given. Deleting from the test tree frees space on it, unless
+    // 40% target when that is given. Deleting from the test tree frees space on it, unless
     // `frees_lazily` is set, in which case free space never moves.
     ServerCachePruner make_pruner(double free_pct, std::uint64_t needed = 0, bool frees_lazily = false) {
         std::uint64_t available = 0;
@@ -141,7 +143,7 @@ protected:
 
 TEST_F(ServerCachePrunerTest, DoesNothingWhileFreeSpaceIsAboveTheThreshold) {
     const fs::path old_kernel = make_kernel("1", "reader", "11", 1000);
-    auto pruner = make_pruner(25.0);
+    auto pruner = make_pruner(30.0);
     const CachePruneResult result = pruner.prune_once();
     EXPECT_FALSE(result.ran);
     EXPECT_TRUE(fs::exists(old_kernel));
@@ -176,7 +178,7 @@ TEST_F(ServerCachePrunerTest, NeverDeletesRecentlyUsedKernelsFirmwareOrPch) {
     const fs::path recent = make_kernel("1", "reader", "11", 0);
     const fs::path firmware = make_firmware("1", 5000);
     write_file(root_ / "pch" / "umbrella.gch", 4096);
-    set_times(root_ / "pch", std::time(nullptr) - 5000 * kHour);
+    set_times(root_ / "pch", std::time(nullptr) - 5000 * kSecondsPerHour);
 
     auto pruner = make_pruner(1.0);
     const CachePruneResult result = pruner.prune_once();
@@ -188,7 +190,7 @@ TEST_F(ServerCachePrunerTest, NeverDeletesRecentlyUsedKernelsFirmwareOrPch) {
     EXPECT_TRUE(fs::exists(firmware / "brisc_weakened.elf"));
     EXPECT_TRUE(fs::exists(root_ / "pch" / "umbrella.gch"));
     ASSERT_EQ(logs_.size(), 1u);
-    EXPECT_NE(logs_[0].find("Could not reach 30.0%"), std::string::npos) << logs_[0];
+    EXPECT_NE(logs_[0].find("Could not reach 40.0%"), std::string::npos) << logs_[0];
 }
 
 TEST_F(ServerCachePrunerTest, RecentFileAccessKeepsAnOldDirectory) {
@@ -196,7 +198,7 @@ TEST_F(ServerCachePrunerTest, RecentFileAccessKeepsAnOldDirectory) {
     // atime shows the recent hit.
     const fs::path kernel = make_kernel("1", "reader", "11", 1000);
     const std::time_t now = std::time(nullptr);
-    const struct timeval times[2] = {{now, 0}, {now - 1000 * kHour, 0}};
+    const struct timeval times[2] = {{now, 0}, {now - 1000 * kSecondsPerHour, 0}};
     ASSERT_EQ(::lutimes((kernel / "brisc" / "brisc.elf").c_str(), times), 0);
 
     auto pruner = make_pruner(1.0);
@@ -225,7 +227,7 @@ TEST_F(ServerCachePrunerTest, LeasedKernelIsSkippedAndStampedAsUsed) {
 TEST_F(ServerCachePrunerTest, LeaseBlocksDeletionEvenWithNoIdleWindow) {
     // With no idle window the stamp alone does not protect a kernel; the lease check must.
     const fs::path kernel = make_kernel("1", "reader", "11", 100);
-    config_.min_idle = std::chrono::seconds(0);
+    config_.min_idle_seconds = std::chrono::seconds(0);
     auto pruner = make_pruner(1.0);
     const auto lease = pruner.acquire(kernel);
     const CachePruneResult result = pruner.prune_once();
@@ -239,7 +241,7 @@ TEST_F(ServerCachePrunerTest, LeaseBlocksDeletionEvenWithNoIdleWindow) {
 
 TEST_F(ServerCachePrunerTest, ReleasedLeaseNoLongerProtectsAnIdleKernel) {
     const fs::path kernel = make_kernel("1", "reader", "11", 100);
-    config_.min_idle = std::chrono::seconds(0);
+    config_.min_idle_seconds = std::chrono::seconds(0);
     auto pruner = make_pruner(1.0);
     {
         const auto lease = pruner.acquire(kernel);
@@ -285,7 +287,7 @@ TEST_F(ServerCachePrunerTest, ReachedTargetComesFromMeasuredFreeSpace) {
     auto pruner = make_pruner(1.0);
     const CachePruneResult result = pruner.prune_once();
     EXPECT_EQ(result.deleted, 1u);
-    // Deleting one small kernel does not get a 1%-free disk to 30%, whatever the estimate says.
+    // Deleting one small kernel does not get a 1%-free disk to 40%, whatever the estimate says.
     EXPECT_FALSE(result.reached_target);
     EXPECT_GT(result.still_needed_bytes, 0u);
 }
@@ -293,11 +295,11 @@ TEST_F(ServerCachePrunerTest, ReachedTargetComesFromMeasuredFreeSpace) {
 TEST_F(ServerCachePrunerTest, IgnoresNonBuildKeyEntriesAndSymlinks) {
     const fs::path outside = root_ / "outside";
     write_file(outside / "keep.txt", 1024);
-    set_times(outside, std::time(nullptr) - 1000 * kHour);
+    set_times(outside, std::time(nullptr) - 1000 * kSecondsPerHour);
     fs::create_directories(root_ / "1" / "kernels" / "reader");
     fs::create_directory_symlink(outside, root_ / "1" / "kernels" / "reader" / "11");
     write_file(root_ / "notakey" / "kernels" / "reader" / "11" / "x.elf", 1024);
-    set_times(root_ / "notakey", std::time(nullptr) - 1000 * kHour);
+    set_times(root_ / "notakey", std::time(nullptr) - 1000 * kSecondsPerHour);
 
     auto pruner = make_pruner(1.0);
     EXPECT_EQ(pruner.prune_once().deleted, 0u);
@@ -318,7 +320,7 @@ TEST_F(ServerCachePrunerTest, DisabledPrunerTracksNothing) {
 
 TEST_F(ServerCachePrunerTest, BackgroundThreadPrunesAndStops) {
     const fs::path kernel = make_kernel("1", "reader", "11", 100);
-    config_.check_interval = std::chrono::seconds(3600);
+    config_.check_interval_seconds = std::chrono::seconds(3600);
     auto pruner = make_pruner(1.0);
     pruner.start();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -341,7 +343,7 @@ TEST_F(ServerCachePrunerTest, FailedDeleteIsNotCountedAsFreed) {
     const std::uint64_t needed = allocated_bytes(stuck);
     // The variant can still be renamed away, but nothing inside brisc/ can be unlinked.
     fs::permissions(stuck / "brisc", fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
-    set_times(stuck, std::time(nullptr) - 50 * kHour);
+    set_times(stuck, std::time(nullptr) - 50 * kSecondsPerHour);
 
     auto pruner = make_pruner(0.0, needed);
     const CachePruneResult result = pruner.prune_once();
@@ -368,7 +370,7 @@ TEST_F(ServerCachePrunerTest, StopInterruptsARun) {
 
 TEST(CachePruneDelayTest, BacksOffOnlyAfterRunsThatFreeNothing) {
     CachePruneConfig config;
-    config.check_interval = std::chrono::seconds(300);
+    config.check_interval_seconds = std::chrono::seconds(300);
     CachePruneResult idle;  // free space was fine
     CachePruneResult fruitless;
     fruitless.ran = true;
@@ -376,17 +378,17 @@ TEST(CachePruneDelayTest, BacksOffOnlyAfterRunsThatFreeNothing) {
     useful.ran = true;
     useful.freed_bytes = 1;
 
-    EXPECT_EQ(next_prune_delay(config.check_interval, idle, config).count(), 300);
-    std::chrono::seconds delay = config.check_interval;
-    delay = next_prune_delay(delay, fruitless, config);
-    EXPECT_EQ(delay.count(), 600);
-    delay = next_prune_delay(delay, fruitless, config);
-    EXPECT_EQ(delay.count(), 1200);
+    EXPECT_EQ(next_prune_delay(config.check_interval_seconds, idle, config).count(), 300);
+    std::chrono::seconds delay_seconds = config.check_interval_seconds;
+    delay_seconds = next_prune_delay(delay_seconds, fruitless, config);
+    EXPECT_EQ(delay_seconds.count(), 600);
+    delay_seconds = next_prune_delay(delay_seconds, fruitless, config);
+    EXPECT_EQ(delay_seconds.count(), 1200);
     for (int i = 0; i < 20; ++i) {
-        delay = next_prune_delay(delay, fruitless, config);
+        delay_seconds = next_prune_delay(delay_seconds, fruitless, config);
     }
-    EXPECT_EQ(delay, kMaxPruneBackoff);
-    EXPECT_EQ(next_prune_delay(delay, useful, config).count(), 300);
+    EXPECT_EQ(delay_seconds, kMaxPruneBackoffSeconds);
+    EXPECT_EQ(next_prune_delay(delay_seconds, useful, config).count(), 300);
 }
 
 TEST(CachePruneDiskSpaceTest, MatchesDfByLeavingOutRootReservedBlocks) {
@@ -451,12 +453,12 @@ TEST(CachePruneConfigTest, IsOptIn) {
 }
 
 TEST(CachePruneConfigTest, ParsesValuesAndDefaultsTheTarget) {
-    const CachePruneConfig defaults = config_from({{kCacheMinFreePctEnv, "15"}});
+    const CachePruneConfig defaults = config_from({{kCacheMinFreePctEnv, "25"}});
     EXPECT_TRUE(defaults.enabled());
-    EXPECT_DOUBLE_EQ(defaults.start_below_free_pct, 15.0);
-    EXPECT_DOUBLE_EQ(defaults.stop_at_free_pct, 25.0);
-    EXPECT_EQ(defaults.min_idle.count(), 3600);
-    EXPECT_EQ(defaults.check_interval.count(), 300);
+    EXPECT_DOUBLE_EQ(defaults.start_below_free_pct, 25.0);
+    EXPECT_DOUBLE_EQ(defaults.stop_at_free_pct, 25.0 + kDefaultPruneTargetGapPct);
+    EXPECT_EQ(defaults.min_idle_seconds.count(), 3600);
+    EXPECT_EQ(defaults.check_interval_seconds.count(), 300);
     EXPECT_DOUBLE_EQ(config_from({{kCacheMinFreePctEnv, "95"}}).stop_at_free_pct, 100.0);
 
     const CachePruneConfig custom = config_from({
@@ -466,8 +468,8 @@ TEST(CachePruneConfigTest, ParsesValuesAndDefaultsTheTarget) {
         {kCacheCheckIntervalEnv, "60"},
     });
     EXPECT_DOUBLE_EQ(custom.stop_at_free_pct, 12.5);
-    EXPECT_EQ(custom.min_idle.count(), 0);
-    EXPECT_EQ(custom.check_interval.count(), 60);
+    EXPECT_EQ(custom.min_idle_seconds.count(), 0);
+    EXPECT_EQ(custom.check_interval_seconds.count(), 60);
 }
 
 TEST(CachePruneConfigTest, RejectsInvalidValues) {

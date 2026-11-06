@@ -227,12 +227,21 @@ cache filesystem from filling up, and point `TT_METAL_JIT_SERVER_CACHE_ROOT` at 
 only this server uses:
 
 ```bash
-# Below 20% free, delete least recently used kernels until 30% is free again
+# Below 25% free, delete least recently used kernels until 40% is free again
 export TT_METAL_JIT_SERVER_CACHE_ROOT=/local/jit-server-cache/
-export TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT=20
-export TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT=30
+export TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT=25
+export TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT=40
 ./build/tools/jit_compile_server
 ```
+
+Choosing the thresholds: the start threshold is the headroom left when pruning begins, so it
+should cover several hours of the server's peak cache growth plus whatever else shares the
+disk. The gap up to the target is how much each run frees, so it sets how often the cache is
+scanned. For scale, a busy server (`bgdepyc04`, 1.8 TB disk shared with other containers)
+added about 300 GB a day and up to 62 GB in a single hour. At 25% / 40% that disk keeps
+~440 GB free (about seven hours at that peak rate) when pruning starts, and each run frees
+~260 GB, about a day's growth. Free space counts the whole filesystem, so on a shared disk
+other users' growth also makes the server delete more of its cache.
 
 The server logs a `JIT compile server cache pruning:` line at startup with the settings in
 effect, or says pruning is disabled. A new cache root starts empty, so the first requests

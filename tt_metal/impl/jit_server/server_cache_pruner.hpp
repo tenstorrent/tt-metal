@@ -22,7 +22,7 @@
 //
 // The cache grows without bound: every new kernel variant adds a
 // <root>/<build_key>/kernels/<kernel_name>/ directory and nothing ever removes one. When pruning is
-// enabled, a background thread checks free space on the cache filesystem every check_interval.
+// enabled, a background thread checks free space on the cache filesystem every check_interval_seconds.
 // Once free space drops below start_below_free_pct it deletes kernel directories, least recently
 // used first across all build keys, until free space is back at stop_at_free_pct.
 //
@@ -52,8 +52,13 @@ inline constexpr const char* kCacheMinIdleEnv = "TT_METAL_JIT_SERVER_CACHE_MIN_I
 inline constexpr const char* kCacheCheckIntervalEnv = "TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S";
 inline constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 inline constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
+// When kCacheTargetFreePctEnv is unset, a run stops this many percentage points above the start
+// threshold. Each run then frees about 15% of the disk: on a 1.8 TB disk that is ~260 GB, roughly a
+// day of growth for a busy server (bgdepyc04 added ~300 GB/day in Nov 2026), so a full scan runs
+// about once a day instead of every few hours.
+inline constexpr double kDefaultPruneTargetGapPct = 15.0;
 // After a run that frees nothing, checks back off exponentially up to this.
-inline constexpr std::chrono::seconds kMaxPruneBackoff{3600};
+inline constexpr std::chrono::seconds kMaxPruneBackoffSeconds{3600};
 
 struct CachePruneConfig {
     // Pruning starts when free space falls below this percentage of the filesystem; 0 disables it.
@@ -61,8 +66,8 @@ struct CachePruneConfig {
     // A run deletes until free space reaches this percentage.
     double stop_at_free_pct = 0.0;
     // Directories used more recently than this are never deleted.
-    std::chrono::seconds min_idle{3600};
-    std::chrono::seconds check_interval{300};
+    std::chrono::seconds min_idle_seconds{3600};
+    std::chrono::seconds check_interval_seconds{300};
     // Prune variables that are set but have no effect because pruning is disabled.
     std::vector<std::string> ignored_settings;
 
@@ -112,9 +117,9 @@ struct CachePruneResult {
 
 // How long to wait before the next check: the configured interval, doubled after each run that
 // had to prune but freed nothing (so an unreachable target does not rescan the cache every few
-// minutes), capped at kMaxPruneBackoff.
+// minutes), capped at kMaxPruneBackoffSeconds.
 std::chrono::seconds next_prune_delay(
-    std::chrono::seconds previous, const CachePruneResult& result, const CachePruneConfig& config);
+    std::chrono::seconds previous_delay_seconds, const CachePruneResult& result, const CachePruneConfig& config);
 
 class ServerCachePruner {
 public:
@@ -179,7 +184,7 @@ public:
 
 private:
     struct Candidate {
-        std::int64_t last_used = 0;
+        std::int64_t last_used_epoch_seconds = 0;
         std::uint64_t bytes = 0;
         std::filesystem::path path;
     };
@@ -191,10 +196,11 @@ private:
 
     enum class RemoveOutcome { Deleted, Gone, InUse, UsedSinceScan, Failed };
 
-    ScanResult scan(std::int64_t now) const;
-    RemoveOutcome remove(const Candidate& candidate, std::int64_t now, std::uint64_t& freed, std::string& error);
+    ScanResult scan(std::int64_t now_epoch_seconds) const;
+    RemoveOutcome remove(
+        const Candidate& candidate, std::int64_t now_epoch_seconds, std::uint64_t& freed, std::string& error);
     bool in_use_locked(const std::filesystem::path& path) const;
-    bool idle_enough(std::int64_t last_used, std::int64_t now) const;
+    bool idle_enough(std::int64_t last_used_epoch_seconds, std::int64_t now_epoch_seconds) const;
     void release(const std::string& key);
     void run();
     void log(const std::string& message) const;

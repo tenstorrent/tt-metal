@@ -572,9 +572,9 @@ int main() {
             "JIT compile server cache pruning: below {}% free, delete kernels idle >= {}s until {}% free; check "
             "every {}s",
             prune_config.start_below_free_pct,
-            prune_config.min_idle.count(),
+            prune_config.min_idle_seconds.count(),
             prune_config.stop_at_free_pct,
-            prune_config.check_interval.count());
+            prune_config.check_interval_seconds.count());
     } else {
         log_info(
             tt::LogMetal,
