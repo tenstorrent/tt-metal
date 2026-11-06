@@ -34,18 +34,16 @@ MODEL_REVISION = "42ed227ee7df40d41602854ae760620d6eb651fe"
 DEFAULT_WEIGHTS = (
     Path.home() / ".cache/huggingface/hub/models--MiniMaxAI--MiniMax-H3/snapshots" / MODEL_REVISION / "vae"
 )
-PIXEL_MEAN = (0.485, 0.456, 0.406)
-PIXEL_STD = (0.229, 0.224, 0.225)
-PATCH = (1, 2, 2)
 
 
 def _import_tt_dit():
     root = os.environ.get("TT_METAL_HOME")
     if root and root not in sys.path:
         sys.path.insert(0, root)
-    from models.tt_dit.models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+    from models.tt_dit.models.vae.minimax_h3 import vae_minimax_h3
+    from models.tt_dit.pipelines.minimax_h3 import conditioning
 
-    return MiniMaxH3Vae, MiniMaxH3VaeConfig
+    return vae_minimax_h3, conditioning
 
 
 def load_encoder_state(weights_dir: Path) -> dict[str, torch.Tensor]:
@@ -61,22 +59,6 @@ def load_encoder_state(weights_dir: Path) -> dict[str, torch.Tensor]:
                 if src == shard:
                     state[key] = f.get_tensor(key)
     return state
-
-
-def patchify(latents: np.ndarray) -> np.ndarray:
-    """(C, H, W) -> (rows, 4C), row-major over (H/2, W/2); the diffusers patchify at T=1."""
-    c, h, w = latents.shape
-    x = latents.reshape(c, h // 2, 2, w // 2, 2).transpose(1, 3, 0, 2, 4)
-    return np.ascontiguousarray(x.reshape(-1, c * 4))
-
-
-def sample_rows(moments: np.ndarray, latents_mean, latents_std, rng: np.random.Generator) -> np.ndarray:
-    """Posterior sample -> fp16 round trip -> normalise -> patchify, as the GPU `encode_image`."""
-    mean, logvar = moments[:24], np.clip(moments[24:], -30.0, 20.0)
-    z = mean + np.exp(0.5 * logvar) * rng.standard_normal(mean.shape, dtype=np.float32)
-    z = z.astype(np.float16).astype(np.float32)
-    z = (z - np.asarray(latents_mean, np.float32)[:, None, None]) / np.asarray(latents_std, np.float32)[:, None, None]
-    return patchify(z).astype(np.float16)
 
 
 def pcc(a: np.ndarray, b: np.ndarray) -> float:
@@ -112,19 +94,19 @@ def main(argv: list[str] | None = None) -> int:
     (cache / "moments").mkdir(exist_ok=True)
     (cache / "samples").mkdir(exist_ok=True)
 
-    MiniMaxH3Vae, MiniMaxH3VaeConfig = _import_tt_dit()
+    vae_minimax_h3, conditioning = _import_tt_dit()
     rows, cols = (int(v) for v in args.mesh.split(","))
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
     try:
-        config = MiniMaxH3VaeConfig.from_pretrained(weights)
+        config = vae_minimax_h3.MiniMaxH3VaeConfig.from_pretrained(weights)
         latents_mean, latents_std = tuple(config.latents_mean), tuple(config.latents_std)
         t0 = time.perf_counter()
-        vae = MiniMaxH3Vae(
+        vae = vae_minimax_h3.MiniMaxH3Vae(
             config,
             task="t2va",
             mesh_device=mesh,
             dtype=ttnn.bfloat16 if args.dtype == "bf16" else ttnn.float32,
-            pixel_norm=(PIXEL_MEAN, PIXEL_STD),
+            pixel_norm=(conditioning.MINIMAX_H3_PIXEL_MEAN, conditioning.MINIMAX_H3_PIXEL_STD),
         )
         vae.load_state(load_encoder_state(weights))
         log.info(
@@ -147,8 +129,11 @@ def main(argv: list[str] | None = None) -> int:
                     f"{key}: moments {moments.shape} vs manifest {entry['latent_height']}x{entry['latent_width']}"
                 )
             np.save(out_moments, moments.astype(np.float32))
-            rng = np.random.default_rng([args.seed, int(key) if key.isdigit() else abs(hash(key))])
-            np.save(out_rows, sample_rows(moments, latents_mean, latents_std, rng))
+            key_id = int(key) if key.isdigit() else abs(hash(key))
+            seed = int(np.random.SeedSequence([args.seed, key_id]).generate_state(1)[0])
+            latents = conditioning.sample_posterior(torch.from_numpy(moments)[None, :, None], seed=seed)
+            video_rows = conditioning.keyframe_condition_rows(latents, latents_mean, latents_std)
+            np.save(out_rows, video_rows.numpy().astype(np.float16))
             done += 1
             if args.reference_dir:
                 ref = np.load(Path(args.reference_dir) / f"{key}.npy").astype(np.float32)
