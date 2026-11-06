@@ -21,6 +21,20 @@ def bbox3d2result(bboxes, scores, labels, attrs=None):
     return result_dict
 
 
+# The head's outputs the PCC tests compare; read back only with read_raw_outputs.
+RAW_OUTPUTS = (
+    "bev_embed",
+    "all_cls_scores",
+    "all_bbox_preds",
+    "all_traj_preds",
+    "all_traj_cls_scores",
+    "map_all_cls_scores",
+    "map_all_bbox_preds",
+    "map_all_pts_preds",
+    "ego_fut_preds",
+)
+
+
 class TtVAD:
     def __init__(
         self,
@@ -47,10 +61,13 @@ class TtVAD:
         video_test_mode=False,
         fut_ts=6,
         fut_mode=6,
+        read_raw_outputs=False,
     ):
         """
         lidar2img: (num_cams, 4, 4) lidar-to-image matrices of the camera rig.
         img_shape: (H, W) of the network input.
+        read_raw_outputs: also read the head's raw outputs back, as _last_outs, for the PCC tests;
+            the forward otherwise reads back only the decoded detections and map elements.
 
         The rig is fixed for the lifetime of the model: the camera projection of
         the BEV grid and the per-camera query plan are built here, and the
@@ -77,6 +94,7 @@ class TtVAD:
             "prev_angle": 0,
         }
         self.with_img_neck = True
+        self.read_raw_outputs = read_raw_outputs
         self._pending_frame = None
         self.planning_metric = None
         self.img_backbone = TtResnet50(params.conv_args["img_backbone"], params.img_backbone, device)
@@ -329,30 +347,15 @@ class TtVAD:
         # The next frame's temporal self-attention reads this BEV on device.
         new_prev_bev = outs["bev_embed"]
 
-        _keys9 = [
-            "bev_embed",
-            "all_cls_scores",
-            "all_bbox_preds",
-            "all_traj_preds",
-            "all_traj_cls_scores",
-            "map_all_cls_scores",
-            "map_all_bbox_preds",
-            "map_all_pts_preds",
-            "ego_fut_preds",
-        ]
-        for _k in _keys9:
-            _tensor = outs[_k]
-            # bev_embed is (10000, 1, 256) in TILE layout: the size-1 second-to-last
-            # dim pads up to a full 32-row tile, so a host-side untilize during
-            # to_torch wastes ~32x the work (~240 ms). Untilize on device first
-            # (a few ms) so the transfer is a plain row-major copy.
-            if _tensor.layout == ttnn.TILE_LAYOUT and _tensor.shape[-2] == 1:
-                _tensor = ttnn.to_layout(_tensor, ttnn.ROW_MAJOR_LAYOUT)
-            outs[_k] = ttnn.to_torch(_tensor).float()
-
-        # Expose the host-side outputs for the PCC test instead of round-tripping
-        # them through torch.save/torch.load to disk on every (timed) forward.
-        self._last_outs = {_k: outs[_k] for _k in _keys9}
+        if self.read_raw_outputs:
+            self._last_outs = {}
+            for key in RAW_OUTPUTS:
+                tensor = outs[key]
+                # bev_embed is (10000, 1, 256): in TILE layout its size-1 dim pads to a whole tile,
+                # which a host untilize would copy 32 times over; untilize on device first.
+                if tensor.layout == ttnn.TILE_LAYOUT and tensor.shape[-2] == 1:
+                    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+                self._last_outs[key] = ttnn.to_torch(tensor).float()
 
         bbox_results = self.post_process_with_metrics(
             outs,
@@ -394,6 +397,7 @@ class TtVAD:
         ]
 
         bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
+        ego_fut_preds = ttnn.to_torch(outs["ego_fut_preds"]).float()
 
         bbox_results = []
         for i, (bboxes, scores, labels, trajs, map_bboxes, map_scores, map_labels, map_pts) in enumerate(bbox_list):
@@ -401,7 +405,7 @@ class TtVAD:
             bbox_result["trajs_3d"] = trajs.cpu()
             map_bbox_result = self.map_pred2result(map_bboxes, map_scores, map_labels, map_pts)
             bbox_result.update(map_bbox_result)
-            bbox_result["ego_fut_preds"] = outs["ego_fut_preds"][i].cpu()
+            bbox_result["ego_fut_preds"] = ego_fut_preds[i]
             bbox_result["ego_fut_cmd"] = ego_fut_cmd.cpu()
             bbox_results.append(bbox_result)
 

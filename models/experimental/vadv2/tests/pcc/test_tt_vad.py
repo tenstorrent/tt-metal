@@ -650,6 +650,7 @@ def test_vadv2(
         parameter,
         lidar2img=rig_meta["lidar2img"],
         img_shape=rig_meta["img_shape"][0][:2],
+        read_raw_outputs=True,
         use_grid_mask=False,  # set to tru for training only
         pts_voxel_layer=None,
         pts_voxel_encoder=None,
