@@ -17,6 +17,8 @@ using namespace tt::tt_metal::quasar::tensix;
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include <tt-umd/types/core_coordinates.hpp>
+#include <tt_stl/assert.hpp>
+#include <enchantum/enchantum.hpp>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
@@ -35,7 +37,7 @@ namespace tensix_realtime_profiler_msgs {
 #include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
-HalCoreInfoType create_tensix_mem_map() {
+HalCoreInfoType create_tensix_mem_map(IpVariant variant) {
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
@@ -67,7 +69,15 @@ HalCoreInfoType create_tensix_mem_map() {
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_SIZE;
+    const uint32_t l1_size = get_l1_size(variant);
+    const DeviceAddr unreserved_base = mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
+    TT_FATAL(
+        unreserved_base <= l1_size,
+        "Tensix L1 layout ends at {} but {} L1 is {} bytes",
+        unreserved_base,
+        enchantum::to_string(variant),
+        l1_size);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = l1_size;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
@@ -85,7 +95,7 @@ HalCoreInfoType create_tensix_mem_map() {
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
-        MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
+        l1_size - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
     assert_kernel_config_no_overlap(
         mem_map_bases, default_l1_kernel_config_size, HalL1MemAddrType::DEFAULT_UNRESERVED, "Tensix");

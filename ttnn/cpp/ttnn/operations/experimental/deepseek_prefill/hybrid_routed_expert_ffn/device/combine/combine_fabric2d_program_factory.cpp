@@ -534,12 +534,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         return desc;
     }
 
-    // combine_fabric2d's own kernels are what get built here; this define is what selects their
-    // overlapped form, in place of a second copy of each kernel that only added it.
-    const auto add_combine_defines = [&](tt::tt_metal::KernelDescriptor& kernel) {
-        kernel.defines.emplace_back("CMBF2D_OVERLAPPED", "1");
-    };
-
     for (const auto& [stream, self] : placement.at(coord).streams) {
         KernelPlan plan = chip_plan;
         plan.stream = stream;
@@ -564,7 +558,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
             .noc = tt::tt_metal::NOC::NOC_1,
         };
-        add_combine_defines(snd);
         auto snd_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(snd));
 
@@ -575,7 +568,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
-        add_combine_defines(rdr);
         rdr.compile_time_args = cmbf2d::ReaderCtArgs(
                                     args,
                                     tensor_args,
@@ -620,21 +612,35 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, rt);
     }
 
-    // One kernel per untilizer core rather than one over a core range: they differ by their index in the
-    // group, which is what deals the group's batches out between them.
+    // One untilizer dataflow kernel per group, over the group's cores: they differ only by their position in the
+    // group, which deals the group's batches out between them, and by their produced-count semaphore, and those are
+    // runtime arguments. Their circular buffers and untilize compute kernel are the same on every untilizer core, so
+    // those are one each over both groups. A program pays per kernel and per circular buffer on every dispatch, and
+    // per buffer binding and arena-backed circular buffer on every cache hit.
+    std::set<CoreRange> untilizer_ranges;
     for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
+        if (groups[g].empty()) {
+            continue;
+        }
+        std::set<CoreRange> group_ranges;
+        std::vector<tt::tt_metal::CoreCoord> group_cores;
+        std::vector<uint32_t> produced_slots;
         for (uint32_t j = 0; j < groups[g].size(); j++) {
-            const CoreRangeSet core(CoreRange(groups[g][j].logical));
-            add_untilizer_cbs(desc, tensor_args, core, arena);
+            group_ranges.insert(CoreRange(groups[g][j].logical));
+            untilizer_ranges.insert(CoreRange(groups[g][j].logical));
+            group_cores.push_back(groups[g][j].logical);
+            produced_slots.push_back(sems.untilized(j));
+        }
+        {
+            const CoreRangeSet core(group_ranges);
 
             UntilizerPlan plan;
             plan.my_expert_base = chip_plan.my_expert_base;
             plan.expert_table_page_base = chip_plan.expert_table_page_base;
             plan.ready_sem = sems.ready();
-            plan.my_index = j;
+            plan.progress_sem = sems.progress();
             plan.num_peers = static_cast<uint32_t>(groups[g].size());
             plan.control_addr = l1.unt_control;
-            plan.produced_slot = sems.untilized(j);
             // A group serves one ring direction: group 0 is clockwise, matching untilizer_group_of.
             const StreamId first = make_stream_id(0, g == 0);
             plan.walks_down = stream_is_cw(first);
@@ -660,28 +666,30 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt::tt_metal::NOC::NOC_1,
             };
-            cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
-            add_combine_defines(kernel);
-            kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
+            cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, group_cores, produced_slots);
             desc.kernels.push_back(std::move(kernel));
-
-            tt::tt_metal::KernelDescriptor untilize;
-            // The standalone op's kernel, unchanged: the untilize depends on nothing the overlap alters.
-            untilize.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/compute/"
-                "untilize_combine_fabric2d.cpp";
-            untilize.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-            untilize.core_ranges = core;
-            untilize.compile_time_args = {
-                cmbf2d::UNT_CB_IN,
-                cmbf2d::UNT_CB_OUT,
-                cmbf2d::UNT_CB_BATCHES,
-                tiles_per_token_row(tensor_args),
-                untilize_block_tiles(tensor_args),
-                cmbf2d::UNT_BATCH_ROWS};
-            untilize.config = tt::tt_metal::ComputeConfigDescriptor{};
-            desc.kernels.push_back(std::move(untilize));
         }
+    }
+    if (!untilizer_ranges.empty()) {
+        const CoreRangeSet untilizer_cores(untilizer_ranges);
+        add_untilizer_cbs(desc, tensor_args, untilizer_cores, arena);
+
+        tt::tt_metal::KernelDescriptor untilize;
+        // The standalone op's kernel, unchanged: the untilize depends on nothing the overlap alters.
+        untilize.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/compute/"
+            "untilize_combine_fabric2d.cpp";
+        untilize.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        untilize.core_ranges = untilizer_cores;
+        untilize.compile_time_args = {
+            cmbf2d::UNT_CB_IN,
+            cmbf2d::UNT_CB_OUT,
+            cmbf2d::UNT_CB_BATCHES,
+            tiles_per_token_row(tensor_args),
+            untilize_block_tiles(tensor_args),
+            cmbf2d::UNT_BATCH_ROWS};
+        untilize.config = tt::tt_metal::ComputeConfigDescriptor{};
+        desc.kernels.push_back(std::move(untilize));
     }
 
     add_collector(

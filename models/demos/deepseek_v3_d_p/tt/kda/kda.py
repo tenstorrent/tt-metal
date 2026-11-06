@@ -130,27 +130,6 @@ class _HistoryExchange:
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
 
 
-def _fused_output_staging(mesh_device, rows: int, weight: ttnn.Tensor, memory_config, ccl_kwargs: dict) -> ttnn.Tensor:
-    """The fused output projection's L1 staging, allocated once per mesh and geometry and shared by its layers."""
-    key = (mesh_device.id(), rows, *tuple(weight.shape)[-2:], weight.dtype, memory_config.buffer_type, str(ccl_kwargs))
-    if key not in _fused_output_stagings:
-        activation = ttnn.empty(
-            (1, rows, weight.shape[-2]),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=memory_config,
-        )
-        _fused_output_stagings[key] = ttnn.experimental.matmul_reduce_scatter_prefill_staging(
-            activation, weight, **ccl_kwargs
-        )
-        ttnn.deallocate(activation)
-    return _fused_output_stagings[key]
-
-
-_fused_output_stagings: dict[tuple, ttnn.Tensor] = {}
-
-
 @dataclass(frozen=True)
 class KdaState:
     """Caller-owned KDA carries.
@@ -267,6 +246,7 @@ class ttKDA:
         self._fused_output_reduce_scatter = (
             self.tensor_parallel_size > 1
             and self.gated_rms_output_dtype == ttnn.bfloat16
+            and self.weights.output_projection.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
             and self.weights.output_projection.shape[-1] % (ttnn.TILE_SIZE * self.tensor_parallel_size) == 0
         )
         # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
@@ -322,8 +302,8 @@ class ttKDA:
         self.decay_logits_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
         )
-        # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
-        # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
+        # Experimental KDA operations reject packer_l1_acc=True: kernels that accumulate in L1 enable it
+        # themselves. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -348,13 +328,18 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.fused_output_projection_compute_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=program_config.output_projection_math_fidelity
-        )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
         if self._fused_output_reduce_scatter:
+            self.fused_output_projection_compute_config = ttnn.ComputeConfigDescriptor(
+                math_fidelity=program_config.output_projection_math_fidelity
+            )
+            # a ring splits each device's output block over two halves, so it needs at least two tiles
+            block_tiles = (self.active_seq_len_local // ttnn.TILE_SIZE) * (
+                self.weights.output_projection.shape[-1] // (ttnn.TILE_SIZE * self.tensor_parallel_size)
+            )
             ring = (
-                self.tp_ccl_topology == ttnn.Topology.Ring
+                block_tiles >= 2
+                and self.tp_ccl_topology == ttnn.Topology.Ring
                 and per_axis_topology()[self.tensor_parallel_axis] == ttnn.Topology.Ring
                 and ttnn.get_usable_topology(
                     self.weights.output_projection, ttnn.Topology.Ring, self.tensor_parallel_axis
@@ -366,13 +351,6 @@ class ttKDA:
                 scatter_dim=-1,
                 topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
-            )
-            self._fused_output_staging = _fused_output_staging(
-                mesh_device,
-                self.active_seq_len_local,
-                self.weights.output_projection,
-                self.norm_output_memory_config,
-                self._fused_output_ccl_kwargs,
             )
 
     @property
@@ -561,7 +539,6 @@ class ttKDA:
                 **self._fused_output_ccl_kwargs,
                 compute_kernel_config=self.fused_output_projection_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                staging_tensor=self._fused_output_staging,
             )
         output = ttnn.linear(
             output,
