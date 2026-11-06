@@ -945,10 +945,17 @@ def test_production_15s(runtime, density):
 
 @SLOW
 @pytest.mark.parametrize("pooled", [True, False], ids=["pooled", "kept_only"])
-@pytest.mark.parametrize("rows, density", [(4736, 0.15), (9184, 0.15), (13664, 0.17)], ids=["5s", "10s", "15s"])
-def test_production_lofi(runtime, rows, density, pooled):
-    """LoFi with bf8 K / V and bf16 Q at the MiniMax-H3 lengths, on the sliced references."""
-    geo = Geometry(rows, rows * MESH_CONFIG.sp_size, 256)
+@pytest.mark.parametrize(
+    "rows, logical_n, density",
+    [(4736, None, 0.15), (9184, None, 0.15), (13664, None, 0.17), (9184, 73425, 0.15), (13664, 109101, 0.17)],
+    ids=["5s", "10s", "15s", "10s_h3", "15s_h3"],
+)
+def test_production_lofi(runtime, rows, logical_n, density, pooled):
+    """LoFi with bf8 K / V and bf16 Q at the MiniMax-H3 lengths, on the sliced references. The _h3 cases use the
+    packed t2va length (logical_n off a tile: the key-bias path is built too), the largest kernel build."""
+    if logical_n is not None and logical_n > rows * MESH_CONFIG.sp_size:
+        pytest.skip(f"the H3 length {logical_n} needs SP=8 ({MESH_CONFIG.sp_size} shards of {rows} rows)")
+    geo = Geometry(rows, logical_n or rows * MESH_CONFIG.sp_size, 256)
     case = Case(runtime, geo, dtype=ttnn.bfloat8_b, lofi=True)
     mask = make_mask(geo, case.S, case.H, density=density, seed=29)
     raw = case.raw_inputs(29)

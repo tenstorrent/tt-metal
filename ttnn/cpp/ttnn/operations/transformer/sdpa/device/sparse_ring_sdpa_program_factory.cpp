@@ -1269,6 +1269,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
+    // The reader and writer are built for size: the kernel config buffer holds all five kernels' text, and the long
+    // builds (several passes, pair steps, LoFi with block-float K / V) come within a few hundred bytes of it at O2.
+    // Their time is mostly NoC waits.
+    reader_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
+    writer_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
 
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source =
@@ -1422,6 +1427,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 producer,
                 n_receivers,
                 rects.size());
+        }
+        // The reader leaves the head chain's transfers out with group delivery (v_chain_moves): no member may be
+        // left outside a group.
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            TT_FATAL(
+                !head_chain_configs[i].participates || group_args[i][0] != 0,
+                "SparseRingSDPA: head chain member core {} has no delivery group",
+                i);
         }
     }
 
