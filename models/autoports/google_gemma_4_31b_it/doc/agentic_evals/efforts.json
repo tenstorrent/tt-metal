@@ -3212,6 +3212,92 @@
 "evidence": [
 "runs/gpqa80-preparation/RESULT.json"
 ]
+},
+{
+"problem": "first-agent-reply-observability",
+"owner": "current_benchmark",
+"goal": "Prove initial C request identity and completions on stock route using supported vLLM logging settings only",
+"plan": "runs/first-agent-reply-observability/plan.md",
+"predicted": {
+"saving_hours": {
+"release": 0
+},
+"device_hours": 0.06,
+"basis": "guess",
+"reason": "Current same-three baseline full60B8 confirmation held device0.05905h; extra four short reasoning requests fit0.12h box. Logging overhead is measured, no speed saving claimed."
+},
+"unblocks": [
+"exact frozen dry first-agent replies"
+],
+"confirm": {
+"method": "Stock response middleware host reasoning-only branch, exact three native baseline pairs on acceptedab273 plus four concurrent short thinking calls with received/response IDs and actual client bodies",
+"success": "All baseline native outputs exact; initial four IDs have full matching successful response logs including empty-visible path; bounded measured logging/file growth, no sampling/parser/runtime changes. Actual CI dry/no-score timing still separate."
+},
+"box_hours": 0.12,
+"status": "done",
+"box_revision": {
+"at": "2026-11-06T19:54:01.815383+00:00",
+"from": 0.1,
+"to": 0.12,
+"reason": "Useful supported response-body logger found by fresh AutoDebug; allow same matched live baseline plus four-client confirmation."
+},
+"used_device_hours": 0.06629052,
+"change": "kept",
+"problem_status": "solved",
+"confirmed": {
+"native_body_id_matches": 7,
+"baseline_exact_pairs": 3,
+"empty_visible_probes_logged": 4,
+"matched_seconds_before": 14.044918984,
+"matched_seconds_after": 14.022174332,
+"scope": "Local exact configuration confirmation; CI first-agent pre-score dry still required",
+"candidate_tti_sha": "af1ef17abfecb059da13d0a1287c00eace0f210e"
+},
+"evidence": [
+"runs/first-agent-reply-observability/AUTODEBUG.md",
+"runs/first-agent-reply-observability/AUTOFIX.md",
+"runs/first-agent-reply-observability/confirmation.json",
+"runs/first-agent-reply-observability/config-candidate.json"
+]
+},
+{
+"problem": "response-logging-runtime-benchmark",
+"owner": "local_serving_check",
+"goal": "Measure required headline and unchanged stage11 matrix with accepted stock response logging configuration",
+"plan": "runs/response-logging-runtime-benchmark/plan.md",
+"predicted": {
+"saving_hours": {
+"release": 0
+},
+"device_hours": 0.07605465913249645,
+"basis": "measured",
+"reason": "Same acceptedab273 runtime/rows prior queuehold; only stock request/response logging settings change ifexactnessconfirmed"
+},
+"unblocks": [
+"measured release serving configuration"
+],
+"confirm": {
+"method": "Exact4096input128outputB1C1 eightrequests and unchanged nominal128/128C1n8 TTI matrix; sourcehash/phaseintegrity/nativecompletions",
+"success": "8/8 each measured throughvLLM; no source/release limits changed, unknowndevice-time fields remainnull"
+},
+"box_hours": 0.15,
+"status": "done",
+"admission": "Held until B8 logging exactness accepts and devicecloses",
+"used_device_hours": 0.08307275277777779,
+"change": "dropped",
+"problem_status": "solved",
+"confirmed": {
+"headline_completed": 8,
+"matrix_completed": 8,
+"headline_buffered_ttft_ms": 4386.854759,
+"headline_buffered_tpot_ms": 0.037546873,
+"reason": "Stockdebugmiddleware drainsallstreamchunks beforedelivery; drop loggingforstreamingB1 and retainselectedunbufferedbaseline. GPQA nonstreaminglogging remainsaccepted.",
+"selected_headline_evidence": "runs/phase-archive-runtime-benchmark/RESULT.json"
+},
+"evidence": [
+"runs/response-logging-runtime-benchmark/RESULT.json",
+"runs/response-logging-runtime-benchmark/AUTOFIX.md"
+]
 }
 ],
 "rankings": [
@@ -19946,6 +20032,114 @@
 }
 ],
 "reason": "Validity before speed. SWE network AutoFix exhausted, measured stop retained; loop causes remain open with no accepted fix. Normal admitted GPQA rungs take precedence over speculative optimization; prepared80 has no admission or timing claim."
+},
+{
+"after": "initial-C replies not established by aggregate progress",
+"at": "2026-11-06T19:45:33.070681+00:00",
+"order": [
+{
+"problem": "first-agent-reply-observability",
+"unblocks": [
+"exact dry"
+],
+"saving_hours": 0,
+"device_hours": 0.04
+},
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"next rung"
+],
+"saving_hours": 0,
+"device_hours": null
+}
+],
+"reason": "New validity gap ranks above speed; host preparation concurrent with scored20 and cannot delay next admitted rung."
+},
+{
+"after": "Supported stock response logging found, live exactness underway",
+"at": "2026-11-06T19:57:51.748007+00:00",
+"order": [
+{
+"problem": "first-agent-reply-observability",
+"unblocks": [
+"exact dry first-agent replies"
+],
+"saving_hours": 0,
+"device_hours": 0.06
+},
+{
+"problem": "response-logging-runtime-benchmark",
+"unblocks": [
+"release measured values"
+],
+"saving_hours": 0,
+"device_hours": 0.07605465913249645
+},
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"next rung"
+],
+"saving_hours": 0,
+"device_hours": null
+}
+],
+"reason": "Validity and required configuration measurements first; independent CI20 continues and next rung never waits for optional speed work."
+},
+{
+"after": "Stock response logging local exactness accepted",
+"at": "2026-11-06T20:02:37.866475+00:00",
+"order": [
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"next rung"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "response-logging-runtime-benchmark",
+"unblocks": [
+"measured serving values"
+],
+"saving_hours": 0,
+"device_hours": 0.07605465913249645
+},
+{
+"problem": "frozen CI initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": null
+}
+],
+"reason": "Observability mechanism confirmed; actual CI log availability and pre-score cancellation remain validity work. Normalrungs continue; speed work remains secondary."
+},
+{
+"after": "Streaming logger measurement and minimal per-arm configuration repair",
+"at": "2026-11-06T20:07:55.959741+00:00",
+"order": [
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"next rung"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "frozen CI initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": null
+}
+],
+"reason": "Required headline alreadymeasured on selectedunbufferedB1; streaminglogger experimentdropped. NormalCIrungcontinues; no speculative speed effort delays progression."
 }
 ],
 "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

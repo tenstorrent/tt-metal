@@ -290,6 +290,18 @@
       "planned_clients": 4,
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch>=4; C4 accepted on paired frozen10 and retention lifecycle validated on current runtime."
+    },
+    "first-agent-reply-observability": {
+      "batch": 8,
+      "planned_clients": 4,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch>=4; baseline exactness subwindow usesC2, separatefour-clientprobe"
+    },
+    "response-logging-runtime-benchmark": {
+      "batch": 1,
+      "planned_clients": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exact headline and unchanged stage11 matrix each require one client"
     }
   },
   "release_limits": {
@@ -581,6 +593,37 @@
       "evidence": "runs/gpqa-c8-capacity/RESULT.json",
       "changes": "none",
       "chosen_clients": 4
+    }
+  },
+  "accepted_response_logging": {
+    "env_vars": {
+      "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "true"
+    },
+    "vllm_args": {
+      "enable_log_requests": true,
+      "max_log_len": 0
+    },
+    "evidence": "runs/first-agent-reply-observability/confirmation.json",
+    "scope": "Stock configuration; raw response logs private, not telemetry/publication; no runtime/parser/sampling changes",
+    "native_exact_pairs": 3,
+    "empty_visible_confirmations": 4,
+    "file_growth_guess": "80worstcap responses~650.8MB beforepossibleworkflowduplication, notbound; sourceconfirmation containsassumptions",
+    "applies_to": "Nonstreaming GPQA B8/C4 arm only"
+  },
+  "logging_by_release_arm": {
+    "r1_gpqa_diamond": {
+      "response_debug": "true",
+      "enable_log_requests": true,
+      "max_log_len": 0,
+      "stream": false,
+      "evidence": "runs/first-agent-reply-observability/confirmation.json"
+    },
+    "benchmarks": {
+      "response_debug": "false",
+      "request_logging": "default disabled",
+      "stream": true,
+      "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json",
+      "reason": "Preserve token-out streaming; response debugbuffersentireSSE, provenbyruns/response-logging-runtime-benchmark/RESULT.json"
     }
   }
 }

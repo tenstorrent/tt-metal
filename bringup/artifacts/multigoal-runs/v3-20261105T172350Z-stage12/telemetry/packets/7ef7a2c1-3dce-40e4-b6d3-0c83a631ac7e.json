@@ -79,7 +79,8 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. GPQA20 raw16/20 unbanked: tar discarded retained artifact. Local archive repair passed; same20 retry42273660905 building ab2730c2. SWE5 completed but invalid external retrieval; measured stop5/functional2. Raw1/5 excluded from banked accuracy. No dry/release."
+    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. GPQA20 raw16/20 unbanked: tar discarded retained artifact. Local archive repair passed; same20 retry42273660905 built ab2730c2 and entered CI device job. SWE5 completed but invalid external retrieval; measured stop5/functional2. Raw1/5 excluded from banked accuracy. No dry/release.",
+    "release": "No frozen dry/release yet. Stock response logging locally confirmed for initial-request IDs including empty-visible replies; actual CI no-score dry remains."
   },
   "notes": [
     "Repaired runtime ab2730c measured; no frozen release yet. No vLLM profiling.",
@@ -88,6 +89,7 @@
     "Local execution checkout remains without remotes; source-only publication uses separate authorized checkouts.",
     "Local saved-input GPQA replay confirms two repetitive tails; original unretained20 remains unbanked. Local archive repair passed exact native outputs and idle tar; CI confirmation pending.",
     "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json.",
-    "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json."
+    "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json.",
+    "Selected headline remains unbuffered B1. Stock response debug buffers SSE (measured experiment excluded from decoderateclaims); enabled only for nonstreamingGPQA. Evidence: runs/response-logging-runtime-benchmark/AUTOFIX.md."
   ]
 }

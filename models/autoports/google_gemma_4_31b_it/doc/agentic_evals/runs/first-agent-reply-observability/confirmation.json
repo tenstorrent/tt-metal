@@ -1,0 +1,128 @@
+{
+  "status": "local_confirmation_pass_configuration_accepted_by_coordinator",
+  "supersedes": "Earlier RESULT.json/RESULT.md broad no-self-contained-config-fix conclusion; preserves their output-logger/DEBUG/OTLP findings. AUTODEBUG.md found existing middleware; AUTOFIX.md records host checks/candidate. Those files remain unchanged.",
+  "configuration_delta": {
+    "env_vars": {
+      "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "true"
+    },
+    "device_model_spec.vllm_args": {
+      "enable_log_requests": true,
+      "max_log_len": 0
+    }
+  },
+  "runtime": {
+    "tt_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+    "source_hash_count": 13,
+    "all_hashes_unchanged": true,
+    "vllm_version_observed": "0.31.0",
+    "vllm_source_tag_sha": "db9527a46873454610df6dbedf79a36d6bf1a7f6",
+    "stock_plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "hf_tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "layers": 60,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "context": 262144,
+    "native_parsers": [
+      "gemma4 reasoning",
+      "gemma4 tool"
+    ],
+    "served_top_k": 32,
+    "candidate_tti_prefix": "af1ef17",
+    "candidate_status": "coordinator accepted exact config delta; source publication owned separately"
+  },
+  "confirmation": {
+    "native_response_bodies_received_by_client": 7,
+    "exact_server_logged_json_matches": 7,
+    "all_received_start_ids_matched": true,
+    "baseline_requests_and_native_semantics_exact": 3,
+    "baseline_planned_clients": 2,
+    "additional_probe_planned_clients": 4,
+    "probe_empty_visible_logged": 4,
+    "total_empty_visible_logged": 5,
+    "probe_output_cap": 32,
+    "probe_scope": "nonscored authorized synthetic logging control only; baseline max256/384 unchanged and no eval caps changed",
+    "host_reasoning_empty_checks": "response-logger-host-check.json"
+  },
+  "timing": {
+    "baseline_matched_request_window_seconds": 14.044918984,
+    "candidate_matched_request_window_seconds": 14.022174332,
+    "difference_seconds": -0.022744652000000087,
+    "ratio": 0.9983805779139124,
+    "scope": "sequential matched three-request observation, not isolated causal overhead; excludes readiness wait"
+  },
+  "cost": {
+    "predicted_device_hours": 0.06,
+    "box_hours": 0.12,
+    "actual_device_hours": 0.06629052,
+    "device_closed_at": "2026-11-06T20:00:02.720505+00:00",
+    "remaining_owners": [],
+    "basis": "queue started_at to observed device close; wrapper completion separately recorded by coordinator"
+  },
+  "phase_integrity": {
+    "snapshots": 19,
+    "events": 852,
+    "unique_matched_steps": 426,
+    "min_step_id": 1,
+    "max_step_id": 426,
+    "contiguous_step_ids": true,
+    "max_active_rows": 4,
+    "prefill_steps": 10,
+    "decode_steps": 416,
+    "pending_final": 0,
+    "errors": 0,
+    "any_truncated": false,
+    "final_retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    },
+    "scope": "physical retained phase rows; request-to-response binding comes from stock middleware and client artifacts, not phase IDs"
+  },
+  "log_growth": {
+    "server_log_bytes_at_audit": 423300,
+    "server_log_bytes_after_shutdown": 530054,
+    "seven_native_response_json_characters": 75657,
+    "seven_generated_tokens": 714,
+    "observed_characters_per_generated_token_all": 105.96218487394958,
+    "observed_four_short_probe_ratio": 35.84375,
+    "measurement_limit": "Includes fixed metadata and native prompt/output ID arrays; short synthetic English controls are not long GPQA reasoning. Character count is not asserted UTF8 byte count.",
+    "forecast_kind": "scenario guesses, not upper bounds",
+    "assumed_serialized_bytes_per_generated_token": 64,
+    "metadata_bytes_per_response": 8192,
+    "at_126976_generated_tokens_bytes": 8134656,
+    "eighty_capped_responses_bytes": 650772480,
+    "possible_log_duplication_factor_guess": 2,
+    "eighty_capped_responses_with_duplication_bytes": 1301544960,
+    "extra_prompt_arrays": "If requested, up to7 guessed bytes per prompt ID; ordinary GPQA does not request native prompt arrays. Full logger ignores max-log-len.",
+    "capacity_risk": "CI log truncation/storage and long-response buffering not measured by this local smoke; keep raw reasoning private."
+  },
+  "evidence": {
+    "native_audit": "bringup/artifacts/first-agent-reply-observability/live/audit.json",
+    "source_snapshot": "bringup/artifacts/first-agent-reply-observability/live/source-launch.json",
+    "server_summary": "bringup/artifacts/first-agent-reply-observability/live/server/vllm_run_summary.json",
+    "private_console": "bringup/artifacts/first-agent-reply-observability/live/server/server.log",
+    "private_phases": "bringup/artifacts/first-agent-reply-observability/live/phases.jsonl",
+    "shutdown": "bringup/artifacts/first-agent-reply-observability/live/idle-shutdown.json",
+    "queue": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/device_queue/local/first-agent-reply-observability/job.json"
+  },
+  "limitations": [
+    "This confirms the stock model-config response-ID witness, including empty-visible responses, and exact client-body receipt locally; not an actual frozen CI dry pass.",
+    "No scored GPQA run or exact initialC pre-aggregation stop was performed here. REST publication lag/cancellation race remains.",
+    "One sequential matched pair does not isolate logging overhead or prove performance neutrality.",
+    "Device times/rooflines not measured; no profiler.",
+    "Full JSON logging includes private reasoning; retain only private raw artifacts and compact committed metadata."
+  ]
+}

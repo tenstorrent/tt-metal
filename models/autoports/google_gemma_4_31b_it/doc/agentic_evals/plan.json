@@ -88,7 +88,24 @@
       "swe_bench_verified",
       "terminal_bench_2_1"
     ],
-    "dry_procedure": "runs/gpqa-only-release-preparation/plan.md"
+    "dry_procedure": "runs/gpqa-only-release-preparation/plan.md",
+    "per_arm_logging": {
+      "r1_gpqa_diamond": {
+        "response_debug": "true",
+        "enable_log_requests": true,
+        "max_log_len": 0,
+        "stream": false,
+        "evidence": "runs/first-agent-reply-observability/confirmation.json"
+      },
+      "benchmarks": {
+        "response_debug": "false",
+        "request_logging": "default disabled",
+        "stream": true,
+        "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json",
+        "reason": "Preserve token-out streaming; response debugbuffersentireSSE, provenbyruns/response-logging-runtime-benchmark/RESULT.json"
+      }
+    },
+    "per_arm_logging_status": "Selected, not finalfreeze; sameeacharm settingsmustbeusedindryandrelease"
   },
   "runs": [
     {
@@ -2189,7 +2206,7 @@
       "capacity_evidence": "runs/retention-c4-lifecycle/RESULT.json",
       "retention_enabled": true,
       "arm": "larger-gpqa20-c4-retention-retry",
-      "status": "building_or_queued",
+      "status": "device_job_in_progress",
       "queued_at": "2026-11-06T18:46:01.548044+00:00",
       "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
       "predicted_hours": 3.049166666666667,
@@ -2207,10 +2224,10 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T19:40:19.099833+00:00",
+      "last_observed_at": "2026-11-06T19:44:22.821358+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-frkdx",
       "build_started_at": "2026-11-06T18:46:22Z",
-      "build_completed_at": null,
+      "build_completed_at": "2026-11-06T19:42:24Z",
       "image_build_observation": {
         "build_job": 128084494246,
         "source_inputs_seen": [
@@ -2221,7 +2238,12 @@
         "evidence": "bringup/artifacts/stage12-archive-repair-image-build-current.log",
         "log_through": "2026-11-06T19:03:58.3323195Z",
         "status": "build in progress; source input mentions only, no successful image/push/digest claim"
-      }
+      },
+      "runner": "120-qb2-p04t05",
+      "device_job_id": 128113001232,
+      "device_job_started_at": "2026-11-06T19:42:26Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-06T19:42:26Z"
     },
     {
       "arm": "phase-archive-idle-race",
@@ -2242,10 +2264,85 @@
       "exit_status": 0,
       "client_completed": 3,
       "actual_device_hours": 0.05904627083333333
+    },
+    {
+      "arm": "first-agent-reply-observability",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed",
+      "started_at": "2026-11-06T19:56:04.074633+00:00",
+      "queued_at": "2026-11-06T19:56:04.074633+00:00",
+      "planned_clients": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch>=4; baseline exactness subwindow usesC2, separatefour-clientprobe",
+      "predicted_hours": 0.06,
+      "box_hours": 0.12,
+      "runtime_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+      "source_snapshot": "bringup/artifacts/first-agent-reply-observability/live/source-launch.json",
+      "command": [
+        "bash",
+        "bringup/artifacts/first-agent-reply-observability/launch-arm.sh",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/first-agent-reply-observability/live",
+        "1"
+      ],
+      "scope": "Diagnostic only; unchanged baseline3 then4short thinking calls; no eval caps changed",
+      "ended_at": "2026-11-06T20:00:02.720505+00:00",
+      "exit_status": 0,
+      "actual_device_hours": 0.06629052,
+      "wrapper_completed_at": "2026-11-06T20:00:06.034559+00:00",
+      "confirmation": "bringup/artifacts/first-agent-reply-observability/live/audit.json",
+      "remaining_owners": []
+    },
+    {
+      "arm": "response-logging-runtime-benchmark",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed_unselected_streaming_logger",
+      "started_at": "2026-11-06T20:00:37.031287+00:00",
+      "queued_at": "2026-11-06T20:00:37.031287+00:00",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exact headline and unchanged stage11 matrix each require one client",
+      "predicted_hours": 0.07605465913249645,
+      "box_hours": 0.15,
+      "command": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "env": {
+          "GEMMA4_BENCHMARK_PHASE_LOG": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-response-logging-runtime-benchmark/phase-events.json",
+          "GEMMA4_PHASE_AUTOEXPORT_SECONDS": "1",
+          "GEMMA4_RETAIN_DECODE_TOKENS": "1",
+          "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "true"
+        },
+        "argv": [
+          "timeout",
+          "540",
+          "bash",
+          "models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+          "--stages",
+          "serve",
+          "--max-num-seqs",
+          "1",
+          "--enable-prefix-caching",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-response-logging-runtime-benchmark/server",
+          "--additional-server-args",
+          "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --reasoning-parser gemma4 --tool-call-parser gemma4 --enable-auto-tool-choice --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475 --enable-log-requests --max-log-len 0"
+        ]
+      },
+      "owner_check": [],
+      "source_snapshot": "bringup/artifacts/stage12-response-logging-runtime-benchmark/source-launch.json",
+      "ended_at": "2026-11-06T20:05:36.093197+00:00",
+      "exit_status": 0,
+      "actual_device_hours": 0.08307275277777779,
+      "wrapper_completed_at": "2026-11-06T20:05:39.117413+00:00",
+      "remaining_owners": [],
+      "disposition": "Streaming response buffering invalidates token-emission decode characterization; loggerselectedonlyGPQA nonstreaming, benchmarkkeepspriorloggingdisabledconfiguration."
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-06T19:40:42.096895+00:00",
+  "last_updated": "2026-11-06T20:07:55.959741+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -2932,6 +3029,23 @@
       "valid": false,
       "disposition": "measured_stop_functional2",
       "audit": "runs/nightly-swe-decode-retention/audit.json"
+    },
+    {
+      "arm": "first-agent-reply-observability",
+      "device_job_hours": 0.06629052,
+      "predicted_hours": 0.06,
+      "planned_clients": 4,
+      "batch": 8,
+      "pass": true,
+      "scope": "native exact logging confirmation; no score"
+    },
+    {
+      "arm": "response-logging-runtime-benchmark",
+      "device_job_hours": 0.08307275277777779,
+      "predicted_hours": 0.07605465913249645,
+      "planned_clients": 1,
+      "batch": 1,
+      "disposition": "Streaming response buffering invalidates token-emission decode characterization; loggerselectedonlyGPQA nonstreaming, benchmarkkeepspriorloggingdisabledconfiguration."
     }
   ],
   "local_idle_intervals": [
@@ -3098,16 +3212,33 @@
       "proof": "Frozenconfig + actualC active rows + successful partial replies k>=C,k<N, persisted before cancel/no final scores; localbenchmark reachability separately",
       "not_yet_clean_dry_run": true
     },
-    "tool_suite_exception": "not applicable to current go set; historical operator question retained"
+    "tool_suite_exception": "not applicable to current go set; historical operator question retained",
+    "initial_agent_identity": {
+      "status": "stock_config_confirmed_locally_actual_dry_pending",
+      "reason": "Prior first18 replies used two peer ports; aggregate k>=4 does not establish initial4. The80min partial-to-final window is not an all-initial-replies window. Supported stock logging investigation underway. Schedule reserve retained but dry admission requires actual proof.",
+      "evidence": "runs/first-agent-reply-observability/confirmation.json",
+      "solution": "InitialReceived IDs matched to full nonstreaming JSONresponse IDs viaacceptedstocklogging; useactualfrozenCIlog, notaggregatek alone"
+    }
   },
   "next_ci_dispatch_image": {
-    "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:b9d3be12a8eac85871beac53cd3ef3700656691efcb396ce04fb2f833907f2ca",
-    "condition": "TT11a387692d2b434198e79dd92fbb8ed308c3ca47/plugin ca7a18246e4111629ed6cb4a7d1192002749fccf unchanged; TTI config-only changes preserve image dependencies",
-    "live_confirmation": "Pulled by both current jobs, full60autoport registered",
-    "live_confirmation_run_ids": [
-      42247098210,
-      42256121890
-    ]
+    "run_id": 42273660905,
+    "build_job_id": 128084494246,
+    "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+    "tti_sha": "37ee508969c730320c01259fafe340e6c2c14d4e",
+    "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "built_tag": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.26.1-ab2730c27e557b09b2eafe3494e47790adc210aa-ca7a182-128084494246",
+    "exported_manifest_list_digest": "sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d",
+    "build_conclusion": "success",
+    "build_hours": 0.9338888888888889,
+    "prediction_build_hours": 0.9,
+    "push_reported_at": "2026-11-06T19:42:16.3483032Z",
+    "evidence": "bringup/artifacts/stage12-archive-repair-image-build-final.log:40050-40063;40143-40147",
+    "actual_pull_digest": "sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d",
+    "server_startup_verified": true,
+    "status": "build_push_pull_and_full60_autoport_startup_confirmed",
+    "note": "Build export digest is candidate for reuse; require actual CI pull digest/runtime readiness before admission.",
+    "actual_startup_evidence": "bringup/artifacts/stage12-gpqa20-repair-current.log:1008,1278,1478,1807; four active decode rows after evalstart",
+    "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d"
   },
   "active_runs": [
     42273660905
@@ -3415,13 +3546,8 @@
     }
   ],
   "next_local_job": {
-    "status": "waiting_for_actual_CI_trajectory",
-    "goal": "Diagnose an actual retained failure if normal current rung requires it",
-    "reason": "Selected repaired runtime benchmark complete. All capacity/source prerequisites measured; host assessment found no justified additional interference trial. Avoid duplicate diagnostics without a new mechanism.",
-    "active_secondary_runs": [
-      42247098210,
-      42273660905
-    ]
+    "status": "awaiting_frozen_dry_or_new_justified_effort",
+    "reason": "All required selectedruntimebenchmarks complete; lateststreamingloggerexperiment dropped, GPQAusesnonstreamingonly"
   },
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T17:48:16.171357+00:00",
@@ -3451,6 +3577,19 @@
       ],
       "condition": "Actual repaired image build/push digest and retry startup verified; prior rung valid and schedule admits successor",
       "no_image_existence_claim": true
+    }
+  },
+  "accepted_response_logging_candidate": {
+    "tti_sha": "af1ef17abfecb059da13d0a1287c00eace0f210e",
+    "cohort": 40,
+    "status": "acceptedconfig_helduntilvalid20",
+    "source": "runs/first-agent-reply-observability/config-candidate.json",
+    "publication": {
+      "sha": "af1ef17abfecb059da13d0a1287c00eace0f210e",
+      "branch": "mvasiljevic/gemma4-31b-goal12-v3",
+      "checkout": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tt-inference-server-stage12",
+      "pushed": true,
+      "scope": "Sourceonly config/tests; no executioncheckoutremote"
     }
   }
 }

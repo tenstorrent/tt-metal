@@ -70,12 +70,29 @@
         "usage_percent": 73,
         "evidence": "bringup/artifacts/stage12-swe-activation-live.log:580",
         "limitation": "Stock cleanup filesystem report; Docker image filesystem mapping/reserve not established."
+      },
+      {
+        "run_id": 42273660905,
+        "runner": "120-qb2-p04t05",
+        "at": "2026-11-06T19:43:16Z",
+        "free_space_reported_GB": 1006,
+        "usage_percent": 72,
+        "evidence": "runs/gpqa-only-release-preparation/disk-observation.md",
+        "limitation": "Runner-admin reset hook, exact filesystem/reserve unknown; no mapping to Dockerroot or /localdev established."
       }
     ],
     "stock_model_disk_policy": {
       "source": "tt-inference-server workflows/model_spec.py:775-794; workflows/setup_host.py:491-514",
       "formula": "Non-repacked param_count*2+20 GiB; repacked param_count*3+20 GiB",
       "scope": "Model weights/cache download minimum, not task-container admission reserve; check may bypass for configured host weights. Do not substitute for unknown Docker reserve."
+    },
+    "current_release_scope": {
+      "go_evals": [
+        "r1_gpqa_diamond"
+      ],
+      "task_containers": 0,
+      "task_declared_storage_bytes": 0,
+      "scope": "HTTP-only GPQA and benchmark, no Harbor environments to pull/start; serverDocker weights/cache/logstorage remain separate and observations retain limitations."
     }
   },
   "admission": {
@@ -91,7 +108,14 @@
       "limit": "ObservedC2 only; hostmaximum and occupiedDockerbridge count unknown; no customadmission checks introduced."
     },
     "selected_route": "qb2-ci",
-    "planned_clients": 2
+    "planned_clients": 2,
+    "current_release_scope": {
+      "planned_clients": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "task_sandboxes": 0,
+      "reason": "GPQA HTTP C4 replayandscored10validated; repaired20actual4rows; no task-sandboxlimit applies. ExistingtoolC2admission evidencehistorical."
+    }
   },
   "release_route": {
     "ok": false,

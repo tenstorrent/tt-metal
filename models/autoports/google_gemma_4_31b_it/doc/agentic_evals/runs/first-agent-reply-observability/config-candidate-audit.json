@@ -1,0 +1,24 @@
+{
+  "exact_added_fields": [
+    [
+      ".templates[194].device_model_specs[0].env_vars.VLLM_DEBUG_LOG_API_SERVER_RESPONSE",
+      "true"
+    ],
+    [
+      ".templates[194].device_model_specs[0].vllm_args.enable_log_requests",
+      true
+    ],
+    [
+      ".templates[194].device_model_specs[0].vllm_args.max_log_len",
+      0
+    ]
+  ],
+  "resolved_serialized_env": "true",
+  "stock_cli_argv": [
+    "--enable-log-requests",
+    "--max-log-len",
+    "0"
+  ],
+  "all_other_yaml_fields_equal": true,
+  "cohort_source_unchanged": true
+}

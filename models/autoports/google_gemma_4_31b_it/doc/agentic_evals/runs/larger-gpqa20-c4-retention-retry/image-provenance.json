@@ -1,0 +1,20 @@
+{
+  "run_id": 42273660905,
+  "build_job_id": 128084494246,
+  "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+  "tti_sha": "37ee508969c730320c01259fafe340e6c2c14d4e",
+  "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "built_tag": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.26.1-ab2730c27e557b09b2eafe3494e47790adc210aa-ca7a182-128084494246",
+  "exported_manifest_list_digest": "sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d",
+  "build_conclusion": "success",
+  "build_hours": 0.9338888888888889,
+  "prediction_build_hours": 0.9,
+  "push_reported_at": "2026-11-06T19:42:16.3483032Z",
+  "evidence": "bringup/artifacts/stage12-archive-repair-image-build-final.log:40050-40063;40143-40147",
+  "actual_pull_digest": "sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d",
+  "server_startup_verified": true,
+  "status": "build_push_pull_and_full60_autoport_startup_confirmed",
+  "note": "Build export digest is candidate for reuse; require actual CI pull digest/runtime readiness before admission.",
+  "actual_startup_evidence": "bringup/artifacts/stage12-gpqa20-repair-current.log:1008,1278,1478,1807; four active decode rows after evalstart",
+  "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d"
+}

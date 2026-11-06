@@ -41,7 +41,7 @@
   "capacity_evidence": "runs/retention-c4-lifecycle/RESULT.json",
   "retention_enabled": true,
   "arm": "larger-gpqa20-c4-retention-retry",
-  "status": "building_or_queued",
+  "status": "device_job_in_progress",
   "queued_at": "2026-11-06T18:46:01.548044+00:00",
   "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
   "predicted_hours": 3.049166666666667,
@@ -59,10 +59,10 @@
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905",
   "workflow_status": "in_progress",
   "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T19:40:19.099833+00:00",
+  "last_observed_at": "2026-11-06T19:44:22.821358+00:00",
   "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-frkdx",
   "build_started_at": "2026-11-06T18:46:22Z",
-  "build_completed_at": null,
+  "build_completed_at": "2026-11-06T19:42:24Z",
   "image_build_observation": {
     "build_job": 128084494246,
     "source_inputs_seen": [
@@ -73,5 +73,10 @@
     "evidence": "bringup/artifacts/stage12-archive-repair-image-build-current.log",
     "log_through": "2026-11-06T19:03:58.3323195Z",
     "status": "build in progress; source input mentions only, no successful image/push/digest claim"
-  }
+  },
+  "runner": "120-qb2-p04t05",
+  "device_job_id": 128113001232,
+  "device_job_started_at": "2026-11-06T19:42:26Z",
+  "device_job_completed_at": null,
+  "start": "2026-11-06T19:42:26Z"
 }

@@ -1,0 +1,29 @@
+{
+  "arm": "first-agent-reply-observability",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "started_at": "2026-11-06T19:56:04.074633+00:00",
+  "queued_at": "2026-11-06T19:56:04.074633+00:00",
+  "planned_clients": 4,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Smallest validated batch>=4; baseline exactness subwindow usesC2, separatefour-clientprobe",
+  "predicted_hours": 0.06,
+  "box_hours": 0.12,
+  "runtime_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+  "source_snapshot": "bringup/artifacts/first-agent-reply-observability/live/source-launch.json",
+  "command": [
+    "bash",
+    "bringup/artifacts/first-agent-reply-observability/launch-arm.sh",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/first-agent-reply-observability/live",
+    "1"
+  ],
+  "scope": "Diagnostic only; unchanged baseline3 then4short thinking calls; no eval caps changed",
+  "ended_at": "2026-11-06T20:00:02.720505+00:00",
+  "exit_status": 0,
+  "actual_device_hours": 0.06629052,
+  "wrapper_completed_at": "2026-11-06T20:00:06.034559+00:00",
+  "confirmation": "bringup/artifacts/first-agent-reply-observability/live/audit.json",
+  "remaining_owners": []
+}

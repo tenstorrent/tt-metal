@@ -182,6 +182,18 @@
     {
       "fact": "Native tool_calls finish reason can coexist with capped repetitive output: Astropy message2 has32768 IDs and an18047-token period4 suffix with54 parsed tools. Missing failed_response bodies remain unknown when archive collection fails; never map physical rows by order.",
       "evidence": "runs/nightly-swe-decode-retention/audit.json"
+    },
+    {
+      "fact": "vLLM enable_log_outputs misses reasoning-only replies; stock VLLM_DEBUG_LOG_API_SERVER_RESPONSE=true logs full nonstreaming JSON includingID. enable_log_requests/max_log_len0 adds startIDs without fullinput. Actual local7/7 native server/client bodies matched,4/4emptyvisible probes logged. Rawlogs remainprivate; complete firstC and no-score timing still need actualCIproof.",
+      "evidence": "runs/first-agent-reply-observability/confirmation.json"
+    },
+    {
+      "fact": "CI runner hook reported1006GBfree/72%used at19:43:16, filesystem/reserveunknown. Currentpersistentpaths /localdev/persistent-volume and /localdev/hf_home notproven same asDocker root. No extra runner check used.",
+      "evidence": "runs/gpqa-only-release-preparation/disk-observation.md"
+    },
+    {
+      "fact": "VLLM_DEBUG_LOG_API_SERVER_RESPONSE buffers entire streaming response beforedelivery. Measured exact4096/128B1C1 yieldsTTFT4386.855ms/TPOT.03755ms; do not call bufferedemission a modeldecoderate. Keepdebugonlynonstreamingeval andfalse onstreamingbenchmark. Per-armsettings mustfreezeunchangedthroughdry/release.",
+      "evidence": "runs/response-logging-runtime-benchmark/AUTOFIX.md"
     }
   ],
   "suite_timings": [

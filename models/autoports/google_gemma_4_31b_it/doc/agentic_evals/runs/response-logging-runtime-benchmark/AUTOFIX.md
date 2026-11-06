@@ -1,0 +1,11 @@
+# AutoFix: stock response logger buffers streaming benchmark
+
+Failing contract: headline TTFT and per-user decode rate must reflect token-out autoregressive streaming, not delivery of a fully buffered response.
+
+Source diagnosis: stock vLLM `vllm/entrypoints/serve/middleware/log_response.py:148` eagerly consumes every section from response.body_iterator before checking streaming content-type and calling _log_streaming_response. It then returns a replacement iterator over the collected body. The benchmark client's endpoint_request_func.py uses stream=True for completion and chat request routes. The installed source is preserved at bringup/artifacts/vllm-server-source-v0.31.0; benchmark source at bringup/artifacts/vllm-benchmark-client-src. Causal chain is directly visible, so no independent speculative AutoDebug run is needed.
+
+Hypotheses: (1) middleware buffering explains near-total-generation TTFT and tiny delivered TPOT; (2) intrinsic model acceleration would not explain delaying first delivery through almost the full request. Warmup measured4.354494s total and4.349544s TTFT; eight headline requests measured4386.854759ms mean TTFT and0.037546873ms TPOT. Source and observations confirm hypothesis1; do not interpret reciprocal TPOT as engine speed.
+
+Minimum repair is configuration scope, not shared-runtime modification: VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false for streaming benchmark arm; true only for nonstreaming GPQA arm, with stock request logging flags recorded per arm. Keep measured failed-selection evidence. Coordinator selected the previously validated exact ab273 logging-disabled B1 configuration, whose eight4096/128 requests measured753.7608765ms TTFT and35.3210051tokens/s/user. That existing same-source confirmation suffices; no redundant benchmark, plugin change or source patch was performed.
+
+Validation: current clients all exit0, source hashes match ab273, complete phase archive/no loss and idle closure; baseline selected behavior is already measured in runs/phase-archive-runtime-benchmark/RESULT.json. The GPQA request is nonstreaming, so buffering does not change an intended streaming-delivery contract there. Residual limitation: logging overhead and output visibility apply only to its measured/configured arm; no causal speed or task-score claim. Central freeze integration is coordinator-owned.

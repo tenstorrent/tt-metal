@@ -1132,6 +1132,81 @@
           "exit_status": 0,
           "client_completed": 3,
           "actual_device_hours": 0.05904627083333333
+        },
+        {
+          "arm": "first-agent-reply-observability",
+          "owner": "coordinator",
+          "device": "local",
+          "status": "completed",
+          "started_at": "2026-11-06T19:56:04.074633+00:00",
+          "queued_at": "2026-11-06T19:56:04.074633+00:00",
+          "planned_clients": 4,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "batch_reason": "Smallest validated batch>=4; baseline exactness subwindow usesC2, separatefour-clientprobe",
+          "predicted_hours": 0.06,
+          "box_hours": 0.12,
+          "runtime_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+          "source_snapshot": "bringup/artifacts/first-agent-reply-observability/live/source-launch.json",
+          "command": [
+            "bash",
+            "bringup/artifacts/first-agent-reply-observability/launch-arm.sh",
+            "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/first-agent-reply-observability/live",
+            "1"
+          ],
+          "scope": "Diagnostic only; unchanged baseline3 then4short thinking calls; no eval caps changed",
+          "ended_at": "2026-11-06T20:00:02.720505+00:00",
+          "exit_status": 0,
+          "actual_device_hours": 0.06629052,
+          "wrapper_completed_at": "2026-11-06T20:00:06.034559+00:00",
+          "confirmation": "bringup/artifacts/first-agent-reply-observability/live/audit.json",
+          "remaining_owners": []
+        },
+        {
+          "arm": "response-logging-runtime-benchmark",
+          "owner": "coordinator",
+          "device": "local",
+          "status": "completed_unselected_streaming_logger",
+          "started_at": "2026-11-06T20:00:37.031287+00:00",
+          "queued_at": "2026-11-06T20:00:37.031287+00:00",
+          "planned_clients": 1,
+          "batch": 1,
+          "max_num_seqs": 1,
+          "batch_reason": "Exact headline and unchanged stage11 matrix each require one client",
+          "predicted_hours": 0.07605465913249645,
+          "box_hours": 0.15,
+          "command": {
+            "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+            "env": {
+              "GEMMA4_BENCHMARK_PHASE_LOG": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-response-logging-runtime-benchmark/phase-events.json",
+              "GEMMA4_PHASE_AUTOEXPORT_SECONDS": "1",
+              "GEMMA4_RETAIN_DECODE_TOKENS": "1",
+              "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "true"
+            },
+            "argv": [
+              "timeout",
+              "540",
+              "bash",
+              "models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+              "--stages",
+              "serve",
+              "--max-num-seqs",
+              "1",
+              "--enable-prefix-caching",
+              "--output-dir",
+              "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-response-logging-runtime-benchmark/server",
+              "--additional-server-args",
+              "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --reasoning-parser gemma4 --tool-call-parser gemma4 --enable-auto-tool-choice --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475 --enable-log-requests --max-log-len 0"
+            ]
+          },
+          "owner_check": [],
+          "source_snapshot": "bringup/artifacts/stage12-response-logging-runtime-benchmark/source-launch.json",
+          "ended_at": "2026-11-06T20:05:36.093197+00:00",
+          "exit_status": 0,
+          "actual_device_hours": 0.08307275277777779,
+          "wrapper_completed_at": "2026-11-06T20:05:39.117413+00:00",
+          "remaining_owners": [],
+          "disposition": "Streaming response buffering invalidates token-emission decode characterization; loggerselectedonlyGPQA nonstreaming, benchmarkkeepspriorloggingdisabledconfiguration."
         }
       ]
     },
@@ -2534,7 +2609,7 @@
           "capacity_evidence": "runs/retention-c4-lifecycle/RESULT.json",
           "retention_enabled": true,
           "arm": "larger-gpqa20-c4-retention-retry",
-          "status": "building_or_queued",
+          "status": "device_job_in_progress",
           "queued_at": "2026-11-06T18:46:01.548044+00:00",
           "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
           "predicted_hours": 3.049166666666667,
@@ -2552,10 +2627,10 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T19:40:19.099833+00:00",
+          "last_observed_at": "2026-11-06T19:44:22.821358+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-frkdx",
           "build_started_at": "2026-11-06T18:46:22Z",
-          "build_completed_at": null,
+          "build_completed_at": "2026-11-06T19:42:24Z",
           "image_build_observation": {
             "build_job": 128084494246,
             "source_inputs_seen": [
@@ -2566,7 +2641,12 @@
             "evidence": "bringup/artifacts/stage12-archive-repair-image-build-current.log",
             "log_through": "2026-11-06T19:03:58.3323195Z",
             "status": "build in progress; source input mentions only, no successful image/push/digest claim"
-          }
+          },
+          "runner": "120-qb2-p04t05",
+          "device_job_id": 128113001232,
+          "device_job_started_at": "2026-11-06T19:42:26Z",
+          "device_job_completed_at": null,
+          "start": "2026-11-06T19:42:26Z"
         }
       ]
     }

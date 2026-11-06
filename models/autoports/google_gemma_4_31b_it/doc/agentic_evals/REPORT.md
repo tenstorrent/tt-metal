@@ -24,6 +24,8 @@ Terminal retains its valid two-task smoke. Nightly10 was stopped at two reported
 
 Extended mode has48hours from2026-11-06T04:28:49UTC to2026-11-08T04:28:49UTC for release start, and12hours per release run. Operator decision8 authorizes CI for Docker tasks, GPQA and final dry/release; local Docker remains unavailable. Task lists, immutable run SHAs, failed attempts, actual times and current projections remain in `cohorts.json`, `compute.json`, `estimate.json` and `plan.json`. The unresolved tool-suite dry-route and disk-admission questions are recorded in `blocked.json`; GPQA-only early-stop dry procedure is conditional on the final go set.
 
+Stock response logging is accepted after fresh AutoDebug found the built-in response middleware. All seven local server/client JSON bodies and request IDs matched, all three baseline outputs stayed exact, and all four reasoning-only probes were observable. Device hold0.06629hours versus0.06forecast/0.12box; matched call windows14.04492 and14.02217seconds are descriptive, not a causal speedup. This fixes local observability, not the remaining actual CI pre-score dry requirement. Full response logs stay private. See `runs/first-agent-reply-observability/confirmation.json`.
+
 ## Effort predictions and results
 
 Device costs include the device job, not build/queue. Release savings are forecasts on the then-planned lists; guesses are marked. Later measured stops can retire those savings. Complete confirmations and their original scope remain in each result linked by efforts.json.
@@ -118,6 +120,8 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | swe-recurrent-network-confirmation | 0.00000 / 0.00000 | 0.00000 | none/open: same exhausted AutoFix diagnosis: True; new generic defect: False; admissible fix: False; decision: Measured validity stop at attempted5; retain functional2; no retry until clean |
 | gpqa-only-release-schedule | 0.00000 / 0.00000 | 0.00000 | kept/open: Coordinator accepts GPQA-only reserve to first dry hour32. Actual clean dry, server storage observations and frozen release remain unproven. |
 | gpqa80-preparation | 0.00000 / 0.00000 | 0.00000 | kept/solved: Nested80 prepared on6ca5a1b;34 focused tests/hooks passed. Held until valid40 and measured time admission. |
+| first-agent-reply-observability | 0.06000 (guess) / 0.06629 | 0.00000 | kept/solved: native body id matches: 7; baseline exact pairs: 3; empty visible probes logged: 4; matched seconds before: 14.044918984 |
+| response-logging-runtime-benchmark | 0.07605 / 0.08307 | 0.00000 | dropped/solved: headline completed: 8; matrix completed: 8; headline buffered ttft ms: 4386.854759; headline buffered tpot ms: 0.037546873 |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
@@ -142,3 +146,5 @@ Tool-suite exact early-stop dry evidence and disk admission remain unresolved in
 Execution changes are committed locally, with SHAs in the stage commit manifest. This execution checkout has no remotes and is never pushed. Separate authorized checkouts publish source-only commits. The local telemetry packet7ef7a2c1-3dce-40e4-b6d3-0c83a631ac7e contains measured headline values, banked subset scores and missing reasons; raw tokens/logs are excluded.
 
 The completed retained SWE audit strengthens the observed loop/cap evidence without identifying its cause. Astropy native capped repetition is confirmed; the other nine discarded outputs remain unknown. Conditional HF/TT and forced-input diagnostics remain limited to their tested prefixes. With SWE stopped for independently unresolved network validity, hypothetical SWE release savings from loop or concurrency efforts are not credited; validity takes precedence over speed, and this finding does not authorize further device experiments.
+
+The streaming logging experiment completed8/8 headline and8/8 matrix requests but buffered the entire SSE response: headline TTFT4386.855ms and TPOT0.03755ms describe buffered delivery, not model decode speed. AutoFix therefore keeps response logging only on the nonstreaming GPQA arm; the B1 benchmark retains its measured unbuffered configuration and headline753.761ms/35.3210tokens/s/user. The experiment cost0.08307device hours versus0.07605forecast. See `runs/response-logging-runtime-benchmark/AUTOFIX.md`.

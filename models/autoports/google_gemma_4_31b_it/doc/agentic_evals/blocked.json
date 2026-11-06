@@ -180,6 +180,25 @@
     "task_storage_required": 0,
     "server_storage_free": null,
     "server_storage_reason": "Stock server still uses Docker; no added admission wrapper/check authorized. Record actual stock evidence, never infer free space from zero task containers.",
-    "evidence": "runs/gpqa-only-release-preparation/plan.md"
+    "evidence": "runs/gpqa-only-release-preparation/plan.md",
+    "server_storage_observation": {
+      "reported_free_gb": 1006,
+      "reported_usage_pct": 72,
+      "filesystem": null,
+      "source": "runs/gpqa-only-release-preparation/disk-observation.md",
+      "scope": "Currentrunner hookonly, not futurehost orDockerrootproof"
+    }
+  },
+  "initial_agent_reply_observability": {
+    "status": "local_config_fix_confirmed_ci_dry_pending",
+    "observed_at": "2026-11-06T19:49:25.885007+00:00",
+    "problem": "Aggregate completions do not prove all initial C requests received replies; stock output log excludes reasoning-only replies, model adapter has no request-final identity.",
+    "evidence": [
+      "runs/first-agent-reply-observability/confirmation.json"
+    ],
+    "action": "Fresh AutoDebug/AutoFix source investigation; no runtime or route change authorized implicitly. Normal rungs continue independently.",
+    "otlp": "Stock host request-finish spans exist, but collector/read route unavailable; no device profiler used or proposed.",
+    "solution": "Stock response-body debugmiddleware plusrequeststartIDs; no sharedsource/runtimechange",
+    "remaining": "Actual initialC response IDs and clientprogress/no errors before score on frozenCIroute; no pass inferred fromlocalcheck"
   }
 }
