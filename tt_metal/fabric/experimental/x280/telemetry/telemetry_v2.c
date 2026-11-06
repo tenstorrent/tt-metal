@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * telemetry.c - experimental X280 telemetry active image.
+ * telemetry_v2.c - experimental X280 telemetry active image.
  *
  * Linked behind the lifecycle harness (src/x280_active_start.c), which calls
  * main on all four harts and returns them to resident idle afterwards.
@@ -273,11 +273,13 @@ size_t init_arc_data_in_table(size_t start_index) {
                 g_table->str_values[str_idx].str_value, TT_ARC_UNKNOWN_TAG_STR, str_len(TT_ARC_UNKNOWN_TAG_STR));
             g_table->labels[curr_idx].metric_type = 1;
             g_table->labels[curr_idx].value_index = str_idx;
+            g_table->labels[curr_idx].arc_index = 999;
             ++curr_idx;
             ++str_idx;
         } else {
             copy_memory(
                 g_table->labels[curr_idx].metric_name, g_arc_tag_names[tag_index], str_len(g_arc_tag_names[tag_index]));
+            g_table->labels[curr_idx].arc_index = value_offset;
             if (value_offset >= g_arc_info.length) {
                 copy_memory(
                     g_table->str_values[str_idx].str_value,
@@ -285,6 +287,7 @@ size_t init_arc_data_in_table(size_t start_index) {
                     str_len(TT_ARC_INVALID_VALUE_STR));
                 g_table->labels[curr_idx].metric_type = 1;
                 g_table->labels[curr_idx].value_index = str_idx;
+                g_table->labels[curr_idx].arc_index = 999;
                 ++str_idx;
             } else {
                 g_table->num_values[num_idx].num_value = get_arc_value(value_offset);
@@ -299,6 +302,17 @@ size_t init_arc_data_in_table(size_t start_index) {
     return curr_idx;
 }
 
+
+void update_arc_data_in_table() {
+     for(int i = 0; i < g_table->num_metrics; ++i) {
+        if (g_table->labels[i].arc_index == 999) {
+            continue;
+        } 
+
+        g_table->num_values[g_table->labels[i].value_index] = get_arc_value(g_table->labels[i].arc_index);
+     }
+}
+
 bool init_table() {
     clear_memory(g_table, sizeof(MetricsTelemetryTable));
 
@@ -306,25 +320,35 @@ bool init_table() {
     copy_memory(g_table->str_values[0].str_value, FIRMWARE_VERSION_STR, str_len(FIRMWARE_VERSION_STR));
     g_table->labels[0].metric_type = 1;
     g_table->labels[0].value_index = 0;
+    g_table->labels[0].arc_index = 999;
 
     copy_memory(g_table->labels[1].metric_name, TT_FIRMWARE_AUTHOR_STR, str_len(TT_FIRMWARE_AUTHOR_STR));
     copy_memory(g_table->str_values[1].str_value, FIRMWARE_AUTHOR_STR, str_len(FIRMWARE_AUTHOR_STR));
     g_table->labels[1].metric_type = 1;
     g_table->labels[1].value_index = 1;
+    g_table->labels[1].arc_index = 999;
 
     copy_memory(g_table->labels[2].metric_name, TT_FIRMWARE_COPYRIGHT_STR, str_len(TT_FIRMWARE_COPYRIGHT_STR));
     copy_memory(g_table->str_values[2].str_value, FIRMWARE_COPYRIGHT_STR, str_len(FIRMWARE_COPYRIGHT_STR));
     g_table->labels[2].metric_type = 1;
     g_table->labels[2].value_index = 2;
+    g_table->labels[2].arc_index = 999;
+
     size_t total_metrics = init_arc_data_in_table(3);
 
     g_table->num_metrics = total_metrics;
+
+    x280_fence_iorw();
     g_table->table_version = TABLE_VERSION;
 
     return true;
 }
 
-bool read_arc(uint64_t run_value) {
+
+bool update_arc_tables() {
+}
+
+bool read_arc() {
     bool result = true;
 
     x280_noc_coord_t coords = {.x = 8, .y = 0};
@@ -371,14 +395,36 @@ cleanup:
     return result;
 }
 
+/* Returns 1 if STOP arrived during the wait. */
+static int sleep_ms(uint32_t ms, uint32_t run_value) {
+    uint64_t start = x280_mtime();
+    uint64_t ticks = (uint64_t)ms * (X280_MTIME_HZ / 1000);
+    while (x280_mtime() - start < ticks) {
+        if (x280_hart_stop_requested(0, run_value)) { 
+            return 1;
+        }
+        x280_pause();
+    }
+    return 0;
+}
+
 void run(uint64_t run_value) {
     for (;;) {
         if (x280_hart_stop_requested(0, run_value)) {
             break;
         }
 
-        //        update_arc();
-        //        update_table();
+        
+        auto result = read_arc(); 
+        if (result) {
+            update_arc_data_in_table(); 
+        }
+
+        // Sleep for a bit.
+        int rc = sleep_ms(2000, run_value);
+        if (rc) {
+            break;
+        } 
     }
 }
 
@@ -386,7 +432,7 @@ int main(uint64_t hartid) {
     uint64_t run_value = x280_hart_control(hartid)->run_value;
     if (hartid == 0) {
         clear_memory(g_table, sizeof(MetricsTelemetryTable));
-        bool result = read_arc(run_value);
+        bool result = read_arc();
         if (result) {
             result = init_table();
         }

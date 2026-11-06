@@ -14,6 +14,7 @@ typedef struct {
     char metric_name[32];
     uint32_t metric_type;  // 0 = number, 1 = string.
     uint32_t value_index;
+    uint32_t arc_index;
 } MetricLabel;
 
 typedef struct {

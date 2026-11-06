@@ -123,10 +123,11 @@ int main(int argc, char* argv[]) {
 
     auto mesh =
         tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(std::nullopt));
-    auto result = get_telemetry_tables(mesh);
 
-    if (!result) {
-        return 1;
+    for(;;) {
+       get_telemetry_tables(mesh);
+       std::this_thread::sleep_for(std::chrono::seconds(5));
     }
+
     return 0;
 }

@@ -2,12 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Driver for the telemetry image on the first X280 tile of chip 0.
-//
-//   x280_telemetry_loader --prime     prime LIM ECC and exit (then: tt-smi -r 0)
-//   x280_telemetry_loader [image.bin] boot resident idle if needed, run the image, return to idle
-//
-// Never resets the chip itself; when a reset is needed it says so and exits.
 
 #include "x280/device/x280_runtime.hpp"
 
