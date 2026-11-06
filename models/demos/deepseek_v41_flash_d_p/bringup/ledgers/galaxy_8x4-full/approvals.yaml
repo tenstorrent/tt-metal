@@ -1,6 +1,22 @@
 intake:
   by: dnijemcevic
-  at: '2026-11-05T08:33:40'
+  at: '2026-11-06T10:59:55'
   files:
-    models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml: ed0698240e4c9a44617d328cce3884c3df94760b308d576d851df080fe143f7a
-  note: ''
+    models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml: 6e72ac394285dcbf9beb22337559e07618e99971559fe8888eaba8a5ec4ccd23
+  note: 'owner 2026-11-06: spec changed by the owner-directed sparse_sdpa H=32 fork
+    waiver (#64605); re-approved'
+shared:
+  P.34:
+    by: dnijemcevic
+    at: '2026-11-06T10:59:55'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-06: write P.34-P.36 into tasks.yaml, let''s run them (P.36
+      held)'
+  P.35:
+    by: dnijemcevic
+    at: '2026-11-06T10:59:55'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-06: write P.34-P.36 into tasks.yaml, let''s run them (P.36
+      held)'

@@ -2843,7 +2843,124 @@ tasks:
       ring_top5_overlap_*: '>= limit'
       dram_load_gib_max: '> 0'
       dram_peak_gib_max: '> 0'
+- id: P.34
+  title: 'POST_COLLAPSE: mhc_post also writes the next sublayer''s collapsed input (no separate mhc_pre_xing collapse pass)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - X.3
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-06 (mHC study, opportunity #1). The next sublayer''s collapse uses pre weights that are already known when the residual runs (DS41-3: ffn_hc collapses with attn_hc''s mix, which attn_residual has; the next layer''s attn_hc collapses with ffn_hc''s mix, which ffn_residual has). mhc_post''s stats kernel already holds the four new streams of a column in DEST (mhc_post_stats_compute.cpp): also write y = sum_k pre_k * X''_k there (the collapsed bf16 input of the next sublayer), and run the Sinkhorn coefficients on the row root after mhc_post''s existing partial-row reduction, so the next step needs no mhc_pre_xing pass that re-reads the 4 x 5120 streams (6.5 MB a call). Expected: about 3-3.5 ms device and 80 launches (~7.7 ms host) a chunk. Risks: DEST room for 4 more coefficient tiles (the kernel splits top / bottom halves); stay bit-identical by rounding each new stream to bf16 in registers before the collapse with the packer''s rounding. Layer 0 keeps its first collapse (the embedding emits no row). Setting POST_COLLAPSE (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line).'
+  ab:
+    env:
+      POST_COLLAPSE: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      POST_COLLAPSE: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
+- id: P.35
+  title: 'NORM_IN_MHC: the RMS norm of the collapsed input inside the collapse pass (attn_norm / ffn_norm calls removed)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.34
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-06 (mHC study, opportunity #3; built on P.34). Under OWN_ROWS each chip holds whole rows, so attn_norm and ffn_norm are local rms_norm calls on the collapsed y (0.70 ms each a chunk, 80 launches). Fold the norm into the pass that writes the collapsed y (after P.34 that is mhc_post''s new collapse output; layer 0''s first collapse in mhc_pre_xing): y * rsqrt(mean(y^2) + eps) * gamma, written as the norm output; optionally also the bfp8 copy q_a reads (0.55 ms of typecasts a chunk). Needs a cross-core row reduction where the collapse is split by column tiles (mhc_pre has a gather-to-root / fold / multicast pattern). perf_proposals.md #10 (NORM_STATS_IN_MHC) predates OWN_ROWS and only moved the statistics; this is the full norm. Expected: about 1.4 ms device (+0.55 with the bfp8 copy) and 80-120 launches a chunk. Setting NORM_IN_MHC (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line).'
+  ab:
+    env:
+      NORM_IN_MHC: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      NORM_IN_MHC: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
+- id: P.36
+  title: 'FFN_FEED: ffn_hc + ffn_norm + the MoE x all_to_all in one program (rows sent over fabric into the head''s input)'
+  step: perf
+  role: perf
+  device: true
+  hold: 'owner 2026-11-06: after the owner''s moe_block update lands and after P.34 / P.35 results; owner releases'
+  deps:
+  - P.35
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/moe_block
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-06 (mHC study, opportunity #2; built on P.34 / P.35; after the owner''s moe_block update). The only collective left next to mHC on the 8x4 default path is the MoE x all_to_all after ffn_norm (all_to_all_async_generic over TP, [160, H] -> [640, H/4] into head.x; moe_block.py:720-722, 997-1010): 4.69 ms max chip, 40 launches, ~13.6 ms host with ffn_norm, ~17 ms device idle before it. Have the pass that writes the normalized ffn input send each 1280-column block straight into the peer chip''s head.x over fabric (persistent buffer, same address on every chip): ports, fabric connections, global semaphores and the ready fence as fabric_reduce_scatter / combine_rf do; a slot in the 110-core cap for the ports. The head''s x must be written before the MoE arena is taken. Risks: hangs; the skew wait (~3.7 ms) moves into the head, it does not vanish. Expected: about 2.2 ms device and 80 launches a chunk. Setting FFN_FEED (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line).'
+  ab:
+    env:
+      FFN_FEED: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      FFN_FEED: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: O.1
+  hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
   step: optests
   deps:
@@ -2863,6 +2980,7 @@ tasks:
   - ttnn/ttnn/bringup
   device: true
 - id: Z.1
+  hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Settings audit: every switch of the model and its forks in tt/settings.py, behaviour unchanged'
   step: settings
   deps:
@@ -2884,6 +3002,7 @@ tasks:
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: F.1
+  hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Every forked op''s tests, strictly: unit suites, every model''s cases, the original ops'' tests'
   step: optests
   deps:
