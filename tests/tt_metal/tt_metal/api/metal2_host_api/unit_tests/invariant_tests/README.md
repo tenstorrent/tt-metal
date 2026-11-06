@@ -47,7 +47,7 @@ The section includes: The definition of constructs within the respective headers
 
 Keep a listing in step with its header: when a struct gains, loses or renames a field, update the listing; when a new
 check is added to `tt_metal/impl/metal2_host_api/program_spec/validation/`, list the rule on the struct that owns it and
-add a test. The `*AdvancedOptions` structs have no listing yet.
+add a test. Listings for the `*AdvancedOptions` structs are incomplete.
 
 ### Example: `SemaphoreSpec` in `semaphore_spec.hpp`
 

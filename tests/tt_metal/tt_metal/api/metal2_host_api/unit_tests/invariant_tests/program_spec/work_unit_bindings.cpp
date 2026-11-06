@@ -397,5 +397,36 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsDisjointNodesSuccee
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverridePrivacyAppliesOnlyOnReservedNodes) {
+    // Multiple bindings on an excluded node do not require sharing permission.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
+    spec.kernels.push_back(MakeMinimalGen2DMKernel("selected"));
+    // The DM and compute kernels share a binding only on the excluded node {0,0}.
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    }
+    spec.work_units.push_back(MakeMinimalWorkUnit("selected", NodeCoord{1, 0}, {"selected"}));
+    spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverridePrivacyRejectsSharedReservedNode) {
+    // Multiple bindings on a reserved node require sharing permission.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 64,
+        .advanced_options = {.override_placement = CoreRangeSet(CoreRange({0, 0}))}}};
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    }
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

@@ -337,7 +337,7 @@ void ValidatePrefetcherPipeLanesAndRelays(
             first->ring_size,
             first->entry_size);
 
-        const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
+        const NodeRangeSet& dfb_nodes = collected.dfb_placements.at(dfb.unique_id).allocation;
         TT_FATAL(
             dfb_nodes.contains(relayed_receivers),
             "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes are not all in the DFB's node set (union of its "

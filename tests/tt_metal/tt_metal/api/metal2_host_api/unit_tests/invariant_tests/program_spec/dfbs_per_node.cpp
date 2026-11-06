@@ -23,6 +23,8 @@
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
+#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
+
 namespace tt::tt_metal::experimental {
 namespace {
 
@@ -154,6 +156,35 @@ TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
         EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(dname))->device_slot, 0u)
             << dname << " is alone on its node and should reuse device slot 0";
     }
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementCountsSlotsOnEndpointNodes) {
+    // Disjoint storage overrides do not increase the slot limit for shared endpoint kernels.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const uint32_t count = static_cast<uint32_t>(::dfb::NUM_DFBS) + 1;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, count);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    for (uint32_t i = 0; i < count; ++i) {
+        spec.dataflow_buffers[i].advanced_options.override_placement = CoreRangeSet(CoreRange({i % 2, 0}));
+    }
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DataflowBufferSpecs on node")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementDetectsL1OverflowOnSelectedNode) {
+    // DFBs whose combined storage exceeds L1 capacity on a selected endpoint node are rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::WORMHOLE_B0, 2);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {2, 0});
+    for (auto& dfb : spec.dataflow_buffers) {
+        dfb.entry_size = 2048;
+        dfb.num_entries = fixture_device.l1_size_per_core() / 4096;
+        dfb.advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
+    }
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("beyond max L1 size")));
 }
 
 }  // namespace
