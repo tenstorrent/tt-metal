@@ -49,8 +49,42 @@ def supported(model, chunk):
     if int(chunk) != GRID:
         return False, f"needs the chunk {GRID} (DSV41_VLLM_CHUNK), got {chunk}"
     if model.Up != model.U:
-        return False, f"needs one prefill slot per user (Up {model.Up} != U {model.U})"
+        # DSV41_APC_PAGED_UP=1 (default off): fewer prefill slots than users per row (B=16: Up 2, U 4). The stores and tables then have Up LANES (the lanes of the prefill key slab / halo tensors) and
+        # a user is addressed by the prefill slot it owns (model.pf_slot_of), see ``lane_of``; hits get a slot before their restore (dsv41_model.prefill_interleaved). Cross-row copies stay off.
+        if os.environ.get("DSV41_APC_PAGED_UP", "0") != "1":
+            return (
+                False,
+                f"needs one prefill slot per user (Up {model.Up} != U {model.U}); DSV41_APC_PAGED_UP=1 allows Up < U",
+            )
+        if os.environ.get("DSV41_APC_PAGED_XROW", "0") == "1":
+            return False, "DSV41_APC_PAGED_XROW is not supported with Up < U"
     return True, ""
+
+
+def lane_index(user, users_per_row, prefill_slots, slot_of):
+    """index of ``user`` in the slot tables of the stores (rows * lanes entries, row-major): the user itself when every user has a prefill slot (Up == U), else the prefill slot r * Up + i
+    the user owns (None: it owns none: nothing to save / restore for it)"""
+    if prefill_slots == users_per_row:
+        return int(user)
+    return slot_of.get(int(user)) if slot_of else None
+
+
+def alloc_view(wave, pending):
+    """the wave as ``Model._slot_alloc`` must see it (Up < U): a hit user of ``pending`` (restore not done yet, no prefill slot) is allocated like a NEW prompt (start 0: a continuation asserts
+    it owns a slot); everybody else unchanged"""
+    return [(b, t, 0 if b in pending else st, e) for b, t, st, e in wave]
+
+
+def store_mib_per_bank(halo_a, halo_b, key_blocks):
+    """DRAM of the paged-APC stores in MiB per bank (8 banks per chip). The stores are per MESH ROW (replicated over users): independent of U / Up and of the context length; the cached pool pages
+    live in the KV pool itself (the index owns every pool page of the row), so no latent store exists."""
+    sb = APS.store_bytes_per_chip(halo_a, halo_b, key_blocks)
+    return (sb["halo_a"] + sb["halo_b"] + sb["keys"]) / 2**20 / 8
+
+
+def idle_pages_mib_per_bank(users_per_row, page_kib=20):
+    """the idle pages (``IDLE_PAGES`` per user, outside the index) the pool grows by: a KV page is 160 KiB per chip = 20 KiB per bank (128 tokens, fp8)"""
+    return IDLE_PAGES * users_per_row * page_kib / 1024
 
 
 class IndexAllocator(PageAllocator):
@@ -129,6 +163,9 @@ class PagedApc:
         if not ok:
             raise RuntimeError(why)
         self.model, self.chunk, self.log = model, int(chunk), log
+        self.lanes = int(
+            model.Up
+        )  # lanes of the stores / slot tables = lanes of the prefill key slabs and halo tensors (users of the traced chunk per mesh row)
         rows, U = model.rows, model.U
         from models.demos.blackhole.deepseek_v41_flash.tt import prefill_model as PM
 
@@ -188,6 +225,10 @@ class PagedApc:
             return None  # image prompts: the host snapshot path decides (and nothing is committed for them)
         return t
 
+    def lane(self, user):
+        """index of ``user`` in the slot tables of the stores (see ``lane_index``)"""
+        return lane_index(user, self.model.U, self.lanes, self.model.__dict__.get("pf_slot_of"))
+
     def _free_users(self, row):
         if self.free_fn is not None:
             return list(self.free_fn(row))
@@ -242,10 +283,10 @@ class PagedApc:
             ow,
         )  # (a model built with a subset of the layers keeps only those halos / owners)
         with memitem(self.model.md, "apc_paged_store"):
-            self.ks = APS.KeyStore(self.model.md, self.model.U, ow, chunk=self.chunk, K=self.sizes["key"])
+            self.ks = APS.KeyStore(self.model.md, self.lanes, ow, chunk=self.chunk, K=self.sizes["key"])
             self.hs = APS.HaloStore(
                 self.model.md,
-                self.model.U,
+                self.lanes,
                 halo_a=self.sizes["halo_a"],
                 halo_b=self.sizes["halo_b"],
                 layers=sorted(halos),
@@ -376,12 +417,15 @@ class PagedApc:
         if not hits:
             return 0.0
         t0 = time.perf_counter()
-        n = self.model.rows * self.model.U
+        n = self.model.rows * self.lanes
         kl, ha, hb = [None] * n, [None] * n, [None] * n
         for b, plan in hits.items():
-            kl[b] = list(plan.key_slots)
-            ha[b] = plan.halo_a
-            hb[b] = plan.halo_b if plan.halo_b >= 0 else None
+            ln = self.lane(b)
+            if ln is None:
+                raise RuntimeError(f"APC paged: hit user {b} has no prefill slot at its restore")
+            kl[ln] = list(plan.key_slots)
+            ha[ln] = plan.halo_a
+            hb[ln] = plan.halo_b if plan.halo_b >= 0 else None
         _, slabs = self.owners()
         halos = self.halos()
         self.ks.set_load(kl)
@@ -678,13 +722,16 @@ class PagedApc:
         if not entries or self.ks is None:
             return
         t0 = time.perf_counter()
-        n = self.model.rows * self.model.U
+        n = self.model.rows * self.lanes
         kv, va, vb = [None] * n, [None] * n, [None] * n
         cps = []
         for b, t, s_end, e in entries:
             rid = self.rid.get(b)
             if rid is None or b in self.auto or b in self.noc or s_end > e or s_end % GRID:
                 continue
+            ln = self.lane(b)
+            if ln is None:
+                continue  # (Up < U: the user lost its prefill slot: its chunk is not in the slab any more)
             ent = self.ktok.get(b)
             if ent is None or ent[0] is not t:
                 ent = (t, np.ascontiguousarray(t.numpy()) if t.dtype == torch.int64 else t.long().numpy())
@@ -697,9 +744,9 @@ class PagedApc:
             if cp is None:
                 continue
             cps.append(cp)
-            kv[b] = cp.key_slot if cp.key_slot >= 0 else None
-            va[b] = cp.halo_a if cp.halo_a >= 0 else None
-            vb[b] = cp.halo_b if cp.halo_b >= 0 else None
+            kv[ln] = cp.key_slot if cp.key_slot >= 0 else None
+            va[ln] = cp.halo_a if cp.halo_a >= 0 else None
+            vb[ln] = cp.halo_b if cp.halo_b >= 0 else None
         if not cps:
             return
         _, slabs = self.owners()

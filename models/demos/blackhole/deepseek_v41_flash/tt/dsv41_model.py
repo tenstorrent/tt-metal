@@ -2043,9 +2043,19 @@ class Model:
                 if b in hits:
                     resume[b] = st
                     self.drop_key_exports([b])
+        # Up < U (DSV41_APC_PAGED_UP=1): the restore of a hit writes into the key slab / halo lanes of a PREFILL SLOT, so it is done per WAVE, right after the wave took its slots (a hit user is
+        # allocated like a new prompt there, ``APM.alloc_view``): a mesh row can hold more hit users than Up slots (B=16: 4 users, Up 2)
+        hit_todo = set(hits) if general else set()
+        from models.demos.blackhole.deepseek_v41_flash.tt.apc_paged_model import alloc_view as _apc_alloc_view
+
         for k, (b, t, st, e) in enumerate(items):
             assert 0 < e <= self.max_ctx - 1 and 0 <= st < e and t.numel() >= e, (b, st, e, t.numel())
-            if st > 0 and (resume.get(b) != st or self.__dict__.get("pf_slot_of", {}).get(b) is None and general):
+            if st > 0 and (
+                resume.get(b) != st
+                or self.__dict__.get("pf_slot_of", {}).get(b) is None
+                and general
+                and b not in hit_todo
+            ):
                 # the carried prefill state of this user is gone (its prefill slot was taken by another prompt of its mesh row, or the trace was re-captured): recompute from position 0
                 # (always correct, never fast; ``tokens`` hold the prompt from position 0)
                 self.log(
@@ -2113,9 +2123,9 @@ class Model:
         self.pool.sync_page_table()
         if hits:
             pa.build()  # (a no-op: built before the capture)
-            t_pr = pa.restore(
-                hits
-            )  # key_load + halo restore, device local, enqueued before the first replay of the hit
+            t_pr = (
+                0.0 if general else pa.restore(hits)
+            )  # key_load + halo restore, device local, enqueued before the first replay of the hit (Up < U: per wave, see the wave loop)
             pa.engram_history(hits, items)
             self.log(
                 f"APC paged: hit users {sorted(hits)} resume at {[hits[b].hit_tokens for b in sorted(hits)]}, restore enqueued in {1e3 * t_pr:.1f} ms"
@@ -2219,7 +2229,19 @@ class Model:
                         if per_row or not all(it[2] == 0 for it in wave)
                         else new_
                     )
-                slot_of = self._slot_alloc(wave, resume) if general else {b: b for b, _, _, _ in wave}
+                slot_of = (
+                    self._slot_alloc(_apc_alloc_view(wave, hit_todo), resume)
+                    if general
+                    else {b: b for b, _, _, _ in wave}
+                )
+                if (
+                    hit_todo
+                ):  # Up < U: the hits of THIS wave restore into the lanes of their slots (enqueued behind the replays of the earlier waves, before the first replay of this one)
+                    wh = {b: hits[b] for b, _, _, _ in wave if b in hit_todo}
+                    if wh:
+                        hit_todo -= set(wh)
+                        t_pr = pa.restore(wh)
+                        self.log(f"APC paged: wave restore of hit users {sorted(wh)} in {1e3 * t_pr:.1f} ms")
                 if (
                     rep
                 ):  # first replay chunk of the rows of this wave (per row: every row its own; else one value for all rows)
