@@ -18,6 +18,12 @@ ours fails.
 
   scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/model_compare/ -m "not large"
 
+BH Galaxy (4x8): run_galaxy.sh next to this file runs the whole set (every path on the default grid, ours on the two
+folded grids, ours with the epilogue as separate ops) into one directory; summarize.py tables a run. On a Galaxy the
+TP4 cases run on axis 0 (rings of 4, replicated over the 8 columns as the tt_dit presets) and the TP8 cases on axis 1
+(rings of 8); the tt_dit fused configs run unadapted on the 12x10 grid. matmul_reduce_scatter_async (Qwen3.6's path,
+Muse's fused alternative) has no cluster_axis and records n/a on a 2-D mesh.
+
 Env: MRS_CMP_MESH mesh to open (default 1x4; 4x8 on a Galaxy), MRS_CMP_PAYLOAD fabric router payload bytes (default 8192, the tt_dit ring presets), MRS_CMP_PATHS comma list to
 restrict paths (e.g. ours,prod), MRS_CMP_SEPARATE_EPILOGUE=1 runs ours' bias and addcmul as separate ops (its program
 without them), MRS_CMP_GRID the matmul grid ours runs on (grid_2d, folded_n or folded_m; default grid_2d).
@@ -64,6 +70,21 @@ ONLY_PATHS = {p for p in os.environ.get("MRS_CMP_PATHS", "").split(",") if p}
 SEPARATE_EPILOGUE = os.environ.get("MRS_CMP_SEPARATE_EPILOGUE", "0") == "1"
 # the matmul grid ours runs on (the caller's choice; a shape a grid cannot take is refused and recorded as an error)
 OURS_GRID = os.environ.get("MRS_CMP_GRID", "grid_2d")
+
+
+def _git_head():
+    try:
+        import subprocess
+
+        here = os.path.dirname(os.path.abspath(__file__))
+        return subprocess.run(
+            ["git", "-C", here, "rev-parse", "--short=11", "HEAD"], capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+    except Exception:  # a record field only
+        return ""
+
+
+GIT_HEAD = _git_head()
 
 DTYPES = {"bf16": ttnn.bfloat16, "bf8b": ttnn.bfloat8_b, "bf4b": ttnn.bfloat4_b, "fp32": ttnn.float32}
 FIDELITY = {
@@ -815,7 +836,11 @@ def measure_trace(mesh_device, trace_id):
 
 def run_path(mesh_device, env, inputs, case, path_name):
     rec = {"case": case.name, "model": case.model, "path": path_name, "M": case.M, "K": case.K, "N": case.N}
+    grid = mesh_device.compute_with_storage_grid_size()
     rec.update(mesh="x".join(map(str, MESH_SHAPE)), tp=G.tp, axis=G.axis, payload=PAYLOAD)
+    rec.update(
+        device_grid=f"{grid.x}x{grid.y}", ours_grid=OURS_GRID, separate_epilogue=SEPARATE_EPILOGUE, commit=GIT_HEAD
+    )
     rec["role"] = "ours" if path_name == "ours" else ("prod" if path_name == case.prod else "alt")
     trace_id, capturing, keep = None, False, []
     try:
