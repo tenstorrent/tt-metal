@@ -139,7 +139,10 @@ def collect_needs(files: list[str]) -> tuple[list[str], list[str], dict]:
         except (OSError, ValueError):
             needs = {}
     lines = r.stdout.splitlines()
-    nodes = [ln.strip() for ln in lines if "::" in ln and not ln.startswith(" ")]
+    # F258: a node id is "<path>.py::<name>" (not any line with "::": ttnn's Config dump prints "std::nullopt")
+    nodes = [
+        ln.strip() for ln in lines if "::" in ln and ln.split("::", 1)[0].endswith(".py") and not ln.startswith(" ")
+    ]
     errors = [ln.strip() for ln in lines if ln.startswith("ERROR ")]
     if r.returncode not in (0, 5) and not errors:  # (5: nothing collected)
         errors = [f"pytest --collect-only exit {r.returncode}: {(r.stdout + r.stderr).strip().splitlines()[-1:]}"]

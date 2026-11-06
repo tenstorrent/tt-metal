@@ -179,7 +179,7 @@ golden:
   keep_fp32:
   - compress_partial
 tests:
-  fork_waivers:  # owner 2026-11-06: until an SFPI without the internal compiler error (report: rebase/sfpi_ice_report.md)
+  fork_waivers:  # owner 2026-11-06: until an SFPI without the internal compiler error (tenstorrent/tt-metal#64605; ttnn/ttnn/bringup/sdpa/docs/sfpi_ice/README.md)
     ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_row_bfp4.py::test_full_window_equals_bf16_on_the_same_values[32-dest16]: 'owner 2026-11-06: SFPI 7.90-7.93 internal compiler error (gimple-rvtt-synth.cc:470) building the sparse_sdpa row_bfp4 compute kernel at H=32, triggered by the new base''s compute headers (old fork kernels too; no -O level avoids it); H=64 (DS41 8x4) builds. Until a fixed SFPI.'
     ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_row_bfp4.py::test_full_window_equals_bf16_on_the_same_values[32-dest32]: 'owner 2026-11-06: SFPI 7.90-7.93 internal compiler error (gimple-rvtt-synth.cc:470) building the sparse_sdpa row_bfp4 compute kernel at H=32, triggered by the new base''s compute headers (old fork kernels too; no -O level avoids it); H=64 (DS41 8x4) builds. Until a fixed SFPI.'
     ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_row_bfp4.py::test_row_bfp8_window_only_equals_bf16[32]: 'owner 2026-11-06: SFPI 7.90-7.93 internal compiler error (gimple-rvtt-synth.cc:470) building the sparse_sdpa row_bfp4 compute kernel at H=32, triggered by the new base''s compute headers (old fork kernels too; no -O level avoids it); H=64 (DS41 8x4) builds. Until a fixed SFPI.'
