@@ -1048,12 +1048,25 @@ constexpr bool matmul_reinit_main_block(const MathFidelity fidelity, const bool 
     return !half_sync && throttle == 0 && !l1_acc && nb == 1 && kt == 1 && rt * ct == 2 && (fidelity == MathFidelity::LoFi || (fidelity == MathFidelity::HiFi2 && rt == 2));
 }
 
+// HiFi2 half sync blocks of two tiles and one K tile into Float16_b from Float16_b or Float32 operands: the keyed row form reads 7.4 cycles per call behind main's tile
+// form, for every accumulate mode, transpose and block count (the full tile cells of the perf_math_matmul sweep); the tiles of fewer than 32 rows read 28.4 behind
+constexpr bool matmul_half_two_tile_main_block(const MathFidelity fidelity, const bool half_sync, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                               const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle)
+{
+    const auto wide = [](const DataFormat f) { return f == DataFormat::Float16_b || f == DataFormat::Float32; };
+    return fidelity == MathFidelity::HiFi2 && half_sync && throttle == 0 && kt == 1 && rt * ct == 2 && out == DataFormat::Float16_b && wide(in1) && wide(in0);
+}
+
 constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
                                      const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
 {
     // Blocks of two tiles at full sync the keyed row form re-initialises slower than main's tile form (up to 25 cycles per init
     // before every call) without reading faster: LoFi is bound by the unpack and the pack, which the row form does not relieve
     if (matmul_reinit_main_block(fidelity, half_sync, rt, ct, kt, throttle, l1_acc, nb))
+    {
+        return true;
+    }
+    if (matmul_half_two_tile_main_block(fidelity, half_sync, in1, in0, out, rt, ct, kt, throttle))
     {
         return true;
     }
@@ -2115,6 +2128,10 @@ inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
 constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
                                      const std::uint32_t r0, const std::uint32_t c1, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
 {
+    if (fidelity == MathFidelity::HiFi2 && half_sync && r0 < 32 && c1 == 32 && kt == 1 && rt * ct == 2 && out == DataFormat::Float16_b)
+    {
+        return true;
+    }
     for (const matmul_tiny_main_cell& c : matmul_tiny_main_cells)
     {
         if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.r0 == r0 && c.c1 == c1 && c.rt == rt &&
