@@ -3,8 +3,8 @@
 //
 // Host side of fused_recurrent_gated_delta_rule: the contract (shape rules, then combination rules, in a fixed order
 // so a given bad call always fails on the same message) in front of the program. The program reads the layer's
-// tensors itself and folds the norm and the scale into its passes; what remains here is the output relayout (until
-// the writer commit).
+// tensors itself, folds the norm and the scale into its passes and writes the outputs in the caller's layouts; this
+// file is the contract and one launch.
 
 #include "fused_recurrent_gated_delta_rule.hpp"
 
@@ -16,12 +16,6 @@
 
 #include "device/fused_recurrent_gated_delta_rule_device_operation.hpp"
 
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/data_movement/copy/copy.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
@@ -217,9 +211,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const uint32_t H = d.H;
     const uint32_t K = d.K;
     const uint32_t HV = d.HV;
-    const uint32_t V = d.V;
-    const uint32_t BH = B * HV;
     const float scale = scale_opt.has_value() ? *scale_opt : (1.0f / std::sqrt(static_cast<float>(K)));
+    (void)Bs;
     const auto kernel_cfg = init_device_compute_kernel_config(
         dev->arch(),
         compute_kernel_config,
@@ -229,30 +222,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         /*default_l1_acc=*/false);
 
     // Everything reaches the program as the layer holds it: the reader gathers the rows and does the GQA mapping, the
-    // compute kernel folds the optional norm and the scale into its passes.
-
-    // Initial state: rows [0:B] of [Bs,HV,K,V] -> [BH,K,V] fp32 TILE; absent, the reader builds a zero state.
-    //
-    // Ring mode: initial_state is the [T*BH,K,V] ring and also the state output; pass it through untouched, since a
-    // reshape or typecast would break the in-place aliasing. The device op validates it.
-    // In place: the device operation takes the caller's [Bs,HV,K,V] tensor as it is and aliases its state output
-    // onto it (head h's tiles are its pages h*kv.., rows [0:B]).
+    // compute kernel folds the optional norm and the scale into its passes, the writer emits o in the input dtype
+    // into [B,T,HV,V] (or the caller's output_tensor) and the state into [B,HV,K,V], [B,T,HV,K,V], the ring, or the
+    // caller's state itself (inplace_final_state). The state is read as the caller holds it: [Bs,HV,K,V] fp32 with
+    // Bs >= B (rows [0:B] are the batch; head h's tiles are its pages h*kv..), the [T*BH,K,V] ring in ring mode, or
+    // absent, in which case the reader builds a zero state.
     const bool ring = initial_state_block_idx.has_value();
-    std::optional<ttnn::Tensor> s0 = initial_state;
-    if (!ring && !inplace_final_state) {
-        if (initial_state.has_value()) {
-            ttnn::Tensor rows = *initial_state;
-            if (Bs != B) {
-                rows = ttnn::slice(
-                    rows,
-                    ttsl::SmallVector<uint32_t>{0, 0, 0, 0},
-                    ttsl::SmallVector<uint32_t>{B, HV, K, V},
-                    ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-            }
-            s0 = ttnn::reshape(rows, ttnn::Shape({BH, K, V}));
-        }
-    }
-
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const bool want_state = output_final_state || output_per_token_state || inplace_final_state;
     auto res = ttnn::prim::fused_recurrent_gated_delta_rule(
@@ -261,8 +236,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         v_in,
         g_in,
         beta_in,
-        s0,
+        initial_state,
         initial_state_block_idx,
+        output_tensor,
         B,
         H,
         HV,
@@ -274,48 +250,13 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         scale,
         out_mem,
         kernel_cfg);
-    const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
-    const ttnn::Tensor& st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
-
-    // o [BH*T,1,V] -> [B,HV,T,V] -> [B,T,HV,V], in the input dtype, into the caller's buffer when given.
-    ttnn::Tensor o = ttnn::to_layout(o_pt, Layout::ROW_MAJOR);
-    o = ttnn::reshape(o, ttnn::Shape({B, HV, T, V}));
-    o = ttnn::permute(o, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V]
-    o = ttnn::to_layout(o, Layout::TILE);
-    if (q_in.dtype() != DataType::FLOAT32) {
-        o = ttnn::typecast(o, q_in.dtype());
-    }
-    if (output_tensor.has_value()) {
-        ttnn::copy(o, *output_tensor);
-        o = *output_tensor;
-    }
-
+    // res[0] is o (the caller's output_tensor when given); res[1] the state in the requested layout: the ring itself
+    // (ring mode), the caller's state (in place), [B,T,HV,K,V] (per token) or [B,HV,K,V] (final).
     std::optional<ttnn::Tensor> state_opt;
-    if (ring) {
-        // res[1] is the caller's ring; return it as-is so the buffer stays aliased.
-        state_opt = st;
-    } else if (output_per_token_state) {
-        // The writer lays per-token state out token-major, so the raw [BH*T,K,V] buffer already
-        // reads as [T,B,HV,K,V]. At B==1 -- the speculative-decode case -- that IS the requested
-        // [B,T,HV,K,V] element order, and K,V (the tiled dims) are untouched, so this is a pure
-        // metadata reshape. It replaces an untilize + 5D permute + re-tilize of the whole state
-        // tensor, which ran once per GDN layer per verify.
-        if (B == 1) {
-            state_opt = ttnn::reshape(st, ttnn::Shape({B, T, HV, K, V}));
-        } else {
-            ttnn::Tensor s = ttnn::to_layout(st, Layout::ROW_MAJOR);
-            s = ttnn::reshape(s, ttnn::Shape({T, B, HV, K, V}));
-            s = ttnn::permute(s, ttsl::SmallVector<int64_t>{1, 0, 2, 3, 4});  // [B,T,HV,K,V]
-            state_opt = ttnn::to_layout(s, Layout::TILE);
-        }
-    } else if (inplace_final_state) {
-        // res[1] is the caller's state tensor: head h's final state landed in its pages, i.e. rows [0:B].
-        state_opt = st;
-    } else if (output_final_state) {
-        state_opt = ttnn::reshape(st, ttnn::Shape({B, HV, K, V}));
+    if (ring || inplace_final_state || output_per_token_state || output_final_state) {
+        state_opt = res[1];
     }
-
-    return {o, state_opt};
+    return {res[0], state_opt};
 }
 
 }  // namespace ttnn::transformer

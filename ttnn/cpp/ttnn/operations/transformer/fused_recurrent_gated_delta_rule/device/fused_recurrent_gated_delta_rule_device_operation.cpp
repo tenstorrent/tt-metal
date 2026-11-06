@@ -151,9 +151,22 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
         !attrs.inplace_final_state || (in.initial_state.has_value() && !ring && !attrs.output_per_token_state),
         "fused_recurrent_gated_delta_rule: inplace_final_state requires initial_state and excludes ring mode and the "
         "per-token state");
-    if (in.initial_state.has_value() && attrs.inplace_final_state) {
-        // In place: the state output is this tensor. [Bs, HV, K, V] with Bs*HV >= BH; head h's tiles are its pages
-        // h*kv .. h*kv + kv - 1 in either rank, so the reader and the writer address it exactly as the [BH, K, V] form
+    if (in.output_tensor.has_value()) {
+        const Tensor& o = *in.output_tensor;
+        const auto& os = o.logical_shape();
+        TT_FATAL(
+            o.storage_type() == StorageType::DEVICE && o.is_allocated() && o.device() == device && !o.is_sharded() &&
+                o.layout() == Layout::TILE && o.dtype() == in.q.dtype() && os.rank() == 4 &&
+                static_cast<uint32_t>(os[0]) == attrs.B && static_cast<uint32_t>(os[1]) == attrs.T &&
+                static_cast<uint32_t>(os[2]) == attrs.HV && static_cast<uint32_t>(os[3]) == V,
+            "fused_recurrent_gated_delta_rule: output_tensor must be [B, T, HV, V] in the input dtype, TILE, "
+            "interleaved, on q's device, got {} {}",
+            o.dtype(),
+            os);
+    }
+    if (in.initial_state.has_value() && !ring) {
+        // The caller's state: [Bs, HV, K, V] with Bs*HV >= BH; head h's tiles are its pages h*kv .. h*kv + kv - 1, so
+        // the reader and the writer address it as [BH, K, V]. With inplace_final_state it is also the state output
         // (the reader reads head h's pages before the writer's only write to them, after the last token).
         const Tensor& s = *in.initial_state;
         const auto& ss = s.logical_shape();
@@ -162,16 +175,13 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
                 s.layout() == Layout::TILE && s.dtype() == DataType::FLOAT32 && ss.rank() == 4 &&
                 static_cast<uint32_t>(ss[0]) * static_cast<uint32_t>(ss[1]) >= attrs.BH &&
                 static_cast<uint32_t>(ss[2]) == K && static_cast<uint32_t>(ss[3]) == V,
-            "fused_recurrent_gated_delta_rule: with inplace_final_state, initial_state must be fp32 TILE interleaved "
-            "[Bs, HV, K, V] with Bs*HV >= {} on q's device, got {} {}",
+            "fused_recurrent_gated_delta_rule: initial_state must be fp32 TILE interleaved [Bs, HV, K, V] with "
+            "Bs*HV >= {} on q's device, got {} {}",
             attrs.BH,
             s.dtype(),
             ss);
     } else if (in.initial_state.has_value()) {
-        check(
-            *in.initial_state,
-            "initial_state",
-            ring ? std::initializer_list<uint32_t>{BHT, K, V} : std::initializer_list<uint32_t>{attrs.BH, K, V});
+        check(*in.initial_state, "initial_state (the ring)", {BHT, K, V});
     }
     if (ring) {
         TT_FATAL(
@@ -208,25 +218,30 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::spec_return_value_t
 FusedRecurrentGatedDeltaRuleDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     const auto layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
-    // o: [BH*T, 1, V]  (one row per (head, token); host folds to [B,T,HV,V]).
-    ttnn::Shape o_shape({attrs.BH * attrs.T, 1, attrs.val_dim});
+    // o: [B, T, HV, V] in the input dtype (the caller's output_tensor's spec when given).
+    const auto o_spec = in.output_tensor.has_value()
+                            ? in.output_tensor->tensor_spec()
+                            : tt::tt_metal::TensorSpec(
+                                  ttnn::Shape({attrs.B, attrs.T, attrs.HV, attrs.val_dim}),
+                                  TensorLayout(in.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
     if (attrs.inplace_final_state) {
         TT_FATAL(
             in.initial_state.has_value(),
             "fused_recurrent_gated_delta_rule: inplace_final_state requires initial_state");
-        return {tt::tt_metal::TensorSpec(o_shape, layout), in.initial_state->tensor_spec()};
+        return {o_spec, in.initial_state->tensor_spec()};
     }
     if (in.initial_state_block_idx.has_value()) {
         // create_output_tensors runs before validate_on_program_cache_miss, so check before dereferencing.
         TT_FATAL(
             in.initial_state.has_value(),
             "fused_recurrent_gated_delta_rule: initial_state_block_idx requires initial_state (the ring)");
-        return {tt::tt_metal::TensorSpec(o_shape, layout), in.initial_state->tensor_spec()};
+        return {o_spec, in.initial_state->tensor_spec()};
     }
-    // state: per-token [BH*T, K, V] for verify slots, else final [BH, K, V].
-    ttnn::Shape s_shape = attrs.output_per_token_state ? ttnn::Shape({attrs.BH * attrs.T, attrs.key_dim, attrs.val_dim})
-                                                       : ttnn::Shape({attrs.BH, attrs.key_dim, attrs.val_dim});
-    return {tt::tt_metal::TensorSpec(o_shape, layout), tt::tt_metal::TensorSpec(s_shape, layout)};
+    // state: per token [B, T, HV, K, V] (verify slots), else final [B, HV, K, V].
+    ttnn::Shape s_shape = attrs.output_per_token_state
+                              ? ttnn::Shape({attrs.B, attrs.T, attrs.HV, attrs.key_dim, attrs.val_dim})
+                              : ttnn::Shape({attrs.B, attrs.HV, attrs.key_dim, attrs.val_dim});
+    return {o_spec, tt::tt_metal::TensorSpec(s_shape, layout)};
 }
 
 FusedRecurrentGatedDeltaRuleDeviceOperation::tensor_return_value_t
@@ -236,7 +251,12 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::create_output_tensors(
     auto* device = in.q.device();
     std::vector<Tensor> outs;
     outs.reserve(specs.size());
-    outs.push_back(create_device_tensor(specs[0], device));
+    // o: the caller's tensor when given (the writer writes into it), else a new one.
+    if (in.output_tensor.has_value()) {
+        outs.push_back(*in.output_tensor);
+    } else {
+        outs.push_back(create_device_tensor(specs[0], device));
+    }
     // Ring mode and the in-place final state: the state output aliases the caller's tensor (the adapter allows an
     // output buffer to alias an input).
     if (in.initial_state_block_idx.has_value() || attrs.inplace_final_state) {
@@ -255,6 +275,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
     const std::optional<Tensor>& initial_state_block_idx,
+    const std::optional<Tensor>& output_tensor,
     uint32_t B,
     uint32_t H,
     uint32_t HV,
@@ -301,6 +322,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .beta = beta,
         .initial_state = initial_state,
         .initial_state_block_idx = initial_state_block_idx,
+        .output_tensor = output_tensor,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

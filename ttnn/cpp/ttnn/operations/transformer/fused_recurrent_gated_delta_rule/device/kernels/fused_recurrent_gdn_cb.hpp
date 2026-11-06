@@ -24,13 +24,13 @@
 //   c_7   ones32     32x32  1         all 1.0, written once at kernel start           reader -> constants pass in0
 //   c_8   zero32     32x32  1         zeros, written once                             reader -> compute (utd)
 //   c_9   ecol32     32x32  1         exp(gcol32): column 0 = e, elsewhere 1          compute -> vector pass, pass 2 (utd)
-//   c_10  (freed)    -      -         was r16; the fused read+vector pass keeps r in DEST, so no CB is allocated
+//   c_10  obf16      n/a    1 page    the writer's bf16 rows of o, Vt x 2 x 32 B       writer scratch (bf16 output only)
 //   c_11  craw16     16x32  1         [0, 0] = c = q_tilde . k_hat                    compute -> constants pass
 //   c_12  raw64      n/a    1 page    the 64-byte DRAM-aligned chunks of bf16 rows      reader scratch (bf16 inputs only)
 //   c_13  u16        16x32  Vt        row 0 = u, rows 1-15 exactly zero               compute -> pass 2 in1
 //   c_14  s2         32x32  kv        state ring (ping)                               compute -> compute (utd); c_21 is its matmul view
 //   c_15  s3         32x32  kv        state ring (pong)                               compute -> compute (utd); c_22 is its matmul view
-//   c_16  out16      16x32  Vt x 2    row 0 = o                                       compute -> writer (2048 B per V tile)
+//   c_16  out16      16x32  Vt x 2    row 0 = o (fp32; the writer rounds to bf16)      compute -> writer
 //   c_17  state_out  32x32  kv x 2    per-token or final state                        compute -> writer
 //   c_18  blkidx     n/a    1 page    ring-mode block-index scratch (uint32 [BH])     reader
 //   c_19  ebc16      16x32  1         column 0: rows 0-3 = e, 4-7 = beta, 8-11 = c    compute constants pass -> vector pass (utd)
@@ -72,7 +72,8 @@ constexpr uint32_t S = 6;
 constexpr uint32_t ones32 = 7;
 constexpr uint32_t zero32 = 8;
 constexpr uint32_t ecol32 = 9;
-constexpr uint32_t freed_r16 = 10;  // not allocated; the math header's TokenCbs still names the field
+constexpr uint32_t obf16 = 10;         // the writer's bf16 landing for o's rows (bf16 output only; was r16)
+constexpr uint32_t freed_r16 = obf16;  // the name the math header's TokenCbs still uses; never touched by the compute
 constexpr uint32_t craw16 = 11;
 constexpr uint32_t raw64 = 12;  // the reader's bf16 landing zone (64 B chunks), allocated only with bf16 inputs
 constexpr uint32_t freed_ccol32 = raw64;  // the name the math header's TokenCbs still uses; never read by the compute
@@ -127,7 +128,7 @@ constexpr std::array<std::array<uint32_t, 2>, num_cbs> tile_dims = {{
     tile_32x32,  // c_7  ones32
     tile_32x32,  // c_8  zero32
     tile_32x32,  // c_9  ecol32
-    tile_16x32,  // c_10 (freed, was r16)
+    tile_16x32,  // c_10 obf16 (placeholder: 32 B rows, writer-private)
     tile_16x32,  // c_11 craw16
     tile_32x32,  // c_12 raw64 (placeholder: 64 B pages, reader-private)
     tile_16x32,  // c_13 u16
@@ -156,7 +157,7 @@ constexpr std::array<bool, num_cbs> unpack_to_dest_fp32 = {{
     false,  // c_7  ones32    (bcast-scalar in0)
     true,   // c_8  zero32
     true,   // c_9  ecol32
-    false,  // c_10 (freed, was r16)
+    false,  // c_10 obf16     (writer-private)
     false,  // c_11 craw16    (bcast-scalar in1)
     false,  // c_12 raw64     (reader-private)
     false,  // c_13 u16       (matmul in1)

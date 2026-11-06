@@ -47,8 +47,10 @@ struct FusedRecurrentGatedDeltaRuleParams {
 //   v    : [B, T, HV, V]
 //   g    : [B, T, HV]     (the log decay g_t)
 //   beta : [B, T, HV]
-//   initial_state: [BH, K, V] or absent (zeros); with inplace_final_state the caller's [Bs, HV, K, V] (Bs*HV >= BH),
-//                  which is also the state output.
+//   initial_state: the caller's [Bs, HV, K, V] fp32 with Bs*HV >= BH (head h's tiles are its pages h*kv..), or
+//                  absent (zeros built in-kernel); with inplace_final_state it is also the state output.
+// Outputs: o [B, T, HV, V] in the input dtype (the caller's output_tensor when given); the state [B, HV, K, V] (final),
+// [B, T, HV, K, V] (per token), the ring (ring mode) or initial_state itself (in place).
 //
 // "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the state output;
 // see the Python binding for the contract.
@@ -60,6 +62,7 @@ struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor beta;
     std::optional<Tensor> initial_state;
     std::optional<Tensor> initial_state_block_idx;
+    std::optional<Tensor> output_tensor;  // the caller's o, [B, T, HV, V] in the input dtype; the output aliases it
 };
 
 }  // namespace ttnn::prim
