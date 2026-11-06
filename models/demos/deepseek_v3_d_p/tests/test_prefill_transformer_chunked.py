@@ -231,9 +231,9 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations. Per-chunk median of
-    # CI runs 40424879138, 40532334659, 40610708699 (attempts 1 and 3) and 40737604734.
-    (61, 11, 10): [0.380, 0.384, 0.407, 0.436, 0.469, 0.499, 0.523, 0.553, 0.592, 0.624, 0.657],
+    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations, with the routed
+    # expert overlapped with combine_fabric2d. CI run 41067008100 / job 124125611366.
+    (61, 11, 10): [0.328, 0.338, 0.372, 0.399, 0.432, 0.462, 0.489, 0.523, 0.564, 0.604, 0.638],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -247,9 +247,9 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1. Cut on bh_sc1_high_power,
-    # CI run 41811923480 / job 126517738450.
-    (78, 11, 10): [0.343, 0.340, 0.348, 0.345, 0.350, 0.351, 0.347, 0.349, 0.356, 0.359, 0.367],
+    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1, sparse KV push in the shared layers.
+    # Cut on bh_sc1_high_power, CI run 42026848687 / job 127259026123.
+    (78, 11, 10): [0.358, 0.350, 0.352, 0.349, 0.353, 0.353, 0.349, 0.349, 0.355, 0.357, 0.364],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -291,29 +291,30 @@ MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] 
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, run 36924348392. Host-dispatch bound and flat with depth, so this
-    # row catches an eager-dispatch regression and cannot see MLA.
+    # Cut on bh_sc1_high_power (run 41067008100 / job 124125611317), with the routed expert overlapped
+    # with combine_fabric2d. Host-dispatch bound and flat with depth, so this row catches an
+    # eager-dispatch regression and cannot see MLA.
     (36, 20, 10): [
-        0.380,
-        0.379,
-        0.379,
-        0.377,
-        0.376,
-        0.376,
-        0.380,
-        0.383,
-        0.393,
-        0.379,
-        0.379,
-        0.383,
-        0.381,
-        0.381,
-        0.378,
-        0.384,
-        0.378,
-        0.381,
-        0.386,
-        0.381,
+        0.266,
+        0.266,
+        0.263,
+        0.263,
+        0.264,
+        0.264,
+        0.260,
+        0.264,
+        0.259,
+        0.261,
+        0.264,
+        0.266,
+        0.263,
+        0.264,
+        0.261,
+        0.262,
+        0.263,
+        0.260,
+        0.260,
+        0.261,
     ],
 }
 

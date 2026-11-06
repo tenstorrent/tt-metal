@@ -48,6 +48,7 @@ nb::dict last_plan_dict() {
     out["hold_depth"] = plan.depth_hold;
     out["grid"] = nb::make_tuple(plan.grid.grid_m, plan.grid.grid_n);
     out["strip"] = plan.grid.strip == detail::Strip::Row ? "row" : "col";
+    out["orient"] = plan.grid.orient == detail::Orient::MOnX ? "m_on_x" : "m_on_y";
     out["half_split"] = half_split_name(plan.half_split);
     out["waves"] = plan.waves.n;
     out["chunks"] = nb::make_tuple(plan.n_m, plan.n_n);
