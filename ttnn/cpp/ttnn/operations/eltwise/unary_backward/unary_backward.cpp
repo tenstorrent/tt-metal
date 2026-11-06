@@ -462,6 +462,17 @@ std::vector<std::optional<Tensor>> sqrt_bw(
 
 std::vector<Tensor> multigammaln_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::MULTIGAMMALN_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor digamma_result =
         ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
@@ -1186,6 +1197,17 @@ std::vector<Tensor> sin_bw(
 // self: grad * self.cosh()
 std::vector<Tensor> sinh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::SINH_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     // An input-domain guard used to sit here, returning +/-inf once |input| passed 88.5. That
     // bound is log(FLT_MAX), the point where exp saturates -- but cosh is (e^x + e^-x)/2 and does
@@ -1303,6 +1325,17 @@ std::vector<Tensor> softsign_bw(
 // self: grad * self.sinh()
 std::vector<Tensor> cosh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::COSH_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     // The same stale guard as in sinh_bw, and eight element-wise operations here rather than six,
     // because the negative branch builds a second infinity tensor. sinh overflows at the same
@@ -1609,6 +1642,17 @@ std::vector<Tensor> polygamma_bw(
 // for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
 std::vector<Tensor> erfinv_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::ERFINV_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
