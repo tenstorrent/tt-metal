@@ -1,0 +1,123 @@
+---
+# Throwaway diagnostic for tenstorrent/torrentci#2517 (H2, timing): run
+# `tt-smi -r --eth_train_skip` as the very first thing in an n150 card job,
+# as soon after VM boot as possible (only the tt-smi fetch precedes it), and
+# retry once after 60 s if it fails. Prints /proc/uptime around the reset and
+# the card's RT_SECONDS from `tt-smi -s` right after. Every step runs under
+# `set +e` and exits 0. No trigger; run it by name. Copied from
+# 90-diag-tt-smi-reset.yaml (same runs-on and image).
+jobs:
+  - id: diag-tt-smi-reset-early
+    checkout: false
+    description: "diag torrentci#2517: tt-smi -r as the very first step after VM boot, 60 s retry on failure (manual)"
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+          limits: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_SMI_VERSION, value: 6.7.0}
+      - {name: TT_SMI_SHA256, value: 13ba3d41c77254c733b8dd70a53323fcc6da20f7869b2326b04be180f23f7942}
+    steps:
+      - id: early-reset
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              mkdir -p "$HOME"
+              echo "=== step start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ) guest_uptime: $(cat /proc/uptime)"
+              curl -fsSL --proto =https -o /tmp/tt-smi "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-24.04"
+              echo "curl rc=$?"
+              echo "${TT_SMI_SHA256}  /tmp/tt-smi" | sha256sum -c -
+              echo "sha256 rc=$?"
+              chmod +x /tmp/tt-smi
+              echo "=== fetch done $(date -u +%Y-%m-%dT%H:%M:%S.%NZ) guest_uptime: $(cat /proc/uptime)"
+              t0=$(date +%s.%N)
+              echo "=== EARLY tt-smi -r --eth_train_skip start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ) guest_uptime: $(cat /proc/uptime)"
+              timeout 600 /tmp/tt-smi -r --eth_train_skip
+              rc=$?
+              t1=$(date +%s.%N)
+              echo "=== EARLY tt-smi -r rc=$rc end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ) duration_s=$(awk "BEGIN{print $t1-$t0}") guest_uptime: $(cat /proc/uptime)"
+              echo "=== tt-smi -s (right after early reset) start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ) guest_uptime: $(cat /proc/uptime)"
+              timeout 300 /tmp/tt-smi -s > /tmp/smi-early.json
+              src=$?
+              echo "=== tt-smi -s (right after early reset) rc=$src end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              echo "--- RT_SECONDS lines:"; grep -n RT_SECONDS /tmp/smi-early.json
+              cat /tmp/smi-early.json
+              if [ "$rc" -ne 0 ]; then
+                echo "=== early reset failed; sleeping 60 s before retry"
+                sleep 60
+                t0=$(date +%s.%N)
+                echo "=== RETRY tt-smi -r --eth_train_skip start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ) guest_uptime: $(cat /proc/uptime)"
+                timeout 600 /tmp/tt-smi -r --eth_train_skip
+                rc2=$?
+                t1=$(date +%s.%N)
+                echo "=== RETRY tt-smi -r rc=$rc2 end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ) duration_s=$(awk "BEGIN{print $t1-$t0}") guest_uptime: $(cat /proc/uptime)"
+              else
+                echo "=== early reset succeeded; no retry"
+              fi
+              exit 0
+      - id: snapshots
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              cat > /tmp/snap.sh <<'EOF'
+              #!/bin/sh
+              set +e
+              echo "=== snapshot $1 at $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              uname -a
+              echo "--- /dev/tenstorrent"; ls -l /dev/tenstorrent/; echo "ls rc=$?"
+              echo "--- tenstorrent pci devices"
+              for d in /sys/bus/pci/devices/*; do
+                v=$(cat "$d/vendor" 2>/dev/null)
+                [ "$v" = "0x1e52" ] || continue
+                echo "dev $d vendor_file=$v device_file=$(cat "$d/device" 2>/dev/null) class_file=$(cat "$d/class" 2>/dev/null) driver=$(basename "$(readlink "$d/driver" 2>/dev/null)" 2>/dev/null) reset_method=$(cat "$d/reset_method" 2>/dev/null)"
+                echo "  config[0..15] bytes: $(od -An -tx1 -N16 "$d/config" 2>&1 | tr -s ' ')"
+                echo "  config vendor=$(od -An -tx2 -j0 -N2 "$d/config" 2>&1 | tr -d ' ') device=$(od -An -tx2 -j2 -N2 "$d/config" 2>&1 | tr -d ' ') class=$(od -An -tx1 -j9 -N3 "$d/config" 2>&1 | tr -d ' ') (prog-if,subclass,class)"
+                echo "  command/status: $(od -An -tx2 -j4 -N4 "$d/config" 2>&1 | tr -s ' ')"
+              done
+              echo "--- lspci"; lspci -d 1e52: -nnvv 2>&1 | head -60
+              echo "--- /dev/shm"; ls -la /dev/shm; echo "ls rc=$?"
+              echo "--- tenstorrent module version: $(cat /sys/module/tenstorrent/version 2>&1)"
+              echo "=== end snapshot $1"
+              EOF
+              chmod +x /tmp/snap.sh
+              /tmp/tt-smi --version
+              echo "version rc=$?"
+              /tmp/snap.sh after-early-reset
+              sleep 10
+              /tmp/snap.sh after-early-reset-plus-10s
+              exit 0
+      - id: smi-snapshot-after
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== tt-smi -s (after) start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              timeout 300 /tmp/tt-smi -s
+              echo "=== tt-smi -s (after) rc=$? end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              exit 0
+      - id: guest-dmesg
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== dmesg at $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              dmesg | tail -100
+              echo "dmesg rc=$?"
+              exit 0
