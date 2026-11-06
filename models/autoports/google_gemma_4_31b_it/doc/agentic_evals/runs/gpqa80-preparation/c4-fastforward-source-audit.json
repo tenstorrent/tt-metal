@@ -1,0 +1,17 @@
+{
+  "base": "7ad6cf50d160a2e9cbe007fc4475af3c8f8bf365",
+  "prior_c4_80": "1eca89c0dcf65550a79196aecca13ef687c9cf06",
+  "production_files_byte_exact_prior_c4_80": true,
+  "only_difference_from_entire_prior_c4_80_tree": "Seven-line default-pool test retained/adapted from current7ad C8 test",
+  "base_changed_paths": [
+    "reference_config/evals/eval_config.py",
+    "tests/workflows/test_eval_config_mode_reference.py",
+    "tests/workflows/test_gemma4_31b_autoport_v3.py",
+    "tests/workflows/test_gemma4_autoport_smoke_suites.py",
+    "workflows/model_specs/dev/llm.yaml"
+  ],
+  "all_unrelated_base_tree_files_unchanged": true,
+  "production_ast_audit": "PASS production AST exact except one GPQA list20to80 and nightlycount20to80 and clients8to4",
+  "yaml_delta": "Only remove GEMMA4_B8_KV_POOL_IDS=20480; all other keys byte-preserved",
+  "cohort_source": "existing cohort.json / registered central frozen80; no selection"
+}

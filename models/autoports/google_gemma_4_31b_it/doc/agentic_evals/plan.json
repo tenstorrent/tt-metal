@@ -2519,7 +2519,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42293808766",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T21:37:05.160384+00:00",
+      "last_observed_at": "2026-11-06T21:43:09.956079+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wlxtq",
       "build_started_at": "2026-11-06T21:05:42Z",
       "build_completed_at": null
@@ -2625,7 +2625,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T21:37:24.184463+00:00",
+      "last_observed_at": "2026-11-06T21:43:29.217322+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 128164656843,
       "device_job_started_at": "2026-11-06T21:28:17Z",
@@ -2634,7 +2634,7 @@
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-06T21:37:24.691247+00:00",
+  "last_updated": "2026-11-06T21:44:00.891854+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -4101,5 +4101,16 @@
     "first_dry_deadline": "2026-11-07T12:28:49.408645+00:00",
     "admission": "Projection fits run limit and pre-dry slot; dispatch held until final20validity audit",
     "limitations": "Aggregate doubledwork guess; newquestion tails unknown. Full4h requesttail reserve is additive planning margin, not bound. Sameimage reused; no new build."
+  },
+  "held_gpqa80_c4_fastforward_candidate": {
+    "tti_sha": "9a874b6574c157e77e5f4445e3134885589af96d",
+    "base": "7ad6cf50d160a2e9cbe007fc4475af3c8f8bf365",
+    "evidence": "runs/gpqa80-preparation/c4-fastforward-RESULT.json",
+    "status": "held",
+    "conditions": [
+      "valid40",
+      "measuredfit"
+    ],
+    "c8_wait": false
   }
 }

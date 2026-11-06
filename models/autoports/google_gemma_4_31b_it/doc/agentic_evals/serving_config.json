@@ -326,6 +326,12 @@
       "planned_clients": 8,
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated physical batch>=8; eight independent131K histories passed local live capacity, zero preemption"
+    },
+    "larger-gpqa40-c4-response-logging": {
+      "batch": 8,
+      "planned_clients": 4,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch>=4; current acceptedC4/B8"
     }
   },
   "release_limits": {
