@@ -9,7 +9,7 @@ A Mesh Graph Descriptor is the input to the Fabric Control Plane to specify a pa
 ### Where to look
 - Schema: [`tt_metal/fabric/protobuf/mesh_graph_descriptor.proto`](protobuf/mesh_graph_descriptor.proto)
 - Example textproto: [`tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto`](../../tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto)
-- C++ API: [`tt_metal/api/tt-metalium/mesh_graph_descriptor.hpp`](../../tt_metal/api/tt-metalium/mesh_graph_descriptor.hpp)
+- C++ API: [`tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp`](../api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp)
 
 ## Usage
 
@@ -43,6 +43,38 @@ avoidance is derived per direction from the fabric config, so an inter-mesh
 link on a config-torused direction could face a peer that labels the axis
 differently and hang (issue #54650). An axis the MGD itself declares as `RING`
 keeps its boundary ports.
+
+### Per-mesh fabric config
+
+Each mesh's fabric config is derived from its `device_topology.dim_types`, so one
+MGD can mix routing configs across meshes (e.g. a `RING,LINE` mesh on
+`FABRIC_2D_TORUS_Y` next to a `LINE,LINE` mesh on `FABRIC_2D`):
+
+```proto
+mesh_descriptors {
+  name: "ring"
+  device_topology { dims: [ 4, 8 ] dim_types: [ RING, LINE ] }   # -> FABRIC_2D_TORUS_Y
+}
+mesh_descriptors {
+  name: "line"
+  device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] }   # -> FABRIC_2D
+}
+```
+
+Resolution is **per mesh**, in precedence order:
+
+1. the process-wide override (`set_fabric_config`), else
+2. a default derived from `device_topology.dim_types`.
+
+The derived default is **always a 2D-family config** — `FABRIC_2D`, or the matching
+`FABRIC_2D_TORUS_X/Y/XY` per the declared ring axes (dim 0 → `TORUS_Y`, dim 1 →
+`TORUS_X`). **1D is never auto-derived**; a `FABRIC_1D` / `FABRIC_1D_RING` config
+can only be set in code, and such a 1D config may not span more than one mesh.
+
+An override is validated against **each mesh's own** topology and may only
+restrict connectivity (e.g. `torus → mesh`), never request more than the topology
+provides — so a torus override on a mesh whose real axis is `LINE` is rejected.
+The derived default is always topology-compatible by construction.
 
 
 ## Minimal workflow

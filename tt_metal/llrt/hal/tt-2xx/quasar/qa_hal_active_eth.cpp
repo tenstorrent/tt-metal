@@ -5,7 +5,7 @@
 #define HAL_BUILD tt::tt_metal::quasar::active_eth
 #define COMPILE_FOR_ERISC
 
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
@@ -16,11 +16,10 @@ using namespace tt::tt_metal::quasar::active_eth;
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"
-#include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "noc/noc_parameters.h"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_AERISC_MAILBOX_BASE)->x))

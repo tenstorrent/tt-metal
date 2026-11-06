@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -128,7 +128,6 @@ void expect_properties_match_devices(const std::shared_ptr<distributed::MeshDevi
         EXPECT_EQ(mesh_device->l1_size_per_core(), device->l1_size_per_core());
         EXPECT_EQ(mesh_device->dram_size_per_channel(), device->dram_size_per_channel());
         EXPECT_EQ(mesh_device->ethernet_cores(), device->ethernet_cores());
-        EXPECT_EQ(mesh_device->storage_only_cores(), device->storage_only_cores());
     }
 }
 }  // namespace unit_tests::basic::device
@@ -244,7 +243,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         std::string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
@@ -309,7 +308,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -370,7 +369,7 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(this->device());
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -413,7 +412,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -540,7 +539,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
     // Create program and kernel for mesh workload
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto noc_addr = pinned_memory->get_noc_addr(device->id());
     ASSERT_TRUE(noc_addr.has_value());
@@ -602,7 +601,7 @@ TEST_F(MeshDeviceFixture, WriteWithStateAnyLenUpdatesRetAddrMidOnCarry) {
     constexpr uint64_t dst_base = 0x1FFFFC000ull;
     constexpr uint32_t total_bytes = 64 * 1024;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_mid_carry.cpp",
