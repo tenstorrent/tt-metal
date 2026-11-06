@@ -234,6 +234,57 @@ def test_relay_affine_prefix_applies_the_complement_form(mesh_device):
 
 
 @_MESH
+def test_relay_affine_prefix_adds_the_entry_state_and_b_in_fp32(mesh_device):
+    """With E = 0 each hop is S + B: random FP32 entry states and BF16 B with full mantissas must come out as their
+    FP32 sum hop after hop, to FP32 rounding. A source register would truncate the entry state to TF32, and B in
+    srcB to 6 mantissa bits at HiFi2: either is an error of order 1e-4 here, against the 1e-6 allowed."""
+    sp_size, tp_size = tuple(mesh_device.shape)
+    generator = torch.Generator().manual_seed(17)
+    b = (0.1 * torch.randn(sp_size, _HEADS, _KEY, _KEY, generator=generator)).bfloat16().float()
+    initial = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
+    initial_tt = ttnn.from_torch(
+        initial,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    entries, carry = [], initial
+    for rank in range(sp_size):
+        entries.append(carry)
+        carry = carry + b[rank]
+    actual_start = make_actual_start(mesh_device, 0)
+    entry, final = _relay(mesh_device)(_pack(mesh_device, torch.zeros_like(b), b), initial_tt, actual_start)
+    for index, (local_entry, local_final) in enumerate(
+        zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
+    ):
+        rank = index // tp_size
+        torch.testing.assert_close(
+            ttnn.to_torch(local_entry), entries[rank], rtol=0, atol=1e-6, msg=f"entry rank={rank}"
+        )
+        if rank in (0, sp_size - 1):
+            torch.testing.assert_close(ttnn.to_torch(local_final), carry, rtol=0, atol=1e-6, msg=f"final rank={rank}")
+
+
+@_MESH
+def test_relay_affine_prefix_rejects_lofi(mesh_device, expect_error):
+    """B enters the hop as I @ B, exact only from HiFi2 on: LoFi is refused."""
+    transforms = _Transforms(mesh_device, seed=0)
+    relay = RelayAffinePrefix(
+        mesh_device,
+        sequence_parallel_axis=0,
+        batch_heads=_HEADS,
+        key_dim=_KEY,
+        value_dim=_KEY,
+        num_links=_sp_links(mesh_device, 0),
+        local_rows=_ROWS,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+    )
+    with expect_error(RuntimeError, "LoFi is unsupported"):
+        relay(transforms.packed, transforms.initial_tt, make_actual_start(mesh_device, 0))
+
+
+@_MESH
 def test_relay_affine_prefix_back_to_back(mesh_device):
     """Two relay calls separated by the SP-line barrier the model runs between layers (the relay's final carry): the
     second call must be as exact as the first, from the landing buffers and arrival counters the first left."""
