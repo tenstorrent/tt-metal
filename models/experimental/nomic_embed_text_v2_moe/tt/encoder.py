@@ -57,6 +57,7 @@ class TtNomicBertEncoder(LightweightModule):
         free_input: bool = False,
         hidden_sharded: Optional[ttnn.Tensor] = None,
         fused_tables=None,
+        output_memory_config: Optional[ttnn.MemoryConfig] = None,
     ) -> ttnn.Tensor:
         """Run every block in order.
 
@@ -69,6 +70,9 @@ class TtNomicBertEncoder(LightweightModule):
             hidden_sharded: hidden_states in the split norms' layout (tt.common.layer_norm), handed to
                 the first block, which frees it; each block hands its own to the next.
             fused_tables: the generated attention front's tables (tt.common.FusedRotaryTables), or None.
+            output_memory_config: where the last block writes its output instead of DRAM. L1 only for a caller that
+                reads and frees it before anything else runs (tt.model.embed's pooling), since ops that plan L1 as
+                free would otherwise sit on top of it.
 
         Returns:
             ttnn.Tensor: (B, 1, S, H).
@@ -86,6 +90,7 @@ class TtNomicBertEncoder(LightweightModule):
                     free_input=free,
                     x_sharded=hidden_sharded,
                     fused_tables=fused_tables,
+                    output_memory_config=output_memory_config,
                 )
             else:
                 hidden_states, hidden_sharded = layer(

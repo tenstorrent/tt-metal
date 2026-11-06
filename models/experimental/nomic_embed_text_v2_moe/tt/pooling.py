@@ -8,6 +8,13 @@
       -> matryoshka_truncate -> (B, 1, 1, dim) optional, feature axis
       -> l2_normalize        -> (B, 1, 1, dim) unit norm
 
+embed() takes a packed form where the chunk's sequences are whole tiles (packed_sum_pool, tt_config.packed_pooling):
+
+    last_hidden_state (B, 1, S, H), S a multiple of 32, in L1
+      -> packed_sum_pool     -> (1, 1, R, H)   fp32, row b = text b's masked token sum, R = B rounded up to 32
+      -> matryoshka_truncate -> (1, 1, R, dim)
+      -> l2_normalize        -> (1, 1, R, dim) unit norm in rows < B, zeros below
+
 Functions rather than a class: there are no weights here. The sequence axis disappears at
 mean_pool, which is why this stage needs the batch-separated (B, 1, S, H) layout rather than the
 flat token axis the MoE uses.
@@ -20,6 +27,8 @@ is 1.000000.
 from __future__ import annotations
 
 from typing import Optional
+
+import torch
 
 import ttnn
 
@@ -86,7 +95,8 @@ def matryoshka_truncate(embeddings: ttnn.Tensor, dim: Optional[int]) -> ttnn.Ten
         raise ValueError(f"matryoshka dim {dim} exceeds embedding width {width}")
     if dim == width:
         return embeddings
-    return ttnn.slice(embeddings, [0, 0, 0, 0], [embeddings.shape[0], 1, 1, dim])
+    shape = embeddings.shape
+    return ttnn.slice(embeddings, [0, 0, 0, 0], [shape[0], shape[1], shape[2], dim])
 
 
 def l2_normalize(embeddings: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
@@ -118,3 +128,87 @@ def l2_normalize(embeddings: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Te
     scale = ttnn.rsqrt(ttnn.clamp(sum_of_squares, min=L2_EPS * L2_EPS))
     ttnn.deallocate(sum_of_squares)
     return ttnn.multiply(embeddings, scale)
+
+
+def packed_pooling_weights(attention_mask: torch.Tensor, device) -> ttnn.Tensor:
+    """The (B, S) keep-mask as packed_sum_pool's weights: (1, 1, R, B*S) bf16, R = B rounded up to a tile.
+
+    Row b holds text b's mask over its own S columns of the flattened token axis, zero elsewhere, and rows past B
+    are zero. 0 and 1 rather than mean_pool's 1/count: they are exact in bfloat16, and the L2 normalize after the
+    pool removes each row's scale, so a sum embeds exactly as a mean does. A row that keeps nothing sums to zeros.
+    """
+    batch, seqlen = attention_mask.shape
+    rows = -(-batch // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    weights = torch.zeros(rows, batch * seqlen, dtype=torch.bfloat16)
+    weights[:batch] = torch.block_diag(*attention_mask.to(torch.bfloat16).unbind(0))
+    return ttnn.from_torch(
+        weights.reshape(1, 1, rows, batch * seqlen),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _packed_program_config(k_tiles: int, m_tiles: int, n_tiles: int, grid: ttnn.CoreCoord):
+    """One output tile column per core (24 cores for H = 768), the weights multicast along: M is one tile block, so
+    N is the only axis to spread. The largest K block up to 32 tiles that divides K (32 measured fastest at 8x512,
+    13.7 us against 15.7 at 16 and 16.1 at 64)."""
+    cores_x = max(x for x in range(1, grid.x + 1) if n_tiles % x == 0 and n_tiles // x <= grid.y)
+    k_block = max(block for block in range(1, 33) if k_tiles % block == 0)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(cores_x, n_tiles // cores_x),
+        in0_block_w=k_block,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=m_tiles,
+        out_block_w=1,
+        per_core_M=m_tiles,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def packed_sum_pool(hidden_states: ttnn.Tensor, weights: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    """Each text's masked token sum, the rows packed into one tile block: one matmul, (R x B*S) against (B*S x H).
+
+    mean_pool runs B separate (1 x S) by (S x H) products, each a tile row of which 31 rows are padding, and reads
+    the tokens from DRAM on 33 cores: 61 us at 8x512. Here the B texts share one product over the flattened token
+    axis, which is a view of the tile layout when S is a whole number of tiles, on 24 cores with the weights
+    multicast: 13.7 us (nomic-opt c09). The 0/1 weights are exact where mean_pool's fp32 1/count is not: against
+    an fp64 reference the embeddings are 1.1e-5 off at 8x512, mean_pool's 4.3e-5.
+
+    Args:
+        hidden_states: (B, 1, S, H) bf16, S a multiple of 32, in L1. Any sharded layout (the generated norm's ND
+            layout) is first copied to L1 interleaved, which the matmul reads; the copy is freed here.
+        weights: packed_pooling_weights of the chunk's mask, on the same device.
+        compute_kernel_config: The port's REDUCE config: HiFi4 with fp32 accumulation. LoFi drops low bits of
+            the tokens (3e-4 in the embedding).
+
+    Returns:
+        ttnn.Tensor: (1, 1, R, H) fp32. Not unit norm; rows past B are zeros.
+    """
+    batch, _, seqlen, width = hidden_states.shape
+    if seqlen % ttnn.TILE_SIZE:
+        raise ValueError(f"packed_sum_pool needs whole tiles of tokens, got S = {seqlen}")
+    interleaved = hidden_states
+    if hidden_states.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        interleaved = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+    tokens = ttnn.reshape(interleaved, (1, 1, batch * seqlen, width))
+    rows = weights.shape[-2]
+    grid = hidden_states.device().compute_with_storage_grid_size()
+    pooled = ttnn.matmul(
+        weights,
+        tokens,
+        dtype=ttnn.float32,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
+        program_config=_packed_program_config(
+            batch * seqlen // ttnn.TILE_SIZE, rows // ttnn.TILE_SIZE, width // ttnn.TILE_SIZE, grid
+        ),
+    )
+    if interleaved is not hidden_states:
+        ttnn.deallocate(interleaved)
+    return pooled

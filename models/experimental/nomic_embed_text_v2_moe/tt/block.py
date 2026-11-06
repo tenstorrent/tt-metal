@@ -110,6 +110,7 @@ class TtNomicBertBlock(LightweightModule):
         x_sharded: ttnn.Tensor | None = None,
         keep_sharded: bool = False,
         fused_tables=None,
+        output_memory_config: ttnn.MemoryConfig | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the block.
 
@@ -150,7 +151,7 @@ class TtNomicBertBlock(LightweightModule):
             mlp_out,
             residual,
             self.norm2,
-            self.output_memory_config,
+            self.output_memory_config if output_memory_config is None else output_memory_config,
             keep_sharded=keep_sharded,
             in_place=not isinstance(self.mlp, TtNomicMoELayer),
         )

@@ -303,6 +303,10 @@ class TtModelConfig:
     # v and the concatenated output interleaved in L1 or DRAM (tt/attention.py: _generated_sdpa). Off, with a mask
     # (padded batches) or where the op refuses a call: ttnn.transformer.scaled_dot_product_attention.
     generated_sdpa: bool = True
+    # embed()'s pooling on chunks of whole tiles (tt/pooling.py: packed_sum_pool): the last block's output stays in L1,
+    # one matmul of 0/1 keep-mask rows against all the chunk's tokens on 24 cores, and the L2 normalize on one packed
+    # row block. Off, or on a chunk off the tile grid: mean_pool's batched matmul on the DRAM output.
+    packed_pooling: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     min_chunk_tokens: int = MIN_CHUNK_TOKENS  # a smaller last chunk is merged with the one before and split
     layout: ttnn.Layout = LAYOUT

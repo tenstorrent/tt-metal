@@ -362,6 +362,47 @@ def test_a_text_embeds_the_same_alone_as_in_a_ragged_batch(tt_model, tokenizer):
     assert cosine > 1.0 - COSINE_TOLERANCE, f"the short text moved when batched: cosine {cosine:.6f}"
 
 
+# Sequences of whole tiles, which embed() pools with packed_sum_pool (tt_config.packed_pooling): the 6 CORPUS texts at 64
+# tokens, all full or ragged under a full longest row, so every chunk keeps its 64 columns.
+PACKED_POOLING_LENGTH = 64
+
+
+@pytest.mark.parametrize("ragged", [False, True])
+@pytest.mark.parametrize("matryoshka_dim", [None, 256])
+def test_packed_pooling_embeds_as_mean_pool(config, reference_model, tt_model, tokenizer, ragged, matryoshka_dim):
+    """embed()'s packed pooling against the batched mean_pool on the same backbone output, and against the reference.
+
+    Real text, repeated past PACKED_POOLING_LENGTH tokens and cut there, so the chunk is 64 tokens wide; ragged rows
+    keep the first row full and mask a different tail of each other row.
+    """
+    from models.experimental.nomic_embed_text_v2_moe.tt.model import embed
+
+    texts = [(text + " ") * 16 for text in CORPUS]
+    encoded = tokenizer(
+        texts, padding="max_length", truncation=True, max_length=PACKED_POOLING_LENGTH, return_tensors="pt"
+    )
+    input_ids, attention_mask = encoded["input_ids"], encoded["attention_mask"]
+    if ragged:
+        for row in range(1, input_ids.shape[0]):
+            keep = PACKED_POOLING_LENGTH - 5 * row
+            attention_mask[row, keep:] = 0
+            input_ids[row, keep:] = tokenizer.pad_token_id
+    assert tt_model.tt_config.packed_pooling
+
+    got = embed(tt_model, input_ids, attention_mask, matryoshka_dim)
+    batched = ttnn.to_torch(pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim)).float()
+    batched = batched.reshape(got.shape)
+    with torch.no_grad():
+        ref = l2_normalize(mean_pool(reference_model(input_ids, attention_mask=attention_mask), attention_mask))
+    if matryoshka_dim is not None:
+        ref = l2_normalize(ref[..., :matryoshka_dim])
+
+    assert torch.allclose(got.norm(dim=-1), torch.ones(got.shape[0]), atol=1e-5), "output is not unit norm"
+    assert float((got - batched).abs().max()) < 1e-4, "packed and batched pooling disagree"
+    cosine = (got * ref).sum(-1)
+    assert bool((cosine > 1.0 - COSINE_TOLERANCE).all()), f"worst row cosine {float(cosine.min()):.6f}"
+
+
 @pytest.mark.parametrize("matryoshka_dim", [768, 512, 256, 128])
 def test_matryoshka_truncation(reference_model, tt_model, tokenizer, matryoshka_dim):
     """A truncated embedding must match the reference's truncation and stay unit norm."""

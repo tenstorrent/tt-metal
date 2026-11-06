@@ -115,6 +115,7 @@ class TtNomicBertModel(LightweightModule):
         input_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None,
+        output_memory_config: Optional[ttnn.MemoryConfig] = None,
     ) -> ttnn.Tensor:
         """Embed the tokens and run the encoder stack, in chunks of whole sequences when the batch is large.
 
@@ -133,6 +134,9 @@ class TtNomicBertModel(LightweightModule):
             token_type_ids: Accepted for parity with the reference. type_vocab_size is 1, so 0 is
                 the only legal value and the embeddings module has already folded that row into
                 the word table.
+            output_memory_config: Where the last block writes a single chunk's output, instead of DRAM: L1 for
+                embed(), which pools and frees it at once (TtNomicBertEncoder.forward). A chunked batch is joined
+                in DRAM either way.
 
         Returns:
             ttnn.Tensor: (B, 1, S, H) last hidden state, one contextual vector per token, in DRAM.
@@ -151,7 +155,13 @@ class TtNomicBertModel(LightweightModule):
         outputs = []
         for chunk in plan_chunks(batch, seqlen, self.tt_config.max_chunk_tokens, self.tt_config.min_chunk_tokens):
             rows = slice(chunk.start, chunk.start + chunk.count)
-            outputs.append(self.backbone(input_ids[rows], None if attention_mask is None else attention_mask[rows]))
+            outputs.append(
+                self.backbone(
+                    input_ids[rows],
+                    None if attention_mask is None else attention_mask[rows],
+                    output_memory_config if chunk.count == batch else None,
+                )
+            )
         if len(outputs) == 1:
             return outputs[0]
         out = ttnn.concat(outputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -159,7 +169,12 @@ class TtNomicBertModel(LightweightModule):
             ttnn.deallocate(piece)
         return out
 
-    def backbone(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> ttnn.Tensor:
+    def backbone(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        output_memory_config: Optional[ttnn.MemoryConfig] = None,
+    ) -> ttnn.Tensor:
         """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H) in DRAM; see forward."""
         seqlen = input_ids.shape[-1]
         # The mask and the rotary tables live through the whole pass, so they are made first: L1 tensors
@@ -193,7 +208,13 @@ class TtNomicBertModel(LightweightModule):
             nd_layout=nd_norm_layout(hidden.shape, self.tt_config),
         )
         out = self.encoder(
-            normalized, rot_mats, mask, free_input=True, hidden_sharded=normalized_sharded, fused_tables=fused_tables
+            normalized,
+            rot_mats,
+            mask,
+            free_input=True,
+            hidden_sharded=normalized_sharded,
+            fused_tables=fused_tables,
+            output_memory_config=output_memory_config,
         )
         self.rotary_tables.release(rot_mats)
         if mask is not None:
@@ -275,11 +296,18 @@ def embed(
         # At least one token a row: a fully padded row pools to zeros either way.
         width = max(chunk.seqlen, 1)
         chunk_mask = attention_mask[rows, :width]
-        hidden = model(input_ids[rows, :width], chunk_mask)
         # Pooling needs a mask even where the backbone did not: padded positions must not enter the
         # mean, because the <pad> embedding is trained and non-zero, so counting it would make one
         # text's embedding depend on how long its batch-mates are.
-        pooled = pooling.mean_pool(hidden, pooling_mask(chunk_mask, model.device), compute_kernel_config=kernel_config)
+        if model.tt_config.packed_pooling and width % ttnn.TILE_SIZE == 0:
+            # The output stays in L1, read once by the pool and freed before the next chunk runs.
+            hidden = model(input_ids[rows, :width], chunk_mask, output_memory_config=ttnn.L1_MEMORY_CONFIG)
+            pooled = pooling.packed_sum_pool(hidden, _packed_weights(model, chunk_mask), kernel_config)
+        else:
+            hidden = model(input_ids[rows, :width], chunk_mask)
+            pooled = pooling.mean_pool(
+                hidden, pooling_mask(chunk_mask, model.device), compute_kernel_config=kernel_config
+            )
         ttnn.deallocate(hidden)
         pieces.append(
             pooling.l2_normalize(
@@ -289,6 +317,26 @@ def embed(
         ttnn.deallocate(pooled)
     out = torch.empty((batch, pieces[0].shape[-1]), dtype=torch.float32)
     for chunk, piece in zip(chunks, pieces):
-        out[order[chunk.start : chunk.start + chunk.count]] = ttnn.to_torch(piece).float().reshape(chunk.count, -1)
+        # One row a text: (count, 1, 1, dim) from mean_pool, the first count of R packed rows from packed_sum_pool.
+        rows_out = ttnn.to_torch(piece).float().reshape(-1, piece.shape[-1])[: chunk.count]
+        out[order[chunk.start : chunk.start + chunk.count]] = rows_out
         ttnn.deallocate(piece)
     return out
+
+
+# packed_pooling_weights per mask, so a repeated batch shape does not upload its weights again (up to 256 KB at
+# 8x512). Keyed on the mask's bytes; the oldest entry goes first past _PACKED_WEIGHTS_KEPT.
+_PACKED_WEIGHTS_KEPT = 8
+
+
+def _packed_weights(model: TtNomicBertModel, chunk_mask: torch.Tensor) -> ttnn.Tensor:
+    cache = model.__dict__.setdefault("_packed_pooling_weights", {})
+    mask = chunk_mask.to(torch.uint8).contiguous()
+    key = (tuple(mask.shape), mask.numpy().tobytes())
+    weights = cache.pop(key, None)
+    if weights is None:
+        weights = pooling.packed_pooling_weights(chunk_mask, model.device)
+        if len(cache) >= _PACKED_WEIGHTS_KEPT:
+            ttnn.deallocate(cache.pop(next(iter(cache))))
+    cache[key] = weights
+    return weights

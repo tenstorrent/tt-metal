@@ -32,6 +32,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     activation_memory_config,
     flatten_tokens,
     layer_norm,
+    pooling_mask,
     sharded_norm_layout,
     to_device,
     transpose_linear_weight,
@@ -42,6 +43,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import (
     dense_linear,
     prepare_grouped_projection,
 )
+from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -456,6 +458,44 @@ def test_mean_pool_excludes_padding(device, tt_config, config, batch, seqlen):
 
     ref = mean_pool(x.squeeze(1), mask).reshape(batch, 1, 1, hidden)
     assert_with_pcc(ref, pooled, OPERATOR_PCC)
+
+
+# (B, S) with S whole tiles: one batch, the model's shapes, and 33 texts, whose packed rows take two tile blocks.
+PACKED_POOL_SHAPES = [(1, 128), (2, 512), (8, 512), (33, 64)]
+
+
+@pytest.mark.parametrize("batch, seqlen", PACKED_POOL_SHAPES)
+def test_packed_sum_pool_embeds_as_the_masked_mean(device, tt_config, config, batch, seqlen):
+    """packed_sum_pool then l2_normalize against the reference mean pool and normalize, ragged rows included.
+
+    The sum embeds as the mean does once normalized; the reference reads the same bf16-rounded tokens, so what is
+    left is the device's own arithmetic, which must be no worse than mean_pool's batched matmul on the same tokens
+    (4.3e-5 at 8x512 against packed's 1.1e-5: its fp32 1/count weights are not exact in the FPU). Rows past the batch
+    must come out zero, and a row that keeps nothing too.
+    """
+    hidden = config.hidden_size
+    x = torch.randn(batch, 1, seqlen, hidden).bfloat16().float()
+    mask = torch.ones(batch, seqlen, dtype=torch.long)
+    for row in range(1, batch):
+        mask[row, seqlen - (row * seqlen) // (batch + 1) :] = 0
+    if batch > 2:
+        mask[2] = 0
+    kernel_config = tt_config.compute_kernel_config(OpGroup.REDUCE)
+
+    x_tt = to_device(x, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    pooled = pooling.packed_sum_pool(x_tt, pooling.packed_pooling_weights(mask, device), kernel_config)
+    out = ttnn.to_torch(pooling.l2_normalize(pooled, kernel_config)).float().reshape(-1, hidden)
+
+    batched = pooling.mean_pool(x_tt, pooling_mask(mask, device), compute_kernel_config=kernel_config)
+    batched = ttnn.to_torch(pooling.l2_normalize(batched, kernel_config)).float().reshape(batch, hidden)
+
+    rows = -(-batch // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    assert out.shape[0] == rows
+    ref = l2_normalize(mean_pool(x.squeeze(1), mask))
+    packed_error = compute_max_abs_error(ref, out[:batch])
+    batched_error = compute_max_abs_error(ref, batched)
+    assert packed_error <= batched_error, f"packed {packed_error:.2e} against mean_pool's {batched_error:.2e}"
+    assert bool((out[batch:] == 0).all()), "rows past the batch are not zero"
 
 
 @pytest.mark.parametrize("dim", [768, 512, 256, 128])
