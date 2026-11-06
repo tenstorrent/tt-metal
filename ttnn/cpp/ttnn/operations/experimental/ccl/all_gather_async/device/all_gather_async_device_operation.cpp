@@ -249,8 +249,8 @@ ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
     };
     uint32_t num_workers_per_direction = 0;
     if (row_free) {
-        // The default worker count is a function of the output bytes: the packed size of the output's spec here and
-        // in the factory, so the key and the program agree on it.
+        // The default worker count is a function of the output bytes (the packed size of the output's spec),
+        // computed the same way here and in the factory.
         const uint32_t output_bytes =
             (tensor_args.persistent_output_buffer.has_value() ? tensor_args.persistent_output_buffer->tensor_spec()
                                                               : compute_output_specs(args, tensor_args))
