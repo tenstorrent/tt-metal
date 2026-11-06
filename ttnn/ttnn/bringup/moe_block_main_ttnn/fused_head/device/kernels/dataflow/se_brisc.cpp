@@ -57,7 +57,7 @@ void kernel_main() {
 #endif
     auto own_addr = [&](uint32_t m, uint32_t j) {  // (chunk m in slot m % SE_XRING: the DRAM fallback's ring)
         const uint32_t slot = (j & 1) ? (i0 < GX ? NOWN0 : 0) + own_slot(j) : own_slot(j);
-        return xown + (((m % SE_XRING) * nown + slot) * MT) * KB * 2048;
+        return xown + (((m % SE_XRING) * nown + slot) * MT) * KB * SE_XTB;
     };
     auto rtrx = [&]() {  // (called after my own-shard x load: the gather's ports wait on every matmul core's - a row
         // lead's x load behind its ~20 us of router x held the gather back that long: GLM-5.3 ring 640 235.8 -> 219.2
@@ -127,9 +127,9 @@ void kernel_main() {
             }
         }
     };
-    const auto xg = TensorAccessor(x_args, x_addr, 2048);
-    const uint32_t xports = se_ra(ord0 + g);         // (the gather's ports read my own shard from here)
-    auto xload_step = [&](uint32_t m, uint32_t j) {  // (one owned step of chunk m from DRAM x [rows, x_ct])
+    const auto xg = TensorAccessor(x_args, x_addr, SE_XTB);  // (x in the engine's format: x, or the caller's xq)
+    const uint32_t xports = se_ra(ord0 + g);                 // (the gather's ports read my own shard from here)
+    auto xload_step = [&](uint32_t m, uint32_t j) {          // (one owned step of chunk m from DRAM x [rows, x_ct])
         const uint32_t s = step_of(j);
         if (!(mine(j) && s * KB >= x_k0 && s * KB < x_k0 + x_ct)) {
             return;
@@ -138,8 +138,8 @@ void kernel_main() {
             for (uint32_t kk = 0; kk < KB; ++kk) {
                 noc_async_read(
                     xg.get_noc_addr(GROW(m, cy * MT + r) * x_ct + s * KB + kk - x_k0),
-                    own_addr(m, j) + (r * KB + kk) * 2048,
-                    2048);
+                    own_addr(m, j) + (r * KB + kk) * SE_XTB,
+                    SE_XTB);
             }
         }
     };
@@ -193,12 +193,12 @@ void kernel_main() {
                             k * sps + st;  // (position; its family j % 2 = st % 2: a block's rounds are even)
                         const uint32_t round = ((m * g + k) * NPG + pg) * (sps / 2) + st / 2;  // (the family's)
                         cb_reserve_back(CB_XIN, MT * KB);
-                        const uint32_t dst = xin + (j & 1) * MT * KB * 2048;
+                        const uint32_t dst = xin + (j & 1) * MT * KB * SE_XTB;
                         if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
                             if (j >= sps) {
                                 noc_semaphore_wait_min(xready, m * (g - 1) + j / sps);
                             }
-                            constexpr uint32_t XBYTES = MT * KB * 2048;
+                            constexpr uint32_t XBYTES = MT * KB * SE_XTB;
                             if (j & 1) {
                                 s1->send(own_addr(m, j), dst, XBYTES);
                             } else {
@@ -236,10 +236,10 @@ void kernel_main() {
             constexpr uint32_t HA = GX * MT * POMAX;
             cb_wait_front(CB_HOWN, MT * POMAX);
             cb_reserve_back(CB_HALL, HA);
-            const uint32_t hs = hall + (SE_HSL > 1 ? (m & 1) : 0) * HA * 2048;  // (h-all slots: SE_HSL)
+            const uint32_t hs = hall + (SE_HSL > 1 ? (m & 1) : 0) * HA * SE_HTB;  // (h-all slots: SE_HSL)
             for (uint32_t c = 0; c < GX; ++c) {
                 if (c == cx) {
-                    sh->send(hown, hs + c * MT * POMAX * 2048, MT * POMAX * 2048);
+                    sh->send(hown, hs + c * MT * POMAX * SE_HTB, MT * POMAX * SE_HTB);
                 } else {
                     rh->receive(m * GX + c);
                 }

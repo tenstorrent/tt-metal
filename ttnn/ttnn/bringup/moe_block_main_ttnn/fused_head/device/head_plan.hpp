@@ -49,6 +49,8 @@ struct HeadShape {
     uint32_t payload = 8256;  // the fabric's packet payload bytes
     uint32_t A = 16;          // the combine's accumulators
     WeightDtype w_dtype = WeightDtype::Bf8;
+    // the shared expert's x / h in the engine (MoEDtypes.shared_activations): Bf16 or Bf8
+    WeightDtype x_dtype = WeightDtype::Bf16;
     // token loops: a chunk's mesh row runs as `loops` head calls of `rows` rows each (MoEBlockConfig.token_loops);
     // the routing planner and exchange are sized for all of them (SA tokens a chip) and plan them in the last call
     uint32_t loops = 1;

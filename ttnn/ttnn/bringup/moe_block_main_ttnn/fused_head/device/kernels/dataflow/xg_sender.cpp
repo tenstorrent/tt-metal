@@ -248,12 +248,12 @@ void kernel_main() {
                     h = h + 1 == GROUP ? 0 : h + 1;
                     if ((++sent % INC) == 0 || sent == npk) {
                         hdr->to_noc_fused_unicast_write_atomic_inc(
-                            NocUnicastAtomicIncFusedCommandHeader{dst, arr_noc, 1, true}, np * 2048);
+                            NocUnicastAtomicIncFusedCommandHeader{dst, arr_noc, 1, true}, np * XTB);
                     } else {
-                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, np * 2048);
+                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, np * XTB);
                     }
                     conn.wait_for_empty_write_slot();
-                    conn.send_current_slot_non_blocking(src, np * 2048, reinterpret_cast<uint32_t>(hdr));
+                    conn.send_current_slot_non_blocking(src, np * XTB, reinterpret_cast<uint32_t>(hdr));
                     if (++unflushed == GROUP || sent == npk) {
                         noc_async_writes_flushed();
                         cb_pop_front(0, RP * GROUP);

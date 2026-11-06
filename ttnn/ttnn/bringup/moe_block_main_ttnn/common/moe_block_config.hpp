@@ -68,8 +68,16 @@ struct MoEModelDims {
 struct MoEDtypes {
     tt::tt_metal::DataType routed_weights = tt::tt_metal::DataType::BFLOAT4_B;
     tt::tt_metal::DataType shared_weights = tt::tt_metal::DataType::BFLOAT8_B;
+    // x and h inside the fused head's shared expert (its matmul inputs: gate / up's x, down's h): BFLOAT16, or
+    // BFLOAT8_B (DeepSeek-V4.1: its reference quantizes both to fp8). BFLOAT8_B: the engine's x own / x in / h own / h
+    // all tiles and the x gather's packets are bfp8, read from the head's xq (x in bfp8, the caller's); the router
+    // keeps bf16 x. The dispatch prep untilizes x own as stored (bf16 rows of the bfp8-rounded x).
     tt::tt_metal::DataType shared_activations = tt::tt_metal::DataType::BFLOAT16;
     tt::tt_metal::MathFidelity shared_fidelity = tt::tt_metal::MathFidelity::HiFi2;
+    // the fused head's bfp8 h packed in one rounding from fp32 DEST at the group's shared exponent
+    // (ComputeConfig.bfp8_pack_precise, as ttnn.typecast packs); false: the packer's default (first to 7 bits at each
+    // value's own exponent, then at the shared one: ties away twice). Only bfp8 packs change (shared_activations).
+    bool shared_pack_precise = false;
     tt::tt_metal::DataType projection_weights = tt::tt_metal::DataType::BFLOAT8_B;  // latent down / up
     // the fused tail's up projection; never LoFi
     tt::tt_metal::MathFidelity tail_fidelity = tt::tt_metal::MathFidelity::HiFi2;

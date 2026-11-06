@@ -166,6 +166,9 @@ void bind_fused_head(nb::module_& mod) {
             loop: this call's loop over the chunk when it runs as MoEBlockConfig.chunk_splits x token_loops head
                 calls (split x token_loops + its loop in the split; x: that call's rows of every chip). A split's
                 last loop plans every loop's tokens of the split.
+            xq: x in bfloat8_b TILE (x's shape, DRAM) when dtypes.shared_activations is bfloat8_b - required then, None
+                otherwise: the shared expert's x (the engine's own-shard load and the gather read it; the router reads
+                x). With the DRAM fallback, x_full is gathered from xq.
 
         Returns:
             FusedHeadOutputs: se, rows, xbuf, route and the combine plan (counts, regions, token_index, table,
@@ -186,7 +189,8 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("arena") = nb::none(),
         nb::arg("actual_start") = nb::none(),
         nb::arg("actual_end") = nb::none(),
-        nb::arg("loop") = 0);
+        nb::arg("loop") = 0,
+        nb::arg("xq") = nb::none());
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

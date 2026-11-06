@@ -177,6 +177,8 @@ struct SeEngineArgs {
     uint32_t router_iters = 1;               // the router stage over NCH / router_iters row chunks at a time
     int64_t arena_max = kArenaMax;
     WeightDtype w_dtype = WeightDtype::Bf8;
+    WeightDtype x_dtype =
+        WeightDtype::Bf16;  // the shared expert's x and h tiles (x own, x in, h own, h all): Bf16 / Bf8
     uint32_t xring = 0;
 };
 
@@ -186,6 +188,7 @@ struct SeEngineSizing {
     SeEngineArgs args;  // (args.rs: not owned - valid while the caller's RsPlan is)
     uint32_t GX, GY, MT, CR, rows, H, I, shards;
     uint32_t NCH, KT, HT, NTH, KB, NSG, SPS, S0, S1, NPG, NGU, NPD, KBD, NSD, NB, WSLOT, wtb;
+    uint32_t xtb = 2048, htb = 2048;  // a tile of x / of h in L1 (args.x_dtype: bf16 2048, bf8 1088)
     uint32_t POMAX, PWDMAX, PGW, LWMAX = 0, LT = 0, WRING = 0, HSL = 1, XR = 0, PFULL = 0, PBCT = 0;
     int64_t LATP = 0, xown_t = 0, wown_t = 0, acc_pages = 0;
     bool xring = false, xfree = false;

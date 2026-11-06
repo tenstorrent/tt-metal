@@ -45,7 +45,8 @@ HeadShape head_shape_of(
     std::array<uint32_t, 2> grid,
     uint32_t payload,
     uint32_t accumulators,
-    tt::tt_metal::DataType shared_weights = tt::tt_metal::DataType::BFLOAT8_B);
+    tt::tt_metal::DataType shared_weights = tt::tt_metal::DataType::BFLOAT8_B,
+    tt::tt_metal::DataType shared_activations = tt::tt_metal::DataType::BFLOAT16);
 
 // The free L1 a core the head plans on: l1_free, else the one measured at the block's first head (the L1 under the
 // lowest occupied address then, less kL1Margin), kept in the resources so every later plan of the block uses the same
@@ -128,7 +129,9 @@ const FusedHeadSetup& setup_fused_head(
 // p S ..; padding tokens get no routes, so the dispatch, the routed experts and the combine never see them (their
 // combined rows are zero). Absent: every row is real (the programs are the unpadded ones). loop: the sub-chunk this
 // call runs when the chunk is run as MoEBlockConfig.token_loops sub-chunks (x: the sub-chunk's rows; a padded chunk's
-// real rows offset by it).
+// real rows offset by it). xq: x [1, 1, rows, H / TP] in MoEDtypes.shared_activations' format when that is bf8 (the
+// shared expert's x: the engine's own-shard load and the gather read it; the router reads x) - required then, absent
+// otherwise; with the DRAM fallback x_full is gathered from xq (the engine's format).
 FusedHeadOutputs fused_head(
     const Tensor& x,
     const FusedHeadWeights& weights,
@@ -140,6 +143,7 @@ FusedHeadOutputs fused_head(
     const std::optional<Tensor>& arena = std::nullopt,
     const std::optional<Tensor>& actual_start = std::nullopt,
     const std::optional<Tensor>& actual_end = std::nullopt,
-    uint32_t loop = 0);
+    uint32_t loop = 0,
+    const std::optional<Tensor>& xq = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

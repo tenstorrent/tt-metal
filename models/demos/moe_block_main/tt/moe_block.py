@@ -108,6 +108,35 @@ class MoEBlock:
         )
         self.one_arena = None
         self.chunk_words = None  # (a padded chunk's scalars given as ints: two persistent device words, rewritten)
+        # (MoEDtypes.shared_activations bf8: the head's xq - x in bf8 - one persistent buffer a shape, written by one
+        # typecast of x a head call unless the caller gives xq (a norm writing it with x: rms_norm bfp8_twin))
+        self.bf8_x = dtypes.shared_activations == ttnn.bfloat8_b
+        self._xq_bufs = {}
+
+    def xq_buffer(self, shape) -> ttnn.Tensor:
+        """The persistent bf8 x [1, 1, rows, H / TP] TILE (DRAM) of this shape: the head's xq when the caller gives
+        none (one typecast of x into it a call), or the caller's to write (input buffers)."""
+        key = tuple(int(s) for s in shape)
+        t = self._xq_bufs.get(key)
+        if t is None:
+            t = self._xq_bufs[key] = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(list(key)), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            )
+        return t
+
+    def _sub_cores(self):
+        """The ops' core cap (set_max_grid) as a stock op's sub_core_grids, None without one."""
+        gx, gy = self.mb.max_grid()
+        if not gx:
+            return None
+        return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(int(gx) - 1, int(gy) - 1))])
+
+    def to_xq(self, x: ttnn.Tensor, out: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+        """x (bf16 TILE) in bf8 - one rounding at each 16 values' shared exponent (ttnn.typecast's pack) - into out
+        (default the persistent buffer of x's shape), on the ops' capped grid."""
+        out = self.xq_buffer(x.shape) if out is None else out
+        ttnn.typecast(x, ttnn.bfloat8_b, output_tensor=out, sub_core_grids=self._sub_cores())
+        return out
 
     def _plan(self, accumulators, max_tokens_per_expert, activation, layout, n_acc):
         """The block's plans for the resources' token loops (raises where one does not fit)."""
@@ -249,8 +278,11 @@ class MoEBlock:
         actual_start: Union[int, ttnn.Tensor, None] = None,
         actual_end: Union[int, ttnn.Tensor, None] = None,
         metadata: Optional[tuple] = None,
+        xq: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """x: this chip's [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM. Returns the residual's layout (fused_tail's).
+        xq (MoEDtypes.shared_activations bfloat8_b): x in bf8 as the caller wrote it (the shared expert's x; e.g. a
+        norm's bfp8 twin), None: one typecast of x a head call.
 
         A padded chunk: actual_start / actual_end, main's chunked-prefill metadata scalars (the chunk's first real
         token's absolute position, one past its last) - one-element uint32 device tensors in DRAM, replicated, read on
@@ -276,18 +308,18 @@ class MoEBlock:
                 actual_start, actual_end = self.full_words
             rows = int(x.shape[-2])
             xp = ttnn.pad(x, [(0, 0), (0, 0), (0, self.pad_rows), (0, 0)], 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            yp = self._forward_splits(xp, weights, actual_start, actual_end)
+            yp = self._forward_splits(xp, weights, actual_start, actual_end)  # (xq from the padded x)
             ttnn.deallocate(xp)
             y = ttnn.slice(yp, [0, 0, 0, 0], [1, 1, rows, int(yp.shape[-1])], [1, 1, 1, 1],
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
             ttnn.deallocate(yp)
             return y
-        return self._forward_splits(x, weights, actual_start, actual_end)
+        return self._forward_splits(x, weights, actual_start, actual_end, xq=xq)
 
-    def _forward_splits(self, x, weights, actual_start, actual_end) -> ttnn.Tensor:
+    def _forward_splits(self, x, weights, actual_start, actual_end, xq=None) -> ttnn.Tensor:
         """The chunk as the block's splits (one without)."""
         if self.splits == 1:
-            return self._forward(x, weights, actual_start, actual_end)
+            return self._forward(x, weights, actual_start, actual_end, xq=xq)
         # (splits: the whole block a piece of each chip's rows - every piece reads the experts' weights again)
         rows, width = int(x.shape[-2]), int(x.shape[-1])
         r = rows // self.splits
@@ -302,7 +334,7 @@ class MoEBlock:
             ttnn.deallocate(t)
         return y
 
-    def _forward(self, x, weights, actual_start, actual_end, split: int = 0) -> ttnn.Tensor:
+    def _forward(self, x, weights, actual_start, actual_end, split: int = 0, xq=None) -> ttnn.Tensor:
         """One split (the whole chunk without splits): the head and the tail k times (token loops: each chip's rows
         i r .. (i + 1) r a call), the dispatch, the routed experts and the combine once - the head's last call planned
         every loop's tokens."""
@@ -317,11 +349,33 @@ class MoEBlock:
             )  # fmt: skip
             for i in range(k)
         ]
+        # (bf8 x / h: each loop's xq - the caller's (sliced like x), else one typecast of the loop's x)
+        xqs = [None] * k
+        if self.bf8_x:
+            if xq is not None and k == 1:
+                xqs = [xq]
+            elif xq is not None:
+                xqs = [
+                    ttnn.slice(
+                        xq,
+                        [0, 0, i * r, 0],
+                        [1, 1, (i + 1) * r, width],
+                        [1, 1, 1, 1],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )  # fmt: skip
+                    for i in range(k)
+                ]
+            elif k == 1:
+                xqs = [self.to_xq(x)]
+            else:  # (a tensor a loop: every loop's xq is written before the first head reads its own)
+                xqs = [ttnn.typecast(xi, ttnn.bfloat8_b, sub_core_grids=self._sub_cores()) for xi in xs]
         # (the DRAM fallback's x_full [1, 1, rows, H]: each loop's x of this mesh row gathered over the TP axis - before
         # the arena: the gather's CBs need the L1)
         x_fulls = [
-            ttnn.all_gather(xi, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if self.x_dram else None
-            for xi in xs
+            ttnn.all_gather(xi if xqi is None else xqi, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if self.x_dram
+            else None
+            for xi, xqi in zip(xs, xqs)
         ]
         arena = ttnn.allocate_tensor_on_device(self.arena_spec, self.mesh_device)
         self.arena_address = int(arena.buffer_address())
@@ -339,11 +393,14 @@ class MoEBlock:
                 actual_start=actual_start,
                 actual_end=actual_end,
                 **({"loop": split * k + i} if k * self.splits > 1 else {}),
+                **({"xq": xqs[i]} if xqs[i] is not None else {}),
             )
             if x_fulls[i] is not None:
                 ttnn.deallocate(x_fulls[i])
             if xs[i] is not x:
                 ttnn.deallocate(xs[i])
+            if xqs[i] is not None and k > 1:
+                ttnn.deallocate(xqs[i])  # (a slice of the caller's xq, or the loop's own typecast)
             ses.append(head.se)  # (each loop's shared expert output: its own tensor)
         self.last_head = head  # (its persistent outputs: a model's checks read the routing rows - every loop's)
         if self.exchange_spec is None:  # (once: the exchange's own arena - the combine's, without the head's bytes)

@@ -42,6 +42,13 @@ std::string model_checks(const MoEModelDims& dims, const MoEDtypes& dtypes) {
     if (w != DataType::BFLOAT4_B && w != DataType::BFLOAT8_B && w != DataType::BFLOAT16) {
         return "shared expert weights: bf4 / bf8 / bf16";
     }
+    const auto a = dtypes.shared_activations;
+    if (a != DataType::BFLOAT16 && a != DataType::BFLOAT8_B) {
+        return "shared expert: bf16 or bf8 x / h";
+    }
+    if (a == DataType::BFLOAT8_B && dims.latent_dim) {
+        return "shared expert: bf8 x / h with a latent (the latent's units are bf16; not ported)";
+    }
     return "";
 }
 
@@ -52,7 +59,8 @@ HeadShape head_shape_of(
     std::array<uint32_t, 2> grid,
     uint32_t payload,
     uint32_t accumulators,
-    tt::tt_metal::DataType shared_weights) {
+    tt::tt_metal::DataType shared_weights,
+    tt::tt_metal::DataType shared_activations) {
     using tt::tt_metal::DataType;
     HeadShape s;
     s.rows = config.loop_tokens() / topology.R;
@@ -76,6 +84,7 @@ HeadShape head_shape_of(
     s.w_dtype = shared_weights == DataType::BFLOAT4_B  ? WeightDtype::Bf4
                 : shared_weights == DataType::BFLOAT16 ? WeightDtype::Bf16
                                                        : WeightDtype::Bf8;
+    s.x_dtype = shared_activations == DataType::BFLOAT8_B ? WeightDtype::Bf8 : WeightDtype::Bf16;
     return s;
 }
 
@@ -125,7 +134,8 @@ const HeadFit& plan_fused_head(
     const int64_t floor = fused_head_l1_detail::cb_floor_of(resources, cb_floor);
     const std::string name = "fused_head/plan/A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) +
                              "/floor_" + std::to_string(floor) + "/w" +
-                             std::to_string(static_cast<int>(dtypes.shared_weights));
+                             std::to_string(static_cast<int>(dtypes.shared_weights)) + "/x" +
+                             std::to_string(static_cast<int>(dtypes.shared_activations));
     return resources.plan<HeadFit>(name, [&] {
         HeadFit f;
         f.why = model_checks(resources.dims(), dtypes);
@@ -140,7 +150,8 @@ const HeadFit& plan_fused_head(
             {uint32_t(g.x), uint32_t(g.y)},
             uint32_t(resources.fabric_max_payload_bytes()),
             accumulators,
-            dtypes.shared_weights);
+            dtypes.shared_weights,
+            dtypes.shared_activations);
         HeadFitOptions o;
         o.l1_free = l1;
         o.cb_floor = floor;
@@ -162,9 +173,10 @@ TensorSpec dram_spec(uint32_t rows, uint32_t cols, DataType dt, Layout layout) {
         tt::tt_metal::TensorLayout(dt, tt::tt_metal::PageConfig(layout), ttnn::DRAM_MEMORY_CONFIG));
 }
 
-std::string key_of(uint32_t accumulators, int64_t l1, int64_t floor, DataType w) {
+std::string key_of(uint32_t accumulators, int64_t l1, int64_t floor, const MoEDtypes& d) {
     return "A" + std::to_string(accumulators) + "/l1_" + std::to_string(l1) + "/floor_" + std::to_string(floor) + "/w" +
-           std::to_string(static_cast<int>(w));
+           std::to_string(static_cast<int>(d.shared_weights)) + "/x" +
+           std::to_string(static_cast<int>(d.shared_activations)) + (d.shared_pack_precise ? "/pp" : "");
 }
 
 // The head's persistent tensors (its outputs and the routing exchange's), in an inputs template.
@@ -195,10 +207,15 @@ FusedHeadInputs persistent_inputs(MoEBlockResources& res, const HeadModel& model
 
 // A call's inputs: the template's persistent tensors with this call's x and weights.
 FusedHeadInputs call_inputs(
-    const FusedHeadSetup& setup, const Tensor& x, const FusedHeadWeights& w, const std::optional<Tensor>& x_full) {
+    const FusedHeadSetup& setup,
+    const Tensor& x,
+    const FusedHeadWeights& w,
+    const std::optional<Tensor>& x_full,
+    const std::optional<Tensor>& xq) {
     FusedHeadInputs in = setup.inputs;
     in.x = x;
     in.x_full = x_full;
+    in.xq = xq;
     in.w = w.w;
     in.w_router = w.w_router;
     in.router_bias = w.router_bias;
@@ -247,7 +264,7 @@ const FusedHeadSetup& setup_fused_head(
     using namespace fused_head_entry_detail;
     const int64_t l1 = fused_head_l1_free(resources, l1_free);
     const int64_t floor = fused_head_l1_detail::cb_floor_of(resources, std::nullopt);
-    const std::string key = key_of(accumulators, l1, floor, dtypes.shared_weights);
+    const std::string key = key_of(accumulators, l1, floor, dtypes);
     return resources.plan<FusedHeadSetup>("fused_head/setup/" + key, [&] {
         const HeadFit& fit = plan_fused_head(resources, dtypes, accumulators, l1, floor);
         TT_FATAL(fit.ok, "fused_head: the head does not fit: {}", fit.why);
@@ -264,11 +281,13 @@ const FusedHeadSetup& setup_fused_head(
             {uint32_t(g.x), uint32_t(g.y)},
             uint32_t(resources.fabric_max_payload_bytes()),
             accumulators,
-            dtypes.shared_weights);
+            dtypes.shared_weights,
+            dtypes.shared_activations);
         pc.lay = fit.planned[0].lay;
         pc.glu = dims.shared_expert_activation.value_or(ExpertActivation{});
         pc.fidelity = dtypes.shared_fidelity;
         pc.w_dtype = dtypes.shared_weights;
+        pc.pack_precise = dtypes.shared_pack_precise;
         pc.route_scale = dims.router.route_scale;
         pc.sqrtsoftplus = dims.router.score_func == RouterScoreFunc::SqrtSoftplus;
         pc.handoff_bytes = cfg.handoff_bytes();
@@ -329,7 +348,8 @@ FusedHeadOutputs fused_head(
     const std::optional<Tensor>& arena,
     const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
-    uint32_t loop) {
+    uint32_t loop,
+    const std::optional<Tensor>& xq) {
     using namespace fused_head_entry_detail;
     TT_FATAL(
         resources.config().pad_tokens == 0 || actual_start.has_value(),
@@ -351,7 +371,7 @@ FusedHeadOutputs fused_head(
         .patches = actual_start ? setup.patches_padded[loop] : setup.patches[loop],
         .loops = loops,
         .loop = loop};
-    auto in = call_inputs(setup, x, weights, x_full);
+    auto in = call_inputs(setup, x, weights, x_full, xq);
     in.y = setup.y_loops[loop % loops];
     in.actual_start = actual_start;
     in.actual_end = actual_end;

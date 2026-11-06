@@ -360,8 +360,9 @@ void kernel_main() {
 #endif
                         cb_reserve_back(SE_PO, SE_PREP_FULL);
                         for (uint32_t c = 0; c * SE_PREP_BCT < n; ++c) {
-                            UNPACK((
-                                get_local_cb_interface(SE_PU).fifo_rd_ptr = pu0 + (off + c * SE_PREP_BCT * 2048) / 16));
+                            UNPACK(
+                                (get_local_cb_interface(SE_PU).fifo_rd_ptr =
+                                     pu0 + (off + c * SE_PREP_BCT * SE_PREP_TB) / 16));
                             pack_untilize_block<SE_PREP_BCT, SE_PREP_FULL>(SE_PU, 1, SE_PO, c);
                         }
                         cb_push_back(SE_PO, SE_PREP_FULL);

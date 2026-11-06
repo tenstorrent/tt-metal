@@ -41,7 +41,7 @@ What changed against the block this branch carries (models/demos/moe_block, P.17
 
 `models/demos/moe_block` (the carried Python block on `ttnn.bringup.flat_routed_expert` + `combine_rf`) when the DRAM
 cores' RISCs must stay free (the serving framework's prefill runner uses them). Not a drop-in: another weight layout,
-no OWN_ROWS head / tail mode, no `max_grid` (see Limits).
+no OWN_ROWS head / tail mode (DeepSeek-V4.1's adapter composes it from a TP all-to-all and two stock ops).
 
 ## Options
 
@@ -57,8 +57,22 @@ each default off (= the source's program):
   head, flat experts, combine cells, fused tail) takes its grid from `common/core_grid.hpp` `block_grid()`, the compute
   grid cut to the cap - a Blackhole Galaxy's 110-core rule (DeepSeek-V4.1 FIX.15: 11 x 10 of the 12 x 10). Set once,
   before the first plan. The call's L1 arena and the words' slab still span the whole grid (memory, no program).
+- `MoEDtypes.shared_activations = bfloat8_b` (default bfloat16 = the source's program): the fused head's shared expert
+  keeps x and h in bf8 tiles (x own, x in, h own, h all, the x gather's packets; `SE_XTB` / `SE_HTB` / `XTB` 1088 B),
+  read from the caller's `fused_head(..., xq=)` (x in bf8; the router keeps reading bf16 x, from DRAM: the row's
+  router x is no longer taken from x own's L1); the dispatch prep untilizes x own as stored. DeepSeek-V4.1's reference
+  fp8-quantizes both (FIX.9, DS41-132). `MoEBlock` makes xq with one capped typecast a call unless the caller gives it.
+  Not with a latent (model_checks refuses). With the DRAM fallback x_full is gathered from xq.
+- `MoEDtypes.shared_pack_precise = True` (default False): the head's compute packs bfp8 h with `bfp8_pack_precise` -
+  one rounding from fp32 DEST at the group's shared exponent (as ttnn.typecast packs), not two (DS41-137); only bfp8
+  packs change.
 
 ## Measured
+
+bf8 shared-expert activations (P.37, Galaxy 8x4, DeepSeek-V4.1-Flash dims, random weights, LoFi, 1024 tokens):
+the head's output vs torch with x / h on the bf8 grid rel 0.0471 (bf16 activations 0.0585), vs full precision 0.0465
+(0.0567); `shared_pack_precise`: every one of 1,777,311 decided h values packed by the one-rounding rule (232,605 of
+them where one and two roundings differ), off: every one by the two-rounding rule (`tests/test_fused_head_bf8.py`).
 
 DeepSeek-V4.1-Flash, Galaxy 8x4 (FABRIC_2D_TORUS_XY), chunk 5120 at start 51200, P.34 defaults, cap 11 x 10,
 weights_nk, bfp4_mse experts (2026-11-06, /scratch/dnijemcevic/rebase/moe_main/check vs fasttests/check, the carried

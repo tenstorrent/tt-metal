@@ -49,12 +49,15 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         c.shape.A,
         c.fidelity,
         c.w_dtype,
+        c.shape.x_dtype,
+        c.pack_precise,
         c.l1_free,
         c.cb_floor,
         args.x.tensor_spec(),
         args.w.tensor_spec(),
         args.w_router.tensor_spec(),
         args.actual_start.has_value(),
+        args.xq.has_value(),
         attrs.loop);
 }
 
@@ -76,6 +79,27 @@ void FusedHeadDeviceOperation::validate_on_program_cache_miss(
         attrs.config.shape.H / attrs.config.shape.G,
         xs);
     TT_FATAL(args.x.layout() == Layout::TILE && args.x.dtype() == DataType::BFLOAT16, "fused_head: x is bf16 TILE");
+    const bool bf8 = attrs.config.shape.x_dtype == WeightDtype::Bf8;
+    TT_FATAL(
+        bf8 == args.xq.has_value(),
+        "fused_head: xq (x in bf8) is given exactly when the shared expert's activations are bf8 (MoEDtypes."
+        "shared_activations)");
+    if (args.xq) {
+        check_dram(*args.xq, "xq");
+        TT_FATAL(
+            args.xq->layout() == Layout::TILE && args.xq->dtype() == DataType::BFLOAT8_B &&
+                args.xq->logical_shape() == args.x.logical_shape(),
+            "fused_head: xq is x's shape in bf8 TILE, got {} {}",
+            args.xq->dtype(),
+            args.xq->logical_shape());
+    }
+    if (args.x_full) {
+        TT_FATAL(
+            args.x_full->dtype() == (bf8 ? DataType::BFLOAT8_B : DataType::BFLOAT16),
+            "fused_head: x_full is gathered in the engine's x format ({}), got {}",
+            bf8 ? "bf8: from xq" : "bf16",
+            args.x_full->dtype());
+    }
     TT_FATAL(
         attrs.config.lay.xdram == args.x_full.has_value(),
         "fused_head: the DRAM fallback layout takes x_full (the gathered x), the resident ones do not");
@@ -158,6 +182,7 @@ HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& a)
     set(SRC_ARENA, &attrs.arena);
     set(SRC_START, a.actual_start ? &*a.actual_start : nullptr);
     set(SRC_END, a.actual_end ? &*a.actual_end : nullptr);
+    set(SRC_XQ, a.xq ? &*a.xq : nullptr);
     for (size_t i = 0; i < attrs.words.size(); ++i) {
         b.addresses[SRC_WORD0 + i] = attrs.words[i];
     }

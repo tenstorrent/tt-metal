@@ -1,0 +1,104 @@
+{
+ "used": [
+  {
+   "id": "DS41-132",
+   "how": "ported FIX.9's bf8 x / h of the fused head's shared expert (se_engine3 x_dtype / h_dtype, x_gather3 XTB) to the main block's C++ head; prerequisite for SE_PACK_PRECISE",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-137",
+   "how": "SE_PACK_PRECISE on main: bfp8_pack_precise on the SE compute plus a SE_PACK_PRECISE define (the kernel cache key leaves the flag out); the fork test checks the one- vs two-rounding rule of this entry bit for bit",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-184",
+   "how": "NORM_INTO_MOE on main relies on the rms_norm bfp8_twin being typecast bit for bit: on / off bit-identical asserted in test_moe_block_main_parity.py",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-202",
+   "how": "replay128 on main: no 48 KB L1 reservation (main keeps persistent words in L1_SMALL and allocates its arena a call); model.build_tail reserves only for carried",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-205",
+   "how": "short-turn accuracy reference values for replay128 (0.199 there; main now 0.1415 vs limit 0.2422)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the moe_block_main fork builds into build_Release but python loads the installed copies: cmake --build build --target install after a C++ change",
+  "the main C++ head has two SeEngineArgs builders (head_plan.cpp fit, head_program.cpp make_head_model): a new engine argument must be set in both",
+  "pytest's mesh_device fixture without a param opens the Galaxy as 1x32; moe_block_main's torus tie check then refuses"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or inflated: bf8 tiles shrink the head's regions; at_chunk shares the routed weights (no duplicate) when the tail plan lays them out the same (all 20 tail layers on 8x4)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched: the head is a C++ device op (address-patched cache hits); the only new device call in Python is a stock ttnn.typecast (the xq, off path / OWN_ROWS) on the capped grid"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "ran only the new tests (test_fused_head_bf8.py, test_moe_block_main_parity.py) and model-level checks; no fork regression suite"
+  }
+ ],
+ "cited_only": [
+  "DS41-211"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.37",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-06T18:15:08",
+  "head": "3c109b29317",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.37.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.37.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_block_main_parity.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/moe_block_main/tt/moe_block.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/common_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/moe_block_config.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/fused_head_device_operation.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/fused_head_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/head_plan.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/head_plan.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/head_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/head_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/head_sizing.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/head_sizing.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/compute/se_compute.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/se_brisc.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/xg_reader.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/xg_sender.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/se_defs.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/xg_walk.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/tests/test_fused_head_bf8.py"
+  ]
+ }
+}

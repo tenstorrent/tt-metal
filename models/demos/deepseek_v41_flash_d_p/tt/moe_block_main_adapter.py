@@ -21,11 +21,16 @@ What is this model's (re-applied from the carried adapter, each still meaningful
   are permuted to match (moe_block_adapter.expert_permutation);
 - the routed experts' weights in the model's EXPERTS_IMPL format (TtExperts._host_weights: e2m1 x ue8m0 dequantized,
   bfp4_mse rounded in the checkpoint's K groups) laid out [N, K] (FlatLayoutOptions.weights_nk, DS41-35);
-- D5 / FIX.9: the shared expert at LoFi with GEMM_INPUTS' activations; the combine snapped (COMBINE_SNAP: bit-identical
-  runs); FIX.15: the block's programs inside tt/cores.max_grid (set_max_grid: 11 x 10 on a Galaxy).
-Not available on the new ops (the carried block's Python programs): NORM_INTO_MOE's in-place x (input_buffers() is
-(None, None): ffn_norm writes its own output), TAIL_A2A_PREPARED / PREPARED_ALL / HOST_ALLOC's block hooks (the C++
-ops patch addresses on their own cache hits), SE_PACK_PRECISE, DECODER_SKIP=replay128 (at_chunk).
+- D5 / FIX.9: the shared expert at LoFi with GEMM_INPUTS' activations (bfloat8_b x / h tiles inside the fused head:
+  MoEDtypes.shared_activations, the head's xq; P.37); SE_PACK_PRECISE: its bfp8 h packed in one rounding
+  (MoEDtypes.shared_pack_precise, P.37); the combine snapped (COMBINE_SNAP: bit-identical runs); FIX.15: the block's
+  programs inside tt/cores.max_grid (set_max_grid: 11 x 10 on a Galaxy);
+- NORM_INTO_MOE (P.21, P.37): input_buffers() gives a persistent x and the head's bfloat8_b xq; ffn_norm writes both
+  (rms_norm bfp8_twin) and the head reads xq as written (no typecast);
+- DECODER_SKIP=replay128 (P.31, P.37): at_chunk - the layer at the decoder tail's chunk on that chunk's own block, the
+  routed weights shared when its flat plan lays them out the same.
+Not ported (owner, P.37 out of scope): the carried block's TAIL_A2A_PREPARED / PREPARED_ALL / HOST_ALLOC hooks (the C++
+ops patch addresses on their own cache hits), mixed expert formats (EXPERTS_IMPL=bfp8_down4).
 
 Weights: per layer, the head's (router + shared expert: prepare_fused_head_weights) from the checkpoint at the
 layer's first call; the routed experts laid out at load (host pack, ~1 min a layer) and kept in the weight cache
@@ -34,6 +39,7 @@ layer's first call; the routed experts laid out at load (host pack, ~1 min a lay
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 import time
@@ -82,7 +88,9 @@ def block_dims(cfg):
 
 def block_dtypes():
     """MoEDtypes: routed weights in EXPERTS_IMPL's format (one for gate / up and down: bfp8_down4 has no equivalent),
-    the shared expert at LoFi (D5) with GEMM_INPUTS' activations (FIX.9), router bf16."""
+    the shared expert at LoFi (D5) with GEMM_INPUTS' activations (FIX.9, DS41-132: bfloat8_b x / h tiles in the fused
+    head - its engine, x gather and dispatch prep; the router keeps bf16 x), router bf16. SE_PACK_PRECISE (DS41-137):
+    the head packs its bfp8 h in one rounding from fp32 DEST (bfp8_pack_precise)."""
     from .common import gemm_dtype
 
     impl = settings.get("EXPERTS_IMPL")
@@ -94,6 +102,7 @@ def block_dtypes():
     d.routed_weights = ttnn.bfloat8_b if WDTYPES[impl] == "bf8" else ttnn.bfloat4_b
     d.shared_fidelity = ttnn.MathFidelity.LoFi
     d.shared_activations = gemm_dtype()
+    d.shared_pack_precise = settings.get("SE_PACK_PRECISE") == "on"
     return d
 
 
@@ -140,7 +149,11 @@ class TtMoEBlockMainLayer:
         from .moe_block_adapter import expert_permutation
 
         assert settings.get("MOE_HEAD") == "fused", "MOE_BLOCK_SRC=main: the block's head is fused (MOE_HEAD=fused)"
-        assert settings.get("DECODER_SKIP") != "replay128", "MOE_BLOCK_SRC=main: no at_chunk (DECODER_SKIP=replay128)"
+        # (D8, as the carried block: the flat op at LoFi with bfp8 x / h tiles; full is not plumbed)
+        assert settings.get("EXPERTS_PRECISION") == "glm", (
+            "MOE_IMPL=block runs EXPERTS_PRECISION=glm only (owner decision D8, 2026-10-27): set "
+            "DS41_EXPERTS_PRECISION=glm or DS41_MOE_IMPL=flat"
+        )
         self.mesh, self.ck, self.cfg = mesh, ck, cfg
         self.layer, self.chunk = int(layer), int(chunk)
         self.own_rows = bool(own_rows)
@@ -193,6 +206,25 @@ class TtMoEBlockMainLayer:
         return hit[2]
 
     # ------------------------------------------------------------------ weights
+    def _plan(self, blk) -> dict:
+        """The block's flat routed-expert plan's layout facts (as_dict)."""
+        kw = blk.expert_kw
+        return (
+            _mb()
+            .flat_routed_expert_plan(
+                self.mesh,
+                int(self.cfg.dim),
+                int(self.cfg.inter),
+                self.epc,
+                int(self.cfg.n_experts),
+                kw["max_tokens_per_expert"],
+                weights_bf8=self.dtypes.routed_weights == ttnn.bfloat8_b,
+                pin=1,
+                layout=kw["layout"],
+            )
+            .as_dict()
+        )
+
     def _cache_paths(self, blk, lay):
         if self.cache_dir is None:
             return None
@@ -212,18 +244,7 @@ class TtMoEBlockMainLayer:
         mb, fw = _mb(), _flat_weights_module()
         rows, cols = tuple(self.mesh.shape)
         n = rows * cols
-        kw = blk.expert_kw
-        lay = mb.flat_routed_expert_plan(
-            self.mesh,
-            int(self.cfg.dim),
-            int(self.cfg.inter),
-            self.epc,
-            int(self.cfg.n_experts),
-            kw["max_tokens_per_expert"],
-            weights_bf8=self.dtypes.routed_weights == ttnn.bfloat8_b,
-            pin=1,
-            layout=kw["layout"],
-        ).as_dict()
+        lay = self.lay = self._plan(blk)
         gids = torch.arange(int(self.cfg.n_experts), dtype=torch.int32).reshape(n, 1, self.epc)
         gidx = ttnn.from_torch(
             gids,
@@ -297,20 +318,64 @@ class TtMoEBlockMainLayer:
 
     # ------------------------------------------------------------------ the model's interface (TtMoEBlockLayer's)
     def input_buffers(self):
-        """NORM_INTO_MOE: the new ops read x from any buffer (no persistent input of the block's): none."""
-        return None, None
+        """NORM_INTO_MOE=on (P.21): (x [1, 1, S/SP, H/TP] bf16, the head's bfloat8_b xq or None) - persistent
+        buffers of the (mesh, chunk)'s block, pinned (tt/ccl.dealloc leaves them alone): ffn_norm writes x there and,
+        with GEMM_INPUTS=bfp8, xq from it in the same program (rms_norm bfp8_twin: typecast(x, bfp8) bit for bit);
+        __call__(x, xq_ready=True) hands xq to the head (no typecast). The block's ops read x from any buffer, so x is
+        only the norm's output kept at one address. Not with OWN_ROWS (the head's x comes from a TP all-to-all)."""
+        if self.own_rows:
+            return None, None
+        blk = self.block()
+        key = (id(self.mesh), self.chunk)
+        bufs = _INPUTS.get(key)
+        if bufs is None or bufs[0] is not self.mesh:
+            rows, cols = tuple(self.mesh.shape)
+            shape = [1, 1, self.chunk // rows, int(self.cfg.dim) // cols]
+            x = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
+            xq = blk.xq_buffer(shape) if blk.bf8_x else None
+            for t in (x, xq):
+                if t is not None and id(t) not in ccl._KEEP:
+                    ccl.pin(self.mesh, t)
+            bufs = _INPUTS[key] = (self.mesh, x, xq)
+        return bufs[1], bufs[2]
 
-    def at_chunk(self, chunk: int):
-        raise NotImplementedError("MOE_BLOCK_SRC=main: DECODER_SKIP=replay128 (at_chunk) is the carried block's")
+    def at_chunk(self, chunk: int) -> "TtMoEBlockMainLayer":
+        """This layer at another chunk (DECODER_SKIP=replay128, P.31: the decoder tail's 1024-row chunk on 8x4): the
+        (mesh, chunk)'s own block (resources, plans, programs; built here), the routed experts' device weights shared
+        when that block's flat plan lays them out as this one's (the plan's weight-layout facts equal), else laid out
+        for it (the weight cache, else the checkpoint); the router / shared expert laid out by that block's head at its
+        first call."""
+        out = copy.copy(self)
+        out.chunk = int(chunk)
+        out.head_w = None
+        blk = out.block()
+        if _weight_layout(self.lay) == _weight_layout(out._plan(blk)):
+            logger.info(
+                f"MOE_BLOCK_MAIN layer={self.layer} chunk={chunk}: routed weights shared with chunk {self.chunk}"
+            )
+        else:
+            logger.info(f"MOE_BLOCK_MAIN layer={self.layer} chunk={chunk}: another flat plan - its own routed weights")
+            out.gidx, out.w_gu, out.w_d = out._routed(blk)
+        return out
 
     def __call__(self, x: ttnn.Tensor, xq_ready: bool = False) -> ttnn.Tensor:
-        assert not xq_ready, "MOE_BLOCK_SRC=main: no NORM_INTO_MOE input buffers"
+        """x: ffn_norm's output (the column split [1, 1, S/SP, H/TP]; OWN_ROWS: [1, 1, S/(SP TP), H]) -> the MoE
+        output, same rows. xq_ready (NORM_INTO_MOE=on): x is input_buffers()[0] and the norm wrote input_buffers()[1]
+        (xq) from it."""
         assert x.layout == ttnn.TILE_LAYOUT
         blk = self.block()
         weights = self._head_weights(blk)
+        xq = None
+        if xq_ready:
+            xb_, xq = self.input_buffers()
+            assert xq is not None and int(x.buffer_address()) == int(
+                xb_.buffer_address()
+            ), "xq_ready needs x = input_buffers()[0] (the norm wrote xq from it)"
         xb = cast(x, ttnn.bfloat16)
         if not self.own_rows:
-            y = blk(xb, weights)
+            y = blk(xb, weights, xq=xq)
         else:
             y = self._own_rows(blk, xb, weights)
         if xb is not x:
@@ -341,8 +406,11 @@ class TtMoEBlockMainLayer:
         )
         if blk.exchange_spec is None:
             blk.one_arena = blk._one_arena_fits()
+        xq = blk.to_xq(x) if blk.bf8_x else None  # (GEMM_INPUTS=bfp8: the shared expert's x, one typecast)
         x_full = (
-            ttnn.all_gather(x, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if blk.x_dram else None
+            ttnn.all_gather(x if xq is None else xq, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if blk.x_dram
+            else None
         )
         arena = ttnn.allocate_tensor_on_device(blk.arena_spec, self.mesh)
         head = mb.fused_head(
@@ -354,6 +422,7 @@ class TtMoEBlockMainLayer:
             x_full=x_full,
             l1_free=blk.l1_free,
             arena=arena,
+            **({"xq": xq} if xq is not None else {}),
         )
         dealloc(x)
         if x_full is not None:
@@ -397,6 +466,14 @@ class TtMoEBlockMainLayer:
 
 
 _FW = None
+_INPUTS: dict = {}  # (id(mesh), chunk) -> (mesh, x bf16, xq bfp8 or None): NORM_INTO_MOE's input buffers
+# the flat plan's facts the routed weights' layout depends on (flat_routed_expert_weights.flat_weight_regions /
+# bank_sharded): two plans equal in these lay the same weights out the same
+_WEIGHT_KEYS = ("banks", "col0s", "n_rd", "n_rd_sg", "nd", "nk_gu", "np", "nu", "pcds", "rg", "wd_rot_tiles")
+
+
+def _weight_layout(lay: dict) -> tuple:
+    return tuple((k, repr(lay.get(k))) for k in _WEIGHT_KEYS)
 
 
 def _flat_weights_module():
