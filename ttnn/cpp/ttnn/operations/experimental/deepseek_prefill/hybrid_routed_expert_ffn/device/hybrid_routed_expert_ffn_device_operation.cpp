@@ -5,9 +5,7 @@
 
 #include "hybrid_program_factory.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
-
-#include <set>
+#include "ttnn/operations/experimental/deepseek_prefill/routed_expert_combine_overlap/device/routed_expert_handoff.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
@@ -19,62 +17,18 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
             t.replicated_global_expert_idx_table.has_value() && t.expert_region_offsets.has_value(),
         "hybrid routed expert overlapped with combine needs dispatched_metadata, expert_offsets, the replicated "
         "global_expert_idx_table and expert_region_offsets");
-    TT_FATAL(
-        op.fwd_arrived.has_value() && op.final_arrived.has_value() && op.expert_go.has_value(),
-        "hybrid routed expert overlapped with combine needs the caller's fwd_arrived, final_arrived and expert_go "
-        "global semaphores, created once and passed on every call");
-    TT_FATAL(
-        op.fwd_arrived->device() == t.x.device() && op.final_arrived->device() == t.x.device() &&
-            op.expert_go->device() == t.x.device(),
-        "hybrid routed expert overlapped with combine: fwd_arrived, final_arrived and expert_go must belong to the "
-        "same mesh device as dispatched_buffer");
-    TT_FATAL(
-        op.fwd_arrived->address() != op.final_arrived->address() &&
-            op.fwd_arrived->address() != op.expert_go->address() &&
-            op.final_arrived->address() != op.expert_go->address(),
-        "hybrid routed expert overlapped with combine: fwd_arrived (0x{:x}), final_arrived (0x{:x}) and expert_go "
-        "(0x{:x}) count independently, so they must be three distinct semaphores",
-        op.fwd_arrived->address(),
-        op.final_arrived->address(),
-        op.expert_go->address());
-    // Combine bakes these addresses into its compile-time arguments, so the hashed copies must be the live ones.
-    TT_FATAL(
-        op.fwd_arrived_addr == op.fwd_arrived->address() && op.final_arrived_addr == op.final_arrived->address() &&
-            op.expert_go_addr == op.expert_go->address(),
-        "hybrid routed expert overlapped with combine: the hashed semaphore addresses do not match the semaphores");
-    const uint32_t channels_needed = combine::channel_semaphore_count(
-        static_cast<uint32_t>(t.x.device()->shape()[static_cast<int32_t>(op.combine_axis)]));
-    TT_FATAL(
-        op.channel_semaphores.size() == channels_needed,
-        "hybrid routed expert overlapped with combine: {} channel semaphores passed, combine needs {} on this "
-        "mesh -- see hybrid_routed_expert_moe_channel_semaphore_count",
-        op.channel_semaphores.size(),
-        channels_needed);
-    TT_FATAL(
-        op.channel_semaphore_addrs.size() == op.channel_semaphores.size(),
-        "hybrid routed expert overlapped with combine: {} hashed channel addresses for {} semaphores",
-        op.channel_semaphore_addrs.size(),
-        op.channel_semaphores.size());
-    // Each counts something different, so a repeat is one counter serving two purposes: not an error anywhere,
-    // just wrong numbers. The trio above is already checked pairwise; this folds the channels in with it.
-    std::set<uint32_t> distinct{op.fwd_arrived_addr, op.final_arrived_addr, op.expert_go_addr};
-    for (uint32_t i = 0; i < channels_needed; i++) {
-        TT_FATAL(
-            op.channel_semaphores[i].device() == t.x.device(),
-            "hybrid routed expert overlapped with combine: channel semaphore {} belongs to another mesh device",
-            i);
-        TT_FATAL(
-            op.channel_semaphore_addrs[i] == op.channel_semaphores[i].address(),
-            "hybrid routed expert overlapped with combine: hashed address of channel semaphore {} does not match "
-            "the semaphore",
-            i);
-        TT_FATAL(
-            distinct.insert(op.channel_semaphore_addrs[i]).second,
-            "hybrid routed expert overlapped with combine: channel semaphore {} repeats an address (0x{:x}) "
-            "already in use",
-            i,
-            op.channel_semaphore_addrs[i]);
-    }
+    combine::validate_overlap_semaphores(
+        "hybrid_routed_expert_moe",
+        t.x.device(),
+        op.combine_axis,
+        op.fwd_arrived,
+        op.final_arrived,
+        op.expert_go,
+        op.channel_semaphores,
+        op.fwd_arrived_addr,
+        op.final_arrived_addr,
+        op.expert_go_addr,
+        op.channel_semaphore_addrs);
     TT_FATAL(
         t.l1_arena.has_value() == (op.hybrid_token_threshold > 0),
         "hybrid routed expert overlapped with combine needs an L1 arena exactly when the fused pass runs "
@@ -95,20 +49,8 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
     TT_FATAL(
         t.output.buffer() != t.x.buffer(),
         "hybrid routed expert overlapped with combine needs an output distinct from dispatched_buffer");
-    if (t.forwarding_buffer.has_value()) {
-        const auto expected = combine::forwarding_buffer_spec(
-            combine_attributes(op, t),
-            ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::token_size_bytes(combine_inputs(t)));
-        TT_FATAL(
-            t.forwarding_buffer->tensor_spec() == expected,
-            "hybrid routed expert overlapped with combine: forwarding_buffer is {} {} {}, combine needs {} {} {}",
-            t.forwarding_buffer->logical_shape(),
-            t.forwarding_buffer->dtype(),
-            t.forwarding_buffer->memory_config(),
-            expected.logical_shape(),
-            expected.data_type(),
-            expected.memory_config());
-    }
+    combine::validate_forwarding_buffer(
+        "hybrid_routed_expert_moe", t.forwarding_buffer, combine_attributes(op, t), combine_inputs(t));
     ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation::
         validate_on_program_cache_miss(combine_attributes(op, t), combine_inputs(t));
 }

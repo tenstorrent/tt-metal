@@ -10,13 +10,6 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
-// unified_waves: the wave-planned unified_routed_expert_ffn program this op runs on its own rows in place of its
-// unified half, given this op's attributes and inputs.
-::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnParams
-wave_attributes(const HybridRoutedExpertFfnParams& op);
-::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnInputs wave_inputs(
-    const HybridRoutedExpertFfnInputs& t);
-
 // Everything the merged op rejects, checked before anything is placed. Each half also validates
 // what it will actually be handed, so a merged dispatch cannot pass a configuration either
 // implementation would reject on its own.
@@ -36,22 +29,5 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     const HybridRoutedExpertFfnInputs& t,
     ttnn::Tensor& output,
     tt::tt_metal::Buffer* l1_arena);
-
-// The combine core every routed-expert writer reports to, once per expert index it walks, and the global
-// semaphore on the writer cores that says it may start. See kernels/hybrid_expert_done.hpp for the device side.
-struct ExpertDoneSignal {
-    uint32_t collector_noc_x = 0;
-    uint32_t collector_noc_y = 0;
-    uint32_t collector_counts_addr = 0;
-    uint32_t go_addr = 0;
-};
-
-// Turns the hook on in a descriptor create_hybrid_program_descriptor built, whichever shape it has: the
-// merged union writer or the unified writer alone. The signal's block goes after every other runtime
-// argument, on every writer core, so neither half's argument layout moves.
-void append_expert_done_signal(tt::tt_metal::ProgramDescriptor& desc, const ExpertDoneSignal& signal);
-
-// How many writer cores report through that hook, each once per expert index it walks.
-uint32_t expert_done_writer_count(const tt::tt_metal::ProgramDescriptor& desc);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

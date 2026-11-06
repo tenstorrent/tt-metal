@@ -42,9 +42,9 @@ struct CombineFabric2dParams {
     uint32_t routed_expert_writers = 0;
     tt::tt_metal::CoreRange routed_expert_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
     uint32_t routed_expert_go_addr = 0;
-    // Set only when the routed expert is unified_routed_expert_moe's wave-planned program (hybrid_routed_expert_ffn
-    // unified_waves): walk each chip's experts in the order that program is predicted to finish them
-    // (adaptive_chunk::predicted_order), planning with its wave planner configuration and big-first threshold.
+    // Set only when the routed expert is unified_routed_expert_moe's wave-planned program
+    // (unified_routed_expert_moe_combine): walk each chip's experts in the order that program is predicted to finish
+    // them (adaptive_chunk::predicted_order), planning with its wave planner configuration and big-first threshold.
     bool predicted_walk = false;
     uint32_t walk_per_core_M_max = 0;
     bool walk_partial_eighth = false;

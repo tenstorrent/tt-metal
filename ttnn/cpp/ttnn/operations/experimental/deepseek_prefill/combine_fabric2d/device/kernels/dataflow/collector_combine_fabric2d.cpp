@@ -6,7 +6,7 @@
 // that reads routed-expert output can poll locally.
 //
 // Every routed-expert writer reports once per expert slot it walks, in every pass, by bumping word s of a
-// per-step count array here (see hybrid_expert_done.hpp). Step s is complete once that word reaches the
+// per-step count array here (see expert_done.hpp). Step s is complete once that word reaches the
 // writer count, and then `ready = s + 1` is set on each waiting core. The waiting cores derive, for each
 // expert, the step that makes it ready, so this core needs to know nothing about experts.
 //
@@ -113,7 +113,7 @@ void kernel_main() {
     }
 #ifdef CMBF2D_PROGRESS_SEM
     // Per-(step, chunk) report counts and chunk sizes from the routed expert's writers; the layout mirrors
-    // hybrid_expert_done.hpp. A step's chunks are released before the whole step is, in whatever order they
+    // expert_done.hpp. A step's chunks are released before the whole step is, in whatever order they
     // finish, as `progress` = step << 24 | chunk size << 16 | done-chunk mask: the untilizers take a tile-row
     // once its chunk's bit or the whole step covers it.
     constexpr uint32_t CHUNK_AREA_OFFSET = 1024;

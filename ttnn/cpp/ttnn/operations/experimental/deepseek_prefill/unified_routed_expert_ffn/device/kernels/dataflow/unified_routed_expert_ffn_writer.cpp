@@ -41,9 +41,9 @@
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
-// Combine-overlap report hooks (URE_PREDICTED_ORDER): hybrid_routed_expert_ffn's overlap defines
+// Combine-overlap report hooks (URE_PREDICTED_ORDER): unified_routed_expert_moe_combine defines
 // HYB_EXPERT_DONE_RT_BASE on this writer when it embeds this program next to combine.
-#include "../../../../hybrid_routed_expert_ffn/device/kernels/hybrid_expert_done.hpp"
+#include "../../../../routed_expert_combine_overlap/device/kernels/expert_done.hpp"
 
 constexpr uint32_t TILE_HEIGHT = 32;
 

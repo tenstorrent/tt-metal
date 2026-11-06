@@ -85,8 +85,8 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 # loader on the old dtype. That file belongs to another PR in this split, so it is a follow-up.
 DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE = ttnn.bfloat4_b
 
-# hybrid_routed_expert_moe's floor on big_first_threshold: below three tiles of tokens the first walk could end in
-# a partial eighth wave.
+# unified_routed_expert_moe_combine's floor on big_first_threshold: below three tiles of tokens the first walk could
+# end in a partial eighth wave.
 _BIG_FIRST_MIN_TOKENS = 3 * 32
 
 
@@ -894,9 +894,10 @@ class TtRoutedExpert(LightweightModule):
         for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the experts as in forward(), except that the
         fused-only sentinel is not available: the one-program op always runs the unified half.
 
-        `unified_waves` runs every expert on unified_routed_expert_moe's wave-planned program instead of the
-        threshold split: no fused pass, the experts above the threshold first (big_first_threshold, when it is at
-        least the op's 96-token floor), and combine taking each expert as it finishes.
+        `unified_waves` runs unified_routed_expert_moe_combine instead of hybrid_routed_expert_moe: every expert on
+        unified_routed_expert_moe's wave-planned program, no fused pass, the experts above the threshold first
+        (big_first_threshold, when it is at least the op's 96-token floor), and combine taking each expert as it
+        finishes.
         """
         if not self._is_blackhole:
             raise NotImplementedError("the routed expert / combine overlap is Blackhole-only")
@@ -906,10 +907,37 @@ class TtRoutedExpert(LightweightModule):
                 f"{dispatched_buffer.layout} {dispatched_buffer.dtype}"
             )
         threshold = 0 if self.hybrid_token_threshold is None else self.hybrid_token_threshold
-        # The wave-planned program has no fused pass; the threshold only orders the experts, big ones first.
-        big_first_threshold = threshold if unified_waves and threshold >= _BIG_FIRST_MIN_TOKENS else 0
         if unified_waves:
-            threshold = 0
+            # The wave-planned program has no fused pass; the threshold only orders the experts, big ones first.
+            ttnn.tracy_message("`TT_SIGNPOST: UnifiedRoutedExpertMoeCombine`")
+            return ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_combine(
+                dispatched_buffer,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                self.gate_projs,
+                self.up_projs,
+                self.down_projs,
+                self.max_tokens,
+                dispatched_metadata=dispatched_metadata,
+                expert_offsets=expert_offsets,
+                replicated_global_expert_idx_table=replicated_global_expert_idx_table,
+                num_experts_per_tok=num_experts_per_tok,
+                seq_len_per_chip=seq_len_per_chip,
+                fwd_arrived_semaphore=combine_semaphores[0],
+                final_arrived_semaphore=combine_semaphores[1],
+                expert_go_semaphore=combine_semaphores[2],
+                channel_semaphores=list(combine_semaphores[3:]),
+                combine_axis=combine_axis,
+                combine_num_links=combine_num_links,
+                big_first_threshold=threshold if threshold >= _BIG_FIRST_MIN_TOKENS else 0,
+                compute_kernel_config=self.compute_kernel_config,
+                activation=self.activation,
+                gate_biases=self.gate_biases,
+                up_biases=self.up_biases,
+                down_biases=self.down_biases,
+                forwarding_buffer=forwarding_buffer,
+            )
         if threshold >= self.max_tokens:
             raise ValueError(
                 f"hybrid_token_threshold {threshold} leaves no expert to the unified half (max_tokens "
@@ -943,7 +971,5 @@ class TtRoutedExpert(LightweightModule):
             expert_go_semaphore=combine_semaphores[2],
             forwarding_buffer=forwarding_buffer,
             channel_semaphores=list(combine_semaphores[3:]),
-            unified_waves=unified_waves,
-            big_first_threshold=big_first_threshold,
             weight_address_table=self.weight_address_table,
         )

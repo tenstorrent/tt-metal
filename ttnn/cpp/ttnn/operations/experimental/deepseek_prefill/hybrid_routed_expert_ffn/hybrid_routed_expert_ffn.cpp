@@ -6,13 +6,11 @@
 
 #include "device/hybrid_program_factory.hpp"
 #include "device/hybrid_routed_expert_ffn_device_operation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <algorithm>
-#include <tuple>
 
 #include <tt-metalium/allocator.hpp>
 
@@ -62,8 +60,6 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& expert_go_semaphore,
     const std::optional<ttnn::Tensor>& forwarding_buffer,
     const std::vector<GlobalSemaphore>& channel_semaphores,
-    bool unified_waves,
-    uint32_t big_first_threshold,
     const std::optional<ttnn::Tensor>& weight_address_table) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
@@ -156,8 +152,7 @@ ttnn::Tensor hybrid_routed_expert_moe(
             tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{grid.x - 1, grid.y - 1}));
         const auto free_l1 = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
         const uint32_t arena_bytes =
-            std::min<uint32_t>(
-                hybrid_l1_arena_bytes(device), static_cast<uint32_t>(free_l1.largest_free_block_bytes)) &
+            std::min<uint32_t>(hybrid_l1_arena_bytes(device), static_cast<uint32_t>(free_l1.largest_free_block_bytes)) &
             ~static_cast<uint32_t>(63);
         const uint32_t cols = arena_bytes / 2;
         l1_arena = ttnn::empty(
@@ -202,8 +197,6 @@ ttnn::Tensor hybrid_routed_expert_moe(
                                      ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                      : std::nullopt,
         .hybrid_token_threshold = hybrid_token_threshold,
-        .unified_waves = unified_waves,
-        .big_first_threshold = big_first_threshold,
         .overlap_combine = overlap_combine,
         .combine_axis = combine_axis,
         .combine_num_links = combine_num_links,
@@ -240,13 +233,6 @@ ttnn::Tensor hybrid_routed_expert_moe(
     if (overlap_combine && !l1_arena.has_value()) {
         attributes.combine_l1_floor =
             static_cast<uint32_t>(dispatched_buffer.device()->lowest_occupied_compute_l1_address().value_or(0));
-    }
-    if (unified_waves) {
-        // The wave-planned program sizes its circular buffers from the free L1, so the plan it picks now is part of
-        // the program-cache key.
-        std::tie(attributes.wave_per_core_M, attributes.wave_in0_block_w) =
-            unified_routed_expert_ffn::UnifiedRoutedExpertFfnProgramFactory::select_l1_plan(
-                wave_attributes(attributes), wave_inputs(tensor_args));
     }
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }

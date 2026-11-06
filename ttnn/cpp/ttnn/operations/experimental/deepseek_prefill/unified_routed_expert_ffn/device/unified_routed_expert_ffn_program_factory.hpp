@@ -27,7 +27,7 @@ struct UnifiedRoutedExpertFfnProgramFactory {
         const UnifiedRoutedExpertFfnInputs& tensor_args,
         Tensor& tensor_return_value);
 
-    // For a caller that builds this program into its own (hybrid_routed_expert_ffn overlapped with combine).
+    // For a caller that builds this program into its own (unified_routed_expert_moe_combine).
     struct EmbeddedOptions {
         // The grid's first row: the caller keeps the rows above (combine takes rows 0-1).
         uint32_t origin_y = 0;

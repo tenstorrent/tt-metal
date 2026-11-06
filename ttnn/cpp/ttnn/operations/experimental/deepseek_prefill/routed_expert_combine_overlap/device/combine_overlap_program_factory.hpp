@@ -15,7 +15,7 @@
 #include <map>
 #include <vector>
 
-namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine {
+namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
 
 // The overlapped fork shares combine_fabric2d's parameter and input structs rather than redeclaring them:
 // both ops link into one binary, so a second definition differing by a field would be an ODR violation
@@ -87,4 +87,4 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     const CombineL1& l1,
     std::map<ttnn::MeshCoordinate, CollectorTarget>* collectors);
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine
+}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap

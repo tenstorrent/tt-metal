@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "combine_fabric2d_collector.hpp"
+#include "combine_overlap_collector.hpp"
 
 #include <string>
 #include <utility>
@@ -11,7 +11,7 @@
 
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_collector_ct_args.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine {
+namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
 
 void add_collector(
     tt::tt_metal::ProgramDescriptor& desc,
@@ -59,4 +59,4 @@ void add_collector(
     desc.kernels.push_back(std::move(kernel));
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine
+}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap

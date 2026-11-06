@@ -370,7 +370,7 @@ class TtMoe(LightweightModule):
             gate_bias_centered: cache and use the gate's correction bias mean-centred (the model config's
                 MOE_GATE_BIAS_CENTERED, see tt_moe_gate_prefill.centre_gate_bias).
             overlap_routed_expert_unified_waves: when the routed expert overlaps combine, run every expert on
-                unified_routed_expert_moe's wave-planned program (hybrid_routed_expert_moe unified_waves) instead of the
+                unified_routed_expert_moe's wave-planned program (unified_routed_expert_moe_combine) instead of the
                 threshold split: the experts above routed_expert_hybrid_token_threshold go first, and combine takes each
                 expert as it finishes. Off by default, keeping the hybrid split inside the overlap; a model opts in
                 with ROUTED_EXPERT_COMBINE_OVERLAP_UNIFIED_WAVES (routed_expert_combine_overlap_unified_waves).

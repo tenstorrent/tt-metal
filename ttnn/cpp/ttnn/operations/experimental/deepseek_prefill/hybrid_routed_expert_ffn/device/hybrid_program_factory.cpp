@@ -11,8 +11,6 @@
 //
 // Order matters: each half is defined before the glue that converts into it and folds it.
 
-#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.hpp"
 #include "hybrid_program_factory.hpp"
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 
@@ -3097,54 +3095,7 @@ unified::UnifiedRoutedExpertFfnInputs unified_inputs(const HybridRoutedExpertFfn
 
 }  // namespace
 
-namespace waves = ::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn;
-
-waves::UnifiedRoutedExpertFfnParams wave_attributes(const HybridRoutedExpertFfnParams& op) {
-    // No fused pass, so the band is wide open, as unified_routed_expert_moe alone builds it.
-    return waves::UnifiedRoutedExpertFfnParams{
-        .m_tiles = op.m_tiles,
-        .experts_per_chip = op.experts_per_chip,
-        .x_is_row_major = op.x_is_row_major,
-        .activation = op.activation,
-        .fuse_bias = op.fuse_bias,
-        .compute_kernel_config = op.compute_kernel_config,
-        .min_active_tokens = 0,
-        .max_active_tokens = std::numeric_limits<uint32_t>::max(),
-    };
-}
-
-waves::UnifiedRoutedExpertFfnInputs wave_inputs(const HybridRoutedExpertFfnInputs& t) {
-    // The real x and a distinct output, for the same reason as unified_inputs.
-    return waves::UnifiedRoutedExpertFfnInputs{
-        .x = t.x,
-        .gate_projs = t.gate_projs,
-        .up_projs = t.up_projs,
-        .down_projs = t.down_projs,
-        .counts = t.counts,
-        .global_expert_idx_table = t.global_expert_idx_table,
-        .output = t.output,
-        .expert_region_offsets = t.expert_region_offsets,
-        .gate_biases = t.gate_biases,
-        .up_biases = t.up_biases,
-        .down_biases = t.down_biases,
-    };
-}
-
 void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t) {
-    TT_FATAL(
-        !op.unified_waves || op.hybrid_token_threshold == 0,
-        "hybrid routed expert: unified_waves replaces the unified half and has no fused pass, so "
-        "hybrid_token_threshold must be 0 (got {})",
-        op.hybrid_token_threshold);
-    TT_FATAL(
-        op.big_first_threshold == 0 || (op.unified_waves && op.big_first_threshold >= 3 * 32),
-        "hybrid routed expert: big_first_threshold {} needs unified_waves and at least 96 tokens",
-        op.big_first_threshold);
-    if (op.unified_waves) {
-        waves::UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
-            wave_attributes(op), wave_inputs(t));
-        return;
-    }
     // Each half validates what it will actually be handed, including its own band, so a merged
     // dispatch cannot pass a configuration either op alone would reject.
     unified::validate(unified_attributes(op), unified_inputs(t));
@@ -3220,31 +3171,6 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // kernel-config ring with them in its runtime args, and it is built exactly as the op alone is.
     const bool weights_from_table = run_fused_pass && t.weight_table.has_value();
 
-    // unified_waves: unified_routed_expert_moe's own program on this op's rows, so combine keeps rows 0-1 when
-    // overlapped. Its writers then report each expert at its place in the predicted finish order.
-    if (op.unified_waves) {
-        const auto plan =
-            waves::UnifiedRoutedExpertFfnProgramFactory::select_l1_plan(wave_attributes(op), wave_inputs(t));
-        TT_FATAL(
-            plan.first == op.wave_per_core_M && plan.second == op.wave_in0_block_w,
-            "hybrid routed expert: unified_waves was called with L1 plan ({}, {}) but would now build ({}, {}); "
-            "the free L1 changed between the call and the program build",
-            op.wave_per_core_M,
-            op.wave_in0_block_w,
-            plan.first,
-            plan.second);
-        return waves::UnifiedRoutedExpertFfnProgramFactory::create_embedded_descriptor(
-            wave_attributes(op),
-            wave_inputs(t),
-            output,
-            waves::UnifiedRoutedExpertFfnProgramFactory::EmbeddedOptions{
-                .origin_y = kOriginY,
-                .big_first_threshold = op.big_first_threshold,
-                .report_predicted_order = op.overlap_combine,
-                .far_chunk_table = op.overlap_combine,
-            });
-    }
-
     tt::tt_metal::ProgramDescriptor unified_descriptor;
     uint32_t next_semaphore_id = 0;
     unified::append_to_descriptor(
@@ -3301,63 +3227,5 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
 }
 
 uint32_t hybrid_l1_arena_bytes(tt::tt_metal::IDevice* device) { return arena_bytes_for(device); }
-
-namespace {
-
-template <typename Descriptor>
-auto find_writer(Descriptor& desc) {
-    const auto is_writer = [](const tt::tt_metal::KernelDescriptor& k) {
-        return k.kernel_source.ends_with("hybrid_writer.cpp") ||
-               k.kernel_source.ends_with("unified_routed_expert_ffn_writer.cpp");
-    };
-    auto writer = desc.kernels.end();
-    for (auto it = desc.kernels.begin(); it != desc.kernels.end(); ++it) {
-        if (is_writer(*it)) {
-            TT_FATAL(writer == desc.kernels.end(), "hybrid routed expert: the program carries two writer kernels");
-            writer = it;
-        }
-    }
-    TT_FATAL(writer != desc.kernels.end(), "hybrid routed expert: the program carries no writer kernel");
-    return writer;
-}
-
-}  // namespace
-
-uint32_t expert_done_writer_count(const tt::tt_metal::ProgramDescriptor& desc) {
-    return static_cast<uint32_t>(find_writer(desc)->core_ranges.num_cores());
-}
-
-void append_expert_done_signal(tt::tt_metal::ProgramDescriptor& desc, const ExpertDoneSignal& signal) {
-    auto* writer = find_writer(desc);
-
-    // One base for every core, so it can be a define: the widest core's list decides it.
-    uint32_t base = 0;
-    for (const auto& [core, args] : writer->runtime_args) {
-        base = std::max(base, static_cast<uint32_t>(args.size()));
-    }
-    // A writer core with no arguments of its own still walks every expert and must still report.
-    std::set<CoreCoord> carried;
-    for (const auto& [core, args] : writer->runtime_args) {
-        carried.insert(core);
-    }
-    for (const auto& range : writer->core_ranges.ranges()) {
-        for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
-            for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
-                if (!carried.contains(CoreCoord{x, y})) {
-                    writer->runtime_args.emplace_back(
-                        CoreCoord{x, y}, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{});
-                }
-            }
-        }
-    }
-    for (auto& [core, args] : writer->runtime_args) {
-        args.resize(base, 0);
-        args.push_back(signal.collector_noc_x);
-        args.push_back(signal.collector_noc_y);
-        args.push_back(signal.collector_counts_addr);
-        args.push_back(signal.go_addr);
-    }
-    writer->defines.emplace_back("HYB_EXPERT_DONE_RT_BASE", std::to_string(base));
-}
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

@@ -76,7 +76,7 @@ private:
 #include "api/debug/assert.h"
 
 #ifdef CMBF2D_PREDICTED_ORDER
-// Overlapped with the wave-planned unified program (hybrid_routed_expert_ffn unified_waves): its writers report each
+// Overlapped with the wave-planned unified program (unified_routed_expert_moe_combine): its writers report each
 // expert as soon as they are done with it, at its place in the order it is predicted to finish them
 // (adaptive_chunk::predicted_order), and combine walks the same order. Computed from the replicated counts, so every
 // core derives every ring chip's order alike -- one order per chip on every chip, which the relays' dense forwarding

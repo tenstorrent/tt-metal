@@ -462,7 +462,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         activation=ttnn.RoutedExpertActivation.Silu,
     )
 
-    def routed_expert(hybrid_threshold=threshold, **overlap):
+    def routed_expert(**overlap):
         return ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
             tt_x,
             tt_region_offsets,
@@ -472,7 +472,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             tt_expert.up_projs,
             tt_expert.down_projs,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            hybrid_token_threshold=hybrid_threshold,
+            hybrid_token_threshold=threshold,
             compute_kernel_config=tt_expert.compute_kernel_config,
             activation=ttnn.RoutedExpertActivation.Silu,
             weight_address_table=tt_expert.weight_address_table,
@@ -527,7 +527,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     # first call is eager, never a capture.
     overlap_semaphores = []
 
-    def overlapped(hybrid_threshold=threshold, **waves):
+    def semaphores():
         if not overlap_semaphores:
             grid = mesh_device.compute_with_storage_grid_size()
             all_cores = ttnn.CoreRangeSet(
@@ -540,9 +540,11 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
                 ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(3 + channels)
             )
             ttnn.synchronize_device(mesh_device)
-        fwd_arrived, final_arrived, expert_go = overlap_semaphores[:3]
+        return overlap_semaphores
+
+    def overlapped():
+        fwd_arrived, final_arrived, expert_go, *channels = semaphores()
         return routed_expert(
-            hybrid_threshold=hybrid_threshold,
             dispatched_metadata=tt_metadata,
             expert_offsets=tt_expert_offsets,
             replicated_global_expert_idx_table=tt_idx_full,
@@ -553,8 +555,36 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             fwd_arrived_semaphore=fwd_arrived,
             final_arrived_semaphore=final_arrived,
             expert_go_semaphore=expert_go,
-            channel_semaphores=overlap_semaphores[3:],
-            **waves,
+            channel_semaphores=channels,
+        )
+
+    # No fused pass: unified_routed_expert_moe's wave-planned program on the routed expert's rows, the experts above
+    # the model's hybrid threshold first, and combine walking each chip's predicted finish order.
+    def overlapped_waves():
+        fwd_arrived, final_arrived, expert_go, *channels = semaphores()
+        return ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_combine(
+            tt_x,
+            tt_region_offsets,
+            tt_counts,
+            tt_idx_slice,
+            tt_expert.gate_projs,
+            tt_expert.up_projs,
+            tt_expert.down_projs,
+            max_dispatched_tokens_per_expert,
+            dispatched_metadata=tt_metadata,
+            expert_offsets=tt_expert_offsets,
+            replicated_global_expert_idx_table=tt_idx_full,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=_SEQ_LEN_PER_CHIP,
+            fwd_arrived_semaphore=fwd_arrived,
+            final_arrived_semaphore=final_arrived,
+            expert_go_semaphore=expert_go,
+            channel_semaphores=channels,
+            combine_axis=sp_axis,
+            combine_num_links=num_links,
+            big_first_threshold=threshold,
+            compute_kernel_config=tt_expert.compute_kernel_config,
+            activation=ttnn.RoutedExpertActivation.Silu,
         )
 
     reference = []
@@ -604,9 +634,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         solo_unified=solo_unified,
         combine=combine,
         overlapped=overlapped,
-        # No fused pass: unified_routed_expert_moe's wave-planned program on the routed expert's rows, the experts
-        # above the model's hybrid threshold first, and combine walking each chip's predicted finish order.
-        overlapped_waves=lambda: overlapped(hybrid_threshold=0, unified_waves=True, big_first_threshold=threshold),
+        overlapped_waves=overlapped_waves,
         torch_reference=torch_reference,
         indices=indices,
         num_dispatch_groups=num_dispatch_groups,

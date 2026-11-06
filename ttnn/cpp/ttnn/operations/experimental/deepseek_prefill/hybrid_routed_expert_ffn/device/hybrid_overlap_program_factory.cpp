@@ -3,20 +3,14 @@
 
 #include "hybrid_overlap_program_factory.hpp"
 
-#include <algorithm>
 #include <map>
-#include <set>
-#include <memory>
-#include <optional>
 
 #include <tt-metalium/mesh_coord.hpp>
 #include <ttnn/global_semaphore.hpp>
 
 #include "hybrid_program_factory.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.hpp"
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
-#include "combine/combine_fabric2d_program_factory.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/routed_expert_combine_overlap/device/routed_expert_handoff.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
@@ -51,36 +45,6 @@ combine::CombineFabric2dInputs combine_inputs(const HybridRoutedExpertFfnInputs&
     };
 }
 
-namespace {
-
-// The unified reader's view of where combine's walks open: expert_offsets' row for the ring chip diametrically
-// opposite this one, which both of combine's walk directions take first. Appended past every other argument.
-// The reader is the merged one when the fused pass runs and the unified half's own when it does not (threshold 0),
-// as for the writer in expert_done_writer_count; both are the unified reader that consumes these arguments.
-void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer* expert_offsets, uint32_t dg_far) {
-    auto* reader = std::find_if(desc.kernels.begin(), desc.kernels.end(), [](const auto& k) {
-        return k.kernel_source.ends_with("hybrid_reader.cpp") ||
-               k.kernel_source.ends_with("unified_routed_expert_ffn_reader.cpp");
-    });
-    TT_FATAL(reader != desc.kernels.end(), "hybrid routed expert: the program carries no reader kernel");
-    uint32_t base = 0;
-    for (const auto& [core, args] : reader->runtime_args) {
-        base = std::max(base, static_cast<uint32_t>(args.size()));
-    }
-    for (auto& [core, args] : reader->runtime_args) {
-        args.resize(base, 0);
-        args.push_back(static_cast<uint32_t>(expert_offsets->address()));
-        args.push_back(static_cast<uint32_t>(expert_offsets->aligned_page_size()));
-        args.push_back(dg_far);
-        // The address is re-patched on every program-cache hit: the tensor may live elsewhere next call.
-        reader->buffer_bindings.push_back(
-            tt::tt_metal::BufferBinding{.core = core, .arg_idx = base, .buffer = expert_offsets});
-    }
-    reader->defines.emplace_back("URE_FAR_RT_BASE", std::to_string(base));
-}
-
-}  // namespace
-
 tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_descriptor(
     const HybridRoutedExpertFfnParams& op,
     const HybridRoutedExpertFfnInputs& t,
@@ -98,28 +62,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
     const auto re_descriptor = create_hybrid_program_descriptor(op, t, re_output, arena);
 
     auto combine_args = combine_attributes(op, t);
-    if (op.unified_waves) {
-        // The wave-planned program's writers report each expert at its place in the predicted finish order; combine
-        // predicts the same order for every ring chip, from the same planner configuration and threshold.
-        namespace waves = ::ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn;
-        const auto planner =
-            waves::UnifiedRoutedExpertFfnProgramFactory::wave_planner_config(wave_attributes(op), wave_inputs(t));
-        // The prediction tables on the combine cores (combine_fabric2d_group_walk.hpp) and the writers.
-        const uint32_t ring =
-            ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::ring_extent(combine_args);
-        TT_FATAL(
-            op.experts_per_chip <= 32 && ring <= 16,
-            "hybrid routed expert: unified_waves overlapped with combine predicts at most 32 experts per chip on a "
-            "ring of at most 16 chips (got {} experts, ring of {})",
-            op.experts_per_chip,
-            ring);
-        combine_args.predicted_walk = true;
-        combine_args.walk_per_core_M_max = planner.per_core_M_max;
-        combine_args.walk_partial_eighth = planner.partial_eighth;
-        combine_args.walk_taper_tail = planner.taper_tail;
-        combine_args.walk_big_first_threshold = op.big_first_threshold;
-    }
-    combine_args.routed_expert_writers = expert_done_writer_count(re_descriptor);
+    combine_args.routed_expert_writers = combine::expert_done_writer_count(re_descriptor);
     combine_args.routed_expert_cores = tt::tt_metal::CoreRange(
         tt::tt_metal::CoreCoord{0, kOriginY}, tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1});
     TT_FATAL(
@@ -142,55 +85,8 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
             .forwarding = t.forwarding_buffer.has_value() ? t.forwarding_buffer->buffer() : nullptr},
         &collectors);
 
-    for (auto& program : workload.programs) {
-        TT_FATAL(
-            program.range.shape().mesh_size() == 1,
-            "hybrid routed expert: combine built one program for {} chips; each chip needs its own collector",
-            program.range.shape().mesh_size());
-        const auto coord = program.range.start_coord();
-        const auto& collector = collectors.at(coord);
-        // NOC coordinates, because the writers address the collector with get_noc_addr.
-        const auto collector_noc = combine_args.device->worker_core_from_logical_core(collector.logical);
-
-        auto re = re_descriptor;
-        append_expert_done_signal(
-            re,
-            ExpertDoneSignal{
-                .collector_noc_x = static_cast<uint32_t>(collector_noc.x),
-                .collector_noc_y = static_cast<uint32_t>(collector_noc.y),
-                .collector_counts_addr = collector.counts_addr,
-                .go_addr = go_addr});
-        {
-            namespace cf = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
-            const uint32_t extent = cf::ring_extent(combine_args);
-            append_far_run(
-                re, t.expert_offsets->buffer(), (cf::my_dg_index(combine_args, coord) + extent / 2) % extent);
-        }
-        if (!collector.l1_homes.empty()) {
-            // The writers keep the tile-rows combine takes last in combine's L1 slots, which no kernel of theirs may
-            // sit on.
-            std::set<tt::tt_metal::CoreCoord> homes;
-            for (std::size_t w = 0; w < collector.l1_homes.size(); w += 2) {
-                homes.insert(tt::tt_metal::CoreCoord{collector.l1_homes[w] & 0xFFFF, collector.l1_homes[w] >> 16});
-            }
-            for (auto& kernel : re.kernels) {
-                for (const auto& range : kernel.core_ranges.ranges()) {
-                    for (const auto& core : range) {
-                        TT_FATAL(
-                            !homes.contains(combine_args.device->worker_core_from_logical_core(core)),
-                            "hybrid routed expert: an L1 slot for the routed expert's output sits on its own core");
-                    }
-                }
-                if (kernel.kernel_source.ends_with("unified_routed_expert_ffn_writer.cpp")) {
-                    kernel.defines.emplace_back("URE_L1H_CT_BASE", std::to_string(kernel.compile_time_args.size()));
-                    kernel.defines.emplace_back("URE_L1H_SLOTS", std::to_string(collector.l1_homes.size() / 2));
-                    kernel.compile_time_args.insert(
-                        kernel.compile_time_args.end(), collector.l1_homes.begin(), collector.l1_homes.end());
-                }
-            }
-        }
-        program.descriptor = tt::tt_metal::merge_program_descriptors({program.descriptor, re});
-    }
+    combine::merge_routed_expert(
+        workload, collectors, re_descriptor, combine_args, t.expert_offsets->buffer(), go_addr);
 
     // The caller owns all three semaphores; holding them here as well only keeps them alive with the program.
     // combine_fabric2d already holds fwd_arrived and final_arrived through its semaphore list.

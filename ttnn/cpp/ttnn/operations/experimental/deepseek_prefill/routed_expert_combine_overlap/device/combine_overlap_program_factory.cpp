@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "combine_fabric2d_program_factory.hpp"
-#include "combine_fabric2d_collector.hpp"
+#include "combine_overlap_program_factory.hpp"
+#include "combine_overlap_collector.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_assignments.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
@@ -38,7 +38,7 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine {
+namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
 
 // Placement, assignments and the geometry helpers are combine_fabric2d's; this op walks the same ring.
 using namespace ::ttnn::operations::experimental::deepseek_prefill::
@@ -233,7 +233,7 @@ struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore fwd_arrived;
     tt::tt_metal::GlobalSemaphore final_arrived;
     // Arrival is per movement class now, so the single fwd_arrived above no longer serves the kernels; it is
-    // kept because the hybrid op's contract still hands one in and validates it. The channel counters below
+    // kept because the overlapped op's contract still hands one in and validates it. The channel counters below
     // come from that same contract, for the same two reasons spelled out at channel_semaphore_count: the
     // upstream chip bumps them across launches, and by the time this op is built there is no L1 left to
     // allocate them from -- the routed expert's arena holds every free byte.
@@ -964,4 +964,4 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     return workload_descriptor;
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine
+}  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap

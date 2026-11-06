@@ -43,11 +43,6 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         hybrid_routed_expert_moe_forwarding_buffer; omitted, combine allocates its own at the first
         call and keeps it for the program's lifetime.
 
-        unified_waves (hybrid_token_threshold 0 only) runs unified_routed_expert_moe's wave-planned
-        program instead of this op's unified half; overlapped with combine, combine walks each chip's
-        experts in that program's predicted finish order. big_first_threshold (0, or at least 96
-        tokens) makes it run the experts above that many tokens first.
-
         weight_address_table is every expert's weight base address as one uint32 ROW_MAJOR DRAM
         page, [gate[0..E), up[0..E), down[0..E)], read by the kernels in place of per-expert runtime
         args, which is what lets the union program fit its kernel-config ring at the production
@@ -82,13 +77,9 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("expert_go_semaphore") = nb::none(),
         nb::arg("forwarding_buffer") = nb::none(),
         nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{},
-        nb::arg("unified_waves") = false,
-        nb::arg("big_first_threshold") = 0,
         nb::arg("weight_address_table") = nb::none());
 
-    ttnn::bind_function<
-        "hybrid_routed_expert_moe_channel_semaphore_count",
-        "ttnn.experimental.deepseek_prefill.">(
+    ttnn::bind_function<"hybrid_routed_expert_moe_channel_semaphore_count", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
         How many channel_semaphores hybrid_routed_expert_moe needs when overlapped with combine.
