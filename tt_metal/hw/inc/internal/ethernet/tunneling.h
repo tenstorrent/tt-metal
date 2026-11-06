@@ -97,8 +97,10 @@ FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
 }
 
+// Issues the send without waiting for the txq. The caller must have checked !eth_txq_is_busy(q_num).
 FORCE_INLINE
-void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+void eth_send_packet_without_txq_busy_check(
+    uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
     DEBUG_SANITIZE_ETH(src_word_addr << 4, dest_word_addr << 4, num_words << 4);
     WATCHER_CHECK_ETH_LINK_STATUS();
     ASSERT(!eth_txq_is_busy(q_num));
@@ -108,8 +110,10 @@ void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t des
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
 }
 
+// Byte-addressed form of eth_send_packet_without_txq_busy_check. Same contract.
 FORCE_INLINE
-void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+void eth_send_packet_bytes_without_txq_busy_check(
+    uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
     DEBUG_SANITIZE_ETH(src_addr, dest_addr, num_bytes);
     WATCHER_CHECK_ETH_LINK_STATUS();
     ASSERT(eth_txq_reg_read(q_num, ETH_TXQ_CMD) == 0);
@@ -117,6 +121,17 @@ void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t de
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_addr);
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_bytes);
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
+}
+
+// Old names. "unsafe" says nothing about what is skipped; use the *_without_txq_busy_check names.
+FORCE_INLINE
+void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    eth_send_packet_without_txq_busy_check(q_num, src_word_addr, dest_word_addr, num_words);
+}
+
+FORCE_INLINE
+void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+    eth_send_packet_bytes_without_txq_busy_check(q_num, src_addr, dest_addr, num_bytes);
 }
 
 template <bool ctx_switch = true>

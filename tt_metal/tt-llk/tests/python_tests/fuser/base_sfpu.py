@@ -41,8 +41,10 @@ class Sfpu:
 
     @staticmethod
     def _vector_mode(operation: "L1Operation") -> str:
-        tile_dims = operation.tile_shape.tile_dims
-        if tile_dims in ((16, 32), (32, 16)):
+        num_faces = operation.tile_shape.total_num_faces()
+        if num_faces == 1:
+            return "ckernel::VectorMode::None"
+        if num_faces == 2:
             return "ckernel::VectorMode::R"
         return "ckernel::VectorMode::RC"
 

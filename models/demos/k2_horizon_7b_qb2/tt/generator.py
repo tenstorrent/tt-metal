@@ -10,6 +10,8 @@ from collections import Counter
 from contextlib import contextmanager
 
 import torch
+from tt_transformers.modules.sampling.sampling_1d import Sampling1D
+from tt_transformers.modules.sampling.seed_manager_1d import _hash_request_seed_to_device_seed
 
 try:
     from readiness_check.contract import Generator
@@ -17,8 +19,6 @@ except ImportError:  # Serving images (e.g. TTI/CI) do not ship the bring-up run
     from models.demos.k2_horizon_7b_qb2.tt.readiness_contract import Generator
 
 import ttnn
-from models.common.modules.sampling.sampling_1d import Sampling1D
-from models.common.modules.sampling.seed_manager_1d import _hash_request_seed_to_device_seed
 from models.demos.k2_horizon_7b_qb2.tt.model import K2Model
 from models.demos.k2_horizon_7b_qb2.tt.token_history import history_program
 
