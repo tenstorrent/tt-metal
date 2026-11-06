@@ -1,0 +1,40 @@
+{
+  "status": "prepared_held",
+  "candidate_sha": "dd4ba5b83837db77f4b26ca43005ae2074cd03b6",
+  "base_sha": "7ad6cf50d160a2e9cbe007fc4475af3c8f8bf365",
+  "branch": "prep/gpqa80-c8",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa80-c8",
+  "cohort_source": "cohorts.json:r1_gpqa_diamond.rungs.prepared-larger80-c4-retained",
+  "no_new_selection": true,
+  "registered80_exact": true,
+  "existing40_exact_prefix": true,
+  "production_delta": [
+    "GPQA doc_ids20to80",
+    "GPQA CI_NIGHTLY count20to80"
+  ],
+  "preserved": "All other production AST and all model YAML bytes unchanged, including C8/B8 expanded pool env, response logging, caps, seed, top_k, runtime defaults and disabled peer suites.",
+  "validation": {
+    "focused_tests_passed": 36,
+    "focused_seconds": 4.02,
+    "full_hooks": "all passed after formatting",
+    "diff_check": "passed",
+    "clean_worktree": true
+  },
+  "device_hours": 0,
+  "host_box_hours": 0.3,
+  "score": null,
+  "projection_hours": null,
+  "held_until": [
+    "valid40",
+    "accepted C8 same20 comparison",
+    "measured time projection and schedule admission"
+  ],
+  "publication": "Local source-only commit; no push/dispatch. Normal40 remains independent.",
+  "evidence": [
+    "c8-plan.md",
+    "c8-source-audit.json",
+    "c8-tests.log",
+    "c8-hooks-final.log",
+    "c8-candidate.patch"
+  ]
+}

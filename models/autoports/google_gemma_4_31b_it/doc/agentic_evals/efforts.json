@@ -3355,7 +3355,7 @@
 },
 "box_hours": 3.5,
 "status": "running",
-"admission": "Host implementation/client preparation admitted; root must queue each device run. Capacity subbox0.65h. Normal40 neverwaits.",
+"admission": "Coordinator admits same20 comparison in parallel to repairedsame20, overlapping required image build; no cohort growth, no dependency delays40. Acceptance still requires valid repaired20baseline and candidate audit.",
 "baseline_reuse": "Explicitly accepted repaired20 C4 baseline onab273; logging exactness-proven separately. If source/config incompatibility affects outputs, repeat appropriate baseline and reprice.",
 "prediction_correction_pending": false,
 "re_estimate": {
@@ -3383,9 +3383,50 @@
 "box_hours": 0.3,
 "basis": "guess from C8 full capacity hold0.24167h, omit exactness",
 "reason": "Existing C4 residency proof lacks completion timestamps; matching context-dependent cadence addresses measured C8 attention-cost uncertainty, no redundant capacity claim",
-"status": "preparing"
+"status": "completed",
+"actual_device_hours": 0.1420230511111111,
+"evidence": "runs/gpqa-b8-expanded-pool/timing-baseline.json"
+},
+"candidate20_workflow_hours_guess": 3.2087288868306616,
+"local_c4_wrapper_hours": 0.14283737602168306,
+"actual_local_hours_so_far": 0.47222091055555554
 }
-}
+},
+{
+"problem": "gpqa80-c8-preparation",
+"owner": "source_packaging",
+"goal": "Prepare exact frozen80 model entry on publishedC8 TTIbase without runtime/harness changes, held until valid40 and acceptedC8 comparison",
+"plan": "runs/gpqa80-preparation/c8-plan.md",
+"predicted": {
+"saving_hours": {
+"r1_gpqa_diamond": 0
+},
+"device_hours": 0,
+"basis": "calculated",
+"reason": "Host-only config preparation avoids blocking next eligible rung; no device run"
+},
+"unblocks": [],
+"confirm": {
+"method": "Exact source/model-config diff, original nested80 IDs, hosttests/hooks",
+"success": "Only list/count and test expectations differ from7ad6cf50; unchanged nativeharness,limits,logging,env"
+},
+"box_hours": 0,
+"host_box_hours": 0.3,
+"status": "done",
+"admission": "Prepare only; coordinator owns publication and dispatch",
+"used_device_hours": 0,
+"change": "kept",
+"problem_status": "solved",
+"confirmed": {
+"candidate_sha": "dd4ba5b83837db77f4b26ca43005ae2074cd03b6",
+"registered80_exact": true,
+"tests": 36,
+"hooks": "passed",
+"dispatch": "held"
+},
+"evidence": [
+"runs/gpqa80-preparation/c8-RESULT.json"
+]
 }
 ],
 "rankings": [
@@ -20347,6 +20388,66 @@
 }
 ],
 "reason": "Validity first; capacity confirmed but speed remains unknown. Coordinator widens existing effort box to3.2h with about0.48h over this sensitivity. No rung waits and no speed saving credited."
+},
+{
+"after": "C4 timing completion and same20 parallel admission",
+"at": "2026-11-06T21:05:23.712981+00:00",
+"order": [
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"valid20 then40"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "frozen initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "gpqa-b8-expanded-pool",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 2.2478752334079,
+"basis": "local measured, candidate guess from measured cadence"
+}
+],
+"reason": "Optional same20 comparison overlaps image build on granted secondary slot; no rung advancement or delay, acceptance requires completed valid paired evidence. Previous normal40-first dispatch order relaxed only to overlap build, not score/admission gates."
+},
+{
+"after": "held80 C8 config preparation",
+"at": "2026-11-06T21:12:45.841097+00:00",
+"order": [
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"valid20 then40"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "frozen initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "gpqa-b8-expanded-pool",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 2.2478752334079,
+"basis": "local measured, candidate guess from measured cadence"
+}
+],
+"reason": "Zero-device host preparation complete; validity gate and optional scored20 comparison ranking unchanged; normal40 remains independent."
 }
 ],
 "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

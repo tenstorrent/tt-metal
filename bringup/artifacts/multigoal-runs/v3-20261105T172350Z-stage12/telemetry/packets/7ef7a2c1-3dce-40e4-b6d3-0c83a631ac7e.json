@@ -91,6 +91,6 @@
     "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json.",
     "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json.",
     "Selected headline remains unbuffered B1. Stock response debug buffers SSE (measured experiment excluded from decoderateclaims); enabled only for nonstreamingGPQA. Evidence: runs/response-logging-runtime-benchmark/AUTOFIX.md.",
-    "Optional B8 expanded pool passed eight-history131072-token capacity (zero preemptions,99.73% late reuse), three native exact pairs and B1 regression. Not selected pending scoredC8 comparison; no speedup credited. Evidence: runs/gpqa-b8-expanded-pool/local-confirmation.json and benchmark-confirmation.json."
+    "Optional B8 expanded pool passed eight131K-history capacity, three native exact pairs and B1 regression. Same20 C8 comparison42293808766 building; baseline42273660905 still running. Not selected, zero speed saving credited. Evidence: runs/gpqa-b8-expanded-pool/{local-confirmation,benchmark-confirmation,timing-baseline}.json."
   ]
 }

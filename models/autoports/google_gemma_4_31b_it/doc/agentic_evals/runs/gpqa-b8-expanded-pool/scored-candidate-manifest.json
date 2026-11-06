@@ -36,7 +36,7 @@
   "workflow": "evals",
   "retention_enabled": true,
   "arm": "gpqa20-c8-expanded-pool-comparison",
-  "status": "held_until_valid_repaired20_and_normal40_dispatch",
+  "status": "submitted",
   "planned_clients": 8,
   "tti_sha": "7ad6cf50d160a2e9cbe007fc4475af3c8f8bf365",
   "tt_metal_sha": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
@@ -47,13 +47,24 @@
     "GEMMA4_B8_KV_POOL_IDS": "20480",
     "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "true"
   },
-  "predicted_hours": null,
-  "projection_pending": "Tail-aware reprice needed: initialC4 includes knowncap tails7/20; C8sameB8 does not halve per-user tails. Use repaired20 actualphase/eval timing, build0.933889h measured, queue0.5hguess.",
+  "predicted_hours": 3.2087288868306616,
   "scope": "Same frozen20 scored comparison with accepted currentC4 baseline; original IDs/limits/nativeharness preserved. Normal40 never waits.",
   "baseline_run_id": 42273660905,
   "baseline_reuse": "Coordinator approved comparative score/work/time, not controlled causal speed claim; actuallogging/source config differences recorded",
-  "no_dispatch": true,
+  "no_dispatch": false,
   "prepared_at": "2026-11-06T20:32:05.089339+00:00",
-  "effort_box_hours": 3.2,
-  "diagnostic_device_hours_sensitivity": 2.389133
+  "effort_box_hours": 3.5,
+  "diagnostic_device_hours_sensitivity": 2.389133,
+  "queued_at": "2026-11-06T21:05:23.712981+00:00",
+  "projection_components_hours": {
+    "candidate_eval_guess_from_measured_context_interpolation": 1.637656,
+    "historical_setup": 0.1371839979417726,
+    "measured_image_build": 0.9338888888888889,
+    "queue_guess": 0.5
+  },
+  "projection_reason": "Same20 initial two long tails mean no2x claim. Interpolation assumes8active growingcontexts and is neither bound nor observed eval; highcontexttail sensitivity2.251949h, release requestlimit4h preserved.",
+  "admission_revision": "Coordinator admits same20 comparison in parallel to repairedsame20, overlapping required image build; no cohort growth, no dependency delays40. Acceptance still requires valid repaired20baseline and candidate audit.",
+  "run_id": 42293808766,
+  "submitted_at": "2026-11-06T21:05:26Z",
+  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42293808766"
 }

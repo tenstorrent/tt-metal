@@ -320,6 +320,12 @@
       "max_num_seqs": 8,
       "planned_clients": 4,
       "batch_reason": "Smallest supported batch>=4; matching default-pool long-context cadence"
+    },
+    "gpqa20-c8-expanded-pool-comparison": {
+      "batch": 8,
+      "planned_clients": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated physical batch>=8; eight independent131K histories passed local live capacity, zero preemption"
     }
   },
   "release_limits": {
@@ -660,7 +666,8 @@
         "GEMMA4_B8_KV_POOL_IDS": "20480"
       },
       "evidence": "runs/gpqa-b8-expanded-pool/local-confirmation.json",
-      "selected": false
+      "selected": false,
+      "matching_c4_cadence": "runs/gpqa-b8-expanded-pool/timing-baseline.json"
     }
   }
 }
