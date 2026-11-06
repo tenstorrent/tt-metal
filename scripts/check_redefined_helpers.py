@@ -20,10 +20,16 @@ import argparse
 import bisect
 import os
 import re
-import subprocess
 import sys
 
-from precommit_common import REPO_ROOT, blank_noncode, safe_git_rev, safe_repo_path
+from precommit_common import (
+    REPO_ROOT,
+    blank_noncode,
+    git_output,
+    name_status_entries,
+    precommit_revisions,
+    safe_repo_path,
+)
 
 # Files that are the source of truth. Definitions inside them are the API.
 ALLOWLIST = {
@@ -750,18 +756,25 @@ def _diff_paths(paths):
 
 
 def _git_diff(args, paths=None):
-    command = ["git", "--literal-pathspecs", "diff", "-U0", "--no-ext-diff", *args, "--"]
-    if paths:
-        command.extend(paths)
-    try:
-        return subprocess.check_output(
-            command,
-            cwd=REPO_ROOT,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+    return git_output(["--literal-pathspecs", "diff", "-U0", "-M", "--no-ext-diff", *args, "--", *(paths or [])])
+
+
+def _rename_sources(revisions, paths):
+    """Old paths of the given files that this change renames.
+
+    git pairs a rename only when both paths are in the pathspec. With the new path alone,
+    the whole moved file reads as added and its existing helpers would be reported.
+    The local lookup reads the index only, so it does not stat the work tree.
+    """
+    if not paths:
+        return []
+    payload = git_output(
+        ["diff", "--name-status", "-z", "-M", "--no-ext-diff", "--diff-filter=R", *(revisions or ["--cached"])]
+    )
+    if not payload:
+        return []
+    wanted = set(paths)
+    return [old for _status, (old, new) in name_status_entries(payload) if new in wanted]
 
 
 def commit_added_lines(paths=None):
@@ -774,14 +787,12 @@ def commit_added_lines(paths=None):
     None when git cannot answer.
     """
     scoped = _diff_paths(paths)
-    from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
-    to_ref = os.environ.get("PRE_COMMIT_TO_REF")
-    if from_ref or to_ref:
-        safe_from = safe_git_rev(from_ref)
-        safe_to = safe_git_rev(to_ref)
-        if safe_from is None or safe_to is None:
-            return None
-        diff = _git_diff([safe_from, safe_to], scoped)
+    revisions = precommit_revisions()
+    if revisions is None:
+        return None
+    scoped += _rename_sources(revisions, scoped)
+    if revisions:
+        diff = _git_diff(revisions, scoped)
     else:
         diff = _git_diff(["HEAD"], scoped)
         if diff is None:

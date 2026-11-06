@@ -16,7 +16,6 @@ from validate_api import (
     ALLOWED_UMD_HEADERS,
     BANNED_HEADERS,
     SKIP_FILES,
-    _paths_from_name_status,
     load_exceptions,
     skip_unrelated_commit,
     source_lines,
@@ -473,10 +472,12 @@ class ApiValidationTests(unittest.TestCase):
             "--exceptions",
             str(exceptions),
         ]
-        result = subprocess.run(command, capture_output=True, text=True)
+        # Under pre-commit the child would inherit PRE_COMMIT and skip an unrelated commit.
+        env = {key: value for key, value in os.environ.items() if not key.startswith("PRE_COMMIT")}
+        result = subprocess.run(command, capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.header("tt-metalium/a.hpp", '#include "internal/private.hpp"\n')
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode, 1)
         for diagnostic in (
             "unconditional #pragma once",
@@ -487,26 +488,24 @@ class ApiValidationTests(unittest.TestCase):
 
 
 class PrecommitSkipTests(unittest.TestCase):
-    def test_name_status_keeps_a_deleted_path_and_both_sides_of_a_rename(self):
-        payload = "D\0tt_metal/api/tt-metalium/old.hpp\0R100\0tt_metal/api/tt-metalium/a.hpp\0elsewhere/a.hpp\0"
-        self.assertEqual(
-            _paths_from_name_status(payload),
-            [
-                "tt_metal/api/tt-metalium/old.hpp",
-                "tt_metal/api/tt-metalium/a.hpp",
-                "elsewhere/a.hpp",
-            ],
-        )
-
     def _skip(self, payload, filenames=()):
         with patch.dict(os.environ, {"PRE_COMMIT": "1"}, clear=False):
             os.environ.pop("PRE_COMMIT_FROM_REF", None)
             os.environ.pop("PRE_COMMIT_TO_REF", None)
-            with patch("validate_api.subprocess.check_output", return_value=payload):
+            with patch("validate_api.git_output", return_value=payload):
                 return skip_unrelated_commit(list(filenames))
 
     def test_deletion_of_an_api_header_still_validates(self):
         self.assertFalse(self._skip("D\0tt_metal/api/tt-metalium/a.hpp\0"))
+
+    def test_a_rename_out_of_the_api_still_validates(self):
+        self.assertFalse(self._skip("R100\0tt_metal/api/tt-metalium/a.hpp\0elsewhere/a.hpp\0"))
+
+    def test_a_shared_helper_change_validates(self):
+        self.assertFalse(self._skip("M\0scripts/precommit_common.py\0"))
+
+    def test_git_failure_validates(self):
+        self.assertFalse(self._skip(None))
 
     def test_unrelated_commit_skips(self):
         self.assertTrue(self._skip("M\0ttnn/foo.py\0"))
