@@ -7,13 +7,21 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstdint>
 #include <cstdlib>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
@@ -525,4 +533,242 @@ TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* weight_decay */ 0.0f,
         /* nesterov */ false,
         /* momentum_buffer */ std::nullopt));
+}
+
+// ====================================================================
+// Program-cache hits
+// lr, momentum, dampening and weight decay are not part of the program hash, so a hit must re-apply them, and the
+// use-weight-decay and use-dampening flags derived from them, with the new buffer addresses. Each test starts from an
+// empty program cache, keeps the tensors of its earlier launches alive and compares every launch with SGDComposite.
+// ====================================================================
+
+class SGDCacheHitTest : public ttml::test_utils::ProgramCacheSuiteTest {};
+
+namespace {
+
+// The arguments of ttml::metal::sgd that are left out of the program hash.
+struct SGDStepScalars {
+    float lr;
+    float momentum;
+    float dampening;
+    float weight_decay;
+};
+
+// A device tensor and the host values it was made from. Parameters, gradients and momentum buffers are random and
+// nonzero, so every scalar shows in the result.
+struct HostAndDeviceTensor {
+    xt::xarray<float> values;
+    ttnn::Tensor tensor;
+};
+
+HostAndDeviceTensor upload_uniform(const std::vector<uint32_t>& shape, uint32_t seed) {
+    auto values = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed);
+    auto tensor = to_tt(values);
+    return {std::move(values), std::move(tensor)};
+}
+
+// The tensors of one launch.
+struct SGDLaunchTensors {
+    HostAndDeviceTensor param;
+    HostAndDeviceTensor grad;
+    std::optional<HostAndDeviceTensor> momentum_buffer;
+};
+
+SGDLaunchTensors make_sgd_launch_tensors(const std::vector<uint32_t>& shape, bool with_momentum_buffer, uint32_t seed) {
+    SGDLaunchTensors tensors{upload_uniform(shape, seed), upload_uniform(shape, seed + 1U), std::nullopt};
+    if (with_momentum_buffer) {
+        tensors.momentum_buffer = upload_uniform(shape, seed + 2U);
+    }
+    return tensors;
+}
+
+ttnn::Tensor launch_sgd(const SGDLaunchTensors& tensors, const SGDStepScalars& scalars, bool nesterov) {
+    std::optional<ttnn::Tensor> momentum_buffer;
+    if (tensors.momentum_buffer.has_value()) {
+        momentum_buffer = tensors.momentum_buffer->tensor;
+    }
+    return ttml::metal::sgd(
+        tensors.param.tensor,
+        tensors.grad.tensor,
+        scalars.lr,
+        scalars.momentum,
+        scalars.dampening,
+        scalars.weight_decay,
+        nesterov,
+        momentum_buffer);
+}
+
+// The tensors a launch updates.
+struct SGDValues {
+    xt::xarray<float> param;
+    std::optional<xt::xarray<float>> momentum;  // with a momentum buffer only
+};
+
+SGDValues read_back(const SGDLaunchTensors& tensors) {
+    SGDValues values{ttml::core::to_xtensor(tensors.param.tensor), std::nullopt};
+    if (tensors.momentum_buffer.has_value()) {
+        values.momentum = ttml::core::to_xtensor(tensors.momentum_buffer->tensor);
+    }
+    return values;
+}
+
+// SGDComposite's step on fresh copies of a launch's inputs. The momentum buffer is restored through the state dict,
+// so the composite treats it as past its first update and applies momentum and dampening to it, as the fused kernel
+// does with any buffer it is given.
+SGDValues composite_reference(const SGDLaunchTensors& tensors, const SGDStepScalars& scalars, bool nesterov) {
+    using namespace ttml;
+    auto theta = autograd::create_tensor(to_tt(tensors.param.values), true);
+    theta->set_grad(to_tt(tensors.grad.values));
+
+    optimizers::SGDCompositeConfig cfg;
+    cfg.lr = scalars.lr;
+    cfg.momentum = scalars.momentum;
+    cfg.dampening = scalars.dampening;
+    cfg.weight_decay = scalars.weight_decay;
+    cfg.nesterov = nesterov;
+    optimizers::SGDComposite opt(serialization::NamedParameters{{"theta", theta}}, cfg);
+    if (tensors.momentum_buffer.has_value()) {
+        auto state = opt.get_state_dict();
+        state["theta"] = serialization::NamedParameters{
+            {"theta", autograd::create_tensor(to_tt(tensors.momentum_buffer->values), false)}};
+        opt.set_state_dict(state);
+    }
+    opt.step();
+
+    SGDValues values{core::to_xtensor(theta->get_value()), std::nullopt};
+    if (tensors.momentum_buffer.has_value()) {
+        const auto state = opt.get_state_dict();
+        const auto& buffers = std::get<serialization::NamedParameters>(state.at("theta"));
+        values.momentum = core::to_xtensor(buffers.at("theta")->get_value());
+    }
+    return values;
+}
+
+void expect_bitwise_equal(
+    const SGDValues& expected, const SGDValues& actual, const SGDLaunchTensors& tensors, const std::string& label) {
+    ASSERT_EQ(expected.param.shape(), actual.param.shape()) << label;
+    EXPECT_EQ(compare_tensors(expected.param, actual.param, tensors.param.values, tensors.grad.values), 0U)
+        << label << ": param";
+    ASSERT_EQ(expected.momentum.has_value(), actual.momentum.has_value()) << label;
+    if (expected.momentum.has_value()) {
+        ASSERT_EQ(expected.momentum->shape(), actual.momentum->shape()) << label;
+        EXPECT_EQ(compare_tensors(*expected.momentum, *actual.momentum, tensors.param.values, tensors.grad.values), 0U)
+            << label << ": momentum buffer";
+    }
+}
+
+void expect_distinct_buffers(const SGDLaunchTensors& a, const SGDLaunchTensors& b) {
+    EXPECT_NE(a.param.tensor.buffer()->address(), b.param.tensor.buffer()->address());
+    EXPECT_NE(a.grad.tensor.buffer()->address(), b.grad.tensor.buffer()->address());
+    if (a.momentum_buffer.has_value() && b.momentum_buffer.has_value()) {
+        EXPECT_NE(a.momentum_buffer->tensor.buffer()->address(), b.momentum_buffer->tensor.buffer()->address());
+    }
+}
+
+// Launch A compiles the program. Launch B updates fresh buffers with every hash-excluded scalar changed. Launch C
+// updates fresh copies of launch A's buffers with launch A's scalars and must reproduce launch A bit for bit.
+void run_new_scalars_on_fresh_buffers(bool nesterov, const SGDStepScalars& scalars_a, const SGDStepScalars& scalars_b) {
+    auto& device = ttml::autograd::ctx().get_device();
+    const auto shape = ttml::test_utils::two_core_group_rows_shape(32U);
+    constexpr uint32_t kSeedA = 100U;
+
+    const auto a = make_sgd_launch_tensors(shape, /*with_momentum_buffer=*/true, kSeedA);
+    const auto entries_before_a = device.num_program_cache_entries();
+    const auto a_out = launch_sgd(a, scalars_a, nesterov);
+    ASSERT_GT(device.num_program_cache_entries(), entries_before_a) << "launch A must compile a program";
+    EXPECT_EQ(a_out.buffer()->address(), a.param.tensor.buffer()->address()) << "SGD updates the parameter in place";
+    const auto a_after = read_back(a);
+    expect_bitwise_equal(composite_reference(a, scalars_a, nesterov), a_after, a, "launch A");
+
+    const auto b = make_sgd_launch_tensors(shape, /*with_momentum_buffer=*/true, 200U);
+    const auto entries_before_b = device.num_program_cache_entries();
+    launch_sgd(b, scalars_b, nesterov);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_b) << "launch B must reuse launch A's program";
+    expect_distinct_buffers(a, b);
+    const auto b_after = read_back(b);
+    expect_bitwise_equal(composite_reference(b, scalars_b, nesterov), b_after, b, "launch B (cache hit, new scalars)");
+
+    const auto c = make_sgd_launch_tensors(shape, /*with_momentum_buffer=*/true, kSeedA);
+    const auto entries_before_c = device.num_program_cache_entries();
+    launch_sgd(c, scalars_a, nesterov);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_c) << "launch C must reuse launch A's program";
+    expect_distinct_buffers(a, c);
+    expect_distinct_buffers(b, c);
+    expect_bitwise_equal(a_after, read_back(c), c, "launch C (launch A again, cache hit)");
+
+    expect_bitwise_equal(a_after, read_back(a), a, "launch A's buffers after the later launches");
+    expect_bitwise_equal(b_after, read_back(b), b, "launch B's buffers after launch C");
+}
+
+}  // namespace
+
+// Launch A runs without dampening or weight decay, so launch B also switches both compute flags on.
+TEST_F(SGDCacheHitTest, MomentumNewScalarsOnFreshBuffers_TwoCoreGroups) {
+    run_new_scalars_on_fresh_buffers(
+        /*nesterov=*/false,
+        /*scalars_a=*/{1e-2f, 0.9f, 0.0f, 0.0f},
+        /*scalars_b=*/{1e-1f, 0.5f, 0.5f, 1.0f});
+}
+
+// Nesterov momentum requires zero dampening (SGD::validate_config).
+TEST_F(SGDCacheHitTest, NesterovNewScalarsOnFreshBuffers_TwoCoreGroups) {
+    run_new_scalars_on_fresh_buffers(
+        /*nesterov=*/true,
+        /*scalars_a=*/{1e-2f, 0.9f, 0.0f, 0.0f},
+        /*scalars_b=*/{1e-1f, 0.5f, 0.0f, 1.0f});
+}
+
+// Without a momentum buffer the op builds a program that neither reads nor writes one, and nesterov momentum, which the
+// program hash keys, builds a third. The launches alternate between the three cached programs on fresh buffers, with
+// new scalars on every hit.
+TEST_F(SGDCacheHitTest, PlainMomentumAndNesterovProgramsAlternate_TwoCoreGroups) {
+    using ttml::test_utils::CacheExpectation;
+    using ttml::test_utils::expect_cache;
+    auto& device = ttml::autograd::ctx().get_device();
+    const auto shape = ttml::test_utils::two_core_group_rows_shape(32U);
+
+    struct Launch {
+        bool momentum_buffer;
+        bool nesterov;
+        SGDStepScalars scalars;
+        bool cache_hit;
+        const char* name;
+    };
+    const std::array<Launch, 6> launches = {{
+        {false, false, {1.0f, 0.0f, 0.0f, 0.0f}, false, "launch A (plain, miss)"},
+        {true, false, {1e-2f, 0.9f, 0.0f, 0.0f}, false, "launch B (momentum, miss)"},
+        {true, true, {1e-2f, 0.9f, 0.0f, 0.0f}, false, "launch C (nesterov, miss)"},
+        {false, false, {1e-1f, 0.0f, 0.0f, 1.0f}, true, "launch D (plain, cache hit)"},
+        {true, false, {1e-1f, 0.5f, 0.5f, 1.0f}, true, "launch E (momentum, cache hit)"},
+        {true, true, {1e-1f, 0.5f, 0.0f, 1.0f}, true, "launch F (nesterov, cache hit)"},
+    }};
+
+    std::vector<SGDLaunchTensors> tensors;
+    std::vector<SGDValues> after;
+    tensors.reserve(launches.size());
+    after.reserve(launches.size());
+    for (uint32_t i = 0; i < launches.size(); ++i) {
+        const auto& launch = launches[i];
+        auto launch_tensors = make_sgd_launch_tensors(shape, launch.momentum_buffer, 300U + 10U * i);
+        for (const auto& earlier : tensors) {
+            expect_distinct_buffers(earlier, launch_tensors);
+        }
+        const auto entries_before = device.num_program_cache_entries();
+        launch_sgd(launch_tensors, launch.scalars, launch.nesterov);
+        expect_cache(entries_before, launch.cache_hit ? CacheExpectation::Hit : CacheExpectation::Miss, launch.name);
+        after.push_back(read_back(launch_tensors));
+        expect_bitwise_equal(
+            composite_reference(launch_tensors, launch.scalars, launch.nesterov),
+            after.back(),
+            launch_tensors,
+            launch.name);
+        tensors.push_back(std::move(launch_tensors));
+    }
+    for (uint32_t i = 0; i < launches.size(); ++i) {
+        expect_bitwise_equal(
+            after[i],
+            read_back(tensors[i]),
+            tensors[i],
+            std::string(launches[i].name) + ": buffers after the later launches");
+    }
 }

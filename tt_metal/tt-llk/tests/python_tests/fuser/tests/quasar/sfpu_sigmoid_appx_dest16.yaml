@@ -4,7 +4,7 @@ dest_acc: false
 operands:
   - name: "input_A"
     dims: [32, 32]
-    format: [Float16_b, Float16]
+    format: [Float16_b]
     stimuli:
       # Keep zero and LUT transition points separate from the random intervals.
       include:

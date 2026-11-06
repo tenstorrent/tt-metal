@@ -14,12 +14,11 @@
 #include <cstdint>
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
-#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -28,7 +27,6 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 struct GoSignalSequenceConfig {
-    uint8_t cq_id;
     MeshDevice* mesh_device;
     SubDeviceId sub_device_id;
     uint32_t expected_num_workers_completed;
@@ -112,7 +110,6 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
 }  // namespace
 
 HostMemDeviceCommand build_go_signal_sequence(
-    uint8_t cq_id,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     uint32_t expected_num_workers_completed,
@@ -121,7 +118,6 @@ HostMemDeviceCommand build_go_signal_sequence(
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
     std::optional<uint32_t> config_ring_sync_count) {
     const GoSignalSequenceConfig config{
-        .cq_id = cq_id,
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
         .expected_num_workers_completed = expected_num_workers_completed,
@@ -148,7 +144,6 @@ void write_go_signal_sequence(
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count) {
     const GoSignalSequenceConfig config{
-        .cq_id = cq_id,
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
         .expected_num_workers_completed = expected_num_workers_completed,

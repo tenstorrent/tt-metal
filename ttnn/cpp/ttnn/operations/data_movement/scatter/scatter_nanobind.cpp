@@ -33,7 +33,7 @@ void bind_scatter(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
-            reduce (ttnn.ScatterReductionType, optional): reduction operation to apply when multiple values are scattered to the same location (e.g., amax, amin, sum). Currently not supported. Defaults to `None`.
+            reduce (str, optional): reduction applied when several source values scatter to the same location; one of 'add' or 'multiply'. Defaults to `None` (overwrite).
             sub_core_grids (ttnn.CoreRangeSet, optional): specifies which cores scatter should run on. Defaults to `None`.
 
         Returns:

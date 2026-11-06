@@ -22,7 +22,7 @@ ttnn::Tensor select_final_carry(
     std::optional<uint32_t> num_links) {
     // Validation runs on cache misses only; the device must be known before then to pick the links.
     TT_FATAL(
-        prefix_final.storage_type() == StorageType::DEVICE && prefix_final.buffer() != nullptr,
+        prefix_final.storage_type() == StorageType::DEVICE && prefix_final.is_allocated(),
         "select_final_carry: prefix_final must be an allocated device tensor");
     auto* mesh = prefix_final.device();
     TT_FATAL(

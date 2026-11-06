@@ -308,6 +308,10 @@
 #include "api/compute/lcm.h"
 #endif
 
+#ifdef SFPU_OP_BINARY_BCAST_INCLUDE
+#include "api/compute/sfpu_binary_bcast.h"
+#endif
+
 #ifdef SFPU_OP_BINARY_SHIFT_INCLUDE
 #include "api/compute/binary_shift.h"
 #endif

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -49,6 +50,11 @@ tt::tt_metal::PhysicalSystemDescriptor build_grid_mock_psd(
     uint32_t channels = 2,
     const std::vector<std::pair<int, int>>& extra_links = {},
     uint64_t base_asic_id = 100);
+
+// The PSD a solve over a subset of hosts sees: only `hosts` keep their ASIC descriptors, ranks and topologies,
+// but their ASICs keep every eth link they report, including links to ASICs on hosts outside the subset.
+tt::tt_metal::PhysicalSystemDescriptor restrict_mock_psd_to_hosts(
+    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::set<std::string>& hosts);
 
 // Topology-shape edge lists (0-based indices), to hand to build_mock_psd.
 std::vector<std::pair<int, int>> line_edges(int num_asics);       // 0-1-2-...-(n-1)

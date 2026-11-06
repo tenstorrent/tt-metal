@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <tt_stl/span.hpp>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <utility>
 #include <vector>
 
@@ -23,13 +23,12 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 

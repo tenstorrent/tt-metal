@@ -41,6 +41,11 @@
 //
 // Each lane streams its half through a transaction-id (trid) ring over its scratch CB
 // so DRAM reads overlap the fabric writes.
+//
+// Extra segments: a service may carry more tensors than the primary one (each with its
+// own spec / dtype / page size). They ship after the primary tensor in the same
+// transfer, each split across the lanes the same way, so one handshake and one
+// data-landed signal per lane still cover everything.
 
 #include <cstdint>
 
@@ -101,6 +106,13 @@ constexpr uint32_t done_count_addr = get_compile_time_arg_val(28);  // shared L1
 // the (vestigial) socket chunk plan; the host sizes the scratch CB to match.
 constexpr uint32_t num_read_slots = get_compile_time_arg_val(29);
 constexpr auto input_tensor_accessor_args = TensorAccessorArgs<30>();
+// Each extra segment appends kExtraSegmentCtArgs words here:
+// [aligned page_size, src_addr, page_start, page_end]. One TensorAccessorArgs
+// block shared by every extra segment follows them (all DRAM interleaved). Each segment's
+// receiver backing address is one RT arg after the primary's.
+constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
+constexpr uint32_t extra_segments_ct_offset = input_tensor_accessor_args.next_compile_time_args_offset();
+constexpr uint32_t kExtraSegmentCtArgs = 4;
 
 // Emit `size` bytes from a contiguous L1 source to a single remote NoC address over
 // fabric, split into <= fabric_max_payload_size packets. Used for both a tensor page
@@ -169,6 +181,50 @@ using ReadRing = TridRing<kRingDepth, kTridBase>;
 // prefetch the page one ring ahead into it. in_acc/out_acc share the per-shard spec
 // (same accessor args, different base address).
 template <typename Acc>
+FORCE_INLINE void stream_pages(
+    const Noc& noc,
+    tt::tt_fabric::WorkerToFabricEdmSender& conn,
+    const Acc& in_acc,
+    const Acc& out_acc,
+    uint32_t cb_l1_addr,
+    uint32_t page_start_,
+    uint32_t page_end_,
+    uint32_t page_size,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
+    const uint32_t n = page_end_ - page_start_;
+    const uint32_t prime = (ReadRing::depth < n) ? ReadRing::depth : n;
+    CoreLocalMem<uint32_t> scratch(cb_l1_addr);
+    for (uint32_t i = 0; i < prime; ++i) {
+        noc.async_read<NocOptions::TXN_ID>(
+            in_acc,
+            scratch,
+            page_size,
+            {.page_id = page_start_ + i},
+            {.offset_bytes = i * page_size},
+            NocOptVals{.trid = ReadRing::trid(i)});
+    }
+    for (uint32_t k = 0; k < n; ++k) {
+        const uint32_t slot = ReadRing::slot(k);
+        const uint32_t trid = ReadRing::trid(k);
+        const uint32_t src = cb_l1_addr + slot * page_size;
+        noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = trid});
+        fabric_write_bytes(conn, out_acc.get_noc_addr(page_start_ + k), src, page_size, data_packet_header_addr);
+        const uint32_t next = k + ReadRing::depth;
+        if (next < n) {
+            noc.async_read<NocOptions::TXN_ID>(
+                in_acc,
+                scratch,
+                page_size,
+                {.page_id = page_start_ + next},
+                {.offset_bytes = slot * page_size},
+                NocOptVals{.trid = trid});
+        }
+    }
+}
+
+// The primary segment's page size is a compile-time constant; inlining stream_pages with it
+// keeps the slot offsets constant-folded.
+template <uint32_t PageSize, typename Acc>
 FORCE_INLINE void stream_half(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
@@ -178,33 +234,39 @@ FORCE_INLINE void stream_half(
     uint32_t page_start_,
     uint32_t page_end_,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
-    const uint32_t n = page_end_ - page_start_;
-    const uint32_t prime = (ReadRing::depth < n) ? ReadRing::depth : n;
-    CoreLocalMem<uint32_t> scratch(cb_l1_addr);
-    for (uint32_t i = 0; i < prime; ++i) {
-        noc.async_read<NocOptions::TXN_ID>(
-            in_acc,
-            scratch,
-            tensor_page_size,
-            {.page_id = page_start_ + i},
-            {.offset_bytes = i * tensor_page_size},
-            NocOptVals{.trid = ReadRing::trid(i)});
-    }
-    for (uint32_t k = 0; k < n; ++k) {
-        const uint32_t slot = ReadRing::slot(k);
-        const uint32_t trid = ReadRing::trid(k);
-        const uint32_t src = cb_l1_addr + slot * tensor_page_size;
-        noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = trid});
-        fabric_write_bytes(conn, out_acc.get_noc_addr(page_start_ + k), src, tensor_page_size, data_packet_header_addr);
-        const uint32_t next = k + ReadRing::depth;
-        if (next < n) {
-            noc.async_read<NocOptions::TXN_ID>(
+    stream_pages(noc, conn, in_acc, out_acc, cb_l1_addr, page_start_, page_end_, PageSize, data_packet_header_addr);
+}
+
+// Stream this lane's range of each extra segment, in order. stream_pages leaves no read
+// in flight, so the segments reuse the scratch CB and trid ring back to back. The shared
+// accessor block lets this be a runtime loop: one copy of the body however many segments
+// there are. The accessor offset depends on NumExtra so that `if constexpr` defers it; with no
+// extra segments the block would otherwise be instantiated past the last CT arg.
+template <uint32_t NumExtra = num_extra_segments>
+FORCE_INLINE void stream_extra_segments(
+    const Noc& noc,
+    tt::tt_fabric::WorkerToFabricEdmSender& conn,
+    uint32_t cb_l1_addr,
+    const uint32_t* receiver_addrs,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
+    if constexpr (NumExtra > 0) {
+        constexpr auto seg_accessor_args =
+            TensorAccessorArgs<extra_segments_ct_offset + (kExtraSegmentCtArgs * NumExtra)>();
+        for (uint32_t s = 0; s < NumExtra; ++s) {
+            const uint32_t ct_idx = extra_segments_ct_offset + (kExtraSegmentCtArgs * s);
+            const uint32_t seg_page_size = kernel_compile_time_args[ct_idx];
+            const auto in_acc = TensorAccessor(seg_accessor_args, kernel_compile_time_args[ct_idx + 1], seg_page_size);
+            const auto out_acc = TensorAccessor(seg_accessor_args, receiver_addrs[s], seg_page_size);
+            stream_pages(
+                noc,
+                conn,
                 in_acc,
-                scratch,
-                tensor_page_size,
-                {.page_id = page_start_ + next},
-                {.offset_bytes = slot * tensor_page_size},
-                NocOptVals{.trid = trid});
+                out_acc,
+                cb_l1_addr,
+                kernel_compile_time_args[ct_idx + 2],
+                kernel_compile_time_args[ct_idx + 3],
+                seg_page_size,
+                data_packet_header_addr);
         }
     }
 }
@@ -231,6 +293,10 @@ void kernel_main() {
     // Per-coord base address of the receiver's DRAM backing tensor (the direct
     // fabric-write destination). Appended after the fabric-connection args; per device.
     const uint32_t receiver_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t extra_receiver_addrs[num_extra_segments > 0 ? num_extra_segments : 1];
+    for (uint32_t s = 0; s < num_extra_segments; ++s) {
+        extra_receiver_addrs[s] = get_arg_val<uint32_t>(rt_args_idx++);
+    }
 
     // This lane's two fabric headers (its own header CB): one for the bulk page
     // writes, one for the data-landed atomic-inc. Routed once below (L1 writes only).
@@ -351,7 +417,7 @@ void kernel_main() {
             }
 
             // 4. Stream the master's half directly into the receiver DRAM tensor.
-            stream_half(
+            stream_half<tensor_page_size>(
                 noc,
                 fabric_connection,
                 input_tensor_accessor,
@@ -360,6 +426,8 @@ void kernel_main() {
                 page_start,
                 page_end,
                 data_packet_header_addr);
+            stream_extra_segments(
+                noc, fabric_connection, cb_l1_addr, extra_receiver_addrs, data_packet_header_addr);
 
             // 4b. Optional metadata: fabric-write the blob to the receiver's vestigial
             //     socket-FIFO L1 base (covered by the master's Flush-inc below); the
@@ -439,7 +507,7 @@ void kernel_main() {
                 fabric_open = true;
             }
 
-            stream_half(
+            stream_half<tensor_page_size>(
                 noc,
                 fabric_connection,
                 input_tensor_accessor,
@@ -448,6 +516,8 @@ void kernel_main() {
                 page_start,
                 page_end,
                 data_packet_header_addr);
+            stream_extra_segments(
+                noc, fabric_connection, cb_l1_addr, extra_receiver_addrs, data_packet_header_addr);
 
             flush_inc_data_landed(fabric_connection, socket_packet_header_addr, recv_bytes_sent_noc_addr);
 

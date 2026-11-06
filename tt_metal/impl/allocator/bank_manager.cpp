@@ -7,16 +7,13 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "allocator_state.hpp"
-#include <limits>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <algorithm>
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
@@ -723,6 +720,17 @@ MemoryBlockTable BankManager::get_memory_block_table(
 
     log_warning(tt::LogAlways, "allocator is not initialized, cannot get block table for memory");
     return {};
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::get_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    const auto* alloc = this->get_allocator_from_id(allocator_id);
+    if (alloc == nullptr) {
+        return {};
+    }
+    auto ranges = alloc->allocated_addresses();
+    std::sort(ranges.begin(), ranges.end());
+    return ranges;
 }
 
 void BankManager::shrink_size(

@@ -9,6 +9,7 @@
 
 namespace ttnn {
 
+[[deprecated("moreh_dot is deprecated and will be removed after 2026-11-26. Use ttnn::matmul instead.")]]
 Tensor moreh_dot(
     const Tensor& input_a,
     const Tensor& input_b,
