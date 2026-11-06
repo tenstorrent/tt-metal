@@ -333,9 +333,11 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     // --- Architecture and clock ---
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
     int clock_rate_mhz = 1000;
+    auto fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
         clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
+        fabric_config = tt::tt_fabric::GetFabricConfig(*input_tensor.device());
     }
 
     // --- Data sizes ---
@@ -375,7 +377,7 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     }
     // Fabric bandwidth and its pipeline-fill latency are two independent floors — both compete in the final max().
     const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
-        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
+        arch, fabric_config, clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
 
     // =========================================================================
     // 2. LOCAL DATA MOVEMENT — first-principles minimum (algorithm-agnostic)

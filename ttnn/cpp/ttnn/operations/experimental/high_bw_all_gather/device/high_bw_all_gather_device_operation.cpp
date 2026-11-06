@@ -524,7 +524,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
         output_tensor.device() == mesh_device,
         "high_bw_all_gather input and output tensors must be on the same mesh device");
 
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     TT_FATAL(
         !linearized_mesh_ring || tt::tt_fabric::is_2d_fabric_config(fabric_config),
         "high_bw_all_gather cluster_axis=None requires a 2D fabric config (FABRIC_2D or "

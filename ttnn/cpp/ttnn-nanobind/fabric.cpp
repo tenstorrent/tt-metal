@@ -157,9 +157,23 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_fabric_config",
-        &tt::tt_fabric::GetFabricConfig,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+            return tt::tt_fabric::GetFabricConfig(mesh_device);
+        },
+        nb::arg("mesh_device"),
+        R"(
+            Returns the fabric configuration in effect for ``mesh_device``.
+        )");
+
+    mod.def(
+        "get_fabric_config",
+        []() { return tt::tt_fabric::GetFabricConfig(); },
         R"(
             Returns the currently active global fabric configuration.
+
+            .. deprecated::
+                Pass ``mesh_device`` instead. This overload resolves the default context and will be
+                removed after 2026-12-31.
         )");
 
     mod.def(

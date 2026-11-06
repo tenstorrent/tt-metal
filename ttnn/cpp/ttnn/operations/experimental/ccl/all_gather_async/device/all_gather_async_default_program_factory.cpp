@@ -195,7 +195,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         sender_device_coord, forward_coord, backward_coord, mesh_device);
     const bool use_fabric_2d_neighbor_barrier =
-        topology == ccl::Topology::Linear && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+        topology == ccl::Topology::Linear &&
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device));
     // A logical line can turn when it is embedded in a 2D physical mesh (for example QB 1x4 on its
     // four-chip cycle). A single Fabric multicast range cannot describe that turn: its hop range
     // continues in the physical direction selected by the first neighbor. The all-gather data path

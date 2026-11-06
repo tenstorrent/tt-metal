@@ -70,7 +70,7 @@ bool reduce_scatter_minimal_direct_is_applicable(
         return false;
     }
     if (!prim::reduce_scatter_direct_fabric_supported(
-            *mesh_device, tt::tt_fabric::GetFabricConfig(), usable_topology)) {
+            *mesh_device, tt::tt_fabric::GetFabricConfig(*mesh_device), usable_topology)) {
         return false;
     }
 

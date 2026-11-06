@@ -343,7 +343,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const uint32_t cluster_axis = operation_attributes.cluster_axis.value_or(0);
     const auto sender_device_fabric_node_id = tensor_args.input_tensor.device()->get_fabric_node_id(mesh_coordinate);
 
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*tensor_args.input_tensor.device());
     const bool is_fabric_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     // FABRIC_2D_TORUS_X/Y wraps only one mesh axis even though get_fabric_topology() reports Torus for both.
     // Resolve wrapping for the collective's axis so a Ring on the other axis cannot open a nonexistent hop.
@@ -1227,7 +1227,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllAsyncGenericProgram::create_workload_de
     const uint32_t num_links = args.num_links.has_value()
                                    ? *args.num_links
                                    : ttnn::operations::ccl::common::get_num_links(*mesh_device, args.cluster_axis);
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     const uint32_t axis = args.cluster_axis.value_or(0);
     const ResolvedRouting routing{
         .num_links = num_links,

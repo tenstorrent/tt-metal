@@ -423,7 +423,7 @@ def test_synthetic_kimi_k3_perf(
     median_wall_ms = statistics.median(samples_ms)
     median_device_ms = None if device_samples_ms is None else statistics.median(device_samples_ms)
     result = {
-        "fabric_config": ttnn.get_fabric_config().name,
+        "fabric_config": ttnn.get_fabric_config(mesh_device).name,
         "layout": layout,
         "traced": traced,
         "sequence": sequence,
@@ -509,7 +509,7 @@ def test_kimi_k3_tp_reduce_scatter_perf(
     """
     reference_ms = _perf_reference_ms(layout)
     tp_size = tuple(mesh_device.shape)[cluster_axis]
-    topology = per_axis_topology()[cluster_axis]
+    topology = per_axis_topology(mesh_device=mesh_device)[cluster_axis]
     assert (tp_size, topology) == (
         4,
         expected_topology,
@@ -563,7 +563,7 @@ def test_kimi_k3_tp_reduce_scatter_perf(
         ttnn.deallocate(partials_tt)
     median_wall_ms = statistics.median(samples_ms)
     result = {
-        "fabric_config": ttnn.get_fabric_config().name,
+        "fabric_config": ttnn.get_fabric_config(mesh_device).name,
         "layout": layout,
         "input_shape": [1, 1, rows, hidden_size],
         "num_links": num_links,

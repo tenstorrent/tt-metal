@@ -461,7 +461,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // also decides the packet header type the kernel reads these back with, so host and
     // device stay in step without a flag — and only a 2D config pairs with the header
     // this kernel is compiled against.
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     TT_FATAL(
         tt::tt_fabric::is_2d_fabric_config(fabric_config),
         "attn_res_gather_softmax needs a 2D fabric, got {}",

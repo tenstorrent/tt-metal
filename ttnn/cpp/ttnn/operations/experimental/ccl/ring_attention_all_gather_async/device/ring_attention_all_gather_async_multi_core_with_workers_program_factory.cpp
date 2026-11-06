@@ -336,7 +336,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     const auto op_config = ttnn::ccl::CCLOpConfig(mutable_input_tensors, output_tensors, transport_topology);
     auto unicast_forward_args = std::get<0>(ccl::get_forward_backward_line_unicast_configuration(
         target_device_coord, unicast_destination_coord, std::nullopt, mesh_device));
-    if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+    if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device))) {
         unicast_forward_args[1] = halo.distance;
     }
 
@@ -752,7 +752,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             rank_mapping.mesh_rows,
             rank_mapping.mesh_cols);
         TT_FATAL(
-            tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device)),
             "full-mesh ring-attention requires Fabric2D");
         TT_FATAL(
             target_device_coord.dims() == 2,

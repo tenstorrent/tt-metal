@@ -582,7 +582,7 @@ def _run_chunked_prefill(
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
     sp_axis, tp_axis = 0, 1
     if topology is None:
-        topology = per_axis_topology()
+        topology = per_axis_topology(mesh_device=mesh_device)
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
     tp = mesh_shape[tp_axis]

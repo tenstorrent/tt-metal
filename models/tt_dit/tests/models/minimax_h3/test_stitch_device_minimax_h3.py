@@ -419,7 +419,7 @@ def test_replicated_readback_matches_gather_path(mesh_device, width):
     )
 
     padded_width = -(-width // (2 * mesh_cols)) * (2 * mesh_cols)
-    ccl_manager = CCLManager(mesh_device, num_links=2, topology=fabric_topology())
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=fabric_topology(mesh_device))
 
     def gather_path():
         reference_in = canvas

@@ -1458,7 +1458,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             "ring_mla cluster_axis=None requires the persistent gathered-KV buffer to be replicated across the "
             "complete mesh");
 
-        const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+        const auto fabric_config = tt::tt_fabric::GetFabricConfig(mesh_device);
         // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
         TT_FATAL(
             tt::tt_fabric::is_2d_fabric_config(fabric_config),

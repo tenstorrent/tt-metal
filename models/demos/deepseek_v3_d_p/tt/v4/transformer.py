@@ -110,7 +110,7 @@ class TtV4Transformer(LightweightModule):
         if padding_side != "right":
             raise ValueError(f"V4 attention is right-padded by construction, got {padding_side!r}")
 
-        topology = topology if topology is not None else per_axis_topology()
+        topology = topology if topology is not None else per_axis_topology(mesh_device=mesh_device)
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         self.mesh_device = mesh_device
         self.config = config

@@ -149,6 +149,7 @@ constexpr uint32_t kNeighborHaloWriterKernelIndex = 4;
 // Program creation and the per-dispatch patch both go through plan_halo_exchanges, since the exchange
 // list fixes the kernel count and order. Only a 1D fabric's line multicast takes a start distance.
 std::vector<ring_joint::ChunkedSlidingHaloExchange> plan_halo_exchanges(
+    const ttnn::MeshDevice& mesh_device,
     const ttnn::prim::Gemma4SlidingRingSDPAParams& args,
     const ring_joint::ChunkedSlidingHaloLayout& layout,
     uint32_t transport_rank) {
@@ -156,7 +157,7 @@ std::vector<ring_joint::ChunkedSlidingHaloExchange> plan_halo_exchanges(
         layout,
         transport_rank,
         args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear,
-        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()));
+        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(mesh_device)));
 }
 
 // A one-hop or multicast halo spreads each exchange over every link; a unicast multi-hop halo gives each
@@ -411,8 +412,8 @@ void apply_ring_joint_scalar_runtime_args(
             args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
                                            : std::nullopt);
     TT_FATAL(runtime_chunked_sliding_layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
-    const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges =
-        plan_halo_exchanges(args, runtime_chunked_sliding_layout, ring_write_plan.transport_rank);
+    const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges = plan_halo_exchanges(
+        *tensor_args.input_k.device(), args, runtime_chunked_sliding_layout, ring_write_plan.transport_rank);
 
     // Semaphores are not in the program hash, so a cache hit may come with different ones: re-apply the halo
     // semaphore's address to every halo reader and writer.
@@ -2054,7 +2055,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // plan_chunked_sliding_halo_exchanges groups the hops into exchanges.
     const uint32_t halo_remote_hops = chunked_sliding_halo_layout.remote_hop_count();
     const auto& ag_attrs = args.all_gather_operation_attributes;
-    const auto halo_exchanges = plan_halo_exchanges(args, chunked_sliding_halo_layout, transport_rank);
+    const auto halo_exchanges = plan_halo_exchanges(*mesh_device, args, chunked_sliding_halo_layout, transport_rank);
     // The first exchange's workers collect every arrival (SlidingHaloConfig::collects_arrivals).
     TT_FATAL(halo_exchanges.front().hop == 1, "The first sliding halo exchange must cover hop 1");
     const bool halo_multicast = halo_exchanges.front().multicast;

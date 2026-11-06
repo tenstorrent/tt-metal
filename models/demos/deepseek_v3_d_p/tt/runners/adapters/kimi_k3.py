@@ -322,7 +322,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
         from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntimeConfig
 
-        topology = per_axis_topology()
+        topology = per_axis_topology(mesh_device=mesh_device)
         logger.info(f"Kimi-K3 per-axis CCL topology (sp, tp) = {topology}")
 
         runtime_config = TtPrefillRuntimeConfig(

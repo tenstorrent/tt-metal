@@ -725,7 +725,7 @@ def main():
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols), l1_small_size=L1_SMALL_SIZE)
     print(
         f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()} "
-        f"fabric={ttnn.get_fabric_config()} ccl_topology={ccl_topology}",
+        f"fabric={ttnn.get_fabric_config(mesh)} ccl_topology={ccl_topology}",
         flush=True,
     )
     results = []

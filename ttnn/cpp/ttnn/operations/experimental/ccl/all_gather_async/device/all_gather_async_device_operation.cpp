@@ -364,9 +364,11 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     // Architecture and clock detection
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
     int clock_rate_mhz = 1000;
+    auto fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
         clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
+        fabric_config = tt::tt_fabric::GetFabricConfig(*input_tensor.device());
     }
 
     // Data size: bytes each device contributes
@@ -394,7 +396,7 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     // (first chunk crossing the diameter). Fill overlaps streaming rather than preceding
     // it, so it joins the max() below instead of adding on.
     const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
-        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
+        arch, fabric_config, clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
 
     // --- Local DRAM bandwidth ceiling (first-principles) ---
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.

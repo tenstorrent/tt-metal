@@ -335,11 +335,10 @@ _FABRIC_2D_CONFIGS = (
 _logged_index_k_routes = set()
 
 
-def _log_index_k_route_once(is_2d, *, sp, tp, rows):
+def _log_index_k_route_once(is_2d, fabric, *, sp, tp, rows):
     if is_2d in _logged_index_k_routes:
         return
     _logged_index_k_routes.add(is_2d)
-    fabric = ttnn.get_fabric_config()
     if is_2d:
         logger.info(f"[msa] index_k TP-dedup gather route: 2D full-mesh snake (fabric={fabric})")
         return
@@ -380,8 +379,9 @@ def _gather_tp_sharded_index_k(
         "msa_cache_index_k_tp", (1, 1, rows * sp * tp, hd), index_k_cache.dtype
     )
 
-    is_2d = ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS
-    _log_index_k_route_once(is_2d, sp=sp, tp=tp, rows=rows)
+    fabric = ttnn.get_fabric_config(index_k_cache.device())
+    is_2d = fabric in _FABRIC_2D_CONFIGS
+    _log_index_k_route_once(is_2d, fabric, sp=sp, tp=tp, rows=rows)
     if is_2d:
         return ttnn.experimental.high_bw_all_gather(
             index_k_cache,

@@ -14,9 +14,10 @@ def ti_cond_skip(condition, reason):
         pytest.skip("Skipping unsupported case: " + reason)
 
 
-def validate_test(num_devices, topology, shape, cluster_axis):
+def validate_test(num_devices, topology, shape, cluster_axis, mesh_device=None):
     if topology is None:
-        fabric_config = ttnn.get_fabric_config()
+        assert mesh_device is not None, "validate_test needs mesh_device to read the fabric topology"
+        fabric_config = ttnn.get_fabric_config(mesh_device)
         topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
     ti_cond_skip((1 == num_devices), "Can't run a CCL test on 1 device")
     ti_cond_skip(
@@ -97,7 +98,7 @@ def test_all_gather_linear_2D_nightly(
     num_iters,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     if cluster_axis == 0:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
@@ -151,7 +152,7 @@ def test_all_gather_multicast_non_scatter_pages(
     mem_config_ag,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
@@ -231,7 +232,7 @@ def test_all_gather_linear_4D_nightly(
     num_iters,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     if cluster_axis == 0:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
@@ -313,7 +314,7 @@ def test_all_gather_ring_nightly(
     cluster_axis,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     if cluster_axis == 0:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
@@ -388,7 +389,7 @@ def test_all_gather_dtype(
     mem_config_ag,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     if cluster_axis == 0:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:

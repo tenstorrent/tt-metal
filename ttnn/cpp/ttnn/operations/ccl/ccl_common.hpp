@@ -24,8 +24,6 @@
 
 namespace ttnn::ccl {
 
-bool is_fabric_2d();
-
 std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     tt::tt_metal::DataType input_dtype);
