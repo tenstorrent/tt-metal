@@ -304,6 +304,15 @@ class ApiValidationTests(unittest.TestCase):
         (self.root / "tt-metalium/alias.hpp").symlink_to("../internal/private.hpp")
         self.assertTrue(any("must not include internal" in error for error in self.errors()))
 
+    def test_dangling_source_relative_symlink_does_not_hide_api_root_header(self):
+        # The quoted path hits a dangling link first. The API-root header exists, and
+        # that is the file the compiler opens.
+        self.header("internal/private.hpp")
+        self.header("tt-metalium/a.hpp", '#pragma once\n#include "internal/private.hpp"\n')
+        (self.root / "tt-metalium/internal").mkdir()
+        (self.root / "tt-metalium/internal/private.hpp").symlink_to("../../tt-metalium/missing.hpp")
+        self.assertTrue(any("must not include internal" in error for error in self.errors()))
+
     def test_directory_symlink_does_not_hide_internal_target(self):
         self.header("internal/private.hpp")
         self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias/private.hpp>\n")
@@ -523,6 +532,25 @@ class PrecommitSkipTests(unittest.TestCase):
 
     def test_a_passed_filename_does_not_skip(self):
         self.assertFalse(self._skip("M\0ttnn/foo.py\0", ["tt_metal/api/tt-metalium/a.hpp"]))
+
+    def test_local_run_diffs_the_work_tree_against_head(self):
+        with patch.dict(os.environ, {"PRE_COMMIT": "1"}, clear=False):
+            os.environ.pop("PRE_COMMIT_FROM_REF", None)
+            os.environ.pop("PRE_COMMIT_TO_REF", None)
+            with patch("validate_api.git_output", return_value="D\0tt_metal/api/tt-metalium/a.hpp\0") as git:
+                self.assertFalse(skip_unrelated_commit([]))
+        args = git.call_args.args[0]
+        self.assertIn("HEAD", args)
+        self.assertNotIn("--cached", args)
+        self.assertIn("tt_metal/api/", args)
+
+    def test_ci_range_keeps_the_given_revisions(self):
+        env = {"PRE_COMMIT": "1", "PRE_COMMIT_FROM_REF": "aaa", "PRE_COMMIT_TO_REF": "bbb"}
+        with patch.dict(os.environ, env, clear=False):
+            with patch("validate_api.git_output", return_value="M\0ttnn/foo.py\0") as git:
+                self.assertTrue(skip_unrelated_commit([]))
+        args = git.call_args.args[0]
+        self.assertEqual(args[4:6], ["aaa", "bbb"])
 
 
 if __name__ == "__main__":
