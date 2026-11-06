@@ -98,8 +98,13 @@ void kernel_main() {
     push_right_mask_tile<mask_t, W_mod32, TILE>(dfb_right_mask, static_cast<mask_t>(MASK_VALUE));
 #endif
 #ifdef HAS_BOTTOM_PAD
+#ifdef GEMMA_RUNTIME_HMOD
+    const auto H_mod32 = get_arg(args::H_mod32);
+    push_bottom_mask_tile_runtime<mask_t, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE), H_mod32);
+#else
     constexpr auto H_mod32 = get_arg(args::H_mod32);
     push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));
+#endif
 #endif
 
     // ---- Phase 2: write-back loop ----

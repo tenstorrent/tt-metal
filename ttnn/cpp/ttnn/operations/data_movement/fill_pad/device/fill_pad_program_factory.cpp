@@ -83,6 +83,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     const std::uint32_t H_tiles = tt::div_up(height, tile_height);
     const std::uint32_t W_tiles = tt::div_up(width, tile_width);
     const std::uint32_t H_mod32 = height % tile_height;
+    const bool runtime_hmod = gemma_runtime_hmod_enabled(operation_attributes, tensor_args);
     const std::uint32_t W_mod32 = width % tile_width;
     const bool has_right_pad = W_mod32 != 0;
     const bool has_bottom_pad = H_mod32 != 0;
@@ -203,7 +204,9 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     if (has_bottom_pad) {
         writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::PRODUCER});
-        writer_cta.insert({"H_mod32", H_mod32});
+        if (!runtime_hmod) {
+            writer_cta.insert({"H_mod32", H_mod32});
+        }
     }
     KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -217,6 +220,10 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
     writer_spec.compiler_options.defines = mask_defines;
+    if (runtime_hmod) {
+        writer_spec.compiler_options.defines.insert({"GEMMA_RUNTIME_HMOD", "1"});
+        writer_spec.runtime_arg_schema.runtime_arg_names.push_back("H_mod32");
+    }
 
     // ---- Compute KernelSpec ----
     Group<DFBBinding> compute_dfb_bindings = {
@@ -263,7 +270,10 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         .name = "fill_pad_dram",
         .kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)},
         .dataflow_buffers = std::move(dataflow_buffers),
-        .tensor_parameters = {TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()}},
+        .tensor_parameters = {TensorParameter{
+            .unique_id = INPUT,
+            .spec = input_tensor.tensor_spec(),
+            .relaxations = {.match_padded_shape_only = runtime_hmod}}},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
     };
 
@@ -328,6 +338,9 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
              {"num_bottom", num_bottom},
              {"start_corner", start_corner},
              {"num_corner", num_corner}});
+        if (runtime_hmod) {
+            AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"H_mod32", H_mod32}});
+        }
         // Compute RT: per-phase counts; starts are not needed (DFBs are FIFO).
         AddRuntimeArgsForNode(
             compute_run.runtime_arg_values,
@@ -342,6 +355,13 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     run_args.tensor_args.insert({INPUT, TensorArgument{tensor_args.input.mesh_tensor()}});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs FillPadProgramFactory::override_runtime_arguments(
+    const FillPadParams& attrs, const FillPadInputs& args, Tensor& output, const std::optional<ttnn::MeshCoordinate>&) {
+    // Re-derive every argument and binding on a hit. This creates host metadata
+    // only; no device allocation or program compilation is performed here.
+    return create_program_artifacts(attrs, args, output).run_params;
 }
 
 ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_program_artifacts(

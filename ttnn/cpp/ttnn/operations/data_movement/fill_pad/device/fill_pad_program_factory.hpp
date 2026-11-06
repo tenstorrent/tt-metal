@@ -107,6 +107,8 @@ namespace ttnn::prim {
 // with num == 0 are skipped. A single compute kernel binary covers all cores
 // (CT has_right_pad / has_bottom_pad gate the phase branches at compile time).
 struct FillPadProgramFactory {
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const FillPadParams&, const FillPadInputs&, Tensor&, const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
 };

@@ -12,6 +12,19 @@ namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
+ttsl::hash::hash_t FillPadDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& args) {
+    if (!gemma_runtime_hmod_enabled(attrs, args)) {
+        return ttsl::hash::hash_objects_with_default_seed(false, attrs, args);
+    }
+    const auto& x = args.input;
+    auto canonical_shape = x.logical_shape();
+    canonical_shape[1] = x.padded_shape()[1] - 1;
+    const tt::tt_metal::TensorSpec canonical(canonical_shape, x.tensor_spec().tensor_layout());
+    TT_FATAL(canonical.padded_shape() == x.padded_shape(), "Canonical FillPad bucket changed padded shape");
+    return ttsl::hash::hash_objects_with_default_seed(true, attrs, canonical);
+}
+
 FillPadDeviceOperation::program_factory_t FillPadDeviceOperation::select_program_factory(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;

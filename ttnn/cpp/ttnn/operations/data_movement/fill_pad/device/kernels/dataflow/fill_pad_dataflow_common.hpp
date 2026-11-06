@@ -52,3 +52,23 @@ void push_bottom_mask_tile(CB_T& cb_bot_mask, MASK_T one_val) {
     generate_mask_tile<MASK_T, TILE, H_mod32, TILE>(reinterpret_cast<MASK_T*>(cb_bot_mask.get_write_ptr()), one_val);
     cb_bot_mask.push_back(1);
 }
+
+// Bottom-only runtime threshold; overwrite every mask lane on every invocation.
+template <typename MASK_T, uint32_t TILE, typename CB_T>
+void push_bottom_mask_tile_runtime(CB_T& cb, MASK_T one_val, uint32_t threshold) {
+    constexpr uint32_t FACE = TILE / 2u;
+    cb.reserve_back(1);
+    auto* p = reinterpret_cast<MASK_T*>(cb.get_write_ptr());
+    for (uint32_t fr = 0; fr < 2; ++fr) {
+        for (uint32_t fc = 0; fc < 2; ++fc) {
+            const uint32_t base = (fr * 2u + fc) * FACE * FACE;
+            for (uint32_t r = 0; r < FACE; ++r) {
+                const auto value = fr * FACE + r >= threshold ? one_val : static_cast<MASK_T>(0);
+                for (uint32_t c = 0; c < FACE; ++c) {
+                    p[base + r * FACE + c] = value;
+                }
+            }
+        }
+    }
+    cb.push_back(1);
+}
