@@ -54,6 +54,23 @@ Scaling: `cb_f_tiles`, `cb_x_tiles` and `cb_out_tiles` scale with `block_c` (and
 | `cb_hc_row` | 1 | 1 | {row: streams, hc_q: spans → 24 cols; others: streams} | Float32 | writer | writer (private scratch) | per rooted row | Could alias `cb_coef_src` (both reader/writer scratch). It cannot: different kernels own them, and they are live concurrently. |
 | `cb_y_tiles` | `block_c` | 1–2 (per-tile push) | {row: streams, c: spans → block_c, i: streams (contracted), others: streams} | Float16_b (y is bf16 by contract) | compute | writer | per block | Transfer-quantum gap, as for `cb_out_tiles`. |
 
+### Refinement 1 — stats inventory as built (departures from the table above)
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_partial` | 2 (design 1) | 1 | as designed | Float32 | compute | writer | per row (until shipped) | Depth 2 so compute can finish row r+1's partial while the writer waits for the leader's grant of row r. |
+| `cb_lead_out` (new) | 1 | 1 | {row: streams, stat_col: spans → 1 tile; others: streams} | Float32 | compute | writer | per led row | The leader's group sum, shipped to the root (two-level only). Not shared with `cb_stats_row`: on a core that both leads and roots, both are live and the writer drains them in a different order. |
+| `cb_comb_acc` (new) | 2 | 1 (ping-pong) | {row: streams, c: streams (accumulates over gather slots), stat_col: spans → 1 tile; others: streams} | Float32 (UnpackToDestFp32) | compute | compute | per combine | Running sum of the combine (seed g0, then `acc + g[s]` in slot order in one streaming chain). Separate from `cb_proj_run`: a leader's combine of row r−1 runs between its row-r blocks, while `cb_proj_run` holds row r's running projection. |
+| `cb_root_gather` (new; design reused `cb_gather`) | `num_groups · COMBINE_DEPTH` (two-level only) | `num_groups` per rooted row in flight | {row: spans → COMBINE_DEPTH rooted rows, c: spans → num_groups leader tiles; others: streams} | Float32 (UnpackToDestFp32) | reader (push after semaphore) | compute | per rooted row | Separate from `cb_gather`: grants run LAG rows ahead of collects, so a root's leader-level and root-level slot sets are live at once and their ring positions advance at different rates. |
+| `cb_proj_masks` (new) | `PROJ_EXACT_PASSES` = 16 (HiFi3/HiFi4 only) | 16 (resident whole kernel) | {all axes: streams; constant} | Float16_b | reader (NoC-zeroed, 64 lanes/tile written) | compute | whole kernel | Column masks {j, j+16} for the exact projection. Needed because the FPU rounds every 16-term face partial sum to ~tf32 (measured; see changelog), so the projection runs 16 passes with one product per face. |
+| `cb_xprime_masked` (new) | `n · block_c` (HiFi3/HiFi4 only) | `n · extent` | {c: spans → block_c, j: spans → n, k_w: spans → n·block_c; others: streams} | Float16_b | compute | compute (matmul in0) | per pass | One masked X' block, re-made 16 times per block. It cannot be packed into `cb_xprime_mm` in place, because the unmasked block feeds all 16 passes. |
+| `cb_zero` | **dropped** | — | — | — | — | — | — | `cb_ss_run` is seeded by a `FillScalar` chain into DEST at each row start (ledger fold option taken). `cb_proj_run` needs no seed: the row's first block packs straight into it. |
+| `cb_hc_*`, `cb_y_tiles` | not built (collapse, Refinement 2) | — | — | — | — | — | — | Reserved in `fused_fixed_bytes` / `fused_per_c_bytes` so the split is already mode-invariant. |
+
+Sizing (host, `mhc_post_program_descriptor.py`): `fused_fixed_bytes` = the collapse inventory above (n_src 3, 24 coefficient columns, the resident W slice, the combine CBs, the hc CBs) plus the 16 mask tiles. `fused_per_c_bytes` = `plain_per_c_bytes` + `cb_xprime_mm` + `cb_xprime_masked` + y. Both are charged at every fidelity and in both fused modes, so `(R, Q, block_c)` depends only on shape, dtypes and coef_source. Built focus split (bf16, packed, T=160, C=5120): R=2, Q=54, 3 rows × 3 c-tiles per core, `block_c = 2`.
+
+Semaphores (fused): `2·COMBINE_DEPTH` arrival counters (leader / root, one per slot set, cumulative), 1 leader-credit counter, and `num_groups` root-credit counters. That is 14 at Q=130, within the 16-id budget; the host asserts it.
+
 ### Fused symbol table (additional)
 
 | Symbol | Bound | Predicate establishing it |

@@ -265,7 +265,21 @@ ALWI void project_block(
         WBlockOffset{w_base});
 }
 
-// Sum tiles 0..count-1 of a staged gather CB in index order into `out_cb` (exact SFPU adds).
+// Sum tiles 0..count-1 of a staged gather CB in index order into `out_cb` (exact SFPU adds):
+// acc <- g0; one streaming chain acc <- acc + g[s] for s = 1..count-1 (acc ping-pongs through
+// cb_comb_acc, fp32 / UnpackToDestFp32, so every partial stays exact); out <- acc. Three chain
+// calls regardless of the fan-in.
+template <uint32_t gather_cb>
+using GatherAt = ckl::CopyTile<
+    ckl::input(
+        gather_cb,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    ckl::Dst::D1>;
+
 template <uint32_t gather_cb, uint32_t out_cb>
 ALWI void sum_slots(uint32_t count, DataflowBuffer& gather, DataflowBuffer& acc, DataflowBuffer& out) {
     if (count == 1) {
@@ -273,40 +287,15 @@ ALWI void sum_slots(uint32_t count, DataflowBuffer& gather, DataflowBuffer& acc,
             ckl::IterationShape::one_tile(), CopyAt<gather_cb, ckl::Dst::D0>{gather, 0}, PackTo<out_cb>{out});
         return;
     }
-    for (uint32_t s = 1; s < count; ++s) {
-        const bool last = (s + 1 == count);
-        if (s == 1) {
-            if (last) {
-                ckl::eltwise_chain(
-                    ckl::IterationShape::one_tile(),
-                    CopyAt<gather_cb, ckl::Dst::D0>{gather, 0},
-                    CopyAt<gather_cb, ckl::Dst::D1>{gather, 1},
-                    AddD0D1{},
-                    PackTo<out_cb>{out});
-            } else {
-                ckl::eltwise_chain(
-                    ckl::IterationShape::one_tile(),
-                    CopyAt<gather_cb, ckl::Dst::D0>{gather, 0},
-                    CopyAt<gather_cb, ckl::Dst::D1>{gather, 1},
-                    AddD0D1{},
-                    PackTo<cb_comb_acc>{acc});
-            }
-        } else if (last) {
-            ckl::eltwise_chain(
-                ckl::IterationShape::one_tile(),
-                CopyRun<cb_comb_acc, ckl::Dst::D0>{acc},
-                CopyAt<gather_cb, ckl::Dst::D1>{gather, s},
-                AddD0D1{},
-                PackTo<out_cb>{out});
-        } else {
-            ckl::eltwise_chain(
-                ckl::IterationShape::one_tile(),
-                CopyRun<cb_comb_acc, ckl::Dst::D0>{acc},
-                CopyAt<gather_cb, ckl::Dst::D1>{gather, s},
-                AddD0D1{},
-                PackTo<cb_comb_acc>{acc});
-        }
-    }
+    ckl::eltwise_chain(
+        ckl::IterationShape::one_tile(), CopyAt<gather_cb, ckl::Dst::D0>{gather, 0}, PackTo<cb_comb_acc>{acc});
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(count - 1),
+        CopyRun<cb_comb_acc, ckl::Dst::D0>{acc},
+        GatherAt<gather_cb>{gather, 1},
+        AddD0D1{},
+        PackTo<cb_comb_acc>{acc});
+    ckl::eltwise_chain(ckl::IterationShape::one_tile(), CopyRun<cb_comb_acc, ckl::Dst::D0>{acc}, PackTo<out_cb>{out});
 }
 
 }  // namespace

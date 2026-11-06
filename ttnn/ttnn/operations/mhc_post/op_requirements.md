@@ -49,7 +49,7 @@ Refinements 1 and 2 exist to land every one of these values in `SUPPORTED`.
   with `UnpackToDestFp32` on every fp32 CB.
 - **Golden baseline**: 88 / 88 supported cells passing; 379 xfail_expected, 348 invalid_skipped, 0 loud.
 
-### [ ] Refinement 1 — bf16 streams + packed mixes + stats mode (stats-2d-tree)
+### [x] Refinement 1 — bf16 streams + packed mixes + stats mode (stats-2d-tree)
 
 **Goal**:
 - Add `ttnn.bfloat16` to `SUPPORTED["dtype"]` and to `SUPPORTED["sublayer_dtype"]`. All four plain dtype combos
@@ -92,6 +92,15 @@ Refinements 1 and 2 exist to land every one of these values in `SUPPORTED`.
 - Acceptance: `test_plain_mixed_dtypes`, `test_plain_packed` and `test_fused_modes[stats-*]` pass.
 - Regression: `test_depth_chain[bf16]`, `test_output_buffers[plain]` and `test_output_buffers[stats]` pass.
 - No loud categories, and the stats rows of two calls are bit-identical.
+
+**Outcome**:
+- Landed: bf16 / bf16 and mixed dtype combos, packed mixes (one page per row), and stats-2d-tree. The tree is
+  deterministic and two-level: fixed leaders, rotating roots, grant/arrival semaphores.
+- Golden slices green: stats 58/58, plain 232/232, regression 15 + 12 collapse skips.
+- Finding: the FPU matmul rounds each 16-term face partial to ~tf32, so the HiFi3/HiFi4 projection uses 16
+  exact column-masked passes. HiFi2 keeps one matmul.
+- Stats at the focus shape (HiFi2): 151 µs vs 103 µs reference. Plain bf16: 84.6 µs.
+- The op is SFPU-mix-bound. Remaining levers are in Refinements 3 and 5.
 
 ### [ ] Refinement 2 — collapse mode (hc SFPU program + y)
 

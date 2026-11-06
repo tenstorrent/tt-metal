@@ -3,3 +3,4 @@
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-06T17:26:52+00:00"}
 {"event":"device_print_observation","detail":"probes: FPU matmul rounds each 16-term face partial to ~tf32 at all fidelities (2 exact products in one face lose 2^-11); one product per face exact; DEST accumulation across K tiles exact","ts":"2026-11-06T17:49:47+00:00"}
 {"event":"test_run","status":"pass","test":"test_mhc_post.py -k fused","detail":"stats T160/T150 pass with 16-pass masked exact projection at HiFi4","ts":"2026-11-06T17:49:47+00:00"}
+{"event":"test_run","status":"pass","detail":"golden stats 58/58, plain 232/232, regression 15 pass; unit dir 49 pass","ts":"2026-11-06T18:05:00+00:00"}
