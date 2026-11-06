@@ -17,8 +17,11 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in, dfb::out);
     transpose_init(dfb::in);
 
+    // RUNTIME ARGS
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t h_tiles = get_arg(args::h_tiles);
+
+    // COMPILE TIME ARGS
     constexpr uint32_t kv_num_tiles = get_arg(args::kv_num_tiles);
     constexpr uint32_t batch = get_arg(args::batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);

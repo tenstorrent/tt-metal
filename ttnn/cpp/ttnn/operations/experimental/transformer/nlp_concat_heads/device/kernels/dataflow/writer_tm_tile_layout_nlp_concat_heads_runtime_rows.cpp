@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Drains the reader's (row, head) blocks to the interleaved output; the page range is derived from
-// the same split as the reader's block range, so a hit only rewrites the common row count.
+// Drains the reader's (row, head) blocks to the interleaved output. The page range comes from the
+// same split as the reader's block range.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -13,9 +13,11 @@
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/nlp_concat_heads_split.hpp"
 
 void kernel_main() {
+    // RUNTIME ARGS
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t h_tiles = get_arg(args::h_tiles);
 
+    // COMPILE TIME ARGS
     constexpr uint32_t in0_w_tiles = get_arg(args::in0_w_tiles);
     constexpr uint32_t in0_c = get_arg(args::in0_c);
     constexpr uint32_t batch = get_arg(args::batch);

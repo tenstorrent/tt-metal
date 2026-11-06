@@ -15,8 +15,7 @@
 void kernel_main() {
     Noc noc;
 
-    // Static core index plus the common sequence length in tiles; the block range and the output
-    // tile ids are derived from the two (same split as the reader).
+    // RUNTIME ARGS: the core index and the common sequence length in tiles (same split as the reader)
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t q_out_h_tiles = get_arg(args::h_tiles);
 
@@ -28,6 +27,7 @@ void kernel_main() {
     constexpr uint32_t split_width = get_arg(args::split_width);  // zero keeps the full Q output
     constexpr uint32_t batch = get_arg(args::batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
+    constexpr uint32_t tile_batch = get_arg(args::tile_batch);  // tiles written per flush; divides the head width
 
     const uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;
 
@@ -45,8 +45,6 @@ void kernel_main() {
     const uint32_t tile_bytes_qv = dfb_qv.get_tile_size();
     const uint32_t tile_bytes_k = dfb_k.get_tile_size();
 
-    // Tiles written per flush; divides the head width.
-    constexpr uint32_t tile_batch = get_arg(args::tile_batch);
     uint32_t l1_read_addr;
     uint32_t q_out_tensor_current_tile_id;  // need this to update q_out_tensor_tile_id
     uint32_t k_out_tensor_current_tile_id;  // need this to update k_out_tensor_tile_id

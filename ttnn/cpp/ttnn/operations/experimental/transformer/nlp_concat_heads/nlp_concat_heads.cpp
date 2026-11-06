@@ -53,7 +53,7 @@ ttnn::Tensor nlp_concat_heads(
     const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config, bool runtime_rows) {
     // TILE-aligned head dims keep the fused TM kernel.
     if (input_tensor.logical_shape()[3] % tt::constants::TILE_WIDTH != 0) {
-        // The composite fallback keys its ops on the shape, so it cannot honour a runtime row count.
+        // The composite fallback is shape-specific and cannot take a runtime row count.
         TT_FATAL(
             !runtime_rows,
             "nlp_concat_heads: runtime_rows needs a head dim that is a multiple of {} (got {})",

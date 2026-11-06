@@ -14,8 +14,7 @@
 void kernel_main() {
     Noc noc;
 
-    // Static core index plus the common sequence length in tiles: each core derives its own block
-    // range from the two, so a new length needs no per-core host work.
+    // RUNTIME ARGS: the core index and the common sequence length in tiles
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t seq_tiles = get_arg(args::h_tiles);
 
@@ -28,6 +27,7 @@ void kernel_main() {
     constexpr uint32_t in1_w_tiles = get_arg(args::in1_w_tiles);
     constexpr uint32_t batch = get_arg(args::batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
+    constexpr uint32_t tile_batch = get_arg(args::tile_batch);  // tiles read per barrier; divides the head width
 
     const auto s0 = TensorAccessor(tensor::input_q);
 
@@ -45,8 +45,6 @@ void kernel_main() {
     const uint32_t tile_bytes_qv = dfb_qv.get_tile_size();
     const uint32_t tile_bytes_k = dfb_k.get_tile_size();
 
-    // Tiles read per barrier; divides the head width.
-    constexpr uint32_t tile_batch = get_arg(args::tile_batch);
     constexpr uint32_t q_heads = q_num_tiles / head_tiles;
     constexpr uint32_t kv_heads = kv_num_tiles / head_tiles;
     constexpr uint32_t slots = q_heads + 2 * kv_heads;
