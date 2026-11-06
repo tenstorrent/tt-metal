@@ -127,9 +127,7 @@ case "${MODEL}" in
     fi
     case "${CONFIG}" in
       sc4|sc1)
-        # No 4x4 MTP cache exists, so the MTP variants run on the _8x4 configs below.
-        [ "${MTP}" -eq 0 ] || { echo "${MODEL}${VARIANT} runs on sc4_8x4 / sc1_8x4 only (no 4x4 MTP cache)" >&2; exit 2; }
-        # The manifest describes a 4x4 stage: SP=4 on mesh axis 1, 2560-token chunks (640 tokens per chip,
+        # The manifest (the MTP variants' too) describes a 4x4 stage: SP=4 on mesh axis 1, 2560-token chunks (640 tokens per chip,
         # GLM's 8x4 per-chip load), TP-deduped KV and the slots that layout fits. Its 1064960 window is a
         # multiple of the deduped cache's 16 x 256 = 4096-token bank quantum and of the chunk. Two ranks per
         # galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two (all 78 layers) for sc1.
@@ -137,22 +135,20 @@ case "${MODEL}" in
         PP_4X4_HOSTS=1
         [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
         PP_RANKS=$((2 * PP_4X4_HOSTS))
-        # The 4x4 cache is not under GLM-5.3-Cache-prefill yet; this is the copy infra made of job 161770's
-        # 78-layer build. Checked non-empty on every host before launch.
-        GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/rkim/glm53_ttnn_cache}"
+        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+        # non-empty on every host before launch.
+        GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
         PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
         RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
         ;;
       *_8x4)
         # One 8x4 stage per galaxy, SP=8 on axis 0, 5120-token chunks, at the 54 slots that layout fits
-        # (the MTP manifests are 8x4 already and keep their own). Exported to runner and producer, ahead
-        # of the manifest.
-        if [ "${MTP}" -eq 0 ]; then
-          if [ "${SCALE}" = sc4 ]; then : "${PREFILL_NUM_USERS:=54}"; export PREFILL_NUM_USERS; fi
-          LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
-          RUNNER_ENV+=" ${LAYOUT_8X4}"
-          PRODUCER_ENV+=" ${LAYOUT_8X4}"
-        fi
+        # (the MTP variants keep their manifest's slots). Exported to runner and producer, ahead of the
+        # manifest.
+        if [ "${MTP}" -eq 0 ] && [ "${SCALE}" = sc4 ]; then : "${PREFILL_NUM_USERS:=54}"; export PREFILL_NUM_USERS; fi
+        LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
+        RUNNER_ENV+=" ${LAYOUT_8X4}"
+        PRODUCER_ENV+=" ${LAYOUT_8X4}"
         ;;
     esac
     ;;

@@ -692,21 +692,28 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
-    def test_glm53_mtp_runs_on_the_8x4_configs_only(self):
-        for config in ("sc4", "sc1"):
-            with self.subTest(config=config):
-                result, records = self.run_harness(
-                    "glm53", config=config, hosts=self.SC4_HOSTS, args=["--variant", "mtp_kv_share"]
-                )
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn("runs on sc4_8x4 / sc1_8x4 only (no 4x4 MTP cache)", result.stderr)
-                self.assertFalse(records)
+    def test_glm53_mtp_runs_4x4_stages_from_its_manifest(self):
         # The stub's verdicts carry no MTP caches, so the gate fails; the launch is what is under test.
+        for config, hosts, ranks in (("sc4", self.SC4_HOSTS, "8"), ("sc1", self.SC4_HOSTS[:1], "2")):
+            with self.subTest(config=config):
+                _, records = self.run_harness("glm53", config=config, hosts=hosts, args=["--variant", "mtp_kv_share"])
+                producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+                self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], ranks)
+                runner = self.one_record(records, "runner")["env"]
+                self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_mtp_kv_share.json"))
+                self.assertNotIn("PREFILL_SP_AXIS", runner)
+                producer = self.one_record(records, "producer")["env"]
+                self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+
+    def test_glm53_mtp_8x4_configs_put_the_8x4_stage_back(self):
         _, records = self.run_harness("glm53", config="sc4_8x4", args=["--variant", "mtp_kv_share"])
         runner = self.one_record(records, "runner")["env"]
         self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_mtp_kv_share.json"))
-        # The MTP manifest is 8x4 already and keeps its own slots.
-        self.assertNotIn("PREFILL_SP_AXIS", runner)
+        self.assertEqual(
+            (runner["PREFILL_SP"], runner["PREFILL_TP"], runner["PREFILL_SP_AXIS"], runner["PREFILL_CHUNK_SIZE"]),
+            ("8", "4", "0", "5120"),
+        )
+        # The MTP variants keep their manifest's slots.
         self.assertNotIn("PREFILL_NUM_USERS", runner)
 
     def test_only_kimi_k3_and_glm53_have_the_8x4_configs(self):
