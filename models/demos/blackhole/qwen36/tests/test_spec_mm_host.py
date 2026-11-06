@@ -326,3 +326,48 @@ def test_prefill_for_spec_b1_threads_vision(monkeypatch, expect_error):
         AssertionError, "bypasses the prefix cache"
     ):  # the resumable (prefix-cache) path never serves a multimodal prompt
         Qwen36Model.prefill_for_spec(m, toks, None, 10, None, plan=(0, None, []), vision_tokens=VIS)
+
+
+def test_every_route_splices_one_host_copy_of_the_vision_rows(fake_ttnn):
+    """The vision tower allocates the packed vision rows per request, after the traces were captured, so a replay can
+    overwrite them before a later chunk splices them. _prefill_row reads them to the host once, first, and every route
+    (fast, B=1 traced, eager) gets that copy."""
+    for B, route in ((8, "fast"), (1, "b1"), (8, "eager")):
+        calls, seen = [], {}
+        e = _dispatch_engine(B, fast=True, recorded=True, calls=calls)
+        _with_vis_offset(e.model)
+        e.model.vision_rows_host = lambda vt: calls.append(("host_copy", vt)) or "HOST_ROWS"
+
+        def _fast(slot, pl, prompt, pt_row, Tp, on_chunk, captured, vision_tokens=None, **k):
+            seen["fast"] = vision_tokens
+            if route != "fast":
+                return None  # declines: the B=1 or eager route runs
+            captured[0] = True
+            return torch.arange(VOCAB + 8, dtype=torch.float32)
+
+        def _b1(prompt, pt_rec, Tp, on_chunk=None, vision_tokens=None):
+            seen["b1"] = vision_tokens
+            on_chunk("HIDDEN", 0, Tp)
+            return torch.arange(VOCAB + 8, dtype=torch.float32)
+
+        def _eager(prompt, pt_row, Tp, on_chunk, slot=0, plan=None, vision_tokens=None):
+            seen["eager"] = vision_tokens
+            on_chunk("HIDDEN", 0, Tp)
+            return torch.arange(VOCAB + 8, dtype=torch.float32)
+
+        e._prefill_fast = _fast
+        e.model.prefill_traced_chunked, e.model.prefill_for_spec = _b1, _eager
+        MTPSpecEngine._prefill_row(e, 0, _mm_prompt(300, 32), _row(), None, vision_tokens=VIS)
+        assert calls[0] == ("host_copy", VIS), calls[:3]
+        assert seen.get(route) == "HOST_ROWS", (route, seen)
+
+
+def test_traced_chunked_prefill_reads_the_vision_rows_before_its_first_replay():
+    """Qwen36Model.prefill_traced_chunked (the B=1 and non-spec traced entry) hands its chunk loop the host copy."""
+    m = types.SimpleNamespace(_chunked_chunk_size=2048)
+    log = []
+    m.vision_rows_host = lambda vt: log.append(("host_copy", vt)) or "HOST_ROWS"
+    m._prefill_traced_chunked_dev = lambda *a, vision_tokens=None, on_chunk=None: log.append(("chunks", vision_tokens))
+    toks = torch.zeros(1, 4096, dtype=torch.int32)
+    Qwen36Model.prefill_traced_chunked(m, toks, None, 4096, vision_tokens=VIS, on_chunk=lambda *a: None)
+    assert log == [("host_copy", VIS), ("chunks", "HOST_ROWS")]
