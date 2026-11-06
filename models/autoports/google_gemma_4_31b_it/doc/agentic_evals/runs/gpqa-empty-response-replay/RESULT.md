@@ -1,0 +1,9 @@
+# GPQA empty-response replay result
+
+Both diagnostic requests entered sustained two-token repetition. Each retained19789decode samples over591.576s. Actual datasetposition7 becomes exactly period2 at decodeindex3178; position20 enters its two-token vocabulary at4091 and exactperiod2 at4103. Earlier windows contain varied tokens; this does not prove semantic progress. Original hidden reasoning remains unavailable, so replay looping does not establish identical original trajectory or its cause.
+
+Coordinator disconnected only the owned HTTP client after sufficient repetitive-tail evidence, preserving126976output/14400srequest settings. Fresh0/0 idle metrics preceded graceful server closure; no owners remain. This is partial diagnostic evidence, not full-cap completion or accuracy evaluation. No final native response is available, firstprefill token is unretained, and physical samples are not claimed client-emitted IDs.
+
+19791 unique submit/completion pairs match, with no ambiguous/unassigned active samples, duplicate steps, final pending/errors or retention loss.592 periodic live snapshots marked pending_incomplete while work was active; initial private analyzer incorrectly grouped that with loss. Corrected analysis-final.json separates in-flight pending from permanent loss; original analysis preserved.
+
+Actualdevice cost0.219436701h versus1.6h full-run forecast and4.3h ceiling, shortened only by explicit diagnostic stop. Source-reconstructed requests use audited actualpositions7/20 (old labels152/189), seed42 and pinned async serializer. Current11a387/B8/C2 configuration differs from original runtime by accepted diagnostics; no numerical/source change or score claim. Next causal work requires complete native prefix capture, including firstprefill token; do not invent that token.

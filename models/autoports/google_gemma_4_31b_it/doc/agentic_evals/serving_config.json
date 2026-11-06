@@ -257,6 +257,22 @@
       "planned_clients": 2,
       "max_num_seqs": 8,
       "batch_reason": "Smallest supported batch at or above two recorded concurrent GPQA requests; diagnostic only"
+    },
+    "gpqa-loop-onset-native-capture": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest supported batch at or above two recorded concurrent GPQA requests; diagnostic only"
+    },
+    "gpqa-loop-logits-discriminator": {
+      "planned_clients": 1,
+      "batch": 8,
+      "batch_reason": "Direct conditional-logit diagnostic preserves served B8 numerical regime; one exact captured prefix, not agent throughput or scored run"
+    },
+    "gpqa-loop-logits-discriminator-case1": {
+      "planned_clients": 1,
+      "batch": 8,
+      "batch_reason": "Match served B8 numerical regime on secondcapturedprefix; directconditionaldiagnostic, not throughput"
     }
   },
   "release_limits": {

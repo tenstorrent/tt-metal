@@ -44,7 +44,7 @@
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42247098210",
   "workflow_status": "in_progress",
   "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T16:51:47.845171+00:00",
+  "last_observed_at": "2026-11-06T17:27:20.234311+00:00",
   "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wvng9",
   "build_started_at": "2026-11-06T15:54:10Z",
   "build_completed_at": "2026-11-06T16:47:21Z",
@@ -52,5 +52,16 @@
   "device_job_id": 128021896449,
   "device_job_started_at": "2026-11-06T16:47:23Z",
   "device_job_completed_at": null,
-  "start": "2026-11-06T16:47:23Z"
+  "start": "2026-11-06T16:47:23Z",
+  "latest_projection": {
+    "observed_at": "2026-11-06T17:33:15.300990+00:00",
+    "eval_started_at": "2026-11-06T17:10:48.5545018Z",
+    "device_started_at": "2026-11-06T16:47:23Z",
+    "device_setup_hours": 0.39043180555555557,
+    "build_hours": 0.8863888888888889,
+    "projection_hours": 8.89957597861111,
+    "max_observed_active_rows": 2,
+    "evidence": "bringup/artifacts/stage12-swe-decode-current.log",
+    "qualification": "Harbor launch timestamp; subsequent decode proves serving active. Replaces premature cold-compilation-only description. Runtime clocks unmeasured; startup800MHz warning retained separately."
+  }
 }

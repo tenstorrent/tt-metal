@@ -69,10 +69,48 @@
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42256121890",
   "workflow_status": "in_progress",
   "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T16:51:58.847694+00:00",
+  "last_observed_at": "2026-11-06T17:27:26.810735+00:00",
   "runner": "120-qb2-p04t07",
   "device_job_id": 128023825841,
   "device_job_started_at": "2026-11-06T16:51:00Z",
   "device_job_completed_at": null,
-  "start": "2026-11-06T16:51:00Z"
+  "start": "2026-11-06T16:51:00Z",
+  "live_startup": {
+    "autoport_layers": 60,
+    "full_context_tokens": 262144,
+    "generate_until_started_at": "2026-11-06T16:58:50Z",
+    "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+  },
+  "latest_progress_projection": {
+    "observed_at": "2026-11-06T17:16:57.641802+00:00",
+    "log_through": "2026-11-06T17:12:20Z",
+    "reported_completed": 6,
+    "tasks": 20,
+    "progress_elapsed_seconds": 721,
+    "eval_projection_hours": 0.6675925925925926,
+    "full_request_tail_hours": 4,
+    "setup_allowance_hours": 0.15,
+    "queue_margin_hours": 0.5,
+    "projected_hours": 5.317592592592593,
+    "max_observed_active_rows": 4,
+    "decision": "continue",
+    "qualification": "Early censored completion-rate projection; long unfinished requests can dominate. Full4h tail retained; no cap classification/score claim.",
+    "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+  },
+  "latest_progress": {
+    "observed_at": "2026-11-06T17:33:15.300990+00:00",
+    "log_through": "2026-11-06T17:28:09Z",
+    "reported_completed": 14,
+    "tasks": 20,
+    "progress_elapsed_seconds": 1492,
+    "eval_projection_hours": 0.5920634920634921,
+    "full_request_tail_hours": 4,
+    "setup_allowance_hours": 0.15,
+    "queue_margin_hours": 0.5,
+    "projected_hours": 5.242063492063492,
+    "max_observed_active_rows": 4,
+    "decision": "continue",
+    "qualification": "Censored completion-rate projection; full4h tail retained. No score or loop classification claimed.",
+    "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+  }
 }

@@ -1,0 +1,16 @@
+{
+  "observed_at": "2026-11-06T17:16:57.641802+00:00",
+  "log_through": "2026-11-06T17:12:20Z",
+  "reported_completed": 6,
+  "tasks": 20,
+  "progress_elapsed_seconds": 721,
+  "eval_projection_hours": 0.6675925925925926,
+  "full_request_tail_hours": 4,
+  "setup_allowance_hours": 0.15,
+  "queue_margin_hours": 0.5,
+  "projected_hours": 5.317592592592593,
+  "max_observed_active_rows": 4,
+  "decision": "continue",
+  "qualification": "Early censored completion-rate projection; long unfinished requests can dominate. Full4h tail retained; no cap classification/score claim.",
+  "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+}

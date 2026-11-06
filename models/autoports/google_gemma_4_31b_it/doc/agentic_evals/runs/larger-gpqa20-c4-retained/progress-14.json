@@ -1,0 +1,16 @@
+{
+  "observed_at": "2026-11-06T17:33:15.300990+00:00",
+  "log_through": "2026-11-06T17:28:09Z",
+  "reported_completed": 14,
+  "tasks": 20,
+  "progress_elapsed_seconds": 1492,
+  "eval_projection_hours": 0.5920634920634921,
+  "full_request_tail_hours": 4,
+  "setup_allowance_hours": 0.15,
+  "queue_margin_hours": 0.5,
+  "projected_hours": 5.242063492063492,
+  "max_observed_active_rows": 4,
+  "decision": "continue",
+  "qualification": "Censored completion-rate projection; full4h tail retained. No score or loop classification claimed.",
+  "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+}

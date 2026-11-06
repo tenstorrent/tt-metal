@@ -1,0 +1,11 @@
+{
+  "observed_at": "2026-11-06T17:33:15.300990+00:00",
+  "eval_started_at": "2026-11-06T17:10:48.5545018Z",
+  "device_started_at": "2026-11-06T16:47:23Z",
+  "device_setup_hours": 0.39043180555555557,
+  "build_hours": 0.8863888888888889,
+  "projection_hours": 8.89957597861111,
+  "max_observed_active_rows": 2,
+  "evidence": "bringup/artifacts/stage12-swe-decode-current.log",
+  "qualification": "Harbor launch timestamp; subsequent decode proves serving active. Replaces premature cold-compilation-only description. Runtime clocks unmeasured; startup800MHz warning retained separately."
+}

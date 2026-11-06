@@ -1,0 +1,137 @@
+{
+  "status": "diagnostic_repetition_confirmed_early_stop",
+  "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "planned_clients": 2,
+  "batch": 8,
+  "classification": "Both replay histories enter sustained two-token periodic loops; cause and original hidden trajectory remain unknown.",
+  "requests": [
+    {
+      "index": 0,
+      "actual_dataset_index": 7,
+      "logged_original_doc_id": 152,
+      "expected_prompt_tokens": 258,
+      "physical_decode_tokens": 19789,
+      "physical_decode_sha256": "c8a2048657b1c15ad6c46a6a83e1ba1e579e545349c7273de7ad836dad81ae73",
+      "physical_rows_seen": [
+        1
+      ],
+      "retained_decode_wall_seconds": 591.575678449,
+      "original_decode_steps": 126975,
+      "original_pair_decode_wall_seconds": 5455.512205884,
+      "original_output_cap": 126976,
+      "native_response_available": false,
+      "repetition": {
+        "tail4096_unique_tokens": 2,
+        "tail_vocabulary_suffix_onset_decode_index": 3178,
+        "exact_period2_suffix_onset_decode_index": 3178,
+        "tokens": 19789,
+        "unique_tokens": 370,
+        "longest_same_token_run": 3,
+        "most_frequent_32gram_occurrences": 8290,
+        "distinct_32grams": 3180,
+        "interpretation": "Token repetition statistics only; overlap counted; novelty is not evidence of reasoning progress."
+      }
+    },
+    {
+      "index": 1,
+      "actual_dataset_index": 20,
+      "logged_original_doc_id": 189,
+      "expected_prompt_tokens": 481,
+      "physical_decode_tokens": 19789,
+      "physical_decode_sha256": "c919be2f35959d9a2f5732727b2d92f224d14b5d77098e0f5b03c083a471afe2",
+      "physical_rows_seen": [
+        0
+      ],
+      "retained_decode_wall_seconds": 591.575678449,
+      "original_decode_steps": 126975,
+      "original_pair_decode_wall_seconds": 5455.512205884,
+      "original_output_cap": 126976,
+      "native_response_available": false,
+      "repetition": {
+        "tail4096_unique_tokens": 2,
+        "tail_vocabulary_suffix_onset_decode_index": 4091,
+        "exact_period2_suffix_onset_decode_index": 4103,
+        "tokens": 19789,
+        "unique_tokens": 334,
+        "longest_same_token_run": 9,
+        "most_frequent_32gram_occurrences": 7828,
+        "distinct_32grams": 3115,
+        "interpretation": "Token repetition statistics only; overlap counted; novelty is not evidence of reasoning progress."
+      }
+    }
+  ],
+  "coverage": {
+    "submit_complete_ids_match": true,
+    "unique_complete_steps": 19791,
+    "duplicate_complete_steps": 0,
+    "unmatched_active_samples": 0,
+    "ambiguous_active_samples": 0,
+    "inactive_physical_row_samples": 118734,
+    "any_exported_loss": false,
+    "exported_error_entries": 0,
+    "final_pending_steps": 0,
+    "final_retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    }
+  },
+  "cost": {
+    "forecast_hours": 1.6,
+    "box_hours": 4.3,
+    "actual_device_hours": 0.21943670050305727,
+    "forecast_ratio": 0.1371479378144108
+  },
+  "stop": {
+    "at": "2026-11-06T17:06:17.813052+00:00",
+    "client_pid": 193429,
+    "signal": "SIGTERM HTTP client only; server and device owner untouched",
+    "reason": "Both captured rows have >4096token two-token repetitive tails, >99.9% repeated32grams; replay diagnostic question settled. Scored CI unchanged.",
+    "limits_preserved": {
+      "request_timeout_seconds": 14400,
+      "max_tokens": 126976
+    },
+    "classification_scope": "Replay demonstrates looping; original hidden sequence not recovered; no score or fullcap completion claimed",
+    "cancellation_source": [
+      "vllm/entrypoints/openai/chat_completion/api_router.py:52",
+      "vllm/entrypoints/serve/utils/api_utils.py:51",
+      "vllm/v1/engine/async_llm.py:746"
+    ],
+    "requests_idle_confirmed": true,
+    "client_disconnect_only": true,
+    "final_idle_evidence": "metrics-after.txt"
+  },
+  "shutdown": {
+    "at": "2026-11-06T17:06:23.391942+00:00",
+    "idle_metrics": [
+      "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+      "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+    ],
+    "owned_readiness_pid": 193358,
+    "signal": "SIGTERM to readiness hold handler only",
+    "device_closed_at": "2026-11-06T17:06:25.396803+00:00",
+    "remaining_owners": []
+  },
+  "source_provenance": "bringup/artifacts/gpqa-empty-response-replay/payload-provenance.json",
+  "analysis": "bringup/artifacts/gpqa-empty-response-replay/analysis-final.json",
+  "analysis_correction": "Initial private analysis.json grouped592 live pending_incomplete snapshots with loss; corrected analyzer excludes in-flight pending flag from historical loss and checks final pending separately. No lost/truncated/export-failed tokens detected; original analysis preserved.",
+  "limitations": [
+    "Partial diagnostic, not full126976cap completion, score, original trajectory reproduction or root cause.",
+    "No final native response; physical decode chains do not prove client emission and exclude firstprefill token.",
+    "Actual datasetpositions7/20 were mislabeled152/189 in old harness metadata.",
+    "Token novelty before loop is not a semantic reasoning-progress claim."
+  ]
+}

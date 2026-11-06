@@ -1,0 +1,20 @@
+{
+  "arm": "gpqa-loop-logits-discriminator-case1",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "queued_at": "2026-11-06T17:28:34.646053+00:00",
+  "planned_clients": 1,
+  "batch": 8,
+  "batch_reason": "Match served B8 numerical regime on secondcapturedprefix; directconditionaldiagnostic, not throughput",
+  "predicted_hours": 0.06,
+  "box_hours": 0.10639028849749595,
+  "regime": "serial_TT_then_CPU_HF_no_performanceclaim",
+  "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "started_at": "2026-11-06T17:28:34.668179+00:00",
+  "owner_check": [],
+  "case_sha256": "65d0d7b08d4a26a42ce142cee94e4520c834e952a427c7d5711da11f50b24f0a",
+  "ended_at": "2026-11-06T17:31:21.034834+00:00",
+  "exit_status": 0,
+  "actual_device_hours": 0.04621171075611427
+}

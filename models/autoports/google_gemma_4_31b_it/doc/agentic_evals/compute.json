@@ -942,7 +942,7 @@
           "arm": "gpqa-empty-response-replay",
           "owner": "coordinator",
           "device": "local",
-          "status": "running",
+          "status": "completed_diagnostic_early_stop",
           "started_at": "2026-11-06T16:53:18.405299+00:00",
           "queued_at": "2026-11-06T16:53:18.405299+00:00",
           "planned_clients": 2,
@@ -960,7 +960,73 @@
             ]
           },
           "owner_check": [],
-          "source_snapshot": "bringup/artifacts/gpqa-empty-response-replay/source-launch.json"
+          "source_snapshot": "bringup/artifacts/gpqa-empty-response-replay/source-launch.json",
+          "ended_at": "2026-11-06T17:06:28.381406+00:00",
+          "exit_status": 0,
+          "actual_device_hours": 0.21943670050305727,
+          "exit_reason": "Loop established; own HTTP clients disconnected, engine0/0 and gracefulclose; no scored run altered"
+        },
+        {
+          "arm": "gpqa-loop-onset-native-capture",
+          "owner": "coordinator",
+          "device": "local",
+          "status": "completed_diagnostic",
+          "started_at": "2026-11-06T17:10:36.058787+00:00",
+          "queued_at": "2026-11-06T17:10:36.058787+00:00",
+          "planned_clients": 2,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "batch_reason": "Smallest supported batch at or above two recorded concurrent GPQA requests; diagnostic only",
+          "predicted_hours": 0.15,
+          "box_hours": 0.25,
+          "command": {
+            "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+            "env": {},
+            "argv": [
+              "bash",
+              "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-onset-native-capture/launch.sh"
+            ]
+          },
+          "owner_check": [],
+          "source_snapshot": "bringup/artifacts/gpqa-loop-onset-native-capture/source-launch.json",
+          "ended_at": "2026-11-06T17:16:00.159686+00:00",
+          "exit_status": 0,
+          "actual_device_hours": 0.09002686181332037,
+          "evidence": "runs/gpqa-loop-onset-native-capture/RESULT.json"
+        },
+        {
+          "arm": "gpqa-loop-logits-discriminator",
+          "owner": "coordinator",
+          "device": "local",
+          "status": "running",
+          "queued_at": "2026-11-06T17:13:12.548254+00:00",
+          "planned_clients": 1,
+          "batch": 8,
+          "batch_reason": "Direct conditional-logit diagnostic preserves served B8 numerical regime; one exact captured prefix, not agent throughput or scored run",
+          "predicted_hours": 0.08,
+          "box_hours": 0.2,
+          "regime": "concurrent_CPU_HF_reference_no_performanceclaim",
+          "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+          "started_at": "2026-11-06T17:18:37.170635+00:00",
+          "owner_check": [],
+          "case_sha256": "8b3684c5dc04b11f511809f9b827b1b21d285cf76d5e7d9943e5db7805d35a7a"
+        },
+        {
+          "arm": "gpqa-loop-logits-discriminator-case1",
+          "owner": "coordinator",
+          "device": "local",
+          "status": "running",
+          "queued_at": "2026-11-06T17:28:34.646053+00:00",
+          "planned_clients": 1,
+          "batch": 8,
+          "batch_reason": "Match served B8 numerical regime on secondcapturedprefix; directconditionaldiagnostic, not throughput",
+          "predicted_hours": 0.06,
+          "box_hours": 0.10639028849749595,
+          "regime": "serial_TT_then_CPU_HF_no_performanceclaim",
+          "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+          "started_at": "2026-11-06T17:28:34.668179+00:00",
+          "owner_check": [],
+          "case_sha256": "65d0d7b08d4a26a42ce142cee94e4520c834e952a427c7d5711da11f50b24f0a"
         }
       ]
     },
@@ -2130,7 +2196,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42247098210",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T16:51:47.845171+00:00",
+          "last_observed_at": "2026-11-06T17:27:20.234311+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wvng9",
           "build_started_at": "2026-11-06T15:54:10Z",
           "build_completed_at": "2026-11-06T16:47:21Z",
@@ -2138,7 +2204,18 @@
           "device_job_id": 128021896449,
           "device_job_started_at": "2026-11-06T16:47:23Z",
           "device_job_completed_at": null,
-          "start": "2026-11-06T16:47:23Z"
+          "start": "2026-11-06T16:47:23Z",
+          "latest_projection": {
+            "observed_at": "2026-11-06T17:33:15.300990+00:00",
+            "eval_started_at": "2026-11-06T17:10:48.5545018Z",
+            "device_started_at": "2026-11-06T16:47:23Z",
+            "device_setup_hours": 0.39043180555555557,
+            "build_hours": 0.8863888888888889,
+            "projection_hours": 8.89957597861111,
+            "max_observed_active_rows": 2,
+            "evidence": "bringup/artifacts/stage12-swe-decode-current.log",
+            "qualification": "Harbor launch timestamp; subsequent decode proves serving active. Replaces premature cold-compilation-only description. Runtime clocks unmeasured; startup800MHz warning retained separately."
+          }
         },
         {
           "eval": "r1_gpqa_diamond",
@@ -2211,12 +2288,28 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42256121890",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T16:51:58.847694+00:00",
+          "last_observed_at": "2026-11-06T17:27:26.810735+00:00",
           "runner": "120-qb2-p04t07",
           "device_job_id": 128023825841,
           "device_job_started_at": "2026-11-06T16:51:00Z",
           "device_job_completed_at": null,
-          "start": "2026-11-06T16:51:00Z"
+          "start": "2026-11-06T16:51:00Z",
+          "latest_progress": {
+            "observed_at": "2026-11-06T17:33:15.300990+00:00",
+            "log_through": "2026-11-06T17:28:09Z",
+            "reported_completed": 14,
+            "tasks": 20,
+            "progress_elapsed_seconds": 1492,
+            "eval_projection_hours": 0.5920634920634921,
+            "full_request_tail_hours": 4,
+            "setup_allowance_hours": 0.15,
+            "queue_margin_hours": 0.5,
+            "projected_hours": 5.242063492063492,
+            "max_observed_active_rows": 4,
+            "decision": "continue",
+            "qualification": "Censored completion-rate projection; full4h tail retained. No score or loop classification claimed.",
+            "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+          }
         }
       ]
     }
@@ -2276,5 +2369,5 @@
       "role": "Read-only status and artifact collection"
     }
   ],
-  "last_updated": "2026-11-06T16:34:21.772313+00:00"
+  "last_updated": "2026-11-06T17:17:57.247345+00:00"
 }

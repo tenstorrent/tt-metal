@@ -1,0 +1,38 @@
+{
+  "arm": "gpqa-loop-logits-discriminator",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "queued_at": "2026-11-06T17:13:12.548254+00:00",
+  "planned_clients": 1,
+  "batch": 8,
+  "batch_reason": "Direct conditional-logit diagnostic preserves served B8 numerical regime; one exact captured prefix, not agent throughput or scored run",
+  "predicted_hours": 0.08,
+  "box_hours": 0.2,
+  "regime": "concurrent_CPU_HF_reference_no_performanceclaim",
+  "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "started_at": "2026-11-06T17:18:37.170635+00:00",
+  "owner_check": [],
+  "case_sha256": "8b3684c5dc04b11f511809f9b827b1b21d285cf76d5e7d9943e5db7805d35a7a",
+  "ended_at": "2026-11-06T17:24:14.169818+00:00",
+  "exit_status": 0,
+  "actual_device_hours": 0.09360971150250406,
+  "completed_subjobs": [
+    {
+      "started_at": "2026-11-06T17:18:37.170635+00:00",
+      "ended_at": "2026-11-06T17:24:14.169818+00:00",
+      "exit_status": 0,
+      "actual_device_hours": 0.09360971150250406,
+      "case_sha256": "8b3684c5dc04b11f511809f9b827b1b21d285cf76d5e7d9943e5db7805d35a7a",
+      "regime": "concurrent_CPU_HF_reference_no_performanceclaim"
+    }
+  ],
+  "next_subjob": {
+    "case": 1,
+    "status": "queued_waiting_case",
+    "predicted_device_hours": 0.06,
+    "remaining_box_hours": 0.10639028849749595,
+    "regime": "serial_TT_then_CPU_HF",
+    "reason": "Seconddistinctloop remainsunclassified; avoid concurrentCPUreference contention duringdevicehold. Predicted.06h from prior directsolo~.05h, guess."
+  }
+}

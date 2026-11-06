@@ -2,7 +2,7 @@
   "arm": "gpqa-empty-response-replay",
   "owner": "coordinator",
   "device": "local",
-  "status": "running",
+  "status": "completed_diagnostic_early_stop",
   "started_at": "2026-11-06T16:53:18.405299+00:00",
   "queued_at": "2026-11-06T16:53:18.405299+00:00",
   "planned_clients": 2,
@@ -20,5 +20,9 @@
     ]
   },
   "owner_check": [],
-  "source_snapshot": "bringup/artifacts/gpqa-empty-response-replay/source-launch.json"
+  "source_snapshot": "bringup/artifacts/gpqa-empty-response-replay/source-launch.json",
+  "ended_at": "2026-11-06T17:06:28.381406+00:00",
+  "exit_status": 0,
+  "actual_device_hours": 0.21943670050305727,
+  "exit_reason": "Loop established; own HTTP clients disconnected, engine0/0 and gracefulclose; no scored run altered"
 }

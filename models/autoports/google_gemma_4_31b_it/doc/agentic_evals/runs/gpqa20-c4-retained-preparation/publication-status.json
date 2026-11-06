@@ -1,0 +1,8 @@
+{
+  "tti_sha": "37ee508969c730320c01259fafe340e6c2c14d4e",
+  "published": true,
+  "publication_checkout": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tt-inference-server-stage12",
+  "branch": "mvasiljevic/gemma4-31b-goal12-v3",
+  "confirmation": "git ls-remote origin exact branch returned37ee508; source-only tree checked before launch",
+  "dispatched_run": 42256121890
+}

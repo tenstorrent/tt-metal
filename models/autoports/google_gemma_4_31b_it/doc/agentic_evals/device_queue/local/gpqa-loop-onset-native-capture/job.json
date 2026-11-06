@@ -1,0 +1,28 @@
+{
+  "arm": "gpqa-loop-onset-native-capture",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed_diagnostic",
+  "started_at": "2026-11-06T17:10:36.058787+00:00",
+  "queued_at": "2026-11-06T17:10:36.058787+00:00",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Smallest supported batch at or above two recorded concurrent GPQA requests; diagnostic only",
+  "predicted_hours": 0.15,
+  "box_hours": 0.25,
+  "command": {
+    "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "env": {},
+    "argv": [
+      "bash",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-loop-onset-native-capture/launch.sh"
+    ]
+  },
+  "owner_check": [],
+  "source_snapshot": "bringup/artifacts/gpqa-loop-onset-native-capture/source-launch.json",
+  "ended_at": "2026-11-06T17:16:00.159686+00:00",
+  "exit_status": 0,
+  "actual_device_hours": 0.09002686181332037,
+  "evidence": "runs/gpqa-loop-onset-native-capture/RESULT.json"
+}

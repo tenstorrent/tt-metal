@@ -155,6 +155,13 @@
     {
       "fact": "Pinned lm-eval membership selection iterates selected dataset positions in dataset order, but logged doc_id labels use original unsorted indices order. Semantic cohort set and nesting remain correct; audit by prompt/doc hashes and mapped actual index.",
       "evidence": "runs/larger-gpqa20-c2-evals/audit.json"
+    },
+    {
+      "fact": "Physical phase row order and prompt lengths do not identify request order when request_ids are absent. Validate each native prompt-ID array against independently pinned-tokenized request; preserve identity corrections rather than infer assignment.",
+      "evidence": [
+        "runs/gpqa-empty-response-replay/IDENTITY_CORRECTION.json",
+        "runs/larger-gpqa20-c2-evals/ERRATUM.json"
+      ]
     }
   ],
   "suite_timings": [
@@ -466,6 +473,17 @@
       "effort": "singleton-batch-comparison",
       "evidence": "runs/singleton-batch-comparison/RESULT.json",
       "summary": "Same greedy native requests/prompts, one generated response differs B1/B8; do not infer exact substitution from same precision. Scored comparison remains required."
+    },
+    {
+      "name": "gpqa_empty_response_replay",
+      "repetition_confirmed": true,
+      "actual_device_hours": 0.21943670050305727,
+      "onset_decode_indices": [
+        3178,
+        4103
+      ],
+      "scope": "two replay inputs, no originalhiddensequence or accuracy claim",
+      "evidence": "runs/gpqa-empty-response-replay/RESULT.json"
     }
   ]
 }
