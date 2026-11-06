@@ -39,3 +39,9 @@ shared:
     paths:
     - ttnn/ttnn/bringup
     note: 'owner 2026-11-06: served index keys in Blaze decode format (scaled fp8, 192 B rows) for PD compatibility; contract change authorized; run after P.38 without waiting for the owner'
+  P.40:
+    by: dnijemcevic
+    at: '2026-11-07T00:05:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-07: index-key format A/B bf16 vs bfp8 vs bfp4 (adds a bfp8 option to INDEX_K_FORMAT; default unchanged)'
