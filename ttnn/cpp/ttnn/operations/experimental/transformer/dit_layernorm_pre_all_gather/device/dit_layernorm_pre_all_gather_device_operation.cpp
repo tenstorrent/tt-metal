@@ -19,13 +19,17 @@ void PreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!input.is_sharded(), "DIT layernorm pre-all-gather does not support sharded inputs.");
     TT_FATAL(input.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
+        input.padded_shape()[-1] > 0 && input.padded_shape()[-2] > 0,
+        "Input must have non-zero height and width, got shape {}",
+        input.padded_shape());
+    TT_FATAL(
         input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Only interleaved inputs supported.");
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
             input.dtype() == DataType::FLOAT32,
         "Input data format not supported.");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands must be on device.");
-    TT_FATAL(input.buffer() != nullptr, "Operands must be allocated on device.");
+    TT_FATAL(input.is_allocated(), "Operands must be allocated on device.");
 }
 
 PreAllGatherDeviceOperation::spec_return_value_t PreAllGatherDeviceOperation::compute_output_specs(

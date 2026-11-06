@@ -34,16 +34,24 @@ bool uses_contiguous_staging(
         ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config));
 }
 
+template <typename ProgramFactory>
+using DescriptorAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<
+    ReduceScatterMinimalAsyncDeviceOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
+
+// The cache-hit re-application of the caller-owned semaphores depends on the adapter reaching these hooks.
+static_assert(DescriptorAdapter<RingReduceScatterProgramFactory>::has_override_runtime_arguments());
+static_assert(DescriptorAdapter<LineReduceScatterProgramFactory>::has_override_runtime_arguments());
+
 }  // unnamed namespace
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-        return RingReduceScatterMeshWorkloadFactory{};
+        return RingReduceScatterProgramFactory{};
     }
     TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
-    return LineReduceScatterMeshWorkloadFactory{};
+    return LineReduceScatterProgramFactory{};
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
@@ -51,7 +59,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
 
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         TT_FATAL(

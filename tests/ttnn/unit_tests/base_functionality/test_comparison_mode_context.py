@@ -2072,8 +2072,7 @@ def test_ring_joint_golden_stats_match_device_scratch_layout():
 def test_std_hw_on_non_tile_aligned_input_in_comparison_mode(device):
     input_tensor = _to_device(torch.rand((1, 1, 33, 33), dtype=torch.bfloat16), device)
 
-    # The device sums squared deviations over the 33x33 logical elements but divides by the padded 64x64 area,
-    # which the golden must reproduce.
+    # The device divides by the 33x33 logical elements, not the padded 64x64 area.
     with comparison_mode():
         ttnn.std_hw(input_tensor)
 

@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_f
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7 import KimiK27Adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -1068,7 +1069,10 @@ def test_ds_prefill_block_chunked_padded(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK27Config)),
+            # Open L1_SMALL like the Kimi K2.7 runner, so op-owned CCL semaphores stay out of main L1.
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK27Config), l1_small_size=KimiK27Adapter.l1_small_size
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1120,7 +1124,10 @@ def test_kimi_prefill_block_chunked(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK27Config)),
+            # Open L1_SMALL like the Kimi K2.7 runner, so op-owned CCL semaphores stay out of main L1.
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK27Config), l1_small_size=KimiK27Adapter.l1_small_size
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

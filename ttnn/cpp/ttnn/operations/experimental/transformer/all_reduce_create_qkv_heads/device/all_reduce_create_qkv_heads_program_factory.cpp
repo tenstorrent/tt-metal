@@ -334,7 +334,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = input_tensor_num_pages;  // TODO: Reduce this to double-buffer packet-size?
@@ -789,14 +789,26 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         if (forward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                forward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
 
         writer_rt_args.push_back(backward_fabric_node_id.has_value());
         if (backward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                backward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
 
         // Promote writer RT args to the descriptor.  None of the indices in this

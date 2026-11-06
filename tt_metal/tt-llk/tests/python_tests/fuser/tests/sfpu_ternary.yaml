@@ -3,26 +3,30 @@ dest_acc: true
 
 operands:
   - name: "condition"
+    tile_dims: [[16, 32], [32, 16], [32, 32]]
     dims: [32, 32]
     format: "Float32"
     stimuli:
       include: [0.0, 1.0]
   - name: "true_value"
+    tile_dims: [[16, 32], [32, 16], [32, 32]]
     dims: [32, 32]
     format: "Float32"
     stimuli: [0.5, 1.0]
   - name: "false_value"
+    tile_dims: [[16, 32], [32, 16], [32, 32]]
     dims: [32, 32]
     format: "Float32"
     stimuli: [-1.0, -0.5]
   - name: "where_out"
+    tile_dims: [[16, 32], [32, 16], [32, 32]]
     dims: [32, 128]
     format: "Float32"
 
 operations:
   - math:
       - type: "Fpu"
-        block_size: [32, 32]
+        block_tiles: [1, 1]
         in0: "condition"
         operation: "Datacopy"
         unpacker: "UnpackerA"
@@ -31,7 +35,7 @@ operations:
         indexes:
           dest: 0
       - type: "Fpu"
-        block_size: [32, 32]
+        block_tiles: [1, 1]
         in0: "true_value"
         operation: "Datacopy"
         unpacker: "UnpackerA"
@@ -40,7 +44,7 @@ operations:
         indexes:
           dest: 1
       - type: "Fpu"
-        block_size: [32, 32]
+        block_tiles: [1, 1]
         in0: "false_value"
         operation: "Datacopy"
         unpacker: "UnpackerA"
@@ -49,6 +53,7 @@ operations:
         indexes:
           dest: 2
       - type: "TernarySfpu"
+        block_tiles: [1, 1]
         operation: "SfpuWhere"
         indexes:
           src0: 0
@@ -57,5 +62,5 @@ operations:
           dest: 3
     pack:
       - output: "where_out"
-        block_size: [32, 128]
+        block_tiles: [1, 4]
         packer: "Packer"

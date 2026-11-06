@@ -408,7 +408,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     tt::tt_metal::Program program{};
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_blocks_per_packet = packet_size_bytes / input_block_size;
@@ -787,6 +787,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             if (forward_fabric_connection) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     forward_fabric_node_id.value(),
                     link_idx,
@@ -799,6 +800,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             if (backward_fabric_connection) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     backward_fabric_node_id.value(),
                     link_idx,

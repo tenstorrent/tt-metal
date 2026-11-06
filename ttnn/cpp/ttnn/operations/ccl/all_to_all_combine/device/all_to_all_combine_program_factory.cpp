@@ -13,7 +13,6 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/global_semaphore.hpp"
 
@@ -196,7 +195,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
 
     const auto& axis = operation_attributes.axis;
 
-    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
@@ -314,7 +313,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
         for (const auto& neighbor_coordinate : neighbors) {
             const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor_coordinate);
             append_fabric_connection_rt_args<ProgramDescriptor>(
-                fabric_node_id, neighbor_fabric_id, link_id, desc, sender_core, writer_runtime_args);
+                *mesh_device, fabric_node_id, neighbor_fabric_id, link_id, desc, sender_core, writer_runtime_args);
         }
 
         KernelDescriptor::RTArgList writer_rt_args_builder;

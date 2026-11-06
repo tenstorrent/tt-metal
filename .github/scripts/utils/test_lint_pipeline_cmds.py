@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import textwrap
@@ -317,3 +318,36 @@ def test_cli_exits_zero_on_clean_file(tmp_path):
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+TTNN_SANITY_WORKFLOW = lint.REPO_ROOT / ".github" / "workflows" / "ttnn-sanity-tests-impl.yaml"
+
+
+def _ttnn_sanity_cmd_runners() -> tuple[list[str], list[str]]:
+    """How ttnn-sanity starts the group cmd: the HW `RUNNER=(...)` arrays and the sim `if ...; then`."""
+    text = TTNN_SANITY_WORKFLOW.read_text()
+    hw = [m.group(1) for m in re.finditer(r'RUNNER=\((?:[^()]* -- )?(\S[^()]*"\$TEST_GROUP_CMD")\)', text)]
+    sim = [m.group(1) for m in re.finditer(r'^\s*if (.*"\$cmd"); then$', text, re.M)]
+    return hw, sim
+
+
+@pytest.mark.parametrize("failing_line", [1, 2])
+def test_ttnn_sanity_keeps_errexit_around_the_group_cmd(failing_line):
+    # The lint passes a plain multi-line block because the block runs under `bash -eo pipefail`.
+    # ttnn-sanity hands the block to a bash of its own, which must keep that, or a failed line is
+    # masked by a later line that passes (e.g. the three pytest lines of "trace allocation tracker").
+    hw, sim = _ttnn_sanity_cmd_runners()
+    assert len(hw) == 2 and len(sim) == 1, "ttnn-sanity runner shape changed; update _ttnn_sanity_cmd_runners"
+    lines = ["true", "true", "true"]
+    lines[failing_line - 1] = "false"
+    cmd = "\n".join(lines)
+    for runner in hw:
+        script = f'TEST_GROUP_CMD="$1"; {runner}'
+        result = subprocess.run(["bash", "-c", script, "_", cmd])
+        assert result.returncode != 0, f"`{runner}` reported a failed line {failing_line} as success"
+    for runner in sim:
+        script = f'export cmd="$1"; if {runner}; then exit 0; fi; exit 1'
+        result = subprocess.run(["bash", "-c", script, "_", cmd])
+        assert result.returncode == 1, f"`{runner}` reported a failed line {failing_line} as success"
+        passing = subprocess.run(["bash", "-c", script, "_", "true\ntrue"])
+        assert passing.returncode == 0

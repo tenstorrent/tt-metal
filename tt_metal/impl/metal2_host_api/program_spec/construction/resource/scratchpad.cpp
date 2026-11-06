@@ -4,37 +4,17 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
-#include <algorithm>
 #include <cstdint>
-#include <limits>
-#include <map>
-#include <memory>
-#include <numeric>
 #include <optional>
-#include <set>
 #include <string>
-#include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
-#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -71,6 +51,9 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
+        if (scratchpad_spec->advanced_options.allow_instance_multi_binding) {
+            handle.shared_allocation_identifier = scratchpad_spec->unique_id;
+        }
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding

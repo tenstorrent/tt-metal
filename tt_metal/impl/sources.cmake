@@ -132,6 +132,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_engine_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/cluster_noc_helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/service/service_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
@@ -146,6 +147,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_transfer_stats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/realtime_profiler_tracy_handler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/ringbuffer_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
@@ -162,6 +164,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_debugging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/l1_ecc_halt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp

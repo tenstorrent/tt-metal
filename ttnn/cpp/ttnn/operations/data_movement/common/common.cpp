@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 #include <numeric>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
@@ -773,7 +773,8 @@ std::array<uint32_t, 2> compute_height_sharded_shard_shape(
     const uint32_t total_num_cores) {
     auto [tensor_height, tensor_width] = squeezed_tensor_hw;
     auto squeezed_height_padded_to_tile =
-        layout == tt::tt_metal::Layout::TILE ? tt::round_up(tensor_height, total_num_cores) : tensor_height;
+        layout == tt::tt_metal::Layout::TILE ? tt::round_up(tensor_height, total_num_cores * tt::constants::TILE_HEIGHT)
+                                             : tensor_height;
     return {tt::div_up(squeezed_height_padded_to_tile, total_num_cores), tensor_width};
 }
 
@@ -822,9 +823,15 @@ ttnn::MemoryConfig create_sharded_memory_config(
             case ShardStrategy::WIDTH:
                 computed_shard_shape = compute_width_sharded_shard_shape(squeezed_tensor_hw, total_num_cores);
                 break;
-            case ShardStrategy::HEIGHT:
-                computed_shard_shape = compute_height_sharded_shard_shape(squeezed_tensor_hw, layout, total_num_cores);
+            case ShardStrategy::HEIGHT: {
+                // A tiled tensor pads each batch's height to a whole tile, so shards must cover the padded rows.
+                const uint32_t physical_height = layout == tt::tt_metal::Layout::TILE
+                                                     ? batch_size * tt::round_up(height, tt::constants::TILE_HEIGHT)
+                                                     : tensor_height;
+                computed_shard_shape =
+                    compute_height_sharded_shard_shape({physical_height, tensor_width}, layout, total_num_cores);
                 break;
+            }
             default: TT_ASSERT(false, "Invalid shard strategy");
         }
     }
@@ -908,6 +915,21 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
     return row_bytes;
 }
 
+bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size) {
+    if (!memory_config.shard_spec().has_value()) {
+        return false;
+    }
+    const auto layout = memory_config.memory_layout();
+    if (layout != tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED &&
+        layout != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        return false;
+    }
+    const uint32_t alignment = (memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM)
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    return (memory_config.shard_spec()->shape[1] * element_size) % alignment != 0;
+}
+
 void push_buffer_set(
     tt::tt_metal::ProgramDescriptor& desc,
     const BlockBufferSet& set,
@@ -974,7 +996,8 @@ BlockPlan make_block_plan(
     uint32_t output_single_tile_size,
     uint32_t tile_height,
     uint32_t tile_width,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles) {
     const bool has_staging = (direction == BlockDirection::Tilize);
 
     TT_FATAL(
@@ -1001,7 +1024,9 @@ BlockPlan make_block_plan(
     const uint32_t fixed_staging_bytes = has_staging ? (2 * dram_alignment) : 0;
     const uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
     const uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
-    const uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
+    const uint32_t l1_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
+    const uint32_t cb_block_size_limit =
+        max_block_tiles.has_value() ? std::min(l1_block_size_limit, *max_block_tiles) : l1_block_size_limit;
 
     BlockPlan plan;
     plan.split = (core_order == BlockCoreOrder::RowMajor)

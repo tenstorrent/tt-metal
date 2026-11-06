@@ -125,7 +125,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
-    TT_FATAL(input_tensors[0].buffer() != nullptr, "Input tensor 0 must be allocated in buffers on device");
+    TT_FATAL(input_tensors[0].is_allocated(), "Input tensor 0 must be allocated in buffers on device");
 
     const auto dtype = input_tensors[0].dtype();
     const auto page_size = input_tensors[0].buffer()->page_size();
@@ -134,7 +134,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
 
         TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor {} must be tiled", i);
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor {} must be on device", i);
-        TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor {} must be allocated in buffers on device", i);
+        TT_FATAL(input_tensor.is_allocated(), "Input tensor {} must be allocated in buffers on device", i);
         TT_FATAL(
             input_tensor.dtype() == dtype,
             "All input tensors must have the same dtype. Input tensor {} has dtype {} but expected {}",
@@ -168,7 +168,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
 
             TT_FATAL(output_tensor.layout() == Layout::TILE, "Output tensor {} must be tiled", i);
             TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor {} must be on device", i);
-            TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor {} must be allocated in buffers on device", i);
+            TT_FATAL(output_tensor.is_allocated(), "Output tensor {} must be allocated in buffers on device", i);
             TT_FATAL(
                 output_tensor.dtype() == dtype,
                 "Output tensor {} dtype should match input tensors but has {}",
@@ -236,7 +236,7 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args, uint32_t 
 
     const auto validate_metadata_tensor = [&tensor_args](const Tensor& tensor, const char* name) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be on device", name);
-        TT_FATAL(tensor.buffer() != nullptr, "{} must be allocated on device", name);
+        TT_FATAL(tensor.is_allocated(), "{} must be allocated on device", name);
         TT_FATAL(tensor.device() == tensor_args.input_q.device(), "{} must be on the same device as Q", name);
         TT_FATAL(tensor.dtype() == DataType::UINT32, "{} must have UINT32 dtype", name);
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "{} must use ROW_MAJOR layout", name);
@@ -397,6 +397,10 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 }
 
+std::optional<tt::tt_metal::TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
+    return tensor.has_value() ? std::optional<tt::tt_metal::TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+}
+
 }  // namespace
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
@@ -435,8 +439,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             ag.mesh_rows,
             ag.mesh_cols,
             ag.ring_size);
-        TT_FATAL(
-            ag.route_plan_hash.has_value(), "Full-mesh RingJointSDPA requires a resolved direct-neighbor route hash");
         const auto live_shape = input_tensor_q.device()->shape();
         TT_FATAL(
             live_shape.dims() == 2 && live_shape[0] == ag.mesh_rows && live_shape[1] == ag.mesh_cols,
@@ -495,7 +497,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             name,
             t.dtype());
         TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} tensor must be on device", name);
-        TT_FATAL(t.buffer() != nullptr, "{} tensor must be allocated on device", name);
+        TT_FATAL(t.is_allocated(), "{} tensor must be allocated on device", name);
         TT_FATAL(
             t.logical_volume() == 1,
             "{} tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
@@ -537,7 +539,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!has_joint_tensors, "RingJointSDPA attention_sink does not support joint attention tensors");
         TT_FATAL(!has_latent_v, "RingJointSDPA attention_sink does not support latent-V / Ring-MLA attention");
         TT_FATAL(attention_sink.storage_type() == StorageType::DEVICE, "Attention sink tensor must be on device");
-        TT_FATAL(attention_sink.buffer() != nullptr, "Attention sink tensor must be allocated on device");
+        TT_FATAL(attention_sink.is_allocated(), "Attention sink tensor must be allocated on device");
         TT_FATAL(
             input_tensor_q.device() == attention_sink.device(),
             "Attention sink must be on the same mesh device as Q/K/V");
@@ -629,7 +631,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
@@ -1214,16 +1216,14 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.kv_cache_batch_idx.has_value(),
         kv_pad_rotation_enabled,
         tensor_args.has_metadata(),
-        // The metadata accessors are baked into compile-time args; the validator pins one form, so this key is
-        // defense in depth should that pin ever relax. Only the config is keyed, never the value.
-        tensor_args.slot_id.has_value() ? tensor_args.slot_id->memory_config() : tt::tt_metal::MemoryConfig{},
-        tensor_args.kv_actual_isl.has_value() ? tensor_args.kv_actual_isl->memory_config()
-                                              : tt::tt_metal::MemoryConfig{},
-        // Presence changes how the kernels compile; the numeric attrs above hash as stable placeholders.
-        tensor_args.has_logical_n_tensor(),
-        tensor_args.has_logical_l_tensor(),
-        tensor_args.has_kv_valid_end(),
-        tensor_args.has_kv_valid_end() ? tensor_args.kv_valid_end->memory_config() : tt::tt_metal::MemoryConfig{},
+        // The metadata, logical_n / logical_l and kv_valid_end tensors' accessors are baked into compile-time args,
+        // and presence changes how the kernels compile, so each is keyed by its optional spec. Only the spec is keyed,
+        // never the value; the numeric attrs above hash as stable placeholders.
+        optional_spec(tensor_args.slot_id),
+        optional_spec(tensor_args.kv_actual_isl),
+        optional_spec(tensor_args.logical_n_tensor),
+        optional_spec(tensor_args.logical_l_tensor),
+        optional_spec(tensor_args.kv_valid_end),
         // The layer fold is baked into kernel runtime args only on the metadata path; the host path re-patches
         // the folded index per dispatch, so keying the factors there would only multiply programs per layer.
         tensor_args.has_metadata() ? args.kv_cache_num_layers : 0u,
@@ -1403,11 +1403,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const auto& mesh_shape = mesh_device.shape();
     std::size_t num_devices =
         full_mesh ? mesh_shape.mesh_size() : (*cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols());
+    // A full-mesh route (snake_orientation, closure, route_plan_hash) is filled in by the program factory on a
+    // program-cache miss; here they stay at their defaults.
     ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     std::optional<uint64_t> route_plan_hash;
-    // The caller asks for a full-mesh gather; the proved route decides whether it closes.
     ttnn::ccl::Topology resolved_topology = topology;
     uint32_t resolved_kv_stripe_split = 1;
     if (full_mesh) {
@@ -1462,23 +1463,17 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             tt::tt_fabric::is_2d_fabric_config(fabric_config),
             "ring_mla cluster_axis=None requires a 2D fabric config (FABRIC_2D or FABRIC_2D_TORUS_X/Y/XY), got {}",
             fabric_config);
-        std::array<tt::tt_fabric::Topology, 2> axis_topology{
-            ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 0),
-            ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 1)};
-        const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            input_tensor_q, std::nullopt, num_links, axis_topology, true, "ring_mla", /*allow_open_path=*/true);
-        TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh route");
         TT_FATAL(
-            route->plan.ring_size <= std::numeric_limits<uint32_t>::digits,
-            "ring_mla supports at most {} full-mesh ranks, got {}",
+            mesh_shape.dims() == 2 && mesh_shape.mesh_size() <= std::numeric_limits<uint32_t>::digits,
+            "ring_mla supports a 2D mesh of at most {} full-mesh ranks, got {}",
             std::numeric_limits<uint32_t>::digits,
-            route->plan.ring_size);
-        snake_orientation = route->plan.orientation;
-        mesh_rows = route->plan.mesh_rows;
-        mesh_cols = route->plan.mesh_cols;
-        route_plan_hash = route->plan.route_plan_hash;
-        num_devices = route->plan.ring_size;
-        resolved_topology = route->topology;
+            mesh_shape);
+        // The route is proved on a program-cache miss (prove_full_mesh_route in the program factory), not here,
+        // where it would walk the fabric control plane on every call. It decides closure (Ring or Linear); the
+        // caller's topology only asked for a full-mesh gather, so it is not kept and Ring and Linear share a program.
+        resolved_topology = ttnn::ccl::Topology::Ring;
+        mesh_rows = mesh_shape[0];
+        mesh_cols = mesh_shape[1];
     } else {
         TT_FATAL(
             *cluster_axis < mesh_shape.dims(),
