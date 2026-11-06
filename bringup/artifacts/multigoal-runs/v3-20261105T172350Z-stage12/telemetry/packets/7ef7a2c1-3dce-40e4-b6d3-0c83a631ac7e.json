@@ -79,12 +79,12 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "GPQA10/198,SWE2/500,Terminal2/89 remain banked. SWE nightly5: raw1/5 quarantined for Xarray externalnetwork;3valid0/3,1unresolvedcap, no completednightly. Same5repeat42228448171 dispatched. FullGPQA198 andTerminal10 running; no dry/release."
+    "stage12_accuracy": "BankedGPQA10/198,SWE2/500,Terminal2/89. FullGPQA198 stopped after10reportedcompletions: empiricalprojection24.55\u201329.46h exceeds12h; no finalsamples/score. SWEnightly5 incompletevalidity, same5repeat42228448171 running; Terminal10 running. No dry/release. GPQA C4 same10 comparison42232104462 active; synthetic capacity is not scored accuracy."
   },
   "notes": [
     "Current stage12 serving measurement; not frozen release.",
     "Native-tool registration repaired with2x168 exact token-ID pairs and actualharness parser checks.",
-    "GPQA server-sized 10 repeats prior nightly visible answers; not 20 independent samples. Full 198 rung dispatched, not release.",
+    "GPQA server-sized 10 repeats prior nightly visible answers; not 20 independent samples. Full198 attempt stopped for projected nonfit; no final score.",
     "Synthetic prefill-interference diagnostic is not headline workload or scored accuracy; excluded from performance fields. Local evidence commit6c9d8cdf.",
     "Current-runtime benchmark confirmation passed; no frozen dry run or release yet.",
     "SWE nightly partial evidence: runs/nightly-swe-observable/audit.json; raw1/5 excluded, notpooled withsmoke."

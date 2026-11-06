@@ -2018,6 +2018,80 @@
         "method": "Actual simultaneous4fullcontextresidency/no preemptions/recaptures onstockB8, then separatelybudgetedsame10C2/C4 scoredpair",
         "success": "Capacity evidence andscoredroutepair; scoresreportednotgated; noacceptancefromthreadsorhosttests"
       },
+      "status": "done",
+      "used_device_hours": 0.14046206916666668,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": "Four simultaneous full131072 input contexts confirmed;8/8 requests completed, no preemption/recapture, late reuse0.99854135. Capacity prerequisite passed; C4 serving change remains unaccepted until scored comparison.",
+      "evidence": [
+        "runs/gpqa-c4-capacity/RESULT.json"
+      ]
+    },
+    {
+      "problem": "gpqa-c4-scored10",
+      "owner": "local_serving_check",
+      "goal": "Choose faster valid GPQA10 concurrency through same-cohort scored C2/C4 comparison",
+      "plan": "runs/gpqa-c4-scored10/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0.065764804125
+        },
+        "device_hours": 0.5088888888888888,
+        "basis": "guess",
+        "reason": "25% of banked10 eval runtime; cost baseline C2 device job, no assumed gain. Conservative run projection separately includes full4h request tail."
+      },
+      "confirm": {
+        "method": "Same frozen10 and unchanged release limits/sampling; audit native stock outputs and runtime identity; compare measured eval/device times against C2 baseline",
+        "success": "Valid scored comparison and faster measured completion; report scores/intervals without score gating; capped/looping failures remain failures and unresolved evidence explicit"
+      },
+      "box_hours": 5.5,
+      "status": "running",
+      "started_at": "2026-11-06T14:13:57.794633+00:00"
+    },
+    {
+      "problem": "terminal-nightly-tail-diagnosis",
+      "owner": "current_benchmark",
+      "goal": "Explain Terminal10 slow tail and project fit from observed progress and model-call activity",
+      "plan": "runs/terminal-nightly-tail-diagnosis/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated",
+        "reason": "Host-only diagnosis from preserved live evidence; no runtime speed claim"
+      },
+      "unblocks": [
+        "representative Terminal score"
+      ],
+      "confirm": {
+        "method": "Timestamped progress and request timeline with uncertainty; empirical projection against12h",
+        "success": "Auditable continue/stop recommendation distinguishing observed activity, unknown output quality, and harness upper bound"
+      },
+      "box_hours": 0,
+      "status": "running"
+    },
+    {
+      "problem": "gpqa-larger20-preparation",
+      "owner": "source_packaging",
+      "goal": "Prepare next nested20 GPQA rung at current accepted C2 independently of C4 speed effort",
+      "plan": "runs/gpqa-larger20-preparation/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated",
+        "reason": "Source-only rung preparation"
+      },
+      "unblocks": [
+        "extended GPQA largest-fitting list"
+      ],
+      "confirm": {
+        "method": "Reproduce original hashed10 exactly and extend same deterministic order to20; source equality limits/pins plus focused tests/hooks",
+        "success": "Nested20 immutable source ready; no score-dependent selection or limit changes"
+      },
+      "box_hours": 0,
       "status": "running"
     }
   ],
@@ -4922,6 +4996,297 @@
         }
       ],
       "reason": "Validitydiagnoses foundnoadmissibleTTI-onlyrepair; samefrozenSWEnightlyrepeat isindependent. C4one-tokenreplay didnotprove4residency orspeed. GPQAhasvalid10baseline andfull198longtail threatensfit, so pursueboundedGPQAcapacitybeforeblockedSWEscoredpair; speedestimatepricedonlyonbanked10."
+    },
+    {
+      "after": "gpqa-c4-capacity-and-full198-measured-stop",
+      "at": "2026-11-06T14:13:57.794633+00:00",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "nightly-swe-network-reach",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "malformed-response-retention",
+          "unblocks": [
+            "representative capped-call diagnosis"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "gpqa-c4-scored10",
+          "saving_hours": 0.065764804125,
+          "device_hours": 0.5088888888888888,
+          "basis": "guess"
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Replay no speedup or four-residency proof; obsolete198 pricing retired after full-suite measured stop. SWE nightly validity prerequisite unresolved."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Validity first; unresolved host-only route and diagnosis questions cannot use hardware. GPQA valid10 permits bounded scored comparison. No full198 savings credited. Rungs continue independently."
+    },
+    {
+      "after": "terminal-nightly-slow-tail-observation",
+      "at": "2026-11-06T14:15:39.673501+00:00",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "nightly-swe-network-reach",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "malformed-response-retention",
+          "unblocks": [
+            "representative capped-call diagnosis"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "terminal-nightly-tail-diagnosis",
+          "unblocks": [
+            "representative Terminal score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "gpqa-c4-scored10",
+          "saving_hours": 0.065764804125,
+          "device_hours": 0.5088888888888888,
+          "basis": "guess"
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Replay no speedup or four-residency proof; obsolete198 pricing retired after full-suite measured stop. SWE nightly validity prerequisite unresolved."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "New validity/projection question ranks before speed; zero device cost, CI runs continue pending measured recommendation."
+    },
+    {
+      "after": "gpqa-intermediate-rung-preparation",
+      "at": "2026-11-06T14:16:58.059693+00:00",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "nightly-swe-network-reach",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "malformed-response-retention",
+          "unblocks": [
+            "representative capped-call diagnosis"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "terminal-nightly-tail-diagnosis",
+          "unblocks": [
+            "representative Terminal score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "gpqa-larger20-preparation",
+          "unblocks": [
+            "extended GPQA largest-fitting list"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "gpqa-c4-scored10",
+          "saving_hours": 0.065764804125,
+          "device_hours": 0.5088888888888888,
+          "basis": "guess"
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Replay no speedup or four-residency proof; obsolete198 pricing retired after full-suite measured stop. SWE nightly validity prerequisite unresolved."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Full198 measured nonfit does not settle largest fitting intermediate list. Prepare nested20 on accepted C2 without waiting for scored C4 effort."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

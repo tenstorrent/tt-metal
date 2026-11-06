@@ -3,7 +3,7 @@
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Valid server-sized10/C2/B8 measured947.013179569s,9/10 complete answers. Full198 rung42208934357 dispatched with11.084957716h conservative workflow forecast including4h configured request-tail allowance; release not frozen.",
+      "reason": "Full198 C2rung stopped: empiricalobservedprogressprojects29h (>12h); retainsvalid10 forreleasependingfreeze/dry. C4capacity/scored10effort doesnotprovefull198fit.",
       "functional_at": 10,
       "projected_hours": null,
       "score": 0.9,
@@ -18,7 +18,9 @@
         "run_id": 42208934357,
         "projected_eval_hours": 5.2085724876293975,
         "projected_workflow_hours": 11.084957715526901
-      }
+      },
+      "full_suite_decision": "stop",
+      "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json"
     },
     "swe_bench_verified": {
       "decision": "stop",

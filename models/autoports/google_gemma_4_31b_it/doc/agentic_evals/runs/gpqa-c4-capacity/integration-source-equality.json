@@ -1,0 +1,43 @@
+{
+  "base": "b4662344c0119e2c1fe7840e9ca954324a2f0afe",
+  "prior_candidate": "a6071fb7fecfe0fea562680a2210666328dcf0b4",
+  "production_ast_only_changes": {
+    "gpqa.max_concurrent": [
+      2,
+      4
+    ],
+    "gpqa.nightly": [
+      0,
+      10
+    ],
+    "terminal.nightly": [
+      10,
+      0
+    ]
+  },
+  "all_other_production_ast_equal": true,
+  "gpqa_doc_ids": [
+    152,
+    189,
+    46,
+    87,
+    52,
+    181,
+    31,
+    185,
+    50,
+    187
+  ],
+  "nightly_suite_sizes": [
+    10,
+    0,
+    0
+  ],
+  "retention": {
+    "swe_return_token_ids": true,
+    "terminal_store_all_messages": true
+  },
+  "method": "Recursive AST field comparison of eval_config.py against base; exactly three scalar leaves differ. Runtime config assertions confirm cohort and metadata. Only two test files additionally differ; workflow and runtime source unchanged.",
+  "device_hours": 0,
+  "status": "prepared_pending_coordinator_acceptance"
+}

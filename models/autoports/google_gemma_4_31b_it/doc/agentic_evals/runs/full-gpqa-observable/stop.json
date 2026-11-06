@@ -1,0 +1,36 @@
+{
+  "status": "stopped_nonfitting_full_rung",
+  "run_id": 42208934357,
+  "task_count": 198,
+  "completed_reported": 10,
+  "issued_including_active": 12,
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "run_timeout_hours": 12,
+  "progress_window_start": "2026-11-06T12:31:37.118566Z",
+  "snapshot_through": "2026-11-06T14:00:52.888246Z",
+  "observed_eval_window_hours": 1.4877138,
+  "projection_hours_completed_rate": 29.45673324,
+  "projection_hours_optimistically_counting_active_as_complete": 24.5472777,
+  "initial_workflow_projection_hours": 11.084957715526901,
+  "reason": "Observed progress extrapolation exceeds12h even counting both unfinishedrequests ascompleted. Two currentrequests havecontinuousdecode for>1h; no newcompletion since12:51:49. Stopfullrung understageclock rule, retainpreviousvalid10.",
+  "uncertainty": "Empiricalsmall-prefix projection withcensoredheavy-tails, notamathematical impossibility proof orloopdiagnosis. No observedrawanswers/score forcurrent10; notpooledwithpriorbanked10.",
+  "functional_at": 10,
+  "score": null,
+  "limits_unchanged": {
+    "request_seconds": 14400,
+    "output_tokens": 126976
+  },
+  "stop_command": "gh run cancel 42208934357 -R tenstorrent/tt-agentic-bringup-qb2",
+  "stop_requested_at": "2026-11-06T14:02:48.560136+00:00",
+  "partial_evidence": [
+    "bringup/artifacts/stage12-gpqa-stop-snapshot.log",
+    "bringup/artifacts/stage12-gpqa-stop-run.json",
+    "bringup/artifacts/stage12-gpqa-stop-jobs.json"
+  ],
+  "artifact_limitation": "Stockcancelroute may omit final sampleartifact; collectorwillattemptexistinguploads. Availablelogs preservedbeforecancel. Nofabricatedscores.",
+  "workflow_conclusion": "cancelled",
+  "workflow_completed_at": "2026-11-06T14:02:40Z",
+  "collected_artifacts": "Only imagebuildresultsreport; no evaluation samples/results uploaded. Private livejoblogs preserved."
+}

@@ -864,7 +864,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T13:54:14.166457+00:00",
+      "last_observed_at": "2026-11-06T14:15:33.824976+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
       "build_started_at": "2026-11-06T10:55:05Z",
       "build_completed_at": "2026-11-06T11:47:58Z",
@@ -879,7 +879,7 @@
       "eval": "r1_gpqa_diamond",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "device_job_in_progress",
+      "status": "cancelled",
       "queued_at": "2026-11-06T11:15:45.309509+00:00",
       "planned_clients": 2,
       "batch": 8,
@@ -909,17 +909,22 @@
       "run_id": 42208934357,
       "submitted_at": "2026-11-06T11:15:47Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42208934357",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T13:54:48.194318+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "cancelled",
+      "last_observed_at": "2026-11-06T14:02:56.568510+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-l229t",
       "build_started_at": "2026-11-06T11:16:03Z",
       "build_completed_at": "2026-11-06T12:06:53Z",
       "runner": "120-qb2-p05t01",
       "device_job_id": 127883320307,
       "device_job_started_at": "2026-11-06T12:06:55Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-06T12:06:55Z"
+      "device_job_completed_at": "2026-11-06T14:02:39Z",
+      "start": "2026-11-06T12:06:55Z",
+      "end": "2026-11-06T14:02:39Z",
+      "exit_status": 1,
+      "actual_hours": 1.9288888888888889,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 2.781388888888889
     },
     {
       "arm": "nightly-swe-observable",
@@ -1046,16 +1051,72 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42228448171",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T13:54:46.778151+00:00",
+      "last_observed_at": "2026-11-06T14:15:03.748707+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 127927949769,
       "device_job_started_at": "2026-11-06T13:48:32Z",
       "device_job_completed_at": null,
       "start": "2026-11-06T13:48:32Z"
+    },
+    {
+      "arm": "gpqa-c4-scored10",
+      "eval": "r1_gpqa_diamond",
+      "device": "qb2-ci",
+      "owner": "coordinator",
+      "status": "device_job_in_progress",
+      "queued_at": "2026-11-06T14:13:57.794633+00:00",
+      "planned_clients": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+      "tti_sha": "82da396ef63bbe95cedbe254bb5433d905cd0491",
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "task_count": 10,
+      "tasks": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187
+      ],
+      "predicted_hours": 5.0088888888888885,
+      "projection_components_hours": {
+        "observed_C2_eval": 0.26305921654693926,
+        "observed_C2_device_overhead": 0.24582967234194958,
+        "full_request_tail_allowance": 4,
+        "queue_margin": 0.5
+      },
+      "prediction_basis": "Measured C2 same10 plus full configured request tail and guessed queue margin; immutable image build skipped, no serving speed credit",
+      "run_timeout_hours": 12,
+      "job_timeout_hours": 18,
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "batch_reason": "Smallest supported batch >=4; local four131072-context residency demonstrated, maxseq8",
+      "host_limit_basis": "HTTP-only GPQA; no Docker task sandboxes; same normal CI route",
+      "capacity_evidence": "runs/gpqa-c4-capacity/RESULT.json",
+      "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
+      "scope": "Scored C4 candidate, same banked10; not release, not full198 retry",
+      "run_id": 42232104462,
+      "submitted_at": "2026-11-06T14:14:10Z",
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42232104462",
+      "workflow_status": "in_progress",
+      "workflow_conclusion": null,
+      "last_observed_at": "2026-11-06T14:14:41.587431+00:00",
+      "runner": "120-qb2-p05t01",
+      "device_job_id": 127940429269,
+      "device_job_started_at": "2026-11-06T14:14:27Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-06T14:14:27Z"
     }
   ],
   "status": "all_smokes_valid_three_larger_runs_executing",
-  "last_updated": "2026-11-06T13:55:02.815119+00:00",
+  "last_updated": "2026-11-06T14:15:39.698482+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1481,6 +1542,24 @@
         31.9
       ],
       "evidence": "runs/agent-capacity-and-contention/REPLAY_RESULT.json"
+    },
+    {
+      "arm": "full-gpqa-observable",
+      "run_id": 42208934357,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 1.9288888888888889,
+      "workflow_wall_hours": 2.781388888888889,
+      "predicted_workflow_hours": 11.084957715526901,
+      "workflow_conclusion": "cancelled"
+    },
+    {
+      "arm": "gpqa-c4-capacity",
+      "planned_clients": 4,
+      "batch": 8,
+      "predicted_hours": 0.18,
+      "device_job_hours": 0.14046206916666668,
+      "result": "Capacity prerequisite confirmed; C4 acceptance pending scored10"
     }
   ],
   "local_idle_intervals": [
@@ -1529,6 +1608,11 @@
       "start": "2026-11-06T13:49:36.657891+00:00",
       "end": null,
       "reason": "Replaycompleted; nextGPQAcapacity planbeingprepared, CIcontinues"
+    },
+    {
+      "start": "2026-11-06T14:04:00Z",
+      "reason": "Four-context GPQA envelope completed; local remaining informative checks require retained real failing histories or new task timing evidence. Three CI runs keep available permitted workload busy; no redundant local benchmark.",
+      "next": "Exact failed native-history diagnostic or measured new serving gap when collected"
     }
   ],
   "schedule_history": [
@@ -1704,15 +1788,37 @@
     "swe": "1/5at8min; too early to extrapolate with confidence; configured6h tail allowance remains; no limit changes"
   },
   "gpqa_live_tail_watch": {
-    "at": "2026-11-06T13:10:43.994280+00:00",
-    "source": "bringup/artifacts/stage12-gpqa-live-1310.log",
-    "snapshot_through": "2026-11-06T13:08:22.7538207Z",
+    "status": "stop_requested_nonfitting_full_rung",
+    "run_id": 42208934357,
+    "task_count": 198,
     "completed_reported": 10,
-    "dataset_tasks": 198,
-    "active_decode_rows": 2,
-    "last_new_prefill_at": "2026-11-06T12:51:49.5335445Z",
-    "interpretation": "Continuous decode is observed, not stalled tool execution. Two in-flight slow requests not yet classified as long valid reasoning or loops. Early completed-count extrapolation is unstable and now near/past12h, while original additive4h request-tail reserve remains largely unconsumed. No release-fit claim. Re-estimate immediately after these requests resolve or tail reserve is consumed; stop a demonstrated non-fitting full rung and retain prior functional10.",
-    "limits_unchanged": true
+    "issued_including_active": 12,
+    "planned_clients": 2,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "run_timeout_hours": 12,
+    "progress_window_start": "2026-11-06T12:31:37.118566Z",
+    "snapshot_through": "2026-11-06T14:00:52.888246Z",
+    "observed_eval_window_hours": 1.4877138,
+    "projection_hours_completed_rate": 29.45673324,
+    "projection_hours_optimistically_counting_active_as_complete": 24.5472777,
+    "initial_workflow_projection_hours": 11.084957715526901,
+    "reason": "Observed progress extrapolation exceeds12h even counting both unfinishedrequests ascompleted. Two currentrequests havecontinuousdecode for>1h; no newcompletion since12:51:49. Stopfullrung understageclock rule, retainpreviousvalid10.",
+    "uncertainty": "Empiricalsmall-prefix projection withcensoredheavy-tails, notamathematical impossibility proof orloopdiagnosis. No observedrawanswers/score forcurrent10; notpooledwithpriorbanked10.",
+    "functional_at": 10,
+    "score": null,
+    "limits_unchanged": {
+      "request_seconds": 14400,
+      "output_tokens": 126976
+    },
+    "stop_command": "gh run cancel 42208934357 -R tenstorrent/tt-agentic-bringup-qb2",
+    "stop_requested_at": "2026-11-06T14:02:48.560136+00:00",
+    "partial_evidence": [
+      "bringup/artifacts/stage12-gpqa-stop-snapshot.log",
+      "bringup/artifacts/stage12-gpqa-stop-run.json",
+      "bringup/artifacts/stage12-gpqa-stop-jobs.json"
+    ],
+    "artifact_limitation": "Stockcancelroute may omit final sampleartifact; collectorwillattemptexistinguploads. Availablelogs preservedbeforecancel. Nofabricatedscores."
   },
   "prepared_next_rungs": [
     {
@@ -1788,5 +1894,13 @@
     "decode_step_lines": 32767,
     "interpretation": "Subsequent model calls observed, so task continues. Step count is not final API usage/finish evidence; cap/loop classification awaits collected native response.",
     "limits_unchanged": true
+  },
+  "candidate_release_lists": {
+    "r1_gpqa_diamond": {
+      "tasks": 10,
+      "source": "cohorts.json r1_gpqa_diamond.rungs.server-sized-gpqa-c2",
+      "reason": "Full198 C2measuredprogressstop; C4capacityeffortcannotestablishfullfit",
+      "frozen": false
+    }
   }
 }

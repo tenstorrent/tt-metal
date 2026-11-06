@@ -1,0 +1,118 @@
+{
+  "status": "local_capacity_confirmed_scored_C4_not_accepted",
+  "scope": "Four synthetic long-context requests at131072input+128output; not four advertised262144contexts, not realGPQAreasoning/quality. Full198inputmax unknown.",
+  "device_hours": 0.14046206916666668,
+  "actual_seconds": 505.663449,
+  "forecast_hours": 0.18,
+  "box_hours": 0.3,
+  "actual_over_forecast": 0.7803448287037038,
+  "client_elapsed_seconds": 286.1586481250124,
+  "planned_clients": 4,
+  "batch": 8,
+  "request_count": 8,
+  "requests_complete": 8,
+  "rounds": [
+    {
+      "prompt_tokens": 130816,
+      "output_tokens_each": 128,
+      "elapsed_seconds_per_request": [
+        272.24481527798343,
+        277.3686611209996,
+        273.96446916100103,
+        275.67084805096965
+      ],
+      "prefix_hits": 0.0,
+      "prefix_queries": 523264.0,
+      "prior_cached_ceiling": 0,
+      "hit_fraction_of_ceiling": null
+    },
+    {
+      "prompt_tokens": 131072,
+      "output_tokens_each": 128,
+      "elapsed_seconds_per_request": [
+        8.753586682956666,
+        8.736143374000676,
+        8.753979000030085,
+        8.749860769021325
+      ],
+      "prefix_hits": 523008.0,
+      "prefix_queries": 524288.0,
+      "prior_cached_ceiling": 523772,
+      "hit_fraction_of_ceiling": 0.9985413500530765
+    }
+  ],
+  "preemptions": 0.0,
+  "postwarmup_captures": 0,
+  "capture_counter_values": [
+    3
+  ],
+  "residency_confirmation": {
+    "confirmed": true,
+    "max_running": 4,
+    "running4_metric_samples": 372,
+    "first_running4_utc": "2026-11-06T14:02:33.090976+00:00",
+    "last_running4_utc": "2026-11-06T14:03:56.439510+00:00",
+    "last_warm_prefill_log_line": 3459,
+    "decode_steps_after_final_warm_prefill": 127,
+    "all_these_steps_active_rows": 4,
+    "basis": "Only this client owns serving. Two rounds each four distinct prompts; last warm prefills end at131072 then127consecutive device-sampling decode records active_rows4, and allfour requests finish128outputs. 0.2s metric samples independently showrunning4 through the late warm round. Ordered server events and round semantics align fullprefix residency; do not equate hostUTC and device clocks or infer tokenpositions solely from aggregate metrics.",
+    "endpoint_limit": "Allfour full131072prompts simultaneously resident and decoding; each completes131200logical total. Last sampled token may not be cached; no claim every final sampled token simultaneously occupies KV."
+  },
+  "pool": {
+    "scheduler_blocks": 10248,
+    "global_scheduler_block_tokens": 64,
+    "sliding_scheduler_block_tokens": 32,
+    "sliding_window": 1024,
+    "groups": {
+      "global": 1,
+      "sliding": 5
+    },
+    "unique_backing_buffers": 10,
+    "sampled_peak_kv_fraction": 0.9185127354347614,
+    "allocator_last": {
+      "num_banks": 8,
+      "total_bytes_allocated_per_bank": 1711566848,
+      "total_bytes_per_bank": 4255564160,
+      "largest_contiguous_bytes_free_per_bank": 2531556224
+    },
+    "interpretation": "Actual unchanged hybridallocation; sampled KVoccupancy not exact high-water mark or available hostmemory. Fullwindowdata alone did not establish theoreticalmaximum capacity."
+  },
+  "identity": {
+    "model": "google/gemma-4-31B-it",
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "adapter": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+    "layers": 60,
+    "mesh": "1x4",
+    "served_top_k": 32,
+    "diagnostic_sampling": "temperature0/top_k1/ignore_eos/128outputs; not scored generation"
+  },
+  "scored_pair_recommendation": {
+    "admissible_to_plan": true,
+    "cohort": "Same frozen GPQA10 IDs and unchanged release caps/sampling on normalCI HTTP-only route",
+    "host_scope": "Four HTTP requests need no four Docker task sandboxes; official gated dataset remainsCI. Existing B8 maxseq8 and current local capacity evidence support4, subject to normalCI runtime identity.",
+    "candidate": "a6071fb7fecfe0fea562680a2210666328dcf0b4",
+    "published_by_this_effort": false,
+    "baseline_c2_eval_hours": 0.26305921654693926,
+    "observed_c2_device_non_eval_hours": 0.24582967234194958,
+    "larger_prior_setup_allowance_hours": 0.5158470585008359,
+    "observed_workflow_non_device_allowance_hours": 1.1305555555555555,
+    "proposed_eval_allowance_hours": 0.5261184330938785,
+    "additional_tail_allowance_hours": 1,
+    "projected_elapsed_hours_including_queue_build_allowance": 3.17252104715027,
+    "prediction_basis": "No speed credit:2\u00d7banked C2 eval + larger prior device-non-eval allowance + observed prior workflow-minus-device (build/queue) +1h additionaltail, all terms explicit; setup allowance includes other overhead and is not pure loadtime. Queue/tail allowances are guesses informed by prior runs, not guarantees. Coordinator sets separate scored box beforedispatch.",
+    "timeout_hours": 12,
+    "accepted_speed_or_score_equivalence": false,
+    "full198": "No fit implication: coordinator stopped C2full198 at10complete after1.4877h, completed-rate29.4567h; keep full198stop and functional10 separately. C4capacity does not restore full198 go."
+  },
+  "closure": "Client0; idle running/waiting0, deliberateAPI SIGINT wrapper1; queue0 and owners empty. No extra hardware/push by analyst.",
+  "evidence": [
+    "growing.json",
+    "server/server.log",
+    "server/vllm_run_summary.json",
+    "bringup/artifacts/stage12-gpqa-c4/client.json",
+    "bringup/artifacts/stage12-gpqa-c4/metrics.jsonl",
+    "../../device_queue/local/gpqa-c4-capacity/job.json",
+    "../../device_queue/qb2-ci/server-sized-gpqa-c2/job.json",
+    "../../device_queue/qb2-ci/nightly-gpqa-explicit-autoport/job.json"
+  ]
+}

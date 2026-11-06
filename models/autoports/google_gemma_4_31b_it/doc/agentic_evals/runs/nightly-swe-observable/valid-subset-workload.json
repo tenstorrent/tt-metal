@@ -1,0 +1,12 @@
+{
+  "planned_clients": 2,
+  "fully_audited_tasks": 3,
+  "recorded_calls": 145,
+  "max_prompt_tokens": 44880,
+  "max_completion_tokens": 2047,
+  "max_prompt_plus_completion_tokens": 44912,
+  "mean_prompt_tokens": 22736.63448275862,
+  "median_prompt_tokens": 22180,
+  "source": "runs/nightly-swe-observable/audit.json",
+  "scope": "Validthree-task subset of incomplete nightly5; Xarraynetworkquarantine andAstropyunresolvedcap excluded. Notnewbankedrung orpopulationbound."
+}

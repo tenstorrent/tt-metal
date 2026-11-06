@@ -24,7 +24,19 @@
         "completed_tasks": 2,
         "prompt_p95": 34072.5,
         "source": "doc/agentic_evals/runs/swe-valid-runtime-analysis/result.json",
-        "limits": "Valid2-task smoke, not population or higher capacity bound. Earlier107585token stress retained separately."
+        "limits": "Valid2-task smoke, not population or higher capacity bound. Earlier107585token stress retained separately.",
+        "nightly_valid_subset": {
+          "planned_clients": 2,
+          "fully_audited_tasks": 3,
+          "recorded_calls": 145,
+          "max_prompt_tokens": 44880,
+          "max_completion_tokens": 2047,
+          "max_prompt_plus_completion_tokens": 44912,
+          "mean_prompt_tokens": 22736.63448275862,
+          "median_prompt_tokens": 22180,
+          "source": "runs/nightly-swe-observable/audit.json",
+          "scope": "Validthree-task subset of incomplete nightly5; Xarraynetworkquarantine andAstropyunresolvedcap excluded. Notnewbankedrung orpopulationbound."
+        }
       },
       "terminal_bench_2_1": {
         "planned_clients": 2,

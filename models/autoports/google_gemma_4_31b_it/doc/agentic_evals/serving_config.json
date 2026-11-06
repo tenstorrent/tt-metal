@@ -156,6 +156,14 @@
       "planned_clients": 2,
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch at orabove2"
+    },
+    "gpqa-c4-scored10": {
+      "eval": "r1_gpqa_diamond",
+      "batch": 8,
+      "planned_clients": 4,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest supported batch >=4; local four131072-context residency demonstrated, maxseq8",
+      "capacity_evidence": "runs/gpqa-c4-capacity/RESULT.json"
     }
   },
   "release_limits": {
@@ -300,7 +308,12 @@
     "output_tokens_each": 8,
     "batch": 8,
     "working_set_is_real_agent_measurement": false,
-    "source": "runs/local-long-context/RESULT.md"
+    "source": "runs/local-long-context/RESULT.md",
+    "gpqa_c4_131k": {
+      "confirmed": true,
+      "evidence": "runs/gpqa-c4-capacity/RESULT.json",
+      "scope": "Four131072 input contexts; not four advertised262144 contexts or scored concurrency acceptance"
+    }
   },
   "measured_suites": {
     "r1_gpqa_diamond": {

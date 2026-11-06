@@ -1,0 +1,36 @@
+{
+  "status": "prepared_not_published_or_accepted",
+  "candidate": "82da396ef63bbe95cedbe254bb5433d905cd0491",
+  "base": "b4662344c0119e2c1fe7840e9ca954324a2f0afe",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa-c4-integrated",
+  "branch": "gpqa-c4-same10-integration",
+  "checks": {
+    "focused": "24 passed in 0.62s",
+    "production_source_equality": "pass: only three expected scalar leaves changed",
+    "runtime_config_assertions": "pass",
+    "ruff": "pass",
+    "ruff_format": "pass",
+    "full_pytest_hook": "pass with inherited TT_METAL_HOME unset",
+    "copyright": "pass",
+    "git_diff_check": "pass"
+  },
+  "initial_full_hook_failure": "Unrelated existing CLI default test expected tt_metal_home=None; inherited TT_METAL_HOME provided execution checkout. Initial run 3773 passed, 15 skipped, 1 failed. Rerun with environment unset passed, no source correction.",
+  "hook_environment": "env -u TT_METAL_HOME -u tt_metal_home PRE_COMMIT_HOME=/home/mvasiljevic/gemma4-31b-pipeline-v3/pre-commit-cache",
+  "commit": "Hooks run successfully before commit; no redundant hook rerun at commit.",
+  "unchanged": [
+    "SWE return_token_ids metadata",
+    "Terminal store_all_messages metadata and frozen ten task names",
+    "All model/runtime/workflow source",
+    "All caps/pins/sampling",
+    "Server batch8"
+  ],
+  "device_hours": 0,
+  "published": false,
+  "dispatched": false,
+  "acceptance": "C4 capacity acceptance and scored trial remain coordinator-owned; this is source integration only",
+  "evidence": [
+    "integration-source-equality.json",
+    "integration-hooks.log",
+    "integration-candidate.patch"
+  ]
+}

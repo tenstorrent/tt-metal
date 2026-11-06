@@ -3,7 +3,7 @@
   "device": "local",
   "owner": "coordinator",
   "start": "2026-11-06T13:55:57.747519+00:00",
-  "status": "running",
+  "status": "completed",
   "planned_clients": 4,
   "batch": 8,
   "max_num_seqs": 8,
@@ -17,5 +17,11 @@
   "output_tokens_per_turn": 128,
   "scope": "Synthetic upper-envelope four-context capacity only; full198 inputmax unknown, no quality/score claim.",
   "owners_before": [],
-  "command": "bash bringup/artifacts/stage12-gpqa-c4/launch-local.sh"
+  "command": "bash bringup/artifacts/stage12-gpqa-c4/launch-local.sh",
+  "end": "2026-11-06T14:04:23.410968+00:00",
+  "actual_hours": 0.14046206916666668,
+  "exit_status": 0,
+  "wrapper_exit_status": 1,
+  "exit_reason": "Successfulclient; idleAPISIGINT; no deviceowners",
+  "owners_after": []
 }
