@@ -455,6 +455,11 @@ class TtIndexerBase:
             dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        # NoPE: the query path is wq_b -> per-head split -> Hadamard with nothing nonlinear between, so fold the
+        # Hadamard into wq_b once here and skip the per-call matmul in score().
+        self._q_hadamard_folded = self._index_rope_dim == 0
+        if self._q_hadamard_folded:
+            self._idx_wq_b = self._fold_q_hadamard(self._idx_wq_b)
 
     @property
     def tp_shard_kv_axis(self):
@@ -541,6 +546,20 @@ class TtIndexerBase:
             num_links=self.ccl_num_links,
             cluster_axis=self.tp_axis,
         )
+
+    def _fold_q_hadamard(self, wq_b: ttnn.Tensor) -> ttnn.Tensor:
+        """wq_b [q_lora, H*D] with each head's D columns right-multiplied by the Hadamard, in wq_b's dtype."""
+        k, hd = wq_b.shape[-2], wq_b.shape[-1]
+        h, d = self.index_args.index_n_heads, self.index_args.index_head_dim
+        w = ttnn.reshape(ttnn.typecast(wq_b, ttnn.bfloat16), (1, k, h, d))
+        folded = ttnn.matmul(
+            w, self._index_hadamard, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+        )
+        ttnn.deallocate(w)
+        result = ttnn.typecast(ttnn.reshape(folded, (1, 1, k, hd)), wq_b.dtype)
+        ttnn.deallocate(folded)
+        ttnn.deallocate(wq_b)
+        return result
 
     def _upload_weights(self, idx_host):
         """Indexer weights → device via the shared converter. `idx_host` may be a full host dict
@@ -839,8 +858,9 @@ class TtIndexerBase:
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
             **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
-            # Preserve the unquantized values through Hadamard, then materialize BFP8 once below.
-            dtype=ttnn.bfloat16,
+            # Preserve the unquantized values through Hadamard, then materialize BFP8 once below. With the Hadamard
+            # folded into wq_b (NoPE), this is already the final query: emit BFP8 directly.
+            dtype=ttnn.bfloat8_b if getattr(self, "_q_hadamard_folded", False) else ttnn.bfloat16,
         )  # [1,1,S/(sp*tp),H_idx*D_idx] — all heads, only this TP rank's query rows
         if qr_local is not qr:
             ttnn.deallocate(qr_local)
@@ -852,17 +872,18 @@ class TtIndexerBase:
         q_dev = self._bc_rope_pe(
             q, rope_tensors, start_pos, metadata=metadata, seq_subshard_axis=self.tp_axis if tpsp else None
         )
-        q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", sq_local)
-        q_h = ttnn.matmul(
-            q_dev,
-            self._index_hadamard,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **({"program_config": q_hadamard_cfg["program_config"]} if q_hadamard_cfg is not None else {}),
-        )
-        ttnn.deallocate(q_dev)
-        q_dev = q_h
+        if not getattr(self, "_q_hadamard_folded", False):
+            q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", sq_local)
+            q_h = ttnn.matmul(
+                q_dev,
+                self._index_hadamard,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **({"program_config": q_hadamard_cfg["program_config"]} if q_hadamard_cfg is not None else {}),
+            )
+            ttnn.deallocate(q_dev)
+            q_dev = q_h
 
         # weights_proj: device stem -> reduce TP partials and scatter query rows. The static scale is
         # already folded into the persistent projection weight in _upload_weights().
