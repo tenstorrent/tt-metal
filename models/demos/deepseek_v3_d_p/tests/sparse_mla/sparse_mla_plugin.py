@@ -5,37 +5,16 @@
 Pytest plugin for the sparse-MLA (DSA) tests.
 
 This is a real plugin module (NOT a conftest), registered via ``pytest_plugins`` in this package's
-conftest (``tests/sparse_mla/conftest.py``). Living under the sparse_mla/ subtree scopes its options
-and markers: they register only when these sparse tests are collected, so dense runs (tests/test_mla.py)
+conftest (``tests/sparse_mla/conftest.py``). Living under the sparse_mla/ subtree scopes its options:
+they register only when these sparse tests are collected, so dense runs (tests/test_mla.py)
 never see them. Because it is referenced by its dotted name and never auto-loaded as a conftest, pytest
 registers it exactly once.
 
-It carries what the sparse suites must share: the ``perf`` marker (for the out-of-band
-suites that run separately from the fast correctness matrix) and the ``--ds-*`` MLA/indexer knobs with
-their ``ds_*`` fixtures.
+It carries what the sparse suites must share: the ``--ds-*`` MLA/indexer knobs with their ``ds_*``
+fixtures.
 """
 
-import re
-
 import pytest
-
-
-def is_marker_explicitly_selected(config, marker: str) -> bool:
-    markexpr = getattr(config.option, "markexpr", "") or ""
-    token = re.escape(marker)
-    selected = re.search(rf"(^|[\s()]){token}($|[\s()])", markexpr)
-    negated = re.search(rf"(^|[\s()])not\s+{token}($|[\s()])", markexpr)
-    return bool(selected and not negated)
-
-
-def pytest_configure(config):
-    """Register the markers for tests that run SEPARATELY from the default correctness matrix.
-
-    The sparse-MLA correctness suite (test_sparse_mla.py) is small/fast enough (~2 min) to run
-    wholesale, so it carries no tier/intent markers. Only the out-of-band suites are marked, so CI can
-    exclude them with e.g. -m "not perf".
-    """
-    config.addinivalue_line("markers", "perf: per-op device-kernel timing (run under tracy, separate from correctness)")
 
 
 def pytest_addoption(parser):

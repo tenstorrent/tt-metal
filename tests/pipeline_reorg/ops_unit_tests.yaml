@@ -632,6 +632,11 @@
     # Galaxy). The folded chains put both of that chip's routes in one direction, where the two services
     # must still get different fabric routers.
     ./build/test/ttnn/unit_tests_ttnn_tensor --gtest_filter='D2DStreamServiceTest.*:StreamPipelineTest.*' || exit_code=$?
+    # Kimi-K3.1 sparse MLA on SP2xTP4 (Galaxy's TP=4 head split): accuracy vs the CPU reference with random
+    # weights, then the host-time perf gate (warm/long, untraced and traced).
+    # Stop at the first failure: a failed run can leave the devices unreset (tt-metal#57706).
+    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -vvv --tb=short -k "kimi_k3_1 and 2x4" || exit $?
+    LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_kimi_k31_sparse_mla_perf -vvv --tb=short || exit $?
     exit $exit_code
   skus:
     bh_loudbox:
