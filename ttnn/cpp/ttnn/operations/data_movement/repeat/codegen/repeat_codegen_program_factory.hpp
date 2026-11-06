@@ -19,6 +19,7 @@ inline constexpr uint32_t kRepeatBatch = 4;
 
 // Two batches: the writers wait for the next batch while the previous one is still in flight.
 inline constexpr uint32_t kRepeatCbDepth = 2 * kRepeatBatch;
+inline constexpr uint32_t kLastDimRmDoublingBatch = 8;
 
 struct RepeatRmCbPlan {
     uint32_t slot_bytes = 0;
@@ -75,7 +76,8 @@ struct RepeatCodegenInputs {
 };
 
 // Sized to the L1 free now; the cache key and the factory must both call it after the output is allocated.
-std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
+std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(
+    const Tensor& input, const tt::tt_metal::TensorSpec& output_spec, const RepeatCodegenParams& params);
 
 struct RepeatCodegenProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(

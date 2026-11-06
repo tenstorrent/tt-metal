@@ -95,8 +95,8 @@ ttsl::hash::hash_t RepeatCodegenDeviceOperation::compute_program_hash(
     uint32_t cb_batch = 0;
     uint32_t cb_depth = 0;
     if (tensor_args.input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        const auto cb_plan =
-            rm_cb_plan_for_call(tensor_args.input, compute_output_specs(operation_attributes, tensor_args));
+        const auto cb_plan = rm_cb_plan_for_call(
+            tensor_args.input, compute_output_specs(operation_attributes, tensor_args), operation_attributes);
         if (cb_plan.has_value()) {
             cb_batch = cb_plan->batch;
             cb_depth = cb_plan->depth;
