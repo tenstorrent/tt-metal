@@ -11,8 +11,8 @@
 
 #include <cstdint>
 
-// With dense units the per-iteration bodies of the reader and compute run from two call sites (the ring loop and the
-// dense batches): keep one copy of each. Without them (SPARSE_DENSE_UNITS undefined) nothing changes.
+// With dense units compute's ring-iteration body and the writer's output block write run from two call sites (the ring
+// loop and the dense batches): keep one copy of each. Without them (SPARSE_DENSE_UNITS undefined) nothing changes.
 #if defined(SPARSE_DENSE_UNITS)
 #define SPARSE_DENSE_ONE_COPY __attribute__((noinline))
 #else

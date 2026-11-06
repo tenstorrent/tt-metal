@@ -1638,34 +1638,33 @@ template <
     uint32_t cb_out>
 static __attribute__((noinline, noclone)) void res_emit_slot(const uint32_t i) {
     constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
-    const auto copy_out = [&](uint32_t cb, uint32_t idx) {
-        CircularBuffer(cb_out).reserve_back(1);
-        tile_regs_acquire();
-        copy_tile(cb, idx, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_out);
-        tile_regs_release();
-        CircularBuffer(cb_out).push_back(1);
-    };
     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_prev_out, cb_qkt_im, cb_qkt_im>();
     sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_out>();
     configure_single_tile_pack(cb_out);
-    copy_init(cb_prev_out);
-    CircularBuffer(cb_prev_out).wait_front(out_tiles);
-    for (uint32_t t = 0; t < out_tiles; ++t) {
-        copy_out(cb_prev_out, t);
-    }
-    sdpa_cb_pop_front_out_of_line(cb_prev_out, out_tiles);
-    CircularBuffer(cb_sum_in).wait_front(Sq_chunk_t);
-    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-        copy_out(cb_sum_in, r);
-    }
-    sdpa_cb_pop_front_out_of_line(cb_sum_in, Sq_chunk_t);
-    sdpa_maybe_reconfig_data_format<cb_sum_in, cb_max_in, cb_qkt_im, cb_qkt_im>();
-    copy_init(cb_max_in);
-    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-        copy_out(cb_max_in, i * Sq_chunk_t + r);
+    // Part 0: the out slot, 1: the sum slot (both consumed from the front), 2: slot i's max.
+    for (uint32_t part = 0; part < 3; ++part) {
+        const uint32_t cb = part == 0 ? cb_prev_out : (part == 1 ? cb_sum_in : cb_max_in);
+        const uint32_t n = part == 0 ? out_tiles : Sq_chunk_t;
+        const uint32_t idx0 = part == 2 ? i * Sq_chunk_t : 0;
+        if (part == 2) {
+            sdpa_maybe_reconfig_data_format<cb_sum_in, cb_max_in, cb_qkt_im, cb_qkt_im>();
+        } else {
+            CircularBuffer(cb).wait_front(n);
+        }
+        copy_init(cb);
+        for (uint32_t t = 0; t < n; ++t) {
+            CircularBuffer(cb_out).reserve_back(1);
+            tile_regs_acquire();
+            copy_tile(cb, idx0 + t, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_out);
+            tile_regs_release();
+            CircularBuffer(cb_out).push_back(1);
+        }
+        if (part < 2) {
+            sdpa_cb_pop_front_out_of_line(cb, n);
+        }
     }
     sdpa_maybe_reconfig_data_format<cb_max_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
     sdpa_maybe_pack_reconfig_data_format<cb_out, cb_qkt_im>();

@@ -108,6 +108,18 @@ void kernel_main() {
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
+    // One normalized Q block from cb_out into the output (the passes' blocks, and the owner's dense blocks).
+    const auto write_q_block = [&](uint32_t q_chunk, uint32_t nb, uint32_t nq) SPARSE_DENSE_ONE_COPY {
+        write_block_row_grouped_trid<output_has_no_padding>(
+            noc,
+            out_generator,
+            q_chunk_out_slice(q_chunk, nb, nq, Sq_chunk_t, vDHt),
+            /*end_seq_tile=*/q_local_padded_Nt,
+            cb_out,
+            tile_bytes,
+            out_subblock_h,
+            /*flush_trid=*/0);
+    };
 
     {
         // Zero the identity tile first: generate_bcast_col_scalar writes column 0 only, and the compute step
@@ -160,15 +172,7 @@ void kernel_main() {
                 const uint32_t q_chunk =
                     res_remap ? sparse_dense::resident_block(shard, decoded_q.q_chunk, mask_nb, mask_nb_pad, in_dense)
                               : decoded_q.q_chunk;
-                write_block_row_grouped_trid<output_has_no_padding>(
-                    noc,
-                    out_generator,
-                    q_chunk_out_slice(q_chunk, decoded_q.nb, decoded_q.nq, Sq_chunk_t, vDHt),
-                    /*end_seq_tile=*/q_local_padded_Nt,
-                    cb_out,
-                    tile_bytes,
-                    out_subblock_h,
-                    /*flush_trid=*/0);
+                write_q_block(q_chunk, decoded_q.nb, decoded_q.nq);
             }
             noc.async_write_barrier();
         }
@@ -195,17 +199,10 @@ void kernel_main() {
                 for (uint32_t u = u0; u < u1; ++u) {
                     if (!emit) {
                         const uint32_t idx = u - o.unit_start;
-                        const uint32_t b =
-                            sparse_dense::dense_block(o.shard, idx % o.n_blocks, mask_nb, mask_nb_pad, in_dense);
-                        write_block_row_grouped_trid<output_has_no_padding>(
-                            noc,
-                            out_generator,
-                            q_chunk_out_slice(b, 0, idx / o.n_blocks, Sq_chunk_t, vDHt),
-                            /*end_seq_tile=*/q_local_padded_Nt,
-                            cb_out,
-                            tile_bytes,
-                            out_subblock_h,
-                            /*flush_trid=*/0);
+                        write_q_block(
+                            sparse_dense::dense_block(o.shard, idx % o.n_blocks, mask_nb, mask_nb_pad, in_dense),
+                            0,
+                            idx / o.n_blocks);
                         continue;
                     }
                     for (uint32_t t = 0; t < kPartialTiles; ++t) {
