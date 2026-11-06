@@ -13,6 +13,10 @@ test_streaming_profiler_fabric_overhead bounds the latency and bandwidth the pro
 microbenchmark, against a profiler-off run. test_streaming_profiler_fabric_sync_check bounds the sync error during that
 microbenchmark, and test_streaming_profiler_fabric_eth_zones checks that the routers' zones reach the zone CSV. These
 three need four or more Blackhole chips and take about 2 minutes warm, 5 cold.
+
+test_streaming_profiler_galaxy_torus_router_fits opens a Blackhole Galaxy as four 4x2 2D-torus meshes, one tt-run rank
+each, with the profiler on, and checks that every fabric router fits its kernel config buffer. That is the largest
+router the profiler builds. It needs a 32-chip Blackhole Galaxy and takes about 2 minutes.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import csv
 import functools
 import os
 import re
+import socket
 import statistics
 import subprocess
 import sys
@@ -364,4 +369,43 @@ def test_streaming_profiler_fabric_eth_zones(ubench_config, baseline, tmp_path):
         zone_file.readline()
         riscs = {row["RISC processor type"] for row in csv.DictReader(zone_file, skipinitialspace=True)}
     assert riscs & {"ERISC_0", "ERISC_1"}, f"no ERISC zone in the zone CSV, only {sorted(riscs)}"
+    check_log_clean(out)
+
+
+GALAXY_CHIPS = 32
+# Four 4x2 meshes on one Galaxy, a RING along each mesh's 4 rows (FABRIC_2D_TORUS_Y), each mesh linked to the next.
+TORUS_MGD = (
+    Path(TT_METAL_HOME)
+    / "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+    / "fabric_cpu_only_blitz_single_galaxy_4x2_ring_4stage_ring_mesh_graph_descriptor.textproto"
+)
+TORUS_RANKS = 4
+TORUS_OPEN = Path(__file__).with_name("streaming_profiler_torus_open.py")
+# The max packet payload tt-blaze's GLM-5 decode pipeline gives the fabric. It sets the routers' channel buffers.
+TORUS_PAYLOAD_BYTES = 8192
+TORUS_TIMEOUT_S = 600
+
+
+@pytest.mark.timeout(PROBE_TIMEOUT_S + TORUS_TIMEOUT_S + 60)
+def test_streaming_profiler_galaxy_torus_router_fits():
+    """With the profiler on, the 2D-torus fabric routers of a Galaxy split into four 4x2 meshes fit their kernel config
+    buffer (MEM_ERISC_KERNEL_CONFIG_SIZE), every rank opens its mesh, and the log is clean."""
+    skip_unless_blackhole(min_chips=GALAXY_CHIPS)
+    args = [
+        "tt-run",
+        "--bare",
+        "--mesh-graph-descriptor",
+        TORUS_MGD,
+        "--hosts",
+        socket.gethostname(),
+        "--mpi-args",
+        "--allow-run-as-root",
+        "--",
+        sys.executable,
+        TORUS_OPEN,
+        str(TORUS_PAYLOAD_BYTES),
+    ]
+    out = run(args, {"TT_METAL_STREAMING_PROFILER": "1"}, TORUS_TIMEOUT_S)
+    opened = out.count("TORUS_OPEN_OK")
+    assert opened == TORUS_RANKS, f"{opened} of {TORUS_RANKS} ranks opened their mesh:\n{out[-4000:]}"
     check_log_clean(out)

@@ -64,6 +64,16 @@
   team: runtime
   budget_type: integration
 
+# --- Galaxy: the streaming profiler's 2D-torus fabric routers fit their kernel config buffer ---
+- name: galaxy_streaming_profiler_torus_router
+  cmd: pytest tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_galaxy_torus_router_fits
+  skus:
+    bh_galaxy:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: integration
+
 # =============================================================================
 # FD Python API Tests (eager ops + sweep)
 # =============================================================================
