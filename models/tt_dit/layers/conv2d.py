@@ -42,6 +42,7 @@ class Conv2d(Module):
     # Rows of activation blocks per core, and double-buffered activations and weights.
     act_block_h_override: int = 32
     double_buffer: bool = False
+    full_inner_dim: bool = False
 
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
@@ -553,6 +554,7 @@ class Conv2d(Module):
             config_tensors_in_dram=self.config_tensors_in_dram,
             enable_act_double_buffer=self.double_buffer,
             enable_weights_double_buffer=self.double_buffer,
+            full_inner_dim=self.full_inner_dim,
         )
 
         # The prepared layout depends on the input size and the slice config. The input memory config,
