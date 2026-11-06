@@ -43,10 +43,10 @@ void kernel_main() {
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(18);
 
     // The row count and every buffer address are common runtime args (one word per launch).
-    using Crta = ttnn::experimental::prim::minimal_matmul_common_args::Dm;
-    const uint32_t M_tiles = get_common_arg_val<uint32_t>(Crta::M_tiles);
-    const uint32_t in1_addr = get_common_arg_val<uint32_t>(Crta::in_addr);
-    const uint32_t in2_addr = get_common_arg_val<uint32_t>(Crta::in2_addr);
+    namespace Crta = ttnn::experimental::prim::minimal_matmul_common_args;
+    const uint32_t M_tiles = get_common_arg_val<uint32_t>(Crta::Dm::M_tiles);
+    const uint32_t in1_addr = get_common_arg_val<uint32_t>(Crta::Dm::in_addr);
+    const uint32_t in2_addr = get_common_arg_val<uint32_t>(Crta::Dm::in2_addr);
 
     uint32_t argidx = 0;
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
@@ -61,8 +61,8 @@ void kernel_main() {
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
-    const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(Crta::ternary_a_addr);
-    const uint32_t ternary_b_addr = get_common_arg_val<uint32_t>(Crta::ternary_b_addr);
+    const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(Crta::Dm::ternary_a_addr);
+    const uint32_t ternary_b_addr = get_common_arg_val<uint32_t>(Crta::Dm::ternary_b_addr);
     const uint32_t broadcast_ternary_b = get_arg_val<uint32_t>(argidx++);
 #endif  // FUSE_TERNARY
 
@@ -78,7 +78,7 @@ void kernel_main() {
     // Always create tuple of output accessors (size = N_chunks)
     constexpr uint32_t out_tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, Crta::out_addr, out_tile_size);
+    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, Crta::Dm::out_addr, out_tile_size);
 
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_args_cta_offset =

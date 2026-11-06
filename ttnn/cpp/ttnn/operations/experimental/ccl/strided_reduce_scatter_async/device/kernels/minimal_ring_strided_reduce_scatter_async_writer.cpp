@@ -46,7 +46,7 @@
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
-using Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args::Writer;
+namespace Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -110,12 +110,12 @@ void kernel_main() {
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
     // The row count, buffer addresses and semaphores are common runtime args (one word per launch).
-    const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::slice_Ht);
-    const address_t intermediate_address = get_common_arg_val<address_t>(Crta::intermediate);
-    const address_t output_address = get_common_arg_val<address_t>(Crta::output);
-    const size_t out_ready_sem = get_common_arg_val<uint32_t>(Crta::semaphore_0 + direction);
-    const size_t batch_ready_sem = get_common_arg_val<uint32_t>(Crta::batch_ready);
-    const size_t barrier_sem = get_common_arg_val<uint32_t>(Crta::barrier);
+    const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::Writer::slice_Ht);
+    const address_t intermediate_address = get_common_arg_val<address_t>(Crta::Writer::intermediate);
+    const address_t output_address = get_common_arg_val<address_t>(Crta::Writer::output);
+    const size_t out_ready_sem = get_common_arg_val<uint32_t>(Crta::Writer::semaphore_0 + direction);
+    const size_t batch_ready_sem = get_common_arg_val<uint32_t>(Crta::Writer::batch_ready);
+    const size_t barrier_sem = get_common_arg_val<uint32_t>(Crta::Writer::barrier);
     // Same split as the reader and the matmul's in0 kernels.
     const uint32_t slice_Ht_per_core = ttnn::runtime_length::div_up(slice_Ht, mm_cores_y);
     const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);

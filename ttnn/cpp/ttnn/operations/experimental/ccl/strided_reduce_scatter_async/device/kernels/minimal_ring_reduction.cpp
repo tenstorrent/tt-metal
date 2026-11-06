@@ -55,10 +55,10 @@ void kernel_main() {
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
     // The row count (and the addcmul scalar) are common runtime args; same split as reader and writer.
-    using Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args::Reduce;
-    const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::slice_Ht);
+    namespace Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args;
+    const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::Reduce::slice_Ht);
 #ifdef FUSE_RS_ADDCMUL
-    const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(Crta::addcmul_scalar);
+    const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(Crta::Reduce::addcmul_scalar);
 #endif
     const uint32_t slice_Ht_per_core = ttnn::runtime_length::div_up(slice_Ht, mm_cores_y);
     const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);

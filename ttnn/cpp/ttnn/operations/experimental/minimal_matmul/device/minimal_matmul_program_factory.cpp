@@ -750,10 +750,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     };
     auto dm_common_args = [&](tt::tt_metal::Buffer* in_buffer, tt::tt_metal::Buffer* in3) {
-        using Crta = minimal_matmul_common_args::Dm;
+        namespace Crta = minimal_matmul_common_args;
         static_assert(
-            Crta::M_tiles == 0 && Crta::in_addr == 1 && Crta::in2_addr == 2 && Crta::in3_addr == 3 &&
-            Crta::ternary_a_addr == 4 && Crta::ternary_b_addr == 5 && Crta::out_addr == 6);
+            Crta::Dm::M_tiles == 0 && Crta::Dm::in_addr == 1 && Crta::Dm::in2_addr == 2 && Crta::Dm::in3_addr == 3 &&
+            Crta::Dm::ternary_a_addr == 4 && Crta::Dm::ternary_b_addr == 5 && Crta::Dm::out_addr == 6);
         tt::tt_metal::KernelDescriptor::RTArgList args;
         args.push_back(M_tiles);  // smuggled-rta-ok: runtime row count, re-applied by override_runtime_arguments
         push_buffer(args, in_buffer);
@@ -985,7 +985,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& vars = cached_program.shared_variables;
-    using Crta = minimal_matmul_common_args::Dm;
+    namespace Crta = minimal_matmul_common_args;
 
     const auto& input_tensor = tensor_args.input_tensor;
     const uint32_t M_tiles =
@@ -1003,14 +1003,14 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
 
     auto patch_dm = [&](tt::tt_metal::KernelHandle kernel_id, uint32_t in_addr, uint32_t in3) {
         auto& args = GetCommonRuntimeArgs(program, kernel_id);
-        args[Crta::M_tiles] = M_tiles;
-        args[Crta::in_addr] = in_addr;
-        args[Crta::in2_addr] = in2_addr;
-        args[Crta::in3_addr] = in3;
-        args[Crta::ternary_a_addr] = ternary_a_addr;
-        args[Crta::ternary_b_addr] = ternary_b_addr;
+        args[Crta::Dm::M_tiles] = M_tiles;
+        args[Crta::Dm::in_addr] = in_addr;
+        args[Crta::Dm::in2_addr] = in2_addr;
+        args[Crta::Dm::in3_addr] = in3;
+        args[Crta::Dm::ternary_a_addr] = ternary_a_addr;
+        args[Crta::Dm::ternary_b_addr] = ternary_b_addr;
         for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-            args[Crta::out_addr + out_idx] = tensor_return_value[out_idx].buffer()->address();
+            args[Crta::Dm::out_addr + out_idx] = tensor_return_value[out_idx].buffer()->address();
         }
     };
     patch_dm(vars.in0_sender_kernels_id, in0_addr, in3_addr);
