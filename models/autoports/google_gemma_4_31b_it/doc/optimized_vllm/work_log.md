@@ -143,3 +143,56 @@ Fresh stage-review returned **clean-pass**, with no required work; see `stage_re
 ## Local checkpoint closure
 
 Implementation, tests and reviewed summaries committed locally as `a785c2626c4552af083c4cc190c325d615d392c3`. Commit hooks passed using the existing workspace PRE_COMMIT_HOME after the default home cache was inaccessible. No runtime source changed after validation. Plugin remains at authorized test-only commit `90f33d2e392eb8bfda6948df9dabe712a724cb1a`, stock runtime base `ca7a18246e4111629ed6cb4a7d1192002749fccf`; no stage-10 plugin or vLLM changes. No push. The following documentation-only closure commit is recorded in local `commit_manifest.json`. Exact-ID telemetry is finalized in the requested bringup artifacts packet; prohibited device/roofline fields remain null.
+
+## Runner advisory reproduction and refutation (2026-11-06)
+
+Ran the supplied installed `10-optimized-vllm.check.sh` with
+`MODEL_DIR=models/autoports/google_gemma_4_31b_it` from this checkout, capturing
+`doc/optimized_vllm/check_reproduction.log`. Exit was 1, reproducing exactly the
+reported two ADVISORY lines. Degeneracy, context 262144 and prefill features pass.
+The installed checker `check_agentic_serving.py:check_memory` deliberately returns
+1 for copies >1 with copy_reason and fixed pool sizing with pool_sizing_reason;
+missing reasons would return 2. The agentic-serving skill explicitly permits
+these documented advisory shortfalls. Thus exit 1 is real; interpreting these
+particular findings as a failed serving correctness/completion gate is refuted.
+No checker was edited, warning suppressed, or ledger policy relabeled.
+
+The two representations are real: `tt/model.py` constructs row-major BF16
+hidden-sharded embedding and transposed tiled BFP4 vocabulary-sharded head.
+The ledger accounts for 704643072 +198180864 =902823936 bytes per device.
+These representations cannot alias; selected datatype and token-out evidence
+remain in `doc/datatype_sweep/selected_default/`. Dropping either representation
+would change the selected implementation and require new correctness/performance
+work; it is not an evidence-only repair.
+
+The fixed pool is also real. `doc/vllm_integration/pool_plan.json` records the
+pinned worker's pre-load query, normalized 36896 IDs and failed smaller-pool
+control. `memory_comparison.json` measures prepared allocation32321636864 of
+34044513280 usable bytes per device, leaving1722876416 bytes. Retaining the
+analytical805306368-byte transient budget leaves917570048 bytes. This is not a
+measured full-stack peak. Final `stage10_final_load/growing_traffic.json` has
+160 completed requests,32 conversations growing to32768 tokens, reuse0.994669269,
+late reuse0.996534388, zero preemptions and stable allocation endpoints.
+These data justify the documented fixed pool; they do not make sizing dynamic.
+
+Found and fixed a documentation inconsistency: `doc/agentic_serving.json:ledger`
+still described pre-batched preparation totals. Reconciled prepared state,
+allocated/free bytes and transient budget to the existing stage10 measurements.
+Runtime source and serving settings are unchanged. Existing independent stage
+review and unaffected device evidence remain applicable. No new hardware runs,
+benchmarks, profiler collection, remote dispatch or publication were needed.
+
+Created the previously absent exact-attempt telemetry packet from its supplied
+template at `bringup/artifacts/multigoal-runs/v3-20261105T172350Z/telemetry/packets/bf89528a-30b5-4467-b42f-617ed982c062.json`.
+It uses existing final4096/128/B1/C1 vLLM evidence: TTFT754.4311319943517ms,
+decode35.31987658862003tokens/s/user. Device time and rooflines remain null;
+accuracy is empty with a missing reason. No measurement was fabricated.
+
+Reverification: the supplied stage script again exits1 with exactly the same two
+advisories (`check_reverification.log`); all other checks pass. Fresh independent
+stage-review agent `/root/advisory_review` returned **clean-pass**, no required
+work, after checking the original goal, checker, code, raw memory/growing traffic,
+benchmark and packet/template. This focused review supplements the existing full
+review. The two shortfalls remain for goal12 pricing. Repository hooks pass with
+`PRE_COMMIT_HOME=$PWD/bringup/artifacts/pre-commit` (default cache inaccessible).
+Local repair checkpoint follows; no push.
