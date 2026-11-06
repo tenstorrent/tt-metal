@@ -9,11 +9,11 @@ from numbers import Integral, Real
 from types import SimpleNamespace
 
 import torch
-from readiness_check.contract import Generator
 from transformers import AutoTokenizer, GenerationConfig
 
 import ttnn
 from models.autoports.google_gemma_4_31b_it.tt.batched_prefill import PreparedBatchedPrefill
+from models.autoports.google_gemma_4_31b_it.tt.generator_contract import Generator
 from models.autoports.google_gemma_4_31b_it.tt.model import Gemma4Model
 from models.autoports.google_gemma_4_31b_it.tt.optimized_decoder import HF_MODEL, HF_REVISION
 from models.autoports.google_gemma_4_31b_it.tt.prefill import PreparedPrefill

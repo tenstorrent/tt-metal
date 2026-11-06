@@ -15,6 +15,10 @@
     {
       "fact": "Keep available hardware mesh separate from measured selected mesh and host-phase rooflines separate from device-time telemetry.",
       "evidence": "startup.json; stage11 benchmark/run/telemetry_packet.json"
+    },
+    {
+      "fact": "Source-only publication must include runtime precision configuration and must not require locally installed readiness runtime. Generic base sources are unchanged from d80d9482.",
+      "evidence": "runs/source-packaging/AUTOFIX.md; setup/source_publication.json"
     }
   ],
   "suite_timings": [],

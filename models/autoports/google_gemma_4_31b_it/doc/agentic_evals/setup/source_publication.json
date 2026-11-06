@@ -1,0 +1,40 @@
+{
+  "status": "prepared_checkout_not_committed_or_pushed",
+  "checkout": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tt-metal-stage12-publish",
+  "base": "d80d9482a418cf04ddcbeecf6adb67010d3091e6",
+  "branch": "mvasiljevic/gemma4-31b-goal12-v3",
+  "remote": "https://github.com/tenstorrent/tt-metal.git",
+  "sparse_paths": [
+    "models/autoports/google_gemma_4_31b_it/",
+    ".pre-commit-config.yaml"
+  ],
+  "source_scope": [
+    "models/autoports/google_gemma_4_31b_it/tt/*.py",
+    "models/autoports/google_gemma_4_31b_it/tt/selected_precision_config.json"
+  ],
+  "excluded": [
+    "doc",
+    "readiness",
+    "readiness_vllm",
+    "weights",
+    "credentials",
+    "logs",
+    "results",
+    "profiler dumps"
+  ],
+  "base_dependencies": {
+    "paths": [
+      "ttnn",
+      "tt_metal",
+      "models/common"
+    ],
+    "diff_from_base": "none"
+  },
+  "pending": [
+    "source-packaging exactness checks and commit",
+    "source-only tree inventory",
+    "TTI autoport registration and eval cohorts",
+    "live adapter import proof on authorized route"
+  ],
+  "dispatch_allowed_now": false
+}

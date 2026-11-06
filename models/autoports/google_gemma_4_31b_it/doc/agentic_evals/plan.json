@@ -71,8 +71,17 @@
     ]
   },
   "runs": [],
-  "status": "blocked_before_smoke",
-  "last_updated": "2026-11-06T04:33:36.867416+00:00",
+  "status": "local_route_blocked_host_preparation",
+  "last_updated": "2026-11-06T04:38:57.574909+00:00",
   "stop_reason": "AutoFix cannot provide missing host Docker backend from current container; local release route unavailable.",
-  "actual_runs": []
+  "actual_runs": [],
+  "continuations": [
+    {
+      "at": "2026-11-06T04:38:57.574909+00:00",
+      "previous_turn_classification": "progress",
+      "environment_changed": false,
+      "work": "Fix standalone runtime packaging before source-only publication",
+      "no_device_runs": true
+    }
+  ]
 }

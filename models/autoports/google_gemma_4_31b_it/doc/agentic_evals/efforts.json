@@ -56,6 +56,42 @@
       },
       "status": "not_run",
       "reason": "Validity first; no real task timings for ranking speed."
+    },
+    {
+      "problem": "source-only-packaging",
+      "owner": "source_packaging",
+      "goal": "Standalone source-only import with identical precision policy and readiness contract compatibility",
+      "plan": "runs/source-packaging/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond",
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Host-only isolated-tree import and exact policy equality; installed ABC compatibility",
+        "success": "No doc or installed skills runtime required for served import; exact selected policy and inherited contract behavior"
+      },
+      "box_hours": 0.1,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "kept",
+      "problem_status": "solved",
+      "confirmed": {
+        "policy": "byte-identical selected policy",
+        "generator": "complete class AST unchanged",
+        "host_checks": "4 packaging checks,7 precision tests,existing host contract passed",
+        "boundary": "Device-dependent imports stubbed; no native live CI/serving validation"
+      },
+      "evidence": "runs/source-packaging/AUTOFIX.md"
     }
   ],
   "rankings": [
@@ -114,6 +150,72 @@
         }
       ],
       "reason": "Runtime still unavailable; no speed effort can unblock local release. Stop after AutoFix unable to repair environment."
+    },
+    {
+      "after": "source_dependency_inspection",
+      "order": [
+        {
+          "problem": "local-sandbox-runtime",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0,
+          "saving_hours": 0
+        },
+        {
+          "problem": "source-only-packaging",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0,
+          "saving_hours": 0
+        },
+        {
+          "problem": "gpqa-local-credential",
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "device_hours": null,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Runtime repair cannot proceed internally; source-only preparation can proceed without devices or permissions."
+    },
+    {
+      "after": "source-only-packaging",
+      "order": [
+        {
+          "problem": "local-sandbox-runtime",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0,
+          "saving_hours": 0
+        },
+        {
+          "problem": "gpqa-local-credential",
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "device_hours": null,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Packaging confirmed host-only; remaining local runtime issue needs external provisioning. Source-only tree preparation proceeds, live checks remain blocked."
     }
   ]
 }

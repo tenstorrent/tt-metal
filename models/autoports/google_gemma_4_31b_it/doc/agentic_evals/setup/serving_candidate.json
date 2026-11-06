@@ -1,0 +1,39 @@
+{
+  "status": "candidate_derived_from_stage11_not_live_validated_in_TTI",
+  "model": "google/gemma-4-31B-it",
+  "model_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "adapter": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+  "class_overrides": [
+    "TTGemma4ForConditionalGeneration",
+    "TTGemma4ForCausalLM"
+  ],
+  "context_tokens": 262144,
+  "validated_batches": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "block_size": 32,
+  "prefix_caching": true,
+  "chunked_prefill": true,
+  "async_scheduling": true,
+  "generation_override": {
+    "top_k": 32
+  },
+  "tt_config": {
+    "sample_on_device_mode": "all",
+    "trace_region_size": 134217728,
+    "fabric_config": "FABRIC_1D_RING"
+  },
+  "source": "../benchmark/run/perf-b1-server.json server_command; ../optimized_vllm evidence",
+  "requirements": [
+    "Use selected autoport class override through stock plugin, verify module_file in registration event",
+    "No GEMMA4_SERVING_TEST_LAYERS or other reduced-model env",
+    "No default policy read from doc/ in source-only deployment",
+    "Provide pinned transformers/vLLM/plugin combination from stage11 provenance",
+    "Request-local eval settings must preserve pinned release limits; defaults do not override eval protocol",
+    "Fresh harness entry remains to be added and validated; candidate is not dispatchable"
+  ]
+}

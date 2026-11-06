@@ -31,7 +31,7 @@ BASELINE = {
 
 def load_precision(value=None):
     if value is None:
-        path = Path(__file__).parents[1] / "doc/datatype_sweep/selected_precision_config.json"
+        path = Path(__file__).with_name("selected_precision_config.json")
         value = path
     if isinstance(value, (str, Path)):
         value = json.loads(Path(value).read_text())
