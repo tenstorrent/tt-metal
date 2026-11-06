@@ -140,15 +140,94 @@ inline void _mul_bcast_scalar_face_(std::uint32_t face_addr) {
     }
 }
 
+// The same group with a compile-time DEST address: every SFPLOAD / SFPSTORE then carries an immediate, and the SFPU
+// issues about one instruction per cycle; with a run-time address each instruction word is assembled first and the
+// sequence runs at about half that rate (measured on the GDN decode update pass, 16 tiles per token).
+template <int N, std::uint32_t ADDR>
+inline void _mul_bcast_scalar_group_imm_() {
+    static_assert(N >= 1 && N <= 4, "a group is 1..4 DEST vectors");
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+    TT_SFPLOAD(p_sfpu::LREG0, IM, BCAST_SCALAR_ADDR_MOD, ADDR);
+    if constexpr (N > 1) {
+        TT_SFPLOAD(p_sfpu::LREG1, IM, BCAST_SCALAR_ADDR_MOD, ADDR + 2);
+    }
+    if constexpr (N > 2) {
+        TT_SFPLOAD(p_sfpu::LREG2, IM, BCAST_SCALAR_ADDR_MOD, ADDR + 4);
+    }
+    if constexpr (N > 3) {
+        TT_SFPLOAD(p_sfpu::LREG3, IM, BCAST_SCALAR_ADDR_MOD, ADDR + 6);
+    }
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    if constexpr (N > 1) {
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+    }
+    if constexpr (N > 2) {
+        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+    }
+    if constexpr (N > 3) {
+        TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    }
+    for (int i = N; i < 4; i++) {
+        TTI_SFPNOP;
+    }
+    TT_SFPSTORE(p_sfpu::LREG0, IM, BCAST_SCALAR_ADDR_MOD, ADDR);
+    if constexpr (N > 1) {
+        TT_SFPSTORE(p_sfpu::LREG1, IM, BCAST_SCALAR_ADDR_MOD, ADDR + 2);
+    }
+    if constexpr (N > 2) {
+        TT_SFPSTORE(p_sfpu::LREG2, IM, BCAST_SCALAR_ADDR_MOD, ADDR + 4);
+    }
+    if constexpr (N > 3) {
+        TT_SFPSTORE(p_sfpu::LREG3, IM, BCAST_SCALAR_ADDR_MOD, ADDR + 6);
+    }
+}
+template <int ITERATIONS, std::uint32_t FACE_ADDR>
+inline void _mul_bcast_scalar_face_imm_() {
+    if constexpr (ITERATIONS > 4) {
+        _mul_bcast_scalar_group_imm_<4, FACE_ADDR>();
+        _mul_bcast_scalar_group_imm_<ITERATIONS - 4, FACE_ADDR + 8>();
+    } else {
+        _mul_bcast_scalar_group_imm_<ITERATIONS, FACE_ADDR>();
+    }
+}
+// One tile at a compile-time base address over the faces the vector mode names.
+template <int ITERATIONS, std::uint32_t BASE>
+inline void _mul_bcast_scalar_tile_imm_(VectorMode vector_mode) {
+    const bool upper_right = vector_mode == VectorMode::RC || vector_mode == VectorMode::R;
+    const bool lower_left = vector_mode == VectorMode::RC || vector_mode == VectorMode::C;
+    const bool lower_right = vector_mode == VectorMode::RC;
+    _mul_bcast_scalar_face_imm_<ITERATIONS, BASE + FACE0_BASE>();
+    if (upper_right) {
+        _mul_bcast_scalar_face_imm_<ITERATIONS, BASE + FACE1_BASE>();
+    }
+    if (lower_left) {
+        _mul_bcast_scalar_face_imm_<ITERATIONS, BASE + FACE2_BASE>();
+    }
+    if (lower_right) {
+        _mul_bcast_scalar_face_imm_<ITERATIONS, BASE + FACE3_BASE>();
+    }
+}
 // DEST[dst_index] <- DEST[dst_index] * LREG14 over the faces the vector mode names (RC: all four; R: faces 0 and
 // 1, tile rows 0..15; C: faces 0 and 2, tile columns 0..15) and the first ITERATIONS vectors of each. Runs once
-// under VectorMode::None; the binary-params signature (second and third indices unused).
+// under VectorMode::None; the binary-params signature (second and third indices unused). Slots 0..7 (an fp32 DEST
+// holds at most eight) take the compile-time address form; any other index the run-time one.
 template <int ITERATIONS>
 inline void _calculate_mul_bcast_scalar_(
     std::uint32_t dst_index,
     [[maybe_unused]] std::uint32_t unused_in1,
     [[maybe_unused]] std::uint32_t unused_out,
     VectorMode vector_mode) {
+    switch (dst_index) {
+        case 0: _mul_bcast_scalar_tile_imm_<ITERATIONS, 0 * DEST_TILE_SIZE_RAW>(vector_mode); return;
+        case 1: _mul_bcast_scalar_tile_imm_<ITERATIONS, 1 * DEST_TILE_SIZE_RAW>(vector_mode); return;
+        case 2: _mul_bcast_scalar_tile_imm_<ITERATIONS, 2 * DEST_TILE_SIZE_RAW>(vector_mode); return;
+        case 3: _mul_bcast_scalar_tile_imm_<ITERATIONS, 3 * DEST_TILE_SIZE_RAW>(vector_mode); return;
+        case 4: _mul_bcast_scalar_tile_imm_<ITERATIONS, 4 * DEST_TILE_SIZE_RAW>(vector_mode); return;
+        case 5: _mul_bcast_scalar_tile_imm_<ITERATIONS, 5 * DEST_TILE_SIZE_RAW>(vector_mode); return;
+        case 6: _mul_bcast_scalar_tile_imm_<ITERATIONS, 6 * DEST_TILE_SIZE_RAW>(vector_mode); return;
+        case 7: _mul_bcast_scalar_tile_imm_<ITERATIONS, 7 * DEST_TILE_SIZE_RAW>(vector_mode); return;
+        default: break;
+    }
     const std::uint32_t base = dst_index * DEST_TILE_SIZE_RAW;
     const bool upper_right = vector_mode == VectorMode::RC || vector_mode == VectorMode::R;
     const bool lower_left = vector_mode == VectorMode::RC || vector_mode == VectorMode::C;

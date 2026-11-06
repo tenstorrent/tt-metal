@@ -76,6 +76,7 @@ inline void pack_out(uint32_t slot, uint32_t tile) { pack_tile<true>(slot, cb_ou
 template <int IT, ckernel::VectorMode VM>
 inline void vector_tile_math_per_j() {
     using namespace ckernel;
+    gdn_decode_sfpu::vector_chain_init();
     auto bcast = [](uint32_t dst, uint32_t col) {
         sfpu_mul_bcast_col_init();
         if constexpr (IT == 8) {
@@ -91,7 +92,6 @@ inline void vector_tile_math_per_j() {
     gdn_decode_sfpu::zero_rows_from_1(1);                              // u16: rows 1..15 exactly zero
     gdn_decode_sfpu::move_row2_to_row0(0);                             // row 0 = e * r_q, rows 1..15 zero
     copy_in(cb_in4, 0, 3);                                             // c (beta is dead)
-    copy_dest_values_init();
     copy_dest_values<DataFormat::Float32, IT>(1, 2, VM);  // u again (e is dead); slot 1 stays u for the pack
     bcast(2, 3);                                          // c * u
     add_binary_tile_init();
@@ -101,6 +101,7 @@ inline void vector_tile_math_per_j() {
 // 0..3 = e, rows 4..7 = beta, rows 8..11 = c). The compositions of fused_recurrent_gdn_sfpu.hpp; slot 3 is scratch.
 inline void vector_tile_math_ebc() {
     using namespace gdn_decode_sfpu;
+    vector_chain_init();
     mul_band0_by(0, 2, 0);  // e * r (rows 0..3: row 0 = e r_k, row 2 = e r_q)
     sub_rows4(1, 0);        // v - e r_k
     mul_band0_by(1, 2, 1);  // beta * (v - e r_k) = u
