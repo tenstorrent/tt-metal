@@ -4,6 +4,8 @@
 
 #include "matmul.hpp"
 
+#include <algorithm>
+#include <array>
 #include <numeric>
 #include <variant>
 
@@ -19,6 +21,10 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/gguf/gguf_matmul_device_operation.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace ttnn::operations::matmul {
 
@@ -81,6 +87,49 @@ Tensor handle_zero_volume_matmul(
     }
 
     return output_tensor;
+}
+
+// A GGUF weight (from_gguf, [K, N]): the GGUF matmul on each 32-row block of a, then the bias.
+Tensor gguf_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const ttnn::Tensor>& bias,
+    const ttnn::prim::MatmulParams& parameters,
+    const std::optional<Tensor>& optional_output_tensor) {
+    TT_FATAL(
+        !parameters.transpose_a && !parameters.transpose_b,
+        "ttnn.matmul: a GGUF weight takes no transpose_a / transpose_b");
+    TT_FATAL(
+        !parameters.program_config.has_value() && !parameters.user_fused_activation.has_value() &&
+            !parameters.global_cb.has_value() && parameters.prefetcher_pipes.empty() &&
+            !parameters.output_tile.has_value() && !parameters.in0_column_offset.has_value() &&
+            !optional_output_tensor.has_value(),
+        "ttnn.matmul: a GGUF weight takes no program config, activation, global CB, prefetcher pipes, output tile, "
+        "column offset or output tensor");
+    TT_FATAL(
+        parameters.output_dtype.value_or(DataType::BFLOAT16) == DataType::BFLOAT16,
+        "ttnn.matmul: the output of a GGUF weight is BFLOAT16, got {}",
+        parameters.output_dtype.value());
+    const auto& memory_config = parameters.output_mem_config;
+    const ttnn::Shape& a_shape = input_tensor_a.logical_shape();
+    const uint32_t k = a_shape[-1];
+    const uint32_t rows = a_shape.volume() / k;
+    if (input_tensor_a.padded_shape().volume() / k == tt::constants::TILE_HEIGHT) {
+        Tensor output = ttnn::prim::gguf_matmul(input_tensor_a, input_tensor_b, memory_config);
+        return bias.has_value() ? ttnn::add(output, bias.value(), std::nullopt, memory_config) : output;
+    }
+    const Tensor a = ttnn::reshape(input_tensor_a, ttnn::Shape({1, 1, rows, k}));
+    std::vector<Tensor> blocks;
+    for (uint32_t r = 0; r < rows; r += tt::constants::TILE_HEIGHT) {
+        const std::array<uint32_t, 4> begin = {0, 0, r, 0};
+        const std::array<uint32_t, 4> end = {1, 1, std::min(rows, r + tt::constants::TILE_HEIGHT), k};
+        const std::array<uint32_t, 4> step = {1, 1, 1, 1};
+        blocks.push_back(ttnn::prim::gguf_matmul(ttnn::slice(a, begin, end, step), input_tensor_b, memory_config));
+    }
+    ttnn::Shape output_shape = a_shape;
+    output_shape[-1] = input_tensor_b.logical_shape()[-1];
+    Tensor output = ttnn::reshape(ttnn::concat(blocks, 2, memory_config), output_shape);
+    return bias.has_value() ? ttnn::add(output, bias.value(), std::nullopt, memory_config) : output;
 }
 
 }  // namespace detail
@@ -253,6 +302,10 @@ static ttnn::Tensor bound_matmul(
             parameters.transpose_a,
             parameters.transpose_b,
             bias);
+    }
+
+    if (tt::tt_metal::is_gguf(input_tensor_b.dtype())) {
+        return detail::gguf_matmul(input_tensor_a, input_tensor_b, bias, parameters, optional_output_tensor);
     }
 
     //----------------------------------------------------------------------------------------------
