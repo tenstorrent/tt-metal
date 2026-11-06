@@ -680,10 +680,18 @@ class TtMoEGatePrefill(LightweightModule):
             packer_l1_acc=True,
         )
         self._tp_gather_semaphores = {}
-        if mesh_device.shape[config.ccl_config["TP_AXIS"]] > 1:
+        self._gate_logits_partials = None
+        tp = mesh_device.shape[config.ccl_config["TP_AXIS"]]
+        if tp > 1:
             ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
             self._tp_gather_semaphores = dict(
                 ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore
+            )
+            self._gate_logits_partials = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                name="gate_logits_partials",
+                shape=[1, tp, config.sp_dim, config.n_routed_experts],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
             )
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
@@ -943,7 +951,10 @@ class TtMoEGatePrefill(LightweightModule):
 
         tp_axis = self.config.ccl_config["TP_AXIS"]
         tp = self.mesh_device.shape[tp_axis]
-        use_gather_reduce = tp > 1 and len(x.shape) == 2
+        partials = self._gate_logits_partials
+        use_gather_reduce = (
+            partials is not None and len(x.shape) == 2 and x.shape[0] == partials.shape[2] and x.dtype == partials.dtype
+        )
         logits = ttnn.matmul(
             x,
             self.weight,
@@ -956,9 +967,7 @@ class TtMoEGatePrefill(LightweightModule):
             gathered = ttnn.experimental.high_bw_all_gather(
                 ttnn.reshape(logits, (1, 1, rows, n)),
                 dim=1,
-                output_tensor=self.tt_ccl.get_mla_high_bw_all_gather_buffer(
-                    name="gate_logits_partials", shape=[1, tp, rows, n], dtype=logits.dtype, layout=ttnn.TILE_LAYOUT
-                ),
+                output_tensor=partials,
                 cluster_axis=tp_axis,
                 num_links=self.config.ccl_config["NUM_LINKS"],
                 **self._tp_gather_semaphores,
