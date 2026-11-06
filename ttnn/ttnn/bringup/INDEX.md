@@ -34,6 +34,16 @@ This section stays above `## Ops`: fork_op.py appends new forks at the end of th
   fp32-accurate sqrt(softplus) on Blackhole); this branch's stock `fp32_selection` normalizes the weights in fp32. Its
   only user, deepseek_v41_flash_d_p tt/router.py (ROUTER_IMPL=fused), calls the stock op; its model case moved to
   `models/demos/deepseek_v41_flash_d_p/tests/test_router_stock_topk.py`.
+- retired `ttnn.bringup.fabric_all_gather` (fabric_all_gather_ttnn; 2026-11-06, owner) ->
+  `ttnn.experimental.high_bw_all_gather` (#61387): the fabric all-gather from `mstaletovic/mimo-v2-dp` @ `b45a923d73c`
+  (link-rate program: NoC1-placed port cores, counter-gated relays). Upstream #61387 (`f5985995a23`) rewrote the stock
+  op on the same program; the fork had API ports only, same Python signature, shared validation. 8x4 A/B of
+  deepseek_v41_flash_d_p's 7 calls: outputs bit-identical on every chip, device 3161 us (stock) vs 3014 us (fork) a
+  chunk. Its users (glm53_flash_d_p tt/common.py, tt/mla_attention.py, tt/experts_ag.py; deepseek_v41_flash_d_p
+  tt/ccl.py) call the stock op with the same arguments. Its 19 model cases moved to
+  `models/demos/deepseek_v41_flash_d_p/tests/test_all_gather_stock.py` and
+  `models/demos/glm53_flash_d_p/tests/test_all_gather_stock.py` (bit-exact, on the stock op). The Python prototype and
+  its `plan()` moved to `fabric_reduce_scatter_ttnn/fabric_all_gather_py.py` (fabric_reduce_scatter plans with it).
 
 ## Ops
 
@@ -64,9 +74,7 @@ that use it. Its `CHANGELOG.md` has the source path and SHA and every change.
   Consider instead of: ttnn.experimental.deepseek_prefill.combine / combine_fabric2d + post_combine_reduce, ttnn.all_gather, ttnn.linear at ~320 rows, ttnn.topk chains, ttnn.sum + ttnn.add, ttnn.tilize / untilize. -> combine_rf/README.md
 - `ttnn.bringup.moe_ag_route_plan`, `moe_ag_local_reduce`, `moe_ag_sum_rows_tiled`, `moe_ag_add_rows`, `moe_ag_untilize_active`, `moe_ag_untilize_x` (moe_ag): device programs of the all-gather MoE block (route plan, weighted local reduce with fused send-back, row sums / adds, untilizes): MoE without dispatch / combine.
   Consider instead of: ttnn.bringup.dispatch + expert compute + ttnn.bringup.combine; ttnn.mul + ttnn.sum weighted combine. -> moe_ag/README.md
-- `ttnn.bringup.fabric_all_gather` (fabric_all_gather_ttnn): drop-in for high_bw_all_gather (same contract and output) with a link-rate program (NoC1-placed port cores, counter-gated relays); Python prototype + `plan()` alongside.
-  Consider instead of: ttnn.experimental.high_bw_all_gather, ttnn.all_gather. -> fabric_all_gather_ttnn/README.md
-- `ttnn.bringup.fabric_reduce_scatter` (fabric_reduce_scatter_ttnn): Python reduce-scatter over the fabric on fabric_all_gather's groups (mesh axis or whole-mesh snake; line, ring or two Hamiltonian cycles), row or column blocks, descriptor cache (opt-in `program_hash`: no per-call kernel-source hashing; opt-in `prepared`: dispatched through prepared_program), load-time `prepare()`; precision only (rule 7: cross-chip sums in bf16): opt-in exact fp32 adds.
+- `ttnn.bringup.fabric_reduce_scatter` (fabric_reduce_scatter_ttnn): Python reduce-scatter over the fabric on the Python fabric_all_gather's groups (its planner `fabric_all_gather_py.py` lives here; mesh axis or whole-mesh snake; line, ring or two Hamiltonian cycles), row or column blocks, descriptor cache (opt-in `program_hash`: no per-call kernel-source hashing; opt-in `prepared`: dispatched through prepared_program), load-time `prepare()`; precision only (rule 7: cross-chip sums in bf16): opt-in exact fp32 adds.
   Consider instead of: ttnn.reduce_scatter, ttnn.experimental.reduce_scatter_minimal_async, ttnn.all_gather + ttnn.add for exact fp32 sums (precision only). -> fabric_reduce_scatter_ttnn/README.md
 - `ttnn.bringup.prepare_program`, `run_prepared`; Python `prepared_program.generic_op` (prepared_program): a generic_op program prepared once and dispatched with only its io tensors' runtime-arg slots and CBs patched on a cache hit (host time only; Marko's MoE block and token-split exchange); opt-in `value_slots`: plain runtime args (a write offset) patched from per-run values.
   Consider instead of: ttnn.generic_op with one descriptor object reused every call. -> prepared_program/README.md

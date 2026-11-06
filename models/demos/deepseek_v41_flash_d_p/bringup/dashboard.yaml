@@ -251,7 +251,7 @@ op_notes:
   op: bringup.fabric_reduce_scatter
   what: sum wo_b's partial outputs over the columns, each chip keeps its hidden slice
 - section: attention
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   what: gather window KV rows from the other mesh row (the chunk's other half)
 - section: attention
   op: experimental.slice_write
@@ -275,7 +275,7 @@ op_notes:
   op: bringup.fabric_reduce_scatter
   what: sum the K-split partials over the columns
 - section: q_a
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   what: gather the summed projection rows back to every chip of the row
 - section: q_a
   op: bringup.rms_norm
@@ -301,14 +301,14 @@ op_notes:
   op: bringup.rms_norm
   what: 'FFN RMSNorm: this chip''s partial sum of squares (stats_out)'
 - section: attn_norm
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   what: gather the norm's partial sums over the columns
 - section: ffn_norm
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   shape: '5120'
   what: gather the normalized rows to full hidden 5120 (router and experts read whole rows)
 - section: ffn_norm
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   what: gather the norm's partial sums over the columns
 - section: attn_hc
   op: matmul
@@ -323,10 +323,10 @@ op_notes:
   op: bringup.mhc_pre_xing
   what: 'mHC: sum the partial mixes, fp32 Sinkhorn, collapse the 4 streams into the FFN input'
 - section: attn_hc
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   what: gather the partial mixes over the columns (exact fp32)
 - section: ffn_hc
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   what: gather the partial mixes over the columns (exact fp32)
 - section: attn_residual
   op: bringup.mhc_post
@@ -350,7 +350,7 @@ op_notes:
   op: generic_op
   what: dispatch / combine planning programs (routing tables, offsets)
 - section: experts
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   what: gather the token rows of the mesh row for dispatch
 - section: experts
   op: all_gather
@@ -400,7 +400,7 @@ op_notes:
   op: bringup.fabric_reduce_scatter
   what: sum the weights_proj partials over the columns
 - section: indexer
-  op: bringup.fabric_all_gather
+  op: experimental.high_bw_all_gather
   what: gather the selected key ids over the columns
 - section: compressor
   op: linear

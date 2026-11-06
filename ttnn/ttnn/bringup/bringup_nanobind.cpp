@@ -28,9 +28,6 @@ void bind_update_padded_kv_cache(nb::module_& mod);
 namespace ttnn::operations::bringup::prepare_chunk_recurrence::detail {
 void bind_prepare_chunk_recurrence(nb::module_& mod);
 }
-namespace ttnn::operations::bringup::fabric_all_gather::detail {
-void bind_experimental_fabric_all_gather_operation(nb::module_& mod);
-}
 namespace ttnn::operations::bringup::moe_ag::detail {
 void bind_moe_ag(nb::module_& mod);
 }
@@ -86,7 +83,6 @@ void py_module(nb::module_& mod) {
     ::ttnn::operations::bringup::topk_large_indices::detail::bind_topk_large_indices(mod);
     ::ttnn::operations::bringup::detail::bind_update_padded_kv_cache(mod);
     ::ttnn::operations::bringup::prepare_chunk_recurrence::detail::bind_prepare_chunk_recurrence(mod);
-    ::ttnn::operations::bringup::fabric_all_gather::detail::bind_experimental_fabric_all_gather_operation(mod);
     ::ttnn::operations::bringup::moe_ag::detail::bind_moe_ag(mod);
     ::ttnn::operations::bringup::detail::bind_flat_routed_expert(mod);
     ::ttnn::operations::bringup::indexer_score::detail::bind_indexer_score(mod);

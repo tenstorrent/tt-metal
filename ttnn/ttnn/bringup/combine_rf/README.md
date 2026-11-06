@@ -50,7 +50,7 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
   the flat expert's counts / regions / token_index, the y writers' L1 hand-off table, and the combine's per-port /
   per-accumulator counts (plus an order table for the deterministic combine). `plan_reference` is its host model.
 - `fabric_all_gather_py`: line / ring all-gather over the fabric, DRAM to DRAM (per-mesh-axis or whole-mesh snake,
-  `scheme="dual_cycles"` on a torus); a copy of `../fabric_all_gather_ttnn/fabric_all_gather_py.py` plus memoized
+  `scheme="dual_cycles"` on a torus); a copy of `../fabric_reduce_scatter_ttnn/fabric_all_gather_py.py` plus memoized
   plans / descriptors and an `extra` hook (another op's CBs / kernels appended).
 - `stream_linear`: y = x @ W for M = 32 x grid rows (bf16 x, bf8 W), 2D matmul with x resident and a W ring per
   column. A dead end kept as a probe (FLAT_COMBINE_OVERLAP_WORKLOG.md, "custom streaming linear").
@@ -75,7 +75,8 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
   `ttnn.bringup.combine` + a weighted sum; when the flat expert runs and the combine should overlap it.
 - sparse_all_gather_2d + dispatch_prep: `ttnn.all_gather` (dense) / `dispatch_fabric2d` / `ttnn.bringup.dispatch`.
 - fabric_all_gather_py: `ttnn.all_gather`, `ttnn.experimental.high_bw_all_gather`; prefer the C++
-  `ttnn.bringup.fabric_all_gather` (../fabric_all_gather_ttnn) unless you need `extra`.
+  `ttnn.experimental.high_bw_all_gather` (the retired fork ttnn.bringup.fabric_all_gather's program, #61387) unless you
+  need `extra`.
 - lin2d / stream_linear: `ttnn.linear` / `ttnn.matmul` (2D mcast) at small M (~320 rows) with large K, N.
 - router_topk: `ttnn.sigmoid` + `ttnn.add` (bias) + `ttnn.topk` + normalize + layout / concat ops.
 - sum_ops: `ttnn.sum` over parts + `ttnn.add` (two passes, two roundings).

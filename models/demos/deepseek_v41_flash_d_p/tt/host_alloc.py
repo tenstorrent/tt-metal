@@ -13,7 +13,7 @@ frees. This module removes the ones whose buffer can be one load-time buffer:
    allocated in a forward and kept shifts later steps' addresses (DS41-146). A call whose output spec has no load-time
    buffer (another chunk length, a box whose shapes this table does not cover) allocates as before (counted,
    ``ccl.SITE_MISSES``). Reuse is safe: each site's result is read and dropped inside its step, each chip runs its
-   programs in order, and fabric_all_gather's ready fence keeps a chip from writing a neighbour's output before that
+   programs in order, and high_bw_all_gather's ready fence keeps a chip from writing a neighbour's output before that
    neighbour started the same call (P.4, the persistent window gathers of P.11 use the same rule).
 2. The block MoE (models/demos/moe_block, outside this model's paths: installed on the built block's instances, as
    P.14's prepared_tail):

@@ -3,7 +3,7 @@
 - Source: `ttnn/ttnn/operations/examples/fabric_reduce_scatter` on `mstaletovic/mimo-v2-dp` @ `b45a923d73c`. New op: no
   TTNN source on this tree (no upstream tests to carry).
 - Python: `ttnn.bringup.fabric_reduce_scatter` (PYTHON_OPS in `ttnn/ttnn/bringup/__init__.py`), planned with
-  fabric_all_gather_ttnn's `plan()`.
+  the Python fabric_all_gather's `plan()` (`fabric_all_gather_py.py`, in this folder since 2026-11-06).
 - Used by: glm53_flash_d_p (tt/common.py:scatter_rows, tt/kda_attention.py, tt/experts_ag.py); deepseek_v41_flash_d_p (tt/ccl.py, CCL_IMPL=fabric, P.5)
 - Tests: `tests/unit/` (the op's own suite); model cases `tests/test_fabric_reduce_scatter_ttnn.py`.
 
@@ -104,3 +104,16 @@
   passes `prepared` through when a case sets it.
 - Needed by: deepseek_v41_flash_d_p P.1 (tt/ccl.py, setting GENERIC_OP_PREPARED)
 - Files: fabric_reduce_scatter.py, tests/unit/test_fabric_rs_prepared.py, tests/test_fabric_reduce_scatter_ttnn.py
+
+### The Python all-gather prototype moves here (fabric_all_gather_ttnn retired, 2026-11-06)
+- What: `fabric_all_gather_py.py` (the planner this op imports; unchanged but one docstring), its worklogs
+  (`README_python.md` -> `fabric_all_gather_py.md`, `report_python.md` -> `fabric_all_gather_py_report.md`), its sweep
+  (`tests/unit/test_fabric_all_gather_py.py`) and CLI (`__main__.py` -> `fabric_all_gather_cli.py`) moved here from
+  fabric_all_gather_ttnn when that C++ fork was retired (stock `ttnn.experimental.high_bw_all_gather` is the same
+  program, #61387). Import it as `ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_py`; its earlier history
+  (incl. "Direct hops only") is in fabric_all_gather_ttnn/CHANGELOG.md before the retiring commit.
+  `tests/unit/test_fabric_rs_vs_ag.py` times stock high_bw_all_gather in place of the C++ fork. No op change.
+- Why: the C++ fork was retired; this op still plans with the prototype.
+- Needed by: the retirement of fabric_all_gather_ttnn
+- Files: fabric_all_gather_py.py, fabric_all_gather_py.md, fabric_all_gather_py_report.md, fabric_all_gather_cli.py,
+  fabric_reduce_scatter.py, __init__.py, tests/unit/test_fabric_all_gather_py.py, tests/unit/test_fabric_rs_vs_ag.py

@@ -558,8 +558,8 @@ def _worker_nearest_noc1(mesh_device, coord, eth_xy, taken, allowed):
     eth_xy; ties to the lower row, then the lower column. NoC1 (the sender's NoC) routes -Y, then -X, wrapping around
     the grid, so the hop count is directional: a core one column left of a harvested column would wrap the whole row.
     Two links whose Ethernet cores sit over one live and one harvested column then get workers in two columns (as
-    fabric_all_gather's C++ op places them), instead of both in the live column, where their writes to the routers
-    would share the column's NoC1 segment into the Ethernet row."""
+    the C++ program, now stock ttnn.experimental.high_bw_all_gather, places them), instead of both in the live column,
+    where their writes to the routers would share the column's NoC1 segment into the Ethernet row."""
     t2p = _chip_maps(mesh_device, coord)[2]
     gx, gy = _noc_grid(mesh_device)
     ex, ey = eth_xy

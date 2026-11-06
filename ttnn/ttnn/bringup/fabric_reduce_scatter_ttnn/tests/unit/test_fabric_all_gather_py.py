@@ -5,9 +5,9 @@
 can form. Every case checks the gathered output bit-exactly on every chip; a combination the fabric cannot route
 (no direct link for a hop) is reported as unsupported.
 
-    scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_fabric_all_gather.py -s
+    scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_all_gather_py.py -s
 
-See ttnn/ttnn/operations/examples/fabric_all_gather/README.md.
+See ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/fabric_all_gather_py.md.
 """
 
 import os
@@ -33,7 +33,12 @@ from loguru import logger
 
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
-from ttnn.bringup.fabric_all_gather_ttnn import build_groups, fabric_all_gather, link_load, plan
+from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_py import (
+    build_groups,
+    fabric_all_gather,
+    link_load,
+    plan,
+)
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 # per-chip shard sizes (H, W), one row of results per size: "H,W" or "H,W;H,W;..."

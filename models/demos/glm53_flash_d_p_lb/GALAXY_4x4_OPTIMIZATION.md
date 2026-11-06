@@ -25,7 +25,7 @@ traced.
 | `linear` + `minimal_matmul`     | 56         | 17%   |
 | `bringup.flat_routed_expert`    | 34         | 10%   |
 | `bringup.sparse_sdpa`           | 27         | 8%    |
-| `bringup.fabric_all_gather`     | 21         | 6%    |
+| `bringup.fabric_all_gather` (now stock `experimental.high_bw_all_gather`) | 21 | 6% |
 | `to_layout`                     | 16         | 5%    |
 | `bringup.moe_ag_local_reduce`   | 13         | 4%    |
 | `experimental.all_to_all_async_generic` | 11 | 3%    |
@@ -49,7 +49,8 @@ moving its partials as computing them.
    collective at all (~16 GFLOP per chip per layer). Cheaper variant: add its partial into the routed experts' [T, H]
    partial so both share one reduce-scatter. A model change (`tt/model.py`, the shared expert), no new kernel.
 2. **Ring reduce-scatter on the dual Hamiltonian cycles** (est. -20 to -25 ms). The routed experts' reduce-scatter is
-   still a line per axis (0.88 ms per layer). `fabric_all_gather` already splits a torus with both sides >= 3 into two
+   still a line per axis (0.88 ms per layer). The all-gather (`fabric_all_gather`; stock `high_bw_all_gather` since the
+   fork's retirement, #61387) already splits a torus with both sides >= 3 into two
    edge-disjoint Hamiltonian cycles (all four links per chip); a reduce-scatter on the same plan should take ~0.25 ms.
    The full-mesh *line* reduce-scatter (`fabric_reduce_scatter(cluster_axis=None)`, `GLM_MOE_RS_FULL_MESH=1`) only
    reached 0.835 ms (the middle of a 16-chip line carries half of every chip's data) and doubles the bf16 rounding of

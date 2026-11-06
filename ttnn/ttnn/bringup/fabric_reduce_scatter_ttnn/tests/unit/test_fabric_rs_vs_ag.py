@@ -7,7 +7,7 @@ blocks on a line's middle link, about G / 2 on a ring), so the gap is the reduce
 local partial and adding in every hop.
 
 Two all-gathers: fabric_all_gather_py (the Python op on the same planner as the reduce-scatter, explicit topology)
-and ttnn.bringup.fabric_all_gather (the C++ op the model runs; no topology argument: a ring wherever the fabric
+and ttnn.experimental.high_bw_all_gather (the C++ op the models run; no topology argument: a ring wherever the fabric
 closes one, so it is timed only where that is the case's topology - on a FABRIC_2D 2 x 4 the axes are lines, the
 whole mesh a snake ring).
 
@@ -95,7 +95,7 @@ def _group(r, c, rows, cols, cluster_axis):
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True, ids=["2x4"])
 @pytest.mark.parametrize("cluster_axis, topology", CASES)
 def test_fabric_rs_vs_ag(mesh_device, cluster_axis, topology):
-    from ttnn.bringup.fabric_all_gather_ttnn.fabric_all_gather_py import fabric_all_gather as ag_py
+    from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_py import fabric_all_gather as ag_py
     from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_reduce_scatter import fabric_reduce_scatter
 
     rows, cols = tuple(mesh_device.shape)
@@ -139,7 +139,7 @@ def test_fabric_rs_vs_ag(mesh_device, cluster_axis, topology):
         timed = [("reduce_scatter", t_rs), ("all_gather py", t_ag)]
         if ring == (cluster_axis is None):  # the C++ op's own topology on this fabric
             y_c = ttnn.allocate_tensor_on_device(y_ag.spec, mesh_device)
-            ttnn.bringup.fabric_all_gather(x_ag, 2, y_c, cluster_axis=cluster_axis, num_links=LINKS)
+            ttnn.experimental.high_bw_all_gather(x_ag, 2, y_c, cluster_axis=cluster_axis, num_links=LINKS)
             c_err = max(
                 (ttnn.to_torch(a).float() - ttnn.to_torch(b).float()).abs().max().item()
                 for a, b in zip(ttnn.get_device_tensors(y_c), ttnn.get_device_tensors(y_ag))
@@ -147,7 +147,7 @@ def test_fabric_rs_vs_ag(mesh_device, cluster_axis, topology):
             assert c_err == 0.0, c_err
             t_c = _time_per_call(
                 mesh_device,
-                lambda: ttnn.bringup.fabric_all_gather(x_ag, 2, y_c, cluster_axis=cluster_axis, num_links=LINKS),
+                lambda: ttnn.experimental.high_bw_all_gather(x_ag, 2, y_c, cluster_axis=cluster_axis, num_links=LINKS),
             )
             timed.append(("all_gather C++", t_c))
             ttnn.deallocate(y_c)

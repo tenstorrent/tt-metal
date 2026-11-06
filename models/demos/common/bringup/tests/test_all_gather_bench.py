@@ -1,16 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""ttnn.all_gather vs ttnn.bringup.fabric_all_gather vs ttnn.experimental.high_bw_all_gather at the model's own
-gather shapes: every all-gather group in <repo>/generated/<model>/op_report.json (tests/test_op_report.py; input shape,
-dtype, cluster axis, gather dim -2). Per shape: the three ops on per-chip-distinct data, the two fabric ops' outputs
-checked bit-identical to ttnn.all_gather's, and each op's device time per call (median over ITERS, slowest chip) from
-the profiler's per-call records. fabric / high_bw get a fresh output per call (ttnn.empty) and no semaphores (the op
-makes and caches its own), as a drop-in replacement would.
+"""ttnn.all_gather vs ttnn.experimental.high_bw_all_gather at the model's own gather shapes: every all-gather group in
+<repo>/generated/<model>/op_report.json (tests/test_op_report.py; input shape, dtype, cluster axis, gather dim -2). Per
+shape: both ops on per-chip-distinct data, high_bw's output checked bit-identical to ttnn.all_gather's, and each op's
+device time per call (median over ITERS, slowest chip) from the profiler's per-call records. high_bw gets a fresh
+output per call (ttnn.empty) and no semaphores (the op makes and caches its own), as a drop-in replacement would.
+(The bring-up fork ttnn.bringup.fabric_all_gather, once a third column, was retired 2026-11-06: high_bw_all_gather
+runs its program since #61387.)
 
     TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 BRINGUP_SPEC=... \\
     scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_all_gather_bench.py -s
-BRINGUP_AGB_ITERS (default 10), BRINGUP_AGB_LINKS (fabric / high_bw num_links, default 2)."""
+BRINGUP_AGB_ITERS (default 10), BRINGUP_AGB_LINKS (high_bw num_links, default 2)."""
 
 import json
 import os
@@ -82,23 +83,19 @@ def test_all_gather_bench(mesh_device):
                 x, dim=2, cluster_axis=axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
             ),
         }
-        for name, fn in (
-            ("fabric_all_gather", ttnn.bringup.fabric_all_gather),
-            ("high_bw_all_gather", ttnn.experimental.high_bw_all_gather),
-        ):
 
-            def run(fn=fn):
-                out = ttnn.empty(
-                    gathered,
-                    dtype=dt,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                fn(x, dim=2, output_tensor=out, cluster_axis=axis, num_links=LINKS)
-                return out
+        def run():
+            out = ttnn.empty(
+                gathered,
+                dtype=dt,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.experimental.high_bw_all_gather(x, dim=2, output_tensor=out, cluster_axis=axis, num_links=LINKS)
+            return out
 
-            ops[name] = run
+        ops["high_bw_all_gather"] = run
         ref = None
         line = {"shape": "x".join(map(str, dims)) + " " + dt_s, "axis": axis, "G": G, "model_calls": calls}
         for name, fn in ops.items():

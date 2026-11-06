@@ -511,9 +511,10 @@ TABLE = {
         ("stock", "fabric", "fabric_bf16"),
         "the cross-chip collectives (tt/ccl.py, P.5): stock = ttnn.all_gather, and the exact TP partial sums (ATTN_O_SUM "
         "/ EXPERTS_SUM / HC_TP_SUM gather_add) as all_gather + SFPU ttnn.add (+ mesh_partition for the hidden-split "
-        "ones); fabric = the bring-up fabric forks: every all_gather whose contract fits on ttnn.bringup."
-        "fabric_all_gather, the hidden-split sums as ONE ttnn.bringup.fabric_reduce_scatter(dim=3, exact_fp32_add=True) "
-        "each, the replicated ones (HC_TP_SUM: tp_sum) as fabric_reduce_scatter(dim=2, exact) + fabric_all_gather; "
+        "ones); fabric = the fabric collectives: every all_gather whose contract fits on stock ttnn."
+        "experimental.high_bw_all_gather (the program of the retired fork ttnn.bringup.fabric_all_gather, #61387), "
+        "the hidden-split sums as ONE ttnn.bringup.fabric_reduce_scatter(dim=3, exact_fp32_add=True) "
+        "each, the replicated ones (HC_TP_SUM: tp_sum) as fabric_reduce_scatter(dim=2, exact) + high_bw_all_gather; "
         "every add one exact fp32 rounding on the SFPU (TP = 2: bit-identical to stock). The head <-> seq all_to_all "
         "stays stock (no fork). stock and fabric: the same numerics. fabric_bf16 (P.6, owner comparison: Marko Staletovic's "
         "GLM-5.3 choice, GLM_SCATTER_OP=fabric_bf16) = fabric, but the reduce-scattered TP partial sums (sum_cols: "

@@ -45,7 +45,7 @@ slice_write, embedding (< 0.1 each); stock typecast, untilize_with_unpadding, mi
 concat, slice, reshape, multiply.
 
 **The shipped model uses 18 bring-up fork folders** (14 with a C++ host side, 4 Python ProgramDescriptor ops):
-flat_routed_expert_ttnn, combine_rf, prepared_program, fabric_all_gather_ttnn, fabric_reduce_scatter_ttnn, sdpa,
+flat_routed_expert_ttnn, combine_rf, prepared_program, fabric_all_gather_ttnn (retired 2026-11-06), fabric_reduce_scatter_ttnn, sdpa,
 indexer_score, topk_large_indices, rms_norm_ttnn, mhc_pre_ttnn, mhc_post_ttnn, rotary_embedding_indexed,
 update_padded_kv_cache, nlp_concat_heads, slice_write, embedding, ckv_bfp4_ttnn, pair_pool_ttnn.
 Plus three non-fork carried code drops from Marko's branch that are not on main: `models/demos/moe_block/`,
@@ -226,6 +226,8 @@ whole-model verification (section 6). low < 1, medium 1-4, high > 4.
 - Upstream drift: main n/a for the op, but **build breaks**: #61503 (2 C++ + 1 Python call sites) and #61262
   (`mesh_device->get_device` x3).
 - Effort: **medium (~1 h)**: mechanical API port, then its tests on the box.
+- Retired 2026-11-06: stock `ttnn.experimental.high_bw_all_gather` is the same program (#61387); tt/ccl.py calls it,
+  the Python planner moved to `fabric_reduce_scatter_ttnn/fabric_all_gather_py.py`.
 
 ### 4.5 fabric_reduce_scatter_ttnn (`ttnn.bringup.fabric_reduce_scatter`)
 - Folder: `ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/` (Python ProgramDescriptor op, 2.5k lines).
@@ -413,7 +415,7 @@ whole-model verification (section 6). low < 1, medium 1-4, high > 4.
 | flat_routed_expert (flat_routed_expert_ttnn) | C++ fork, source = Marko's branch | MoE expert engine; no stock op | layouts, bfp4 down, weights_nk, patch_addresses, any I | main n/a; Marko +3 (DRISC NoC fix) | medium ~2.5 h |
 | combine_rf.* (combine_rf) | Python JIT builders, source = Marko's branch | token-split dispatch / combine / planners; no stock op | landing pools, multi-core deterministic planner, bf16 acc | main: #61503 (2 Py sites); Marko +8 | medium ~2 h |
 | prepare_program / run_prepared (prepared_program) | C++ fork, Marko's | host time on 32 chips | patched-slot prepared dispatch, value_slots | main 0; Marko +1 | low ~0.5 h |
-| fabric_all_gather (fabric_all_gather_ttnn) | C++ fork, mimo-v2-dp | link-rate all-gather (P.5) | the op, persistent outputs | **build breaks: #61503, #61262** | medium ~1 h |
+| fabric_all_gather (fabric_all_gather_ttnn; retired 2026-11-06, stock high_bw_all_gather) | C++ fork, mimo-v2-dp | link-rate all-gather (P.5) | the op, persistent outputs | **build breaks: #61503, #61262** | medium ~1 h |
 | fabric_reduce_scatter (fabric_reduce_scatter_ttnn) | Python fork, mimo-v2-dp | exact fp32 / deterministic RS, prepared | groups, exact_fp32_add, program_hash, prepared | none | low ~0.5 h |
 | sparse_sdpa (sdpa) | C++ fork of transformer/sdpa | 4-bit KV rows, 110 cores, precision | ROW_BFP4/BFP8, kv_window, max_grid, precision opts | 7 commits; #60493 1147-line factory rewrite, #61759, #62434, #61503 build break | medium ~1.5 h (selective) / high ~5 h (full) |
 | ring_indexer_score_dsa (indexer_score) | C++ fork | ratio 2, natural blocks, bfp4 q/k (DS41-49/-117/-150) | ratio 2, block epilogue, bfp4, fp32 DEST | 1 cleanup | low ~0.5 h |
