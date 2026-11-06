@@ -51,6 +51,8 @@
 // and is never reserved, pushed, waited on or popped. That is sound because a state CB holds exactly one state (kv
 // tiles, single-buffered) and every token produces and consumes it whole: the read and write pointers of both ids
 // start at the CB base and wrap back to it after kv tiles, so tile i sits at base + i tiles for every id, every token.
+// (The reader pushes the t = 0 state in column groups of Kt tiles as the columns land and the read pass waits for it
+// column by column; the pushes move the write pointer only, and it has wrapped to the base after the last group.)
 // The unpack thread waits on the utd id before it unpacks through the mm view, and that wait is the only ordering the
 // view needs. The factory checks the one-state sizing (add_state_cb); the compute passes check the pointers under LLK
 // asserts (gdn_decode::check_state_views). Double-buffering a state CB would break the invariant; the view would then

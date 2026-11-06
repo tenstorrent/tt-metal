@@ -15,11 +15,16 @@
 // aligned, so fp32 rows go straight into the CB tiles and bf16 rows arrive as their 64-byte chunk in the raw64
 // scratch and are widened (bf16 bits << 16) into the fp32 tiles by the RISC. The column tiles (kT16, qcol32, gcol32,
 // bcol16) are built by a RISC loop from the landed rows. The zero paddings of every token CB are written once at
-// kernel start: the CBs hold token_cb_nbuf slot sets that the per-token reserve/push walks in a fixed order, so a
-// padding is never overwritten (at T = 1 only the first slot set is used and zeroed).
+// kernel start (during token 0's DRAM reads when every input is bf16): the CBs hold token_cb_nbuf slot sets that
+// the per-token reserve/push walks in a fixed order, so a padding is never overwritten (at T = 1 only the first slot
+// set is used and zeroed).
 //
-// Per token this is 4*Kt + 2*Vt + 2 NoC reads of 64 bytes (26 at Kt = Vt = 4) under one barrier; token 0's reads are
-// issued together with the state's so their latency overlaps.
+// Per token this is 4*Kt + 2*Vt + 2 NoC reads of 64 bytes (26 at Kt = Vt = 4) under one barrier. Token 0's rows go
+// out before the state's tiles, each group under its own NoC transaction id, so the token's column build and the
+// compute's constants pass overlap the state read, and the read pass starts on column 0 of the state while the other
+// columns are still landing (the state section below).
+//
+// Every runtime argument is common to the cores; the head index is the core's coordinates: h = x * grid_y + y.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -71,15 +76,16 @@ void kernel_main() {
     constexpr auto s0_a = TensorAccessorArgs<b_a.next_compile_time_args_offset()>();
     constexpr auto idx_a = TensorAccessorArgs<s0_a.next_compile_time_args_offset()>();
 
-    const uint32_t h = get_arg_val<uint32_t>(0);
-    const uint32_t T = get_arg_val<uint32_t>(1);
-    const uint32_t q_addr = get_arg_val<uint32_t>(2);
-    const uint32_t k_addr = get_arg_val<uint32_t>(3);
-    const uint32_t v_addr = get_arg_val<uint32_t>(4);
-    const uint32_t g_addr = get_arg_val<uint32_t>(5);
-    const uint32_t b_addr = get_arg_val<uint32_t>(6);
-    const uint32_t s0_addr = get_arg_val<uint32_t>(7);
-    // rt 8 = block-index buffer address (0 when absent), rt 9 = its aligned page size, rt 10 = BH.
+    const uint32_t T = get_common_arg_val<uint32_t>(0);
+    const uint32_t q_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t k_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t v_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t g_addr = get_common_arg_val<uint32_t>(4);
+    const uint32_t b_addr = get_common_arg_val<uint32_t>(5);
+    const uint32_t s0_addr = get_common_arg_val<uint32_t>(6);
+    // 7 = block-index buffer address (0 when absent), 8 = its aligned page size, 9 = BH, 10 = the grid stride.
+    const uint32_t grid_y = get_common_arg_val<uint32_t>(10);
+    const uint32_t h = get_absolute_logical_x() * grid_y + get_absolute_logical_y();
 
     // Source tiles are 32x32 of the tensor's dtype; the state's are fp32. The CB tiles are the tiny ones of the plan.
     constexpr uint32_t in_e = in_bf16 ? 2u : 4u;
@@ -128,11 +134,17 @@ void kernel_main() {
     // Reserving the whole CB (nothing is pushed yet) gives the base of all its slot sets; the per-token reserve/push
     // below walks them in a fixed order. zero32 is zeroed by the NoC's zero write; every other padding is a local NoC
     // copy of zero32 in 4 KB pieces (the zero write itself goes in small loopback pieces: 96 KB of it cost 3.7 us).
+    // The copies run under their own transaction id (the ids are explained at the state section): with bf16 inputs
+    // no DRAM row lands in a token tile, so they are issued after token 0's and the state's reads and land during
+    // the DRAM latency; with an fp32 input its rows land in the tiles, so the copies go first and are waited for.
     cb_zero.reserve_back(1);
     noc.async_write_zeros(cb_zero, tb32);
     noc.write_zeros_l1_barrier();
     const uint64_t zero_src = get_noc_addr(cb_zero.get_write_ptr());
-    {
+    constexpr uint32_t tok_trid = 15, fill_trid = 14;  // the state columns take ids 1..13
+    constexpr bool fill_overlaps = in_bf16 && g_bf16 && b_bf16;
+    auto fill_paddings = [&]() {
+        noc_async_read_set_trid(fill_trid);
         constexpr uint32_t nb = cb::token_cb_nbuf;
         const uint32_t nb_used = T > 1 ? nb : 1u;  // slot sets the token loop will touch
         auto zero_fill = [&](CircularBuffer& c, uint32_t capacity_tiles, uint32_t bytes) {
@@ -161,10 +173,10 @@ void kernel_main() {
                 noc_async_read(get_noc_addr(ones_base), ones_base + off, 512);
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = fill_trid});
         cb_zero.push_back(1);
         cb_ones.push_back(1);
-    }
+    };
 
     // ---- per-token tiles: the NoC reads (issue) and the column build + push (finish) ----------------------------
     // One face row of a source tile into the CB tile (fp32: the aligned 64 B row itself) or into a raw64 slot (bf16:
@@ -277,43 +289,34 @@ void kernel_main() {
         return widen(raw[idx / 2u], idx & 1u);
     };
 
-    // Call after the reads of issue_token_reads have landed (a NoC read barrier).
+    // Call after the reads of issue_token_reads have landed (a NoC read barrier). Two push groups, so the compute's
+    // constants pass (qk16, qcol32, gcol32, bcol16) starts while v16 and kT16, which only the vector and update passes
+    // read, are still being built.
     auto finish_token = [&](uint32_t t) {
         compiler_fence();
+        // The token's tiles, taken before the first group's pushes move the write pointers on.
+        const uint32_t qk_base = cb_qk.get_write_ptr();
+        const uint32_t kT_base = cb_kT.get_write_ptr();
+        const uint32_t qc_base = cb_qc.get_write_ptr();
+        const uint32_t v_base = cb_v.get_write_ptr();
         if constexpr (in_bf16) {
             for (uint32_t ki = 0; ki < Kt; ki++) {
-                tt_l1_ptr uint32_t* qk = reinterpret_cast<tt_l1_ptr uint32_t*>(cb_qk.get_write_ptr() + ki * tb16);
+                tt_l1_ptr uint32_t* qk = reinterpret_cast<tt_l1_ptr uint32_t*>(qk_base + ki * tb16);
                 widen_row(raw_k + ki * 2, kr, qk + cb::off_16x32(0, 0) / 4);
                 widen_row(raw_k + ki * 2 + 1, kr, qk + cb::off_16x32(0, 1) / 4);
                 widen_row(raw_q + ki * 2, kr, qk + cb::off_16x32(2, 0) / 4);
                 widen_row(raw_q + ki * 2 + 1, kr, qk + cb::off_16x32(2, 1) / 4);
             }
-            for (uint32_t j = 0; j < Vt; j++) {
-                tt_l1_ptr uint32_t* v = reinterpret_cast<tt_l1_ptr uint32_t*>(cb_v.get_write_ptr() + j * tb16);
-                widen_row(raw_v + j * 2, vr, v + cb::off_16x32(0, 0) / 4);
-                widen_row(raw_v + j * 2 + 1, vr, v + cb::off_16x32(0, 1) / 4);
-            }
             compiler_fence();
         }
-        // Column tiles from the landed rows: kT16[ki] column 0 = k, qcol32[ki] column 0 = q. Element c of face f of
-        // the row tile is column 16f + c, i.e. row 16f + c of the column tiles.
+        // Column tiles from the landed rows: qcol32[ki] column 0 = q (here), kT16[ki] column 0 = k (the second
+        // group). Element c of face f of the row tile is column 16f + c, i.e. row 16f + c of the column tiles.
         for (uint32_t ki = 0; ki < Kt; ki++) {
-            // __restrict__: the three tiles never overlap, so the compiler may issue a face row's 16 loads before its
-            // 16 scattered stores instead of a load-use stall per element.
+            // __restrict__: the tiles never overlap, so the compiler may issue a face row's 16 loads before its 16
+            // scattered stores instead of a load-use stall per element.
             const tt_l1_ptr uint32_t* __restrict__ qk =
-                reinterpret_cast<const tt_l1_ptr uint32_t*>(cb_qk.get_write_ptr() + ki * tb16);
-            tt_l1_ptr uint32_t* __restrict__ kT =
-                reinterpret_cast<tt_l1_ptr uint32_t*>(cb_kT.get_write_ptr() + ki * tb16);
-            tt_l1_ptr uint32_t* __restrict__ qc =
-                reinterpret_cast<tt_l1_ptr uint32_t*>(cb_qc.get_write_ptr() + ki * tb32);
-#pragma GCC unroll 16
-            for (uint32_t c = 0; c < 16; c++) {
-                kT[cb::off_32x16_col0(c) / 4] = qk[cb::off_16x32(0, 0) / 4 + c];
-            }
-#pragma GCC unroll 16
-            for (uint32_t c = 0; c < 16; c++) {
-                kT[cb::off_32x16_col0(16 + c) / 4] = qk[cb::off_16x32(0, 1) / 4 + c];
-            }
+                reinterpret_cast<const tt_l1_ptr uint32_t*>(qk_base + ki * tb16);
+            tt_l1_ptr uint32_t* __restrict__ qc = reinterpret_cast<tt_l1_ptr uint32_t*>(qc_base + ki * tb32);
 #pragma GCC unroll 16
             for (uint32_t c = 0; c < 16; c++) {
                 qc[cb::off_32x32_col0(c) / 4] = qk[cb::off_16x32(2, 0) / 4 + c];
@@ -350,47 +353,99 @@ void kernel_main() {
         }
         compiler_fence();
         cb_qk.push_back(Kt);
-        cb_kT.push_back(Kt);
         cb_qc.push_back(Kt);
-        cb_v.push_back(Vt);
         cb_g.push_back(1);
         cb_b.push_back(1);
-    };
-
-    // ---- initial state S (once): the caller's state (block h, or ring block idx[h]: caller contract in the Python
-    // binding), or zeros replicated from zero32 when the caller gave none. Token 0's reads go out under the same
-    // barrier.
-    {
-        cb_S.reserve_back(kv);
-        if constexpr (has_state) {
-            uint32_t s0_block = h;
-            if constexpr (use_blk_idx) {
-                const uint32_t idx_addr = get_arg_val<uint32_t>(8);
-                const uint32_t idx_page_bytes = get_arg_val<uint32_t>(9);
-                [[maybe_unused]] const uint32_t BH = get_arg_val<uint32_t>(10);
-                CircularBuffer cb_idx(cb::blkidx);
-                const CoreLocalMem<volatile uint32_t> idx(cb_idx.get_write_ptr());
-                const auto idx_acc = TensorAccessor(idx_a, idx_addr, idx_page_bytes);
-                noc.async_read(idx_acc, cb_idx, idx_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                s0_block = idx[h];
-                // Watcher-checked caller contract: the block belongs to head h and lies inside the ring.
-                ASSERT(s0_block % BH == h && s0_block < T * BH);
-            }
-            for (uint32_t i = 0; i < kv; i++) {
-                noc.async_read(s0_acc, cb_S, s_tb, {.page_id = s0_block * kv + i}, {.offset_bytes = i * s_tb});
-            }
-        } else {
-            const uint32_t dst = cb_S.get_write_ptr();
-            for (uint32_t i = 0; i < kv; i++) {
-                noc_async_read(zero_src, dst + i * tb32, tb32);
+        // Second group: v16 and kT16 (the k rows are read back from the pushed qk16 tiles, which nothing writes;
+        // qk_base still addresses them, the CB's write pointer no longer does).
+        if constexpr (in_bf16) {
+            for (uint32_t j = 0; j < Vt; j++) {
+                tt_l1_ptr uint32_t* v = reinterpret_cast<tt_l1_ptr uint32_t*>(v_base + j * tb16);
+                widen_row(raw_v + j * 2, vr, v + cb::off_16x32(0, 0) / 4);
+                widen_row(raw_v + j * 2 + 1, vr, v + cb::off_16x32(0, 1) / 4);
             }
         }
+        for (uint32_t ki = 0; ki < Kt; ki++) {
+            const tt_l1_ptr uint32_t* __restrict__ qk =
+                reinterpret_cast<const tt_l1_ptr uint32_t*>(qk_base + ki * tb16);
+            tt_l1_ptr uint32_t* __restrict__ kT = reinterpret_cast<tt_l1_ptr uint32_t*>(kT_base + ki * tb16);
+#pragma GCC unroll 16
+            for (uint32_t c = 0; c < 16; c++) {
+                kT[cb::off_32x16_col0(c) / 4] = qk[cb::off_16x32(0, 0) / 4 + c];
+            }
+#pragma GCC unroll 16
+            for (uint32_t c = 0; c < 16; c++) {
+                kT[cb::off_32x16_col0(16 + c) / 4] = qk[cb::off_16x32(0, 1) / 4 + c];
+            }
+        }
+        compiler_fence();
+        cb_v.push_back(Vt);
+        cb_kT.push_back(Kt);
+    };
+
+    // ---- initial state S (once) and token 0 ---------------------------------------------------------------------
+    // Token 0's rows go out first, then the state's kv tiles in column order (tile (i, j) at CB slot i*Vt + j), each
+    // group under its own NoC transaction id: on Blackhole the id register of the read command buffer is sticky, so
+    // every read issued after noc_async_read_set_trid(id) carries that id, and a barrier on an id waits for that id's
+    // reads only. The token's column tiles are built and pushed as soon as its rows land, and column j of the state is
+    // pushed (Kt tiles) as soon as it lands, so the compute runs its constants pass and then column 0 of the read pass
+    // while the rest of the state is in flight (read_vector_pass waits for the state column by column). The state is
+    // the caller's (block h, or ring block idx[h]: caller contract in the Python binding) or zeros replicated from
+    // zero32 when the caller gave none.
+    {
+        auto col_trid = [](uint32_t j) { return 1u + (j % 13u); };  // ids repeat past 13 columns: earlier ones are done
+        if constexpr (!fill_overlaps) {
+            fill_paddings();
+        }
+        cb_S.reserve_back(kv);
+        [[maybe_unused]] const uint32_t s_dst = cb_S.get_write_ptr();  // the zero state's landing
+        [[maybe_unused]] uint32_t s0_block = h;
+        if constexpr (has_state && use_blk_idx) {
+            const uint32_t idx_addr = get_common_arg_val<uint32_t>(7);
+            const uint32_t idx_page_bytes = get_common_arg_val<uint32_t>(8);
+            [[maybe_unused]] const uint32_t BH = get_common_arg_val<uint32_t>(9);
+            CircularBuffer cb_idx(cb::blkidx);
+            const CoreLocalMem<volatile uint32_t> idx(cb_idx.get_write_ptr());
+            const auto idx_acc = TensorAccessor(idx_a, idx_addr, idx_page_bytes);
+            noc.async_read(idx_acc, cb_idx, idx_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            s0_block = idx[h];
+            // Watcher-checked caller contract: the block belongs to head h and lies inside the ring.
+            ASSERT(s0_block % BH == h && s0_block < T * BH);
+        }
+        noc_async_read_set_trid(tok_trid);
         issue_token_reads(0);
-        noc.async_read_barrier();
-        cb_S.push_back(kv);
+        if constexpr (has_state) {
+            for (uint32_t j = 0; j < Vt; j++) {
+                noc_async_read_set_trid(col_trid(j));
+                for (uint32_t i = 0; i < Kt; i++) {
+                    const uint32_t tile = i * Vt + j;
+                    noc.async_read(
+                        s0_acc, cb_S, s_tb, {.page_id = s0_block * kv + tile}, {.offset_bytes = tile * s_tb});
+                }
+            }
+        } else {
+            noc_async_read_set_trid(col_trid(0));
+            for (uint32_t i = 0; i < kv; i++) {
+                noc_async_read(zero_src, s_dst + i * tb32, tb32);
+            }
+        }
+        if constexpr (fill_overlaps) {
+            fill_paddings();  // the local copies land during the DRAM reads' latency
+        }
+        noc_async_read_set_trid(0);  // the later tokens' reads carry the default id and use the plain barrier
+        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = tok_trid});
+        finish_token(0);
+        if constexpr (has_state) {
+            for (uint32_t j = 0; j < Vt; j++) {
+                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = col_trid(j)});
+                cb_S.push_back(Kt);
+            }
+        } else {
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = col_trid(0)});
+            cb_S.push_back(kv);
+        }
     }
-    finish_token(0);
 
     // ---- tokens 1.. --------------------------------------------------------------------------------------------
     for (uint32_t t = 1; t < T; t++) {
