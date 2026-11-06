@@ -232,3 +232,6 @@ Branch commits on the new base: 70075e3e7a1 906d3fbe4b7 3b9ed4635b1 020b0fb7556 
 - landed on the rebased branch: moe_grouped_topk + fabric_all_gather retirements, upstream combine file, H=32 waiver,
   rotary test fix, F257; rebuild OK (unity regrouping exposed a missing include in prepared_program.hpp: fixed).
 - SFPI ICE filed: https://github.com/tenstorrent/tt-metal/issues/64605 (report + reproducer on the branch: ttnn/ttnn/bringup/sdpa/docs/sfpi_ice/). Pushed cd24bcb7899 (fast-forward).
+- 10:24 re-verification after landing the retirements (stock high_bw_all_gather in the model) + rebuild: ladder rung
+  last PASS, 200 accuracy metrics bit-identical to the first rebased run, 104 limited metrics in limit; clean warm
+  chunk with DS41_ENGRAM_TABLE=resident: 172.8 ms (spread 7.1; P tasks' resident ~195-207). Pushed.
