@@ -3,7 +3,7 @@
   "eval": "terminal_bench_2_1",
   "device": "qb2-ci",
   "owner": "coordinator",
-  "status": "completed_valid",
+  "status": "completed_awaiting_audit",
   "workflow": "agentic",
   "planned_clients": 2,
   "batch": 8,

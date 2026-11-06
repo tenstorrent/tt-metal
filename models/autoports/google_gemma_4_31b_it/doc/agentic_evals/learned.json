@@ -147,6 +147,10 @@
     {
       "fact": "Four HTTP-only GPQA requests fit at131072 input tokens in unchanged B8pool; this is not four full advertised262144 contexts, task sandbox admission, or scored speed acceptance.",
       "evidence": "runs/gpqa-c4-capacity/RESULT.json"
+    },
+    {
+      "fact": "Direct diagnostic launch must set validated writable TT_METAL_CACHE before runtime init; XDG_CACHE_HOME alone does not redirect JIT. Host mkdir failure with clean UMD close recovered via environment correction and bounded mesh health, no reset.",
+      "evidence": "runs/astropy-prefix-discriminator/cache-launch-AUTOFIX.md"
     }
   ],
   "suite_timings": [
@@ -407,6 +411,20 @@
       "sha": "536febd8",
       "fix": "Local servingdiagnostic client nowhonorsconfiguredsockettimeout instead ofhidden60s clamp; totalelapsedguardunchanged.",
       "evidence": "runs/measured-workload-prefill/AUTOFIX.md"
+    }
+  ],
+  "current_runtime_measurements": [
+    {
+      "runtime": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+      "source": "runs/retained-runtime-benchmark/RESULT.json",
+      "matrix_seconds": 27.08457288099453,
+      "headline_ttft_ms": 753.31630265282,
+      "headline_decode_tps": 35.31811185868559,
+      "device_hours": 0.09667890765859435,
+      "limitations": {
+        "device_time_and_rooflines": "No profiling of vLLM; host TTFT/phase boundaries cannot substitute for device time.",
+        "causal_retention_overhead": "Single sequential run, no randomized repeated control; no causal optimization/speed claim."
+      }
     }
   ]
 }

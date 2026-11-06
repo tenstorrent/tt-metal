@@ -65,7 +65,7 @@ class Gemma4ForCausalLM:
         )
         phase_path = os.environ.get("GEMMA4_BENCHMARK_PHASE_LOG")
         obj._benchmark_phases = (
-            PhaseRecorder(
+            PhaseRecorder.create(
                 phase_path,
                 dict(
                     module_file=os.path.realpath(__file__),
@@ -320,7 +320,8 @@ class Gemma4ForCausalLM:
         phase_step = None
         if recorder is not None:
             starts, ends = list(map(int, start_pos)), list(map(int, prompt_lens))
-            phase_step = recorder.begin(
+            phase_step = recorder.observe(
+                "begin",
                 "prefill",
                 batch_size=self.batch,
                 sampling_mode="device" if sampling_params is not None else "host_compatibility",
@@ -353,7 +354,7 @@ class Gemma4ForCausalLM:
                 torch.tensor(result[: len(prompt_lens)], dtype=torch.int64).reshape(-1, 1)
             )
         if recorder is not None:
-            recorder.complete(phase_step)
+            recorder.observe("complete", phase_step)
         return result
 
     def decode_forward(
@@ -375,17 +376,28 @@ class Gemma4ForCausalLM:
         recorder = getattr(self, "_benchmark_phases", None)
         phase_step = None
         if recorder is not None:
-            positions = recorder.decode_positions(start_pos, reload_inputs)
-            phase_step = recorder.begin(
+            positions = recorder.observe(
+                "decode_positions",
+                start_pos,
+                reload_inputs,
+                **({"slot_remap": slot_remap} if recorder.retain_decode_tokens else {}),
+            )
+            phase_step = recorder.observe(
+                "begin",
                 "decode",
                 batch_size=self.batch,
                 sampling_mode="device" if sampling_params is not None else "host_compatibility",
                 effective_positions=positions,
                 positions=positions,
-                active_rows=sum(p >= 0 for p in positions),
+                active_rows=sum(p >= 0 for p in positions) if positions is not None else None,
                 token_shape=list(tokens.shape),
                 reload_inputs=bool(reload_inputs),
                 reload_page_table=bool(reload_page_table),
+                **(
+                    {"slot_remap": list(map(int, slot_remap)) if slot_remap is not None else None}
+                    if recorder.retain_decode_tokens
+                    else {}
+                ),
             )
         if "reset_batch" in kwargs:
             raise TypeError("Legacy reset_batch is incompatible with decode contract version1")
@@ -436,16 +448,16 @@ class Gemma4ForCausalLM:
             else:
                 result = result.reshape(self.batch, 1, -1)
             if recorder is not None:
-                recorder.complete(phase_step)
+                recorder.observe("complete", phase_step, sampled_tokens=result if sampling_params is not None else None)
         elif recorder is not None:
-            recorder.submitted_output(phase_step, result)
+            recorder.observe("submitted_output", phase_step, result)
         return result
 
     def read_decode_output(self, output, async_read=False):
         result = self.generator.read_decode_output(output, async_read=async_read)
         recorder = getattr(self, "_benchmark_phases", None)
         if recorder is not None:
-            recorder.bind_readback(output, result[0] if async_read else result)
+            recorder.observe("bind_readback", output, result[0] if async_read else result)
         return result
 
     def process_decode_output_host(self, output, is_tokens=False):
@@ -455,7 +467,7 @@ class Gemma4ForCausalLM:
         if recorder is not None:
             # Async callers already waited the existing readback event; sync
             # conversion above already materialized its existing device read.
-            recorder.complete_output(output)
+            recorder.observe("complete_output", output, sampled_tokens=result if is_tokens else None)
         return result
 
     def release_persistent_capture(self):

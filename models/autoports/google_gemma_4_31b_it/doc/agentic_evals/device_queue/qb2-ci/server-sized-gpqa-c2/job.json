@@ -2,7 +2,7 @@
   "arm": "server-sized-gpqa-c2",
   "device": "qb2-ci",
   "owner": "coordinator",
-  "status": "completed_valid",
+  "status": "completed_awaiting_audit",
   "eval": "r1_gpqa_diamond",
   "rung": "server-sized",
   "tasks": 10,

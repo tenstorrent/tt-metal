@@ -3,7 +3,7 @@
   "eval": "swe_bench_verified",
   "device": "qb2-ci",
   "owner": "coordinator",
-  "status": "completed_valid",
+  "status": "completed_unbanked",
   "queued_at": "2026-11-06T13:48:13.783611+00:00",
   "planned_clients": 2,
   "batch": 8,

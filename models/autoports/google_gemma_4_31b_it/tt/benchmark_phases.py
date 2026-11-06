@@ -24,6 +24,16 @@ def socket_path(path):
 
 
 class PhaseRecorder:
+    @classmethod
+    def create(cls, *args, **kwargs):
+        try:
+            return cls(*args, **kwargs)
+        except Exception:
+            if not kwargs.get("retain_decode_tokens", os.environ.get("GEMMA4_RETAIN_DECODE_TOKENS", "0") == "1"):
+                raise
+            logging.warning("Gemma4 token diagnostic setup failed; no retained evidence available")
+            return None
+
     def __init__(
         self,
         path,
@@ -33,6 +43,8 @@ class PhaseRecorder:
         auto_export_interval=None,
         max_file_bytes=None,
         export_chunk_events=1024,
+        retain_decode_tokens=None,
+        max_pending_steps=64,
     ):
         if auto_export_interval is None:
             auto_export_interval = float(os.environ.get("GEMMA4_PHASE_AUTOEXPORT_SECONDS", "0"))
@@ -42,6 +54,16 @@ class PhaseRecorder:
             max_file_bytes = int(os.environ.get("GEMMA4_PHASE_MAX_FILE_BYTES", str(4 * 1024**3)))
         if max_file_bytes < 4096 or export_chunk_events < 1 or max_events < 1:
             raise ValueError("invalid phase export bounds")
+        if retain_decode_tokens is None:
+            retain_decode_tokens = os.environ.get("GEMMA4_RETAIN_DECODE_TOKENS", "0") == "1"
+        if retain_decode_tokens and (not auto_export_interval or not 1 <= max_pending_steps <= 1024):
+            raise ValueError("token retention requires private periodic export and bounded pending steps")
+        self.retain_decode_tokens = bool(retain_decode_tokens)
+        self.max_pending_steps = max_pending_steps
+        self.token_diagnostic_disabled = False
+        self.token_diagnostic_failures = 0
+        self.token_diagnostic_reason = None
+        self.position_identity_uncertain = False
         self.auto_export_interval = auto_export_interval
         self.max_file_bytes = max_file_bytes
         self.export_chunk_events = export_chunk_events
@@ -76,6 +98,56 @@ class PhaseRecorder:
         self.thread = threading.Thread(target=self._serve, daemon=True, name="gemma4-phase-export")
         self.thread.start()
 
+    def observe(self, method, *args, **kwargs):
+        """Token diagnostics may fail closed without changing model outputs."""
+        if not self.retain_decode_tokens:
+            return getattr(self, method)(*args, **kwargs)
+        if self.token_diagnostic_disabled or self.file_exhausted or self.export_failed:
+            with self.lock:
+                self.pending.clear()
+                self.unbound.clear()
+                self.readbacks.clear()
+            return None
+        try:
+            with self.lock:
+                if (
+                    (method == "begin" and len(self.pending) >= self.max_pending_steps)
+                    or (method == "submitted_output" and len(self.unbound) >= self.max_pending_steps)
+                    or (method == "bind_readback" and len(self.readbacks) >= self.max_pending_steps)
+                ):
+                    raise RuntimeError("pending token diagnostic bound reached")
+            return getattr(self, method)(*args, **kwargs)
+        except Exception as error:
+            # Do not include tokens or exception text in public diagnostic logs.
+            with self.lock:
+                self.token_diagnostic_failures += 1
+                self.token_diagnostic_reason = f"{method}:{type(error).__name__}"
+                self.token_diagnostic_disabled = True
+                self.truncated = True
+                self.pending.clear()
+                self.unbound.clear()
+                self.readbacks.clear()
+                self._append(dict(event="token_retention_disabled", reason=self.token_diagnostic_reason))
+            logging.warning("Gemma4 token diagnostics disabled (%s); retained evidence incomplete", method)
+            return None
+
+    def _token_payload(self, record, sampled_tokens):
+        if record["phase"] != "decode":
+            return {}
+        if record["sampling_mode"] != "device":
+            return dict(token_retention_status="host_sampled_tokens_unavailable")
+        # The adapter passes its existing CPU [batch,1] result after validation.
+        # Never move a tensor to CPU or revisit the device-output object here.
+        if sampled_tokens is None or getattr(getattr(sampled_tokens, "device", None), "type", None) != "cpu":
+            raise ValueError("sampled token diagnostic requires existing CPU result")
+        batch = record["batch_size"]
+        if not 1 <= batch <= 32 or tuple(sampled_tokens.shape) != (batch, 1):
+            raise ValueError("sampled token diagnostic shape outside bounded batch")
+        values = sampled_tokens.reshape(-1).tolist()
+        if any(type(value) is not int or not 0 <= value < 2**32 for value in values):
+            raise ValueError("sampled token diagnostic requires uint32-range integers")
+        return dict(sampled_decode_token_ids=values, token_retention_status="retained_physical_rows")
+
     def _append(self, event):
         if self.file_exhausted:
             return
@@ -103,8 +175,13 @@ class PhaseRecorder:
             self._append(dict(record, event="submit", monotonic_ns=now))
             return self.sequence
 
-    def decode_positions(self, supplied, reload_inputs):
+    def decode_positions(self, supplied, reload_inputs, *, slot_remap=None):
         with self.lock:
+            if self.retain_decode_tokens and not reload_inputs and slot_remap is not None:
+                remap = list(map(int, slot_remap))
+                if remap != list(range(len(remap))):
+                    self.position_identity_uncertain = True
+                    raise ValueError("nonidentity remap without position reload")
             if reload_inputs:
                 self.positions = list(map(int, supplied))
             if self.positions is None:
@@ -129,7 +206,7 @@ class PhaseRecorder:
                 raise RuntimeError(self.errors[-1])
             self.readbacks[id(host)] = (step_id, host)
 
-    def complete_output(self, output):
+    def complete_output(self, output, *, sampled_tokens=None):
         with self.lock:
             pair = self.readbacks.pop(id(output), None)
             if pair is None:
@@ -140,13 +217,14 @@ class PhaseRecorder:
                     self.errors.append("unknown output completion")
                     raise RuntimeError(self.errors[-1])
             step_id = pair[0]
-        self.complete(step_id)
+        self.complete(step_id, sampled_tokens=sampled_tokens)
 
-    def complete(self, step_id):
+    def complete(self, step_id, *, sampled_tokens=None):
         now = time.perf_counter_ns()
         with self.lock:
             record = self.pending.pop(step_id)
-            self._append(dict(record, event="complete", monotonic_ns=now))
+            payload = self._token_payload(record, sampled_tokens) if self.retain_decode_tokens else {}
+            self._append(dict(record, event="complete", monotonic_ns=now, **payload))
 
     def _snapshot(self):
         return dict(
@@ -160,6 +238,30 @@ class PhaseRecorder:
             boundary_ns=time.perf_counter_ns(),
             window_start_ns=self.window_start_ns,
             **({"truncated": self.truncated} if self.auto_export_interval else {}),
+            **(
+                {
+                    "token_retention": dict(
+                        scope="decode_device_only_physical_rows",
+                        row_index="index_in_sampled_decode_token_ids",
+                        positions="processed_input_position; sample_predicts_position_plus_one",
+                        inactive_rows="positions_less_than_zero_are_not_request_tokens",
+                        prefill_tokens_retained=False,
+                        host_sampled_tokens_retained=False,
+                        request_ids_available=False,
+                        client_emission_verified=False,
+                        diagnostic_disabled=self.token_diagnostic_disabled,
+                        diagnostic_failures=self.token_diagnostic_failures,
+                        diagnostic_reason=self.token_diagnostic_reason,
+                        position_identity_uncertain=self.position_identity_uncertain,
+                        loss=self.truncated or self.export_failed or self.file_exhausted,
+                        export_failed=self.export_failed,
+                        file_exhausted=self.file_exhausted,
+                        pending_incomplete=bool(self.pending or self.unbound or self.readbacks),
+                    )
+                }
+                if self.retain_decode_tokens
+                else {}
+            ),
         )
 
     def _write_export(self, result):
@@ -188,6 +290,11 @@ class PhaseRecorder:
                         errors=["phase file cap reached; subsequent events omitted"],
                         boundary_ns=result["boundary_ns"],
                         events=[],
+                        **(
+                            {"token_retention": {"loss": True, "file_exhausted": True}}
+                            if self.retain_decode_tokens
+                            else {}
+                        ),
                     )
                 )
                 + "\n"
@@ -235,6 +342,8 @@ class PhaseRecorder:
             if command == "reset":
                 if self.pending or self.unbound or self.readbacks:
                     raise RuntimeError("cannot reset phase collector with pending work")
+                if self.retain_decode_tokens and self.events:
+                    raise RuntimeError("drain retained token events before reset")
                 if self.errors:
                     raise RuntimeError("cannot reset collector after accounting errors")
                 self.events.clear()

@@ -1,0 +1,224 @@
+{
+  "status": "host_capacity_audit_complete",
+  "change": "none",
+  "problem_status": "calibrated_default_capacity_sufficient_with_remaining_space_condition",
+  "device_hours": 0,
+  "forecast_device_hours": 0,
+  "box_hours": 0,
+  "runtime_unchanged": true,
+  "calibration": {
+    "measurements": {
+      "B8_live_pair": {
+        "source": "bringup/artifacts/model-token-retention/live-pair/candidate/phases.jsonl",
+        "file_bytes": 532470,
+        "frames": 89,
+        "events": 786,
+        "decode_steps": 385,
+        "event_size_bytes": {
+          "submit": {
+            "min": 400,
+            "mean": 406.3818181818182,
+            "max": 428
+          },
+          "complete": {
+            "min": 532,
+            "mean": 543.6857142857143,
+            "max": 566
+          }
+        },
+        "frame_empty_bytes": {
+          "min": 1824,
+          "mean": 1824.9887640449438,
+          "max": 1826
+        },
+        "median_completion_gap_seconds": 0.029364982499999998,
+        "median_gap_rate_steps_s": 34.05416638678399,
+        "peak_sliding_rates_steps_s": {
+          "1": 35.0,
+          "5": 34.0,
+          "10": 31.9
+        }
+      },
+      "B1_benchmarks": {
+        "source": "bringup/artifacts/stage12-retained-runtime-benchmark/phase-events.json",
+        "file_bytes": 2068908,
+        "frames": 195,
+        "events": 4370,
+        "decode_steps": 2159,
+        "event_size_bytes": {
+          "submit": {
+            "min": 344,
+            "mean": 348.5155164427976,
+            "max": 350
+          },
+          "complete": {
+            "min": 434,
+            "mean": 438.57572950440016,
+            "max": 442
+          }
+        },
+        "frame_empty_bytes": {
+          "min": 1824,
+          "mean": 1825.0051282051281,
+          "max": 1826
+        },
+        "median_completion_gap_seconds": 0.0282721835,
+        "median_gap_rate_steps_s": 35.370455203787145,
+        "peak_sliding_rates_steps_s": {
+          "1": 40.0,
+          "5": 38.2,
+          "10": 38.0
+        }
+      }
+    },
+    "estimates": {
+      "SWE_C2_B8": {
+        "clients": 2,
+        "physical_batch": 8,
+        "output_cap": 32768,
+        "conservative_decode_steps": 32768,
+        "event_envelope_bytes": {
+          "submit": 450,
+          "complete": 598
+        },
+        "bytes_per_step": 1048,
+        "frame_overhead_allowance_bytes_per_s": 4096,
+        "call_bytes_at_measured_B8_step_rate": 38282165.233909756,
+        "call_mib": 36.508717759999996,
+        "full_buffer_step_capacity": 500000,
+        "automatic_export_event_capacity_per_s": 1024,
+        "producer_events_s_at_measured_rate": 68.10833277356798,
+        "remaining_file_required_before_call_bytes": 38284213.233909756,
+        "estimated_prior_consumption_allowed_bytes": 4256683082.7660904,
+        "maximum_sustained_step_rate_for_12h_4GiB": 90.9584845914617,
+        "run_scenarios": {
+          "34.05416638678399": {
+            "steps_per_second": 34.05416638678399,
+            "bytes_12h": 1718701907.3287036,
+            "gib_12h": 1.6006658853299018,
+            "fits_default_4GiB": true
+          },
+          "40": {
+            "steps_per_second": 40,
+            "bytes_12h": 1987891200,
+            "gib_12h": 1.8513679504394531,
+            "fits_default_4GiB": true
+          },
+          "60": {
+            "steps_per_second": 60,
+            "bytes_12h": 2893363200,
+            "gib_12h": 2.6946544647216797,
+            "fits_default_4GiB": true
+          },
+          "80": {
+            "steps_per_second": 80,
+            "bytes_12h": 3798835200,
+            "gib_12h": 3.5379409790039062,
+            "fits_default_4GiB": true
+          },
+          "100": {
+            "steps_per_second": 100,
+            "bytes_12h": 4704307200,
+            "gib_12h": 4.381227493286133,
+            "fits_default_4GiB": false
+          }
+        }
+      },
+      "GPQA_C4_B8": {
+        "clients": 4,
+        "physical_batch": 8,
+        "output_cap": 126976,
+        "conservative_decode_steps": 126976,
+        "event_envelope_bytes": {
+          "submit": 466,
+          "complete": 614
+        },
+        "bytes_per_step": 1080,
+        "frame_overhead_allowance_bytes_per_s": 4096,
+        "call_bytes_at_measured_B8_step_rate": 152406622.28140032,
+        "call_mib": 145.34628132,
+        "full_buffer_step_capacity": 500000,
+        "automatic_export_event_capacity_per_s": 1024,
+        "producer_events_s_at_measured_rate": 68.10833277356798,
+        "remaining_file_required_before_call_bytes": 152408670.28140032,
+        "estimated_prior_consumption_allowed_bytes": 4142558625.7186,
+        "maximum_sustained_step_rate_for_12h_4GiB": 88.26341838134431,
+        "run_scenarios": {
+          "34.05416638678399": {
+            "steps_per_second": 34.05416638678399,
+            "bytes_12h": 1765778386.9417937,
+            "gib_12h": 1.644509273526998,
+            "fits_default_4GiB": true
+          },
+          "40": {
+            "steps_per_second": 40,
+            "bytes_12h": 2043187200,
+            "gib_12h": 1.9028663635253906,
+            "fits_default_4GiB": true
+          },
+          "60": {
+            "steps_per_second": 60,
+            "bytes_12h": 2976307200,
+            "gib_12h": 2.771902084350586,
+            "fits_default_4GiB": true
+          },
+          "80": {
+            "steps_per_second": 80,
+            "bytes_12h": 3909427200,
+            "gib_12h": 3.6409378051757812,
+            "fits_default_4GiB": true
+          },
+          "100": {
+            "steps_per_second": 100,
+            "bytes_12h": 4842547200,
+            "gib_12h": 4.509973526000977,
+            "fits_default_4GiB": false
+          }
+        }
+      }
+    },
+    "defaults": {
+      "max_events": 1000000,
+      "export_chunk_events": 1024,
+      "interval_seconds": 1,
+      "max_file_bytes": 4294967296,
+      "reserved_terminal_bytes": 2048,
+      "max_pending_steps": 64
+    },
+    "assumptions": [
+      "C2 and C4 served on B8, token array includes all8 padded rows",
+      "Two events per decode step; all simultaneous clients share that step",
+      "4096bytes/s frame allowance exceeds measured empty-frame maxima; prefill event bytes additional",
+      "Continuous decode scenarios include earlier decode calls; they are not an unconditional12h bound",
+      "Serialized sizes are not Python heap sizes; memory cannot be inferred from JSONbytes"
+    ]
+  },
+  "findings": [
+    "CI default4GiB, not local diagnostic64MiB",
+    "Full SWE C2 cap requires estimated36.51MiB; GPQA C4 cap145.35MiB at measured B8step rate, with conservative event envelope and4KiB/s frames",
+    "12h continuous decode at measured B8rate fits1.60/1.64GiB, or1.85/1.90GiB at40steps/s; extra prefill bytes are additional",
+    "A long call only fits if prior bytes leave its estimated reservation; defaults do not reserve per-call space",
+    "File exhaustion preserves historical prefix and loses current export chunk plus all later events; it does not roll or retain latest segment",
+    "Buffer overflow drops newest events until drains free room, persists sticky truncated flag, and can split submit/complete pairs",
+    "File write failure stops automatic retries and future observations; buffered pre-failure events remain but missing exported IDs cannot be assumed recoverable",
+    "No unconditional whole12h guarantee: unknown traffic/prefill rate, export stalls, filesystem quota, and bytes already consumed remain conditions"
+  ],
+  "repair": {
+    "necessary_now": false,
+    "reason": "Measured regimes plus conservative envelopes fit default4GiB with margin; no evidence justifies runtime tuning",
+    "minimal_if_projected_nonfit": "Set existing model-specific GEMMA4_PHASE_MAX_FILE_BYTES to a calculated larger byte cap with verified disk reserve; do not change runtime or enable ring eviction. Never use local64MiB for full GPQA retention.",
+    "fastest_confirmation": "Host serialized-byte projection plus existing capped-writer tests; assert deployed env cap and disk reserve, then inspect final loss/pending status on normal run. No extra device benchmark needed."
+  },
+  "checks": {
+    "bound_semantics_tests": "3passed",
+    "sources": [
+      "tt/benchmark_phases.py",
+      "TTI workflows/model_specs/dev/llm.yaml atbb16e00"
+    ],
+    "evidence": [
+      "calibration.json",
+      "analyze.py",
+      "bounds-checks.log"
+    ]
+  }
+}

@@ -29,9 +29,9 @@
     "decode_device_us": null,
     "prefill_flops_pct": null,
     "decode_dram_pct": null,
-    "ttft_ms": 756.0979105037404,
-    "decode_tps": 35.32312857218267,
-    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/current-runtime-benchmark/headline.json; full60/B1/C1,8serial4096/128 requests; runtime439c22b0e991e5af626efafa7224edf28f84795b; TTI4b94cf3ba86d30a6816149872e59cc34438748ae; no device profiling"
+    "ttft_ms": 753.31630265282,
+    "decode_tps": 35.31811185868559,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/retained-runtime-benchmark/RESULT.json; publication11a387692d2b434198e79dd92fbb8ed308c3ca47; full60/B1/C1 eight exact4096/128 serial requests"
   },
   "accuracy": [
     {
@@ -79,16 +79,13 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. FullGPQA198 and Terminalnightly10 stopped on measured non-fitting projections; no final scores. SWErepeat5 completed but one cap-correlated response is missing, so full5 unbanked. C4candidate10 valid9/10 on the same ten examples; currentC2 pair and nested20 still running. No dry/release. Wrong-route GPQA attempts preserved; AutoFix corrected dispatch."
+    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. FullGPQA198 and Terminalnightly10 measured stops. SWE repeat5 raw1/5 unbanked because one cap-correlated body was lost; repaired retention normal same5 queued. Nested GPQA20 C2 active. No dry/release."
   },
   "notes": [
-    "Current stage12 serving measurement; not frozen release.",
-    "Native-tool registration repaired with2x168 exact token-ID pairs and actualharness parser checks.",
-    "GPQA server-sized 10 repeats prior nightly visible answers; not 20 independent samples. Full198 attempt stopped for projected nonfit; no final score.",
-    "Synthetic prefill-interference diagnostic is not headline workload or scored accuracy; excluded from performance fields. Local evidence commit6c9d8cdf.",
-    "Current-runtime benchmark confirmation passed; no frozen dry run or release yet.",
-    "SWE nightly partial evidence: runs/nightly-swe-observable/audit.json; raw1/5 excluded, notpooled withsmoke.",
-    "C4 frozen10 candidate valid9/10 in642.445722s; contemporaryC2 comparison pending. Same ten examples, not additional independent accuracy samples.",
-    "SWE repeat5 completed4041.919023s; raw1/5 unbanked because one cap-correlated response body is missing. Functional_at remains2; model-owned evidence repair under investigation."
+    "Current accepted-runtime serving measurement, not frozen release. No vLLM profiling.",
+    "C4 same-ten scored pair9/10 each; C4 642.445722s versus C2 938.039050s. Repeated tasks are not additional independent accuracy samples.",
+    "SWE repeat5 raw1/5 in4041.919023s excluded from banked accuracy pending cap classification.",
+    "Default-off model-owned token retention accepted by exact native paired outputs and583matched decode IDs; no client-emission identity claim.",
+    "Local execution checkout remains without remotes; source-only publication uses separate authorized checkouts."
   ]
 }

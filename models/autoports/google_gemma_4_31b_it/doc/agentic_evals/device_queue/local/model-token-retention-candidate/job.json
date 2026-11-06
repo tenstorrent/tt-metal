@@ -1,0 +1,29 @@
+{
+  "arm": "model-token-retention-candidate",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Smallest validated batch at or above two diagnostic clients",
+  "queued_at": "2026-11-06T15:22:08.705293+00:00",
+  "predicted_hours": 0.06,
+  "shared_effort_box_hours": 0.25,
+  "server_timeout_seconds": 420,
+  "scope": "Synthetic async exactness/evidence diagnostic, not scored task run or release limit selection",
+  "retain_decode_tokens": true,
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py": "f2f7e02c45539e7b75c4d73c9d1f3447a2e623f9afbce4329441a588c4d5c63d",
+    "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py": "41b859bd05377cc2ea7f8d053d632eadb27fe9e3f0f0d71727c6ce577efd0cc9"
+  },
+  "private_directory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/model-token-retention/live-pair/candidate",
+  "dependency": "Astropy diagnostic device close, owner check, then baseline/candidate sequentially",
+  "started_at": "2026-11-06T15:37:57.754120+00:00",
+  "owner_check": [],
+  "remaining_effort_hours": 0.1842039775,
+  "ended_at": "2026-11-06T15:41:54.572907+00:00",
+  "exit_status": 0,
+  "client_completed": 3,
+  "actual_device_hours": 0.06578299638888889
+}

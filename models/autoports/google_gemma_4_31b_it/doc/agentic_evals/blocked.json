@@ -29,7 +29,7 @@
     "Stage gate pass"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T14:59:27.931508+00:00",
+  "updated_at": "2026-11-06T15:55:58.830336+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -37,11 +37,10 @@
   ],
   "live_wait": {
     "run_ids": [
-      42228448171,
       42234274300,
-      42237390829
+      42247098210
     ],
-    "status": "SWE repeat5, GPQA nested20 and current C2 matched baseline active; C4candidate audited"
+    "status": "Nested GPQA20 C2 active; SWE same5 retention-repaired rung queued for new image. C4 accepted and local current-runtime benchmark complete."
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -80,7 +79,8 @@
     "reason": "Stock workflow lacks readiness-stop; cancellation skips complete task evidence upload",
     "source": "runs/ci-release-route/RESULT.md",
     "permission_required": "Exception to stop-after-start/no-score dry run; no generic route alteration assumed",
-    "conditional_resolution": "If all tool suites have measured stop, HTTP-only GPQA scope can use exact early-stop dry run with preserved live progress; see runs/gpqa-only-dry-route/RESULT.md. No exception assumed for tool suites."
+    "conditional_resolution": "If all tool suites have measured stop, HTTP-only GPQA scope can use exact early-stop dry run with preserved live progress; see runs/gpqa-only-dry-route/RESULT.md. No exception assumed for tool suites.",
+    "partial_run_hypothesis": "Refuted by stock source/live console evidence; runs/partial-tool-dry-route/RESULT.md"
   },
   "release_dependency_freeze": {
     "status": "Harbor_pin_live_confirmed",
