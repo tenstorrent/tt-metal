@@ -61,6 +61,7 @@ set(UNIT_TESTS_API_SOURCES
     test_host_buffer.cpp
     test_host_write_dma.cpp
     test_kernel_compile_cache.cpp
+    test_kernel_cores.cpp
     test_kernel_creation.cpp
     test_offline_kernel_compile.cpp
     test_memory_pin.cpp

@@ -20,6 +20,7 @@
 #include <reflect>
 
 #include "ttnn/core.hpp"
+#include "ttnn/sub_device_scope.hpp"
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
@@ -208,6 +209,9 @@ void py_module(nb::module_& mod) {
     mod.def("get_current_command_queue_id_for_thread", &ttnn::core::get_current_command_queue_id_for_thread);
     mod.def("push_current_command_queue_id_for_thread", &ttnn::core::push_current_command_queue_id_for_thread);
     mod.def("pop_current_command_queue_id_for_thread", &ttnn::core::pop_current_command_queue_id_for_thread);
+
+    mod.def("push_sub_device_for_thread", &ttnn::push_sub_device_for_thread, nb::arg("sub_device_id"));
+    mod.def("pop_sub_device_for_thread", &ttnn::pop_sub_device_for_thread, nb::arg("token"));
 }
 
 }  // namespace ttnn::core

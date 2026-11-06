@@ -11,6 +11,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/assigned_sub_device.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::examples {
@@ -20,7 +21,17 @@ struct ExampleDeviceOperation {
     struct operation_attributes_t {
         bool attribute;
         int some_other_attribute;
+
+        // The sub-device the operation runs on, assigned in the prim with ttnn::assign_sub_device() and exposed through
+        // assigned_sub_device() below. That opts the operation in to sub-devices: it may run inside a ttnn.sub_device
+        // scope, where launch refuses operations that do not record one. Its factories place kernels on the
+        // sub-device's cores, never on the device's whole grid, and launch checks that the programs they build do.
+        ttnn::AssignedSubDevice assigned_sub_device;
     };
+
+    static const ttnn::AssignedSubDevice& assigned_sub_device(const operation_attributes_t& operation_attributes) {
+        return operation_attributes.assigned_sub_device;
+    }
 
     // Define the tensor arguments. This is used to store all tensors passed in and/or out of the operation.
     // Tensor arguments don't need to be just input tensors, they can be output tensors, input/output tensors, optional

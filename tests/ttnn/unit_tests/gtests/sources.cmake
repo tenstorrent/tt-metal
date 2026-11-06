@@ -36,6 +36,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
+    test_assigned_sub_device.cpp
     test_layernorm_stats_selector.cpp
     test_moreh_mean_backward.cpp
     test_moreh_sum_backward.cpp
