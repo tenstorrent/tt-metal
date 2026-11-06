@@ -9,7 +9,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"

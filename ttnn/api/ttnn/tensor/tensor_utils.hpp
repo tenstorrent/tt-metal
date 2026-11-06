@@ -56,7 +56,7 @@ std::vector<tt::tt_metal::CoreCoord> get_optimal_worker_cores_for_sharded_tensor
  *   // Old way (manual):
  *   auto act_df = datatype_to_dataformat_converter(device_input_tensor.dtype());
  *   uint32_t tile_size = tt::tile_size(act_df);
- *   uint32_t page_size = round_up_to_mul32(tile_size);
+ *   uint32_t page_size = tt::round_up(tile_size, 32u);
  *   uint32_t num_tiles = calculate_tiles_from_shard(...);
  *   CBDescriptor cb = {
  *       .total_size = num_tiles * page_size,

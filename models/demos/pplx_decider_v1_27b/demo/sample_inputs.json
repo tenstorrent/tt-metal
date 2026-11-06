@@ -1,0 +1,35 @@
+[
+  {
+    "name": "choice",
+    "state": "My Stripe integration keeps failing. Please help ASAP.",
+    "question": {
+      "type": "choice",
+      "instructions": "Which team should handle this request?",
+      "criteria": {
+        "billing": "Charges and refunds",
+        "technical_support": "Integration errors",
+        "sales": "Questions about buying a product"
+      }
+    },
+    "expected": "technical_support"
+  },
+  {
+    "name": "noul",
+    "state": "My Stripe integration keeps failing. Please help ASAP.",
+    "question": {
+      "type": "noul",
+      "instructions": "Does this message express urgency?"
+    },
+    "expected": true
+  },
+  {
+    "name": "score",
+    "state": "My Stripe integration keeps failing. Please help ASAP.",
+    "question": {
+      "type": "score",
+      "instructions": "How urgent is this message?",
+      "criteria": ["Not urgent at all", "Somewhat urgent", "Very urgent"]
+    },
+    "expected": "2"
+  }
+]

@@ -1765,6 +1765,7 @@ def chunk_gated_delta_rule_golden(
     chunk_size=64,
     use_qk_l2norm=False,
     output_head_major=False,
+    num_key_heads=None,  # flat-q/k head count for the device op; the golden only takes rank-4 inputs, so ignored
     **_,
 ):
     num_value_heads = v.shape[2]

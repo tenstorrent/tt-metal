@@ -152,7 +152,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     const auto& dL_dout_shape = dLdout.logical_shape();
     TT_FATAL(dL_dout_shape.rank() == 4, "dL_dout tensor must be 4D [B, N, S, C], got shape {}", dL_dout_shape);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*input.device());
     tt::tt_metal::IDevice* device = input.device();
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
