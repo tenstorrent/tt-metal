@@ -1,10 +1,10 @@
 ---
 name: perf-test
-description: Create, unify, or repair a Wormhole/Blackhole LLK perf test so it matches its functional test - one kernel source, one Python runner, one shared sweep, a perf L1_TO_L1 that is the functional run, and isolate run types that are slices of L1_TO_L1. Use when adding perf_[op].py, merging a separate *_perf.cpp into the functional kernel, aligning a perf sweep with its functional sweep, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE, or reviewing a perf test for drift from functional.
+description: Create, unify, repair, or review an LLK perf test on Wormhole, Blackhole, or Quasar so it measures its functional test - one kernel source, one Python runner, one shared sweep, a perf L1_TO_L1 that is the functional run, and isolate run types that are slices of L1_TO_L1. Use when adding perf_[op].py or perf_[op]_quasar.py, merging a separate *_perf.cpp into the functional kernel, implementing or debugging UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / SFPU_ISOLATE, fixing a perf hang or dvalid mock count, choosing Quasar PERF_TILE_SIZES or dest-fill matrices, or reviewing a perf test for drift from functional.
 user_invocable: true
 ---
 
-# Perf Test (aligned with functional)
+# Perf Test
 
 ## Goal
 
@@ -13,45 +13,71 @@ source and one Python runner serve both. Perf `L1_TO_L1` is the functional run
 with `LOOP_FACTOR` repetitions. Each isolate run type runs one thread's
 `L1_TO_L1` loop unchanged and replaces only the threads it does not measure.
 
-Reference implementations: `tests/sources/eltwise_unary_datacopy_test.cpp` with
-`test_eltwise_unary_datacopy.py` / `perf_eltwise_unary_datacopy.py`, and, after
-#63744, `tests/sources/pack_dest_bank_test.cpp` with `test_pack_dest_bank.py` /
-`perf_pack_dest_bank.py`.
+This skill is the architecture-neutral contract. Read the reference for the
+target architecture before editing:
 
-Related skills:
+- [references/wormhole-blackhole.md](references/wormhole-blackhole.md):
+  MOP stream stand-ins, handshake counts, `#1230`, reference implementations.
+- [references/quasar.md](references/quasar.md): the Quasar harness, tile and
+  dimension selection, wait masks, Quasar stand-in counts.
+- [references/perf-facts.md](references/perf-facts.md): run types, build
+  kinds, CSV normalization, schema and `tile_cnt` accounting, report paths,
+  determinism, CI. Every perf skill links here.
 
-- `quasar-perf-test` — Quasar specifics: tile-size selection, dvalid wait
-  masks, Quasar LLK signatures. The alignment contract below applies there too.
-- `align-bh-qsr-tests` — the coverage comparer, and the cross-architecture
-  alignment.
-- `perf-report` — run a sweep and validate the CSV.
-- `perf-regression-check` — compare against the branch point and read the
-  deltas.
+Related skills, in the order work usually needs them:
+
+- `quasar-test-coverage`: choose the Quasar functional sweep. Perf inherits
+  it, so its size sets the perf build count.
+- `perf-coverage`: prove the perf sweep matches functional, or line up
+  Blackhole and Quasar.
+- `run-test`: run the test (`--perf` for perf sweeps).
+- `perf-report`: produce, validate, and record a report.
+- `perf-regression-check`: compare against the branch point.
+- `perf-parameter-impact`: analyze a validated `.post.csv`.
+- `perf-optimization-audit`: audit the kernel's own instruction costs.
+
+## Choose the workflow
+
+1. No perf test yet: **Inventory** (to read the functional test), then
+   **Python**, **Kernel**, **Validate**.
+2. A separate perf kernel or sweep exists: **Inventory** the drift, then fix
+   each item.
+3. A run type hangs or reports implausible numbers: **Repair**.
+4. Tile sizes, dimensions or other sweep axes change: **Python**, then
+   `perf-coverage`.
+
+Finish every workflow with **Validate**.
 
 ## 1. Inventory the drift
 
 Read the functional test, the perf test, and every kernel source they build.
-List each difference under one of these headings. Each one is a defect unless
-it is in the allowed list in step 2.
+List each difference under one heading below. Each one is a defect unless the
+**Python** rules allow it.
+
+Run the coverage comparer (`perf-coverage`) too, but do not rely on it
+alone: it reads only `@parametrize`. Values set inside the test body
+(`input_dimensions=[64, 64]`), runtimes, and run types fixed inside a
+`PerfConfig` call are invisible to it.
 
 | Area | Typical drift |
 |---|---|
 | Sources | a separate `[op]_perf.cpp` next to `[op]_test.cpp` |
 | Sweep | perf-only values or axes, a different format set, hand-picked block shapes instead of the functional `input_dimensions` |
 | Python checks | perf-only rejections (`perf does not support tilize`, `perf requires dest_index=0`) |
-| Run types | perf measures a subset (for example only `PACK_ISOLATE`) |
-| INIT | a different init order, or a different `PackMode`, per run type; extra "prefill" work in isolate INIT |
-| Addresses | isolates use the `PERF_ADDRESS` ring while `L1_TO_L1` uses `buffer_A` / `buffer_Res` |
-| Loop shape | isolate loops iterate differently from `L1_TO_L1`: other block sizes, `MAX_TILES_DEST` chunks instead of `NUM_BLOCKS × NUM_TILES_IN_BLOCK`, a hard-coded dst index |
+| Runtimes | perf omits a runtime functional emits (`NUM_FACES`, `NUM_BLOCKS`), or passes a different value |
+| Run types | perf measures a subset (for example only `PACK_ISOLATE`), or a `static_assert` forbids one |
+| INIT | a different init order, `PackMode`, tensor shape or literal (`num_faces = 4`) per run type; "prefill" work in isolate INIT |
+| Addresses | any run type uses the `PERF_ADDRESS` ring or hard-coded L1 addresses instead of `buffer_A` / `buffer_Res` |
+| Loop shape | isolates iterate differently from `L1_TO_L1`: other block sizes, `MAX_TILES_DEST` chunks instead of `NUM_BLOCKS × NUM_TILES_IN_BLOCK`, a hard-coded dst index |
 | Parameters | the kernel picks values by build kind, such as `#ifdef LLK_PROFILER` stand-in zeros |
 
 ## 2. Python: one sweep, one runner
 
-In `test_[op].py`:
+In the functional module:
 
 ```python
-# Shared with perf_[op].py so the two sweeps stay aligned.
-OP_SWEEP = dict(formats=..., dest_acc=..., tilize=get_valid_tilize_..., input_dimensions=[...])
+# Shared with the perf module so the two sweeps stay aligned.
+OP_SWEEP = dict(formats=..., dest_acc=..., input_dimensions=[...])
 
 
 def _run_op_test(<sweep args>, *, is_perf=False, perf_report=None, run_types=None, loop_factor=1):
@@ -67,14 +93,9 @@ def _run_op_test(<sweep args>, *, is_perf=False, perf_report=None, run_types=Non
         configuration.run(perf_report)
         return
     # functional-only: result setup, collection, golden check
-
-
-@parametrize(**OP_SWEEP)
-def test_op(<sweep args>):
-    _run_op_test(<sweep args>)
 ```
 
-In `perf_[op].py`, add only measurement axes:
+The perf module adds only measurement axes:
 
 ```python
 @pytest.mark.perf
@@ -84,69 +105,123 @@ def test_perf_op(perf_report, <sweep args>, run_types, loop_factor):
                  run_types=run_types, loop_factor=loop_factor)
 ```
 
+Quasar has its own established shape for this (`_PERF_AXES`,
+`PERF_RUN_TYPES_QUASAR`, `@pytest.mark.quasar`); see
+[references/quasar.md](references/quasar.md).
+
 Rules:
 
 - Stimuli, golden, block split (`get_num_blocks_and_num_tiles_in_block`),
   templates and runtimes are built in one place. Perf never builds its own
   config.
 - Emit every template and runtime the kernel reads, in both modes. If perf
-  lacks a field such as `INPUT_DIMENSIONS`, pass it. Do not make the kernel
+  lacks a field such as `INPUT_DIMENSIONS`, pass it; do not make the kernel
   guess.
 - No perf-only rejections. Reject a combination only when the hardware or the
   LLK cannot run it, and then reject it for functional too.
 - Functional-only steps stay after the `is_perf` return: zero-filling the
   result for L1 accumulation, collecting results, the golden check.
-- Narrowing perf is allowed only as a documented subset: copy the sweep and
-  filter an axis (see `align-bh-qsr-tests`, "Perf-only packaging"). Never add
-  values that functional does not have.
-- `run_types` defaults to `ALL_PERF_RUN_TYPES`. Leave a run type out only when
-  the pipeline does not have that stage (unpack-to-dest without math).
-- `loop_factor`: one value is enough (32 is the convention). Each extra value
-  multiplies the builds by the number of run types.
+- Narrow perf only as a documented subset: copy the sweep and filter an axis
+  (`perf-coverage`, "Perf-only packaging"), or use the architecture's
+  documented perf generator (Quasar tile shapes). Never add values that
+  functional does not have.
+- When perf sweeps values functional lacks (block shapes, `num_faces`),
+  widen functional first, with a golden for each new value, and then share
+  the sweep. Do not shrink perf to functional's smaller set without saying
+  which perf points were dropped.
+- Runtime values come from the same code in both modes. A value derived from
+  the golden (a ReLU threshold, a clamp) is computed for perf too, so perf
+  measures the configuration functional checks.
+- `run_types` covers every stage the pipeline has. Leave one out only when the
+  stage does not exist (unpack-to-dest without math).
+- One `loop_factor` is enough. Use 32 (the convention) unless the module
+  already publishes another value: changing it moves every published number,
+  so do it in a separate, stated change. Each extra value multiplies the
+  builds by the number of run types.
 - Functional-only regression tests, such as a forced block shape, may stay
   unmatched. Name them in the PR.
 
 ## 3. Kernel: same INIT, same buffers, isolates as slices
 
-Merge `[op]_perf.cpp` into `[op]_test.cpp` and delete it.
+Merge `[op]_perf.cpp` into `[op]_test.cpp` and delete it. Include `counters.h`,
+`perf.h` and `profiler.h`. Open the setup scope with
+`START_PERF_MEASURE("INIT")` and the repeated work with
+`START_PERF_MEASURE("TILE_LOOP")`, each ending with `PROFILER_SYNC()`. The
+macro opens the profiler zone and, in counter builds, the counter window; a
+bare `ZONE_SCOPED` loses the counters. Branch with
+`if constexpr (PERF_RUN_TYPE == ...)`.
 
 **INIT.** One INIT sequence for every run type: the functional order, the
-functional `PackMode`, and no prefill. An isolate thread with no partner
-neither needs nor gets real Dest or source contents.
+functional `PackMode`, the same runtime values, and no prefill. An isolate
+thread with no partner neither needs nor gets real Dest or source contents.
+The only allowed per-run-type difference is handshake setup: a thread that
+runs without its partner clears or skips the Dest dvalid wiring that would
+wait for it (see the architecture reference).
 
-**Buffers.** Every run type reads `buffer_A` (and `buffer_B`) and writes
-`buffer_Res`, with the functional tile indexing. Do not switch to
-`PERF_ADDRESS` for some run types. It changes the L1 traffic you are
-measuring.
+**Buffers.** Every run type, `L1_TO_L1` included, reads `buffer_A` (and
+`buffer_B`) and writes `buffer_Res`, with the functional tile indexing. Do
+not use `PERF_ADDRESS` or hard-coded L1 addresses; they change the L1
+traffic you measure.
 
-**Loop bodies.** Put each thread's per-block work in a helper. `L1_TO_L1` and
-that thread's isolate call the same helper with the same `NUM_BLOCKS`,
-`NUM_TILES_IN_BLOCK`, `DST_INDEX` and addresses. The two branches can then
-differ only in sync:
+**Loop bodies.** Put each thread's per-block work in a helper (identical
+inline copies drift the first time one is edited). `L1_TO_L1` and that
+thread's isolate call the same helper with the same `NUM_BLOCKS`,
+`NUM_TILES_IN_BLOCK`, `DST_INDEX` and addresses, and repeat it `LOOP_FACTOR`
+times. The two branches then differ only in sync:
 
 | Run type | Unpack | Math | Pack |
 |---|---|---|---|
-| `L1_TO_L1` | real loop | `wait_for_dest_available` → block helper → `dest_section_done` | `wait_for_math_done` → block helper → `dest_section_done` |
-| `UNPACK_ISOLATE` | real loop | stand-in: `_perf_math_stream_clear_valid` | empty |
-| `MATH_ISOLATE` | stand-in: `_perf_unpack_stream_set_valid` | block helper, no Dest sync | empty |
+| `L1_TO_L1` | real loop | wait for Dest → block helper → section done | wait for math → block helper → section done |
+| `UNPACK_ISOLATE` | real loop | stand-in: clear the source dvalids unpack posts | empty |
+| `MATH_ISOLATE` | stand-in: post the source dvalids math consumes | block helper, no Dest sync | empty |
 | `PACK_ISOLATE` | empty | empty | block helper, no math wait, no section done |
 
-- Stand-in counts: `LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces)`.
-  Unpack and math must agree, or the threads deadlock.
-- Stand-in SrcB: copy the established rule. In datacopy-style unary kernels
-  unpack sets SrcB for `tilize_en || is_fp32_dest_acc_en`, and math clears
-  `<true, true>`. Unpack-to-dest posts no source dvalids: math either copies
-  without a source wait or is idle.
-- Call the `_perf_*_stream_*<..., PERF_RUN_TYPE>` stand-ins. On Wormhole
-  isolate runs they drive the handshakes through the MOP expander, so the
-  stand-in does not set the measured value. Elsewhere they fall back to the
-  `_perf_*_loop_*` RISC-V loop themselves, so call them on every architecture.
-- Idle branches are empty and fall through to `PROFILER_SYNC()`. Keep the
-  same `if constexpr` chain shape in every thread.
+Adapt the table to the real pipeline: an unpack-to-dest kernel may bypass
+math, and a 4-TRISC Quasar kernel adds an SFPU column.
+
+- Idle branches are empty and fall through to `PROFILER_SYNC()`; no early
+  `return` inside the zone. Keep the same `if constexpr` chain shape in every
+  thread.
 - Uninit calls (`_llk_unpack_tilize_uninit_...`) go after the `TILE_LOOP`
   zone, for every run type.
 - Options such as tilize work in every run type. A `static_assert` that a
   feature is functional-only is drift.
+
+### Source dvalid accounting
+
+The stand-in count must match what the real partner does, exactly:
+
+```text
+stand-in count =
+    LOOP_FACTOR
+  × real operation invocations per loop
+  × dvalid pulses per invocation
+```
+
+- Count the tiles and blocks actually consumed.
+- Determine from the MOP whether the real path pulses per tile or per face,
+  and whether math consumes SrcA, SrcB, or both.
+- Unpack's and math's counts must agree, or the threads deadlock.
+- Use the shared count helper where one exists
+  (`_perf_src_handshake_iters_` in `tests/helpers/include/llk_lib_unpack_wrappers.h`
+  on Wormhole and Blackhole) and the stand-in helpers named in the
+  architecture reference. Count from the MOP code, not its comments.
+- Do not shrink `TILE_CNT` to change the published per-tile number
+  ([references/perf-facts.md](references/perf-facts.md), "Accounting").
+- Never add a synthetic SET/CLEAR pair to flush the pipeline. An extra token
+  can race the final operation and pollute a later run.
+
+### Destination dvalid rules
+
+Signal completion only to an active consumer:
+
+- `L1_TO_L1`: keep the real producer-to-pack setup and section-done calls.
+- `UNPACK_ISOLATE` and `MATH_ISOLATE`: do not signal the idle pack.
+- `PACK_ISOLATE`: pack without waiting for math and without Dest section
+  done.
+
+Architecture-specific state (Quasar wait masks, `set_up_dest_dvalid_per_thread`)
+is in the references.
 
 ## 4. Parameters that compile in every build
 
@@ -162,80 +237,82 @@ still compile. Every name it uses must exist in every build.
 ```
 
 - Select only on `SPEED_OF_LIGHT` (runtime field versus generated constant).
-- Never select parameter values on `LLK_PROFILER`. It means "profiler
-  instrumentation is compiled", not "this is a perf config". A stand-in there
-  silently returns wrong values when a config changes, and it hides untested
-  code.
-- If a field is missing in one mode, fix the Python side (step 2), not the
-  kernel.
-- Use sources of truth: `get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()`,
-  `TILE_WIDTH * TILE_HEIGHT`. Label literal arguments (`false /* untilize */`,
-  `true /* set_a */`) and check each label against the callee's parameter
-  name.
+- Never select parameter values on `LLK_PROFILER`
+  ([references/perf-facts.md](references/perf-facts.md), "Build kinds"). A
+  stand-in there silently returns wrong values when a config changes and
+  hides untested code.
+- If a field is missing in one mode, fix the Python side, not the kernel.
+- Use sources of truth such as `get_dest_max_tiles<...>()` and
+  `TILE_WIDTH * TILE_HEIGHT`. Label literal arguments (`false /* untilize */`)
+  and check each label against the callee's parameter name.
+- Use the target architecture's current LLK signatures. Do not copy calls
+  from another architecture's or an older perf kernel.
 
 ## 5. No dead paths
 
 A kernel branch that no sweep value reaches is untested, and untested code
 hides bugs. In the pack dest-bank test, tilize was never swept, and its read
 offset stepped by `BLOCK_RT_DIM` instead of `BLOCK_CT_DIM`. Either sweep the
-option in functional (and so in perf), using the matching golden
+option in functional (and so in perf), with the matching golden
 (`TilizeGolden`), or delete the branch.
 
 ## 6. Perf schema
 
-CSV columns come from the template and runtime dataclass fields. Adding a
-runtime such as `INPUT_DIMENSIONS` adds its fields (`full_rt_dim`,
-`full_ct_dim`, `block_rt_dim`, `block_ct_dim`). Update the module's entry in
-`helpers/perf/test_schemas.py` and bump `version` relative to main, once per
-PR. The hardware-free header gate fails on any drift.
+Adding a template or runtime field adds CSV columns. Update the module's
+entry in `helpers/perf/test_schemas.py` and bump its `version` once per PR,
+relative to main. The hardware-free header gate fails on any drift.
 
-## 7. Validate
+## 7. Repair a run type
 
-From `tests/python_tests`, with `tests/.venv` and `CHIP_ARCH` set (or through
-`run-test`):
+1. Read the kernel, both Python modules, and the latest
+   `perf_data/latest/<module>/<module>.post.csv`.
+2. Map every producer and consumer handshake: SrcA and SrcB dvalids between
+   unpack and math, Dest dvalids between unpack or math and pack, and any
+   semaphore-based unpack-to-dest sync.
+3. Inspect the LLK MOP when pulse counts are not explicit, and derive the
+   exact count for one invocation. Do not copy counts blindly.
+4. Fix the branch. Compile a focused sweep (`run-test --k`), then run all run
+   types together: sticky state shows only when one run type follows another.
+5. Check the numbers against the plausibility list in `perf-report`
+   ("Validate the artifact"). A hang means a stand-in count or a sync step is
+   wrong. Values near 2048, 4096 or 8192, or a healthy first variant followed
+   by slow ones, mean a handshake, section-done or wait-mask bug.
+6. Run the functional test, including unpack-to-dest and Dest-accumulation
+   variants when they exist.
+7. Restore the full sweep after focused debugging.
 
-1. **Compile.** Wormhole and Blackhole, normal and `--speed-of-light`,
-   functional and perf (`--compile-producer`). Blackhole builds tilize
-   variants that Wormhole skips.
-2. **Functional on hardware.** Both modes.
-3. **Perf on hardware.** All run types. A hang means a stand-in count or a
-   sync step is wrong: see "Source dvalid accounting" in `quasar-perf-test`.
-4. **Plausibility** of `TILE_LOOP`, per config:
-   - every isolate ≤ `L1_TO_L1`;
-   - `L1_TO_L1` ≥ the slowest isolate. The gap is the cross-thread handshake,
-     largest for one-tile blocks (about 1.5–1.8× on Wormhole pack dest bank)
-     and about 1.1–1.4× for 4–8 tile blocks;
-   - repeated runs of one build give identical cycles on Wormhole. Any
-     run-to-run spread means sticky state or a race.
-5. **Coverage.** `python compare_test_and_perf.py --arch wormhole test_[op].py perf_[op].py`,
-   then the same with `--arch blackhole`. Expect every coverage axis
-   identical and only `run_types` / `loop_factor` ignored.
-6. **Hardware-free perf suite**, which includes the header gate:
+Do not change LLK library code before ruling out a test-kernel orchestration
+bug.
 
-   ```bash
-   LLK_HARDWARE_FREE=1 CHIP_ARCH=wormhole pytest -c pytest.ini --rootdir=. --confcutdir=. \
-     -p helpers.llk_pytest_plugin -q -n 8 ../hardware_free/perf
-   ```
+## 8. Validate
 
-7. **Perf against main** with `perf-regression-check`. When the sweep or run
-   types changed, matching points are few. Read deltas with that skill's
-   "Layout sensitivity" section before calling anything a regression.
-8. `perf_split_costs.json` / `perf_split_costs_sol.json` weight CI groups by
-   module. When the build count changes a lot, say so in the PR;
-   `build_perf_split_costs.py` rebuilds them from CI timings.
+Run device and simulator tests through `run-test`; perf sweeps take `--perf`.
+
+1. **Compile** every architecture the test runs on, normal and
+   `--speed-of-light`, functional and perf.
+2. **Functional** on hardware or the simulator, both modes.
+3. **Perf**, all run types, through `run-test --perf`.
+4. **Plausibility and determinism**: `perf-report`, "Validate the artifact".
+5. **Coverage**: `perf-coverage`. Expect every coverage axis identical and
+   only measurement axes ignored.
+6. **Host-only suite**, which includes the schema header gate:
+   `tests/run_hardware_free.sh`.
+7. **Against main**: `perf-regression-check`. When the sweep or run types
+   changed, few points match. Read deltas with its "Layout sensitivity"
+   section before calling anything a regression.
+8. **CI cost**: when the build count changes a lot, update the split costs
+   ([references/perf-facts.md](references/perf-facts.md), "CI").
 
 ## PR description
 
 State:
 
 - which drift was removed;
-- the isolate model (the table above);
+- the isolate model (the table above, as implemented);
 - any intentionally unmatched functional tests;
 - the schema version change;
-- the validation actually run, per architecture.
-
-Say what was not measured on silicon (for example Blackhole on a Wormhole-only
-host).
+- the validation actually run, per architecture, and what was not measured
+  (for example Blackhole on a Wormhole-only host).
 
 ## Do not
 
@@ -245,5 +322,6 @@ host).
   `L1_TO_L1`;
 - choose parameter values on `LLK_PROFILER`;
 - keep a feature branch that no sweep exercises;
+- weaken functional assertions;
 - narrow the permanent sweep to make a run finish;
 - declare success from pytest alone without the plausibility checks.
