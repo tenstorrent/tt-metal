@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -50,6 +51,16 @@ bool has_input_window(const UpdatePaddedKvCacheDeviceOperation::operation_attrib
     return args.input_row_offset != 0 || written_input_rows(args, input_seq) != input_seq;
 }
 
+// A tensor's key as Metal 2.0 matches it under match_padded_shape_only: its whole TensorLayout (Alignment
+// included) plus its padded shape. An absent tensor keys as nullopt, so presence is keyed too.
+std::optional<std::uint64_t> padded_key(const std::optional<Tensor>& tensor) {
+    if (!tensor.has_value()) {
+        return std::nullopt;
+    }
+    return tt::tt_metal::experimental::hash_tensorspec_with_relaxation(
+        tensor->tensor_spec(), {.match_padded_shape_only = true});
+}
+
 // Window offset in page-rows. A windowed call is a plain page copy (no rope / scales), so a page-row is one token
 // row for a ROW_MAJOR cache and one tile row otherwise. The cache-miss and cache-hit paths both use this, so a hit
 // patches the same value the miss set.
@@ -64,11 +75,12 @@ uint32_t input_row_offset_page_rows(
 // Those per-request values reach the writer one of two ways (chosen by whether the slot_idx /
 // kv_actual_global tensors are supplied; both keep them out of the program hash so one cached program
 // per layer is reused):
-//   - metadata path: read on-device from two 1-element uint32 DRAM tensors (raw addresses are common
-//     runtime args patched on cache hits) — off the host dispatch path, so the op is traceable.
-//   - scalar path: passed as common runtime args 8/9 and patched on cache hits.
-// MeshWorkloadFactory::override_runtime_arguments patches whichever applies so the buffer-binding fast
-// cache-hit path stays correct.
+//   - metadata path: read on-device from 1-element uint32 tensors (bound to common runtime
+//     args, so the framework refreshes their addresses on cache hits) — off the host dispatch path, so
+//     the op is traceable.
+//   - scalar path: passed as common runtime args 8/9 and patched on cache hits by
+//     MeshWorkloadFactory::override_runtime_arguments, so the buffer-binding fast cache-hit path stays
+//     correct.
 constexpr auto kReaderKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/"
     "reader_update_padded_kv_cache.cpp";
@@ -318,8 +330,7 @@ void validate_runtime_args(
     // UINT32, ROW_MAJOR, single-element, non-sharded) here, so a malformed tensor fails host-side with a
     // clear message instead of a hard-to-debug device-side read. Values stay off the host dispatch path.
     if (tensor_args.slot_idx.has_value()) {
-        const auto& meta_memory_config = tensor_args.slot_idx->memory_config();
-        auto validate_meta = [&cache, &meta_memory_config](const Tensor& meta, const char* name) {
+        auto validate_meta = [&cache](const Tensor& meta, const char* name) {
             TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
             TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
             TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
@@ -332,17 +343,7 @@ void validate_runtime_args(
             // The writer resolves meta.buffer()->address() against cache.device(); a tensor on a
             // different mesh device would bake the wrong address and fail obscurely downstream.
             TT_FATAL(meta.device() == cache.device(), "metadata tensor {} must be on the same device as cache", name);
-            // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses
-            // it for every metadata read, so a tensor carrying a different memory config would have its
-            // address resolved through the wrong bank table.
-            TT_FATAL(
-                meta.memory_config() == meta_memory_config,
-                "update_padded_kv_cache does not currently support metadata tensors with different memory "
-                "configs: one TensorAccessor serves every metadata read, so {} must match slot_idx (got "
-                "buffer types {} and {})",
-                name,
-                meta.memory_config().buffer_type(),
-                meta_memory_config.buffer_type());
+            // Each metadata tensor has its own TensorAccessorArgs, so their memory configs may differ.
         };
         validate_meta(tensor_args.slot_idx.value(), "slot_idx");
         validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
@@ -537,42 +538,41 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
     // slot_idx and kv_actual_global are NEVER hashed on either path (metadata: read on-device; scalar:
     // common runtime args patched on cache hits), so successive users/chunks reuse the cached program.
     // The metadata-vs-scalar choice DOES change the program (compile args, common args, which kernel
-    // path compiles), so `slot_idx.has_value()` is hashed to keep the two variants distinct (the
-    // slot_idx and kv_actual_global tensors are always present together).
+    // path compiles); keying each metadata tensor's presence keeps the two variants
+    // distinct (the slot_idx and kv_actual_global tensors are always present together).
     // layer_idx IS hashed: it takes only num_layers distinct values, so one program per layer is reused
     // across users/chunks. num_layers, cluster_axis and tp_axis stay IN: all structural — they govern
     // the cache slot linearization and which mesh dims are sp/tp — not per-call data.
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
-    // Hash the full padded shapes, not just their volumes: the descriptor derives Wt, input_Ht,
-    // cache_HtWt/CHtWt and the work split from specific dimensions, so two differently-shaped
-    // tensors that happen to share a volume must NOT collide onto the same cached program.
+    // Every tensor is keyed as Metal 2.0 matches it under match_padded_shape_only: its whole TensorLayout
+    // plus its padded shape. The full padded shapes, not just their volumes, matter:
+    // the descriptor derives Wt, input_Ht, cache_HtWt/CHtWt and the work split from specific
+    // dimensions, so two differently-shaped tensors that happen to share a volume must NOT collide onto
+    // the same cached program. Layout matters too (TILE vs ROW_MAJOR drives the page-unit math), and the
+    // rest of each layout (Alignment included) is keyed because Metal 2.0 requires it to match exactly on
+    // every cache hit (#59915). Logical shapes are left out: the descriptor works only from padded shapes,
+    // and the logical-shape checks run in validate_runtime_args, on hits too. So a caller whose true
+    // sequence length varies under a fixed padded size still reuses one program.
+    // On the metadata path the writer bakes one TensorAccessorArgs per metadata tensor (slot_idx,
+    // kv_actual_global, valid_global) and the reader one for kv_actual_global into their compile-time
+    // args, so the bank tables they select cannot be refreshed on a cache hit; each metadata tensor's
+    // layout and padded shape is keyed, never its values.
     // has_valid is a writer compile arg, so it is hashed; the VALUE stays out (patched runtime arg).
     return tt::tt_metal::operation::hash_operation<UpdatePaddedKvCacheDeviceOperation>(
-        tensor_args.slot_idx.has_value(),
         tensor_args.valid_global.has_value() || args.valid_global.has_value(),
         args.layer_idx,
         args.num_layers,
         args.cluster_axis,
         args.tp_axis.has_value(),
         args.tp_axis.value_or(0),
-        tensor_args.rope.has_value(),
-        tensor_args.rope.has_value() ? tensor_args.rope->memory_config() : MemoryConfig{},
-        tensor_args.rope.has_value() ? tensor_args.rope->layout() : Layout::ROW_MAJOR,
-        tensor_args.scales.has_value(),
-        tensor_args.scales.has_value() ? tensor_args.scales->memory_config() : MemoryConfig{},
-        cache.dtype(),
-        cache.layout(),
-        input.dtype(),
-        input.layout(),  // TILE vs ROW_MAJOR drives the page-unit math; must not collide
-        input.memory_config(),
-        input.padded_shape(),
-        cache.memory_config(),
-        cache.padded_shape(),
-        // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
-        // compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only the
-        // config is keyed, never the value; kv_actual_global is pinned to match by validate_runtime_args.
-        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{},
+        padded_key(cache),
+        padded_key(input),
+        padded_key(tensor_args.slot_idx),
+        padded_key(tensor_args.kv_actual_global),
+        padded_key(tensor_args.valid_global),
+        padded_key(tensor_args.rope),
+        padded_key(tensor_args.scales),
         // A window's row count shapes the work split; its offset is a runtime arg patched on cache hits.
         has_input_window(args, input.padded_shape()[-2]),
         written_input_rows(args, input.padded_shape()[-2]));
@@ -782,12 +782,11 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // Writer kernel descriptor. Compile args (uniform leading layout so the kernel offsets are fixed):
     // [0]=kSrcCbIndex, [1]=has_metadata, [2]=kMetaCbIndex (placeholder 0 on scalar path),
     // [3]=writer_tile_height, [4]=has_valid, [5]=BF16 untilize, [6]=block_pages, [7]=scaled packing,
-    // [8]=tiled RoPE output CB, [9..]=cache accessor, then (metadata path only) ONE metadata accessor
-    // (the slot_idx and kv_actual_global tensors share an identical 1-element uint32 replicated-DRAM
-    // layout, so the same TensorAccessorArgs serves both reads). writer_tile_height divides kv tokens
-    // into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR). On the metadata path the writer
-    // reads slot_idx then kv_actual_global (each element [0]) via this accessor against the two raw
-    // addresses in common args 8/9; on the scalar path it reads them directly from common args 8/9.
+    // [8]=tiled RoPE output CB, [9..]=cache accessor, then (metadata path only) one accessor per metadata
+    // tensor: slot_idx, kv_actual_global, and valid_global when clamping. writer_tile_height divides kv
+    // tokens into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR). On the metadata path the
+    // writer reads element [0] of each tensor through its own accessor, at the base addresses bound to
+    // common args 8/9/10; on the scalar path it reads the values directly from common args 8/9/10.
     KernelDescriptor::CompileTimeArgs writer_compile_args = {
         has_rope ? kUntilizedCbIndex : kSrcCbIndex,
         static_cast<uint32_t>(has_metadata),
@@ -800,8 +799,11 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         tiled_rope ? kUntilizedCbIndex : 0u};
     TensorAccessorArgs(cache.buffer()).append_to(writer_compile_args);
     if (has_metadata) {
-        // One accessor reused for both 1-element tensors (identical layout).
         TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(writer_compile_args);
+        TensorAccessorArgs(tensor_args.kv_actual_global->buffer()).append_to(writer_compile_args);
+        if (has_valid) {
+            TensorAccessorArgs(tensor_args.valid_global->buffer()).append_to(writer_compile_args);
+        }
     }
 
     KernelDescriptor writer_kernel;
@@ -813,30 +815,35 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
     // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t are
-    // this chip's position on the linearized sp*tp axis, layer_idx is hashed. Indices 8 and 9 carry the
-    // per-call values that override_runtime_arguments patches on cache hits (the buffer-binding fast
-    // path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
-    // [9]=kv_actual_global tensor's raw DRAM address; scalar path -> [8]=slot_idx, [9]=kv_actual_global.
+    // this chip's position on the linearized sp*tp axis, layer_idx is hashed. Indices 8, 9 and 10 carry
+    // the per-call inputs. Metadata path -> buffer bindings for the slot_idx, kv_actual_global and (when
+    // clamping) valid_global tensors, which the framework refreshes on cache hits; the writer reads
+    // element [0] of each on-device (trace-safe; the values stay out of the program hash). Scalar path ->
+    // the values themselves, which override_runtime_arguments patches on cache hits.
     // The kernel composes batch_idx = slot_idx*num_layers + layer_idx.
     if (has_metadata) {
-        const uint32_t slot_idx_addr = tensor_args.slot_idx->buffer()->address();
-        const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->buffer()->address();
-        writer_kernel.emplace_common_runtime_args({
-            linear_coord,
-            linear_factor,
-            chunk_local_t,
-            args.layer_idx,
-            args.num_layers,
-            Wt,
-            cache_HtWt,
-            cache_CHtWt,
-            slot_idx_addr,          // smuggled-rta-ok: 1-element metadata tensor DRAM addr; the writer reads
-                                    // slot_idx on-device from it (trace-safe; value kept out of the program hash)
-            kv_actual_global_addr,  // smuggled-rta-ok: 1-element metadata tensor DRAM addr; read on-device
-            // Arg 10: valid_global's DRAM addr when clamping, else an inert 0 (always present so the
-            // indices never shift).
-            has_valid ? tensor_args.valid_global->buffer()->address() : 0u,  // smuggled-rta-ok: as above
-        });
+        KernelDescriptor::RTArgList writer_common;
+        for (const uint32_t structural :
+             {linear_coord,
+              linear_factor,
+              chunk_local_t,
+              args.layer_idx,
+              args.num_layers,
+              Wt,
+              cache_HtWt,
+              cache_CHtWt}) {
+            writer_common.push_back(structural);
+        }
+        writer_common.push_back(tensor_args.slot_idx->buffer());
+        writer_common.push_back(tensor_args.kv_actual_global->buffer());
+        // Arg 10: valid_global's binding when clamping, else an inert 0 (always present so the indices
+        // never shift).
+        if (has_valid) {
+            writer_common.push_back(tensor_args.valid_global->buffer());
+        } else {
+            writer_common.push_back(0u);
+        }
+        writer_kernel.emplace_common_runtime_args(writer_common);
     } else {
         writer_kernel.emplace_common_runtime_args({
             linear_coord,
@@ -854,22 +861,20 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     }
 
     // Reader common args: the TP-linearization quantities its source-row mapping needs, plus index 7
-    // (patched on cache hits) -- which rows this chip owns depends on the chunk start. Metadata path ->
-    // the kv_actual_global tensor's raw DRAM address, which the reader reads element [0] of on-device;
-    // scalar path -> the value itself. Same dual use as the writer's args 8/9.
-    const uint32_t reader_kv_actual =
-        has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
-    reader_kernel.emplace_common_runtime_args({
-        linear_coord,
-        linear_factor,
-        chunk_local_t,
-        window_Ht,
-        sp_factor,
-        tp_factor,
-        Wt,
-        reader_kv_actual,  // smuggled-rta-ok: metadata path -> 1-element tensor DRAM addr, read on-device;
-                           // override_runtime_arguments patches this common arg (index 7) on every cache hit
-    });
+    // -- which rows this chip owns depends on the chunk start. Metadata path -> a buffer binding for the
+    // kv_actual_global tensor, which the reader reads element [0] of on-device; scalar path -> the value
+    // itself, patched on cache hits. Same dual use as the writer's args 8/9.
+    KernelDescriptor::RTArgList reader_common;
+    for (const uint32_t structural :
+         {linear_coord, linear_factor, chunk_local_t, window_Ht, sp_factor, tp_factor, Wt}) {
+        reader_common.push_back(structural);
+    }
+    if (has_metadata) {
+        reader_common.push_back(tensor_args.kv_actual_global->buffer());
+    } else {
+        reader_common.push_back(args.kv_actual_global);
+    }
+    reader_kernel.emplace_common_runtime_args(reader_common);
 
     // Bind each shared buffer once per kernel. Cache hits refresh these common bindings and the
     // metadata controls above; per-core work assignments depend only on the hashed tensor specs.
@@ -945,13 +950,13 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    // Default adapter behaviour: patch operand buffer-binding addresses on cache hits.
+    // Default adapter behaviour: patch buffer-binding addresses on cache hits. That covers every operand,
+    // including the metadata tensors bound to the writer's args 8/9/10 and the reader's arg 7.
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
-    // The writer's per-call common runtime args are raw scalars (not Buffer* bindings), so the
-    // buffer-binding fast path would leave them stale across calls. Patch BOTH on every cached
-    // program: metadata path -> arg 8 = slot_idx tensor's raw DRAM address, arg 9 = kv_actual_global
-    // tensor's raw DRAM address (kernel reads element [0] of each on-device); scalar path ->
-    // arg 8 = slot_idx, arg 9 = kv_actual_global.
+    // On the scalar path those args are raw values (not Buffer* bindings), so the buffer-binding fast path
+    // would leave them stale across calls; patch them on every cached program: writer arg 8 = slot_idx,
+    // arg 9 = kv_actual_global, arg 10 = valid_global (0 when not clamping), reader arg 7 =
+    // kv_actual_global.
     constexpr uint32_t kReaderKernelHandle = 0;  // reader is pushed first in create_descriptor
     constexpr uint32_t kWriterKernelHandle = 1;  // writer is pushed second
     constexpr uint32_t kArg8 = 8;
@@ -965,25 +970,20 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     const bool window = has_input_window(args, tensor_args.input.padded_shape()[-2]);
     const uint32_t input_row_offset_t = input_row_offset_page_rows(args, tensor_args.cache);
     const bool has_metadata = tensor_args.slot_idx.has_value();
-    const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->buffer()->address() : args.slot_idx;
-    const uint32_t arg9 = has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
-    // Arg 10: valid_global's address (metadata) or token count (scalar); 0 when not clamping.
-    const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->buffer()->address()
-                                                                : args.valid_global.value_or(0);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);
         TT_FATAL(
             kArg10 < writer_common.size(), "update_padded_kv_cache writer is missing its per-call common runtime args");
-        writer_common[kArg8] = arg8;
-        writer_common[kArg9] = arg9;
-        writer_common[kArg10] = arg10;
-
         auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelHandle);
         TT_FATAL(
             kReaderKvActualGlobalCommonArgIdx < reader_common.size(),
             "update_padded_kv_cache reader is missing the kv_actual_global common arg");
-        // arg9 already resolves to the address on the metadata path and the value on the scalar path.
-        reader_common[kReaderKvActualGlobalCommonArgIdx] = arg9;
+        if (!has_metadata) {
+            writer_common[kArg8] = args.slot_idx;
+            writer_common[kArg9] = args.kv_actual_global;
+            writer_common[kArg10] = args.valid_global.value_or(0);
+            reader_common[kReaderKvActualGlobalCommonArgIdx] = args.kv_actual_global;
+        }
         if (window) {
             reader_common[kReaderInputRowOffsetCommonArgIdx] = input_row_offset_t;
         }
