@@ -503,8 +503,9 @@ bool is_exact_unary_sfpu_op(const std::string& op_name) {
     return op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round" ||
            op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
            op_name == "isfinite" || op_name == "logical_not" || op_name == "heaviside" || op_name == "identity" ||
-           op_name == "abs" || op_name == "fill" || op_name == "tiled_prod_next_tile" || op_name == "signbit" ||
-           op_name.starts_with("unary_") || op_name.starts_with("add_binary") || op_name.starts_with("sub_binary") ||
+           op_name == "abs" || op_name == "fill" || op_name.starts_with("fill_rows_") ||
+           op_name == "tiled_prod_next_tile" || op_name == "signbit" || op_name.starts_with("unary_") ||
+           op_name.starts_with("add_binary") || op_name.starts_with("sub_binary") ||
            op_name.starts_with("mul_binary") || op_name.starts_with("copy_dest");
 }
 
@@ -1093,6 +1094,71 @@ bool is_written_by_partial_tile_op(const std::string& op_name, size_t element_in
     return faces[element_in_tile / 256] && 2 * (row / 4) + col % 2 < iterations;
 }
 
+// fill_rows_tile: the chain fill_rows_{begin}_{end}_{tag} fills tile rows [begin, end) with the tag's value (v5 = 5.0,
+// v0 = 0.0, vn0 = -0.0, vnan = the quiet NaN) and leaves every other row as the input. Begins and ends sit on and off
+// the 4-row band edges; every ordered pair runs with 5.0, and the edge pairs of the tile and of a band also with the
+// special values. The chain's kernel defines come from sfpu_defines_of, not sfpu_op_to_op_name.
+struct RowRangeCase {
+    uint32_t begin, end;
+    uint32_t value_bits;
+};
+const std::map<std::string, RowRangeCase> sfpu_row_range_ops = [] {
+    std::map<std::string, RowRangeCase> cases;
+    constexpr uint32_t kFive = 0x40a00000u;
+    const auto name = [](uint32_t b, uint32_t e, const char* tag) {
+        return "fill_rows_" + std::to_string(b) + "_" + std::to_string(e) + "_" + tag;
+    };
+    for (uint32_t b : {0u, 1u, 2u, 3u, 4u, 15u, 16u, 17u, 31u, 32u}) {
+        for (uint32_t e : {0u, 1u, 2u, 3u, 4u, 15u, 16u, 17u, 31u, 32u}) {
+            if (b < e) {
+                cases[name(b, e, "v5")] = {b, e, kFive};
+            }
+        }
+    }
+    const std::vector<std::pair<uint32_t, uint32_t>> edge_pairs = {
+        {0u, 32u}, {1u, 16u}, {3u, 17u}, {15u, 32u}, {0u, 1u}, {31u, 32u}};
+    for (const auto& [b, e] : edge_pairs) {
+        cases[name(b, e, "v0")] = {b, e, 0u};
+        cases[name(b, e, "vn0")] = {b, e, 0x80000000u};
+        cases[name(b, e, "vnan")] = {b, e, 0x7fc00000u};
+    }
+    return cases;
+}();
+bool is_row_range_sfpu_op(const std::string& op_name) { return sfpu_row_range_ops.contains(op_name); }
+// The tile row of a face-ordered element: faces 0 and 1 hold rows 0..15, faces 2 and 3 rows 16..31.
+bool is_written_by_row_range_op(const std::string& op_name, size_t element_in_tile) {
+    const auto& c = sfpu_row_range_ops.at(op_name);
+    const size_t row = (element_in_tile / 512) * 16 + (element_in_tile % 256) / 16;
+    return c.begin <= row && row < c.end;
+}
+// The kernel defines of a chain: generated for the fill_rows cases, sfpu_op_to_op_name for everything else.
+std::map<std::string, std::string> sfpu_defines_of(const std::string& op_name) {
+    if (const auto it = sfpu_row_range_ops.find(op_name); it != sfpu_row_range_ops.end()) {
+        const auto& c = it->second;
+        return {
+            {"SFPU_OP_FILL_INCLUDE", "1"},
+            {"SFPU_OP_CHAIN_0",
+             "fill_tile_init(); fill_rows_tile(0, " + std::to_string(c.begin) + ", " + std::to_string(c.end) +
+                 ", __builtin_bit_cast(float, " + std::to_string(c.value_bits) + "u));"}};
+    }
+    return sfpu_op_to_op_name.at(op_name);
+}
+// The whole-tile fill of the same value: what the device writes for it (through the SFPU store and the packer a NaN
+// arrives in L1 as +inf and -0.0 as +0.0, on a 16-bit and a 32-bit Dest alike), the golden of the filled rows.
+std::map<std::string, std::string> fill_rows_reference_defines(const std::string& op_name) {
+    const auto& c = sfpu_row_range_ops.at(op_name);
+    return {
+        {"SFPU_OP_FILL_INCLUDE", "1"},
+        {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile_bitcast(0, " + std::to_string(c.value_bits) + "u);"}};
+}
+std::vector<std::tuple<size_t, std::string>> fill_rows_test_params() {
+    std::vector<std::tuple<size_t, std::string>> params;
+    for (const auto& [op_name, c] : sfpu_row_range_ops) {
+        params.emplace_back(1, op_name);
+    }
+    return params;
+}
+
 // Non-negative Int8 operands, packed four per word (sign bit clear, so sign-magnitude == value).
 // Divisors stay >= 1; rsub_int keeps RHS >= LHS so the result is non-negative too.
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_non_negative_int8_binary_inputs(
@@ -1165,6 +1231,9 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "fill") {
         return 5.0f;
+    }
+    if (op_name.starts_with("fill_rows_")) {
+        return std::bit_cast<float>(sfpu_row_range_ops.at(op_name).value_bits);
     }
     if (op_name == "relu_min") {
         return fmaxf(input, 5.1f);
@@ -1763,7 +1832,8 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if (op_name == "celu" || op_name == "elu" || op_name == "selu" || op_name == "softshrink" ||
         op_name == "hardshrink" || op_name == "hardtanh" || op_name == "erf" || op_name == "erfc" ||
         op_name == "identity" || op_name == "hardmish" || op_name == "prelu" || op_name == "tanhshrink" ||
-        op_name == "xielu" || op_name == "power" || op_name == "abs" || op_name == "fill") {
+        op_name == "xielu" || op_name == "power" || op_name == "abs" || op_name == "fill" ||
+        op_name.starts_with("fill_rows_")) {
         return uniform(-3.0f, 3.0f);
     }
     if (op_name.starts_with("tiled_prod")) {
@@ -1995,7 +2065,7 @@ bool is_close_packed_sfpu_output(
     }
     if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min" ||
         op_name == "reshuffle_rows" || op_name == "copy_dest" || op_name == "mask" || op_name == "mask_posinf" ||
-        op_name == "isclose") {
+        op_name == "isclose" || op_name.starts_with("fill_rows_")) {
         return vec_a == vec_b;
     }
     if (is_exact_unary_sfpu_op(op_name)) {
@@ -2577,6 +2647,30 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
                       relu_threshold_op ? -2.0f : -1.0f, relu_threshold_op ? 10.0f : 1.0f, numel, seed)
                 : sfpu_util::generate_packed_sfpu_input(numel, test_config.sfpu_op, seed);
 
+    // The kernel defines of a chain: its own, plus every include the chain kernel may want.
+    const auto kernel_defines = [&](std::map<std::string, std::string> sfpu_defines) {
+        sfpu_defines["SFPU_UNARY_OP"] = "1";
+        // For chains that take the approximation mode as a template argument (mish_tile): APPROX is
+        // declared only on the math TRISC, so name the fixture's mode as a literal instead.
+        sfpu_defines["SFPU_OP_APPROX"] = test_config.approx_mode ? "true" : "false";
+        sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_RSQRT_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_CLAMP_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_ROUND_FAMILY_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
+        sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
+        return sfpu_defines;
+    };
+
     // Golden output
     std::vector<uint32_t> packed_golden;
     if (is_fp32) {
@@ -2618,29 +2712,24 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
                 }
             }
         }
+        if (sfpu_util::is_row_range_sfpu_op(test_config.sfpu_op)) {
+            // The rows of the range carry the bits the whole-tile fill_tile writes for the value on this device
+            // (a reference run: a NaN arrives in L1 as +inf and -0.0 as +0.0, which is the fill family's behaviour,
+            // not this op's), every other row the input's bits.
+            const auto ref = unpack_vector<bfloat16, uint32_t>(run_sfpu_pipeline(
+                mesh_device,
+                test_config,
+                kernel_defines(sfpu_util::fill_rows_reference_defines(test_config.sfpu_op)),
+                packed_input));
+            for (size_t i = 0; i < golden.size(); ++i) {
+                golden[i] = sfpu_util::is_written_by_row_range_op(test_config.sfpu_op, i % 1024) ? ref[i] : input[i];
+            }
+        }
         packed_golden = pack_vector<uint32_t, bfloat16>(golden);
     }
 
-    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
-    sfpu_defines["SFPU_UNARY_OP"] = "1";
-    // For chains that take the approximation mode as a template argument (mish_tile): APPROX is
-    // declared only on the math TRISC, so name the fixture's mode as a literal instead.
-    sfpu_defines["SFPU_OP_APPROX"] = test_config.approx_mode ? "true" : "false";
-    sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RSQRT_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_CLAMP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ROUND_FAMILY_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
+    const std::map<std::string, std::string> sfpu_defines =
+        kernel_defines(sfpu_util::sfpu_defines_of(test_config.sfpu_op));
 
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
     const bool ok =
@@ -2649,7 +2738,9 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     if (!ok && is_fp32) {
         log_fp32_tile_match_fractions(dest_buffer_data, packed_golden, packed_input, test_config.num_tiles);
     } else if (
-        !ok && !is_fp32 && sfpu_util::is_tile_layout_sfpu_op(test_config.sfpu_op) &&
+        !ok && !is_fp32 &&
+        (sfpu_util::is_tile_layout_sfpu_op(test_config.sfpu_op) ||
+         sfpu_util::is_row_range_sfpu_op(test_config.sfpu_op)) &&
         sfpu_util::is_exact_unary_sfpu_op(test_config.sfpu_op)) {
         // Name the elements that differ in (tile, row, col) of the 32x32 tile, so a store that lands
         // outside its tile shows up as the positions it hit.
@@ -2657,7 +2748,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
         const auto want = unpack_vector<bfloat16, uint32_t>(packed_golden);
         size_t mismatches = 0;
         for (size_t i = 0; i < got.size(); ++i) {
-            if (got[i] == want[i]) {
+            if (std::bit_cast<uint16_t>(got[i]) == std::bit_cast<uint16_t>(want[i])) {
                 continue;
             }
             if (mismatches++ < 8) {
@@ -2665,13 +2756,15 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
                 const size_t row = (face / 2) * 16 + (in_tile % 256) / 16, col = (face % 2) * 16 + in_tile % 16;
                 log_error(
                     tt::LogTest,
-                    "{}: tile {} row {} col {}: got {} want {}",
+                    "{}: tile {} row {} col {}: got {} (0x{:04x}) want {} (0x{:04x})",
                     test_config.sfpu_op,
                     i / 1024,
                     row,
                     col,
                     static_cast<float>(got[i]),
-                    static_cast<float>(want[i]));
+                    std::bit_cast<uint16_t>(got[i]),
+                    static_cast<float>(want[i]),
+                    std::bit_cast<uint16_t>(want[i]));
             }
         }
         log_error(tt::LogTest, "{}: {} of {} elements differ", test_config.sfpu_op, mismatches, got.size());
@@ -3968,6 +4061,15 @@ INSTANTIATE_TEST_SUITE_P(
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
 
+// fill_rows_tile over a 16-bit Dest: see sfpu_util::sfpu_row_range_ops for the cases.
+INSTANTIATE_TEST_SUITE_P(
+    FillRows,
+    SingleCoreSingleMeshDeviceSfpuParameterizedFixture,
+    ::testing::ValuesIn(unit_tests::sfpu_util::fill_rows_test_params()),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
+
 class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
     : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
@@ -4309,6 +4411,14 @@ TEST_F(LLKMeshDeviceFixture, TensixSfpuExpExactColumnFp32) {
         EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(*device, test_config));
     }
 }
+// fill_rows_tile over a 32-bit Dest: the same cases.
+INSTANTIATE_TEST_SUITE_P(
+    FillRows,
+    SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture,
+    ::testing::ValuesIn(unit_tests::sfpu_util::fill_rows_test_params()),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
 
 class SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture
     : public LLKMeshDeviceFixture,
