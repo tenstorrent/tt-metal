@@ -2,12 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import pytest
 
 import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 from tests.ttnn.unit_tests.operations.data_movement.test_slice_write import offset_increment_tensor
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
@@ -2552,3 +2561,43 @@ def test_slice_rm_wide_row_after_l1_fills(device):
         assert torch.equal(ttnn.to_torch(output), torch_expected)
     finally:
         ttnn.deallocate(resident)
+
+
+def _docstring_unit_step_dtypes():
+    """Dtypes the ttnn.slice docstring says need a ``slice_step`` of 1."""
+    names = re.findall(r"``(\w+)``\s+tensors\s+need\s+a\s+``slice_step``\s+of\s+1", ttnn.slice.__doc__)
+    return {getattr(ttnn.DataType, name) for name in names}
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.slice))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.slice))
+def test_slice_docstring_supported_inputs(dtype, layout, buffer_type, device, expect_error):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.slice docstring lists.
+
+    Each one also takes a slice with negative indices and a strided slice. A strided slice must raise for the
+    dtypes the docstring says need a ``slice_step`` of 1, and work for the rest.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((1, 1, 64, 64), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    expected = ttnn.to_torch(input_tensor)
+
+    output = ttnn.slice(input_tensor, [0, 0, 32, 0], [1, 1, 64, 64], memory_config=memory_config)
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(expected[:, :, 32:, :], ttnn.to_torch(output))
+
+    output = ttnn.slice(input_tensor, [0, 0, -32, 0], [1, 1, 64, 64], memory_config=memory_config)
+    assert_exact(expected[:, :, -32:, :], ttnn.to_torch(output))
+
+    if dtype in _docstring_unit_step_dtypes():
+        with expect_error(RuntimeError, "Strided slice is not supported"):
+            ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 64], [1, 1, 2, 1], memory_config=memory_config)
+    else:
+        output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 64], [1, 1, 2, 1], memory_config=memory_config)
+        assert output.dtype == dtype
+        assert output.layout == layout
+        assert_exact(expected[:, :, ::2, :], ttnn.to_torch(output))
