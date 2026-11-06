@@ -532,3 +532,24 @@ Build fixes after fork_op.py (no behaviour change):
   fork's fp32-DEST ring_mla (`test_ring_mla_fp32_dest.py`, `test_ring_mla_single_chunk.py`).
 - Files: 21 merged files under `device/` and `sdpa_nanobind.cpp`; `device/kernels/compute/sparse_sdpa_compute.cpp`
   (shim port); README.md (sync SHA)
+
+### sparse_sdpa: BF16 kv + a bf16 kv_window (KV_WINDOW)
+- What: `ttnn.bringup.sparse_sdpa(kv_format=SparseKVFormat.BF16, kv_window=w)` (opt-in; without kv_window the BF16 path
+  is unchanged): kv = bf16 rows (the history table), kv_window `[1, 1, Tw, K_DIM]` bf16 ROW_MAJOR DRAM interleaved
+  (chunk 0); the index row `[window k_chunk | top-k]`, each part with its own sentinel tail, as ROW_BFP4. Kernels:
+  define `SPARSE_SDPA_KV_WINDOW` (reader: chunk 0 gathered from kv_window, chunks >= 1 from kv, both into cb_k_rm, the
+  dual-NoC split and request KIND as ROW_BFP4; writer: its half from the accessor KIND names; compute: the window's
+  own mask, `SPARSE_SDPA_SPLIT_WINDOW`, shared with ROW_BFP4). Factory: the window's accessor and address where
+  ROW_BFP4 puts them (no extra compile-time args). Validation: a BF16 kv takes a bf16 kv_window only (no records),
+  bf16 q, TOPK > k_chunk_size, no block_cyclic.
+- Why: deepseek_v41_flash_d_p P.38 (owner 2026-11-06: both KV caches 16-bit for now): the compressed layers read the
+  bf16 compressed history plus each chip's own bf16 window region (WINDOW_KV_FORMAT=bf16_tiles) without copying the
+  region into the table.
+- Tests: `tests/unit/test_sparse_sdpa_kv_window_bf16.py` (new, 10 passed on a p150b of the 8x4 Galaxy: full window
+  bit-identical to the plain BF16 path on one [window; history] table for top-k 0 / 1 / 31 / 32 / 200 / 512, H 32 / 64,
+  dest16 / dest32, full grid and max_grid 11x10; partial window vs float32 as close as the compacted one-table path;
+  deterministic; refusals). `test_sparse_sdpa_row_bfp4.py::test_refusals`: its "BF16 refuses a kv_window" check now
+  uses a uint8 record window (a bf16 one is accepted); 1 passed. Fork regression not run (OV-25: F.1 runs it).
+- Files: `device/kernels/sparse_sdpa_common.hpp`, `device/kernels/dataflow/sparse_sdpa_reader.cpp`,
+  `device/kernels/dataflow/sparse_sdpa_writer.cpp`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
+  `device/sparse_sdpa_program_factory.cpp`, `device/sparse_sdpa_device_operation.cpp`, the two tests, README.md.

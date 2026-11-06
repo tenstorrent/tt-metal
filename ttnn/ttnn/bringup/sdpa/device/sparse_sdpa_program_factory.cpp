@@ -89,6 +89,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // bfloat8_b window blocks (32 consecutive rows a page): two NoC reads a block instead of two a row
     const bool window_blocks = window_bfp8 && window->logical_shape()[-1] == ::sparse_sdpa::window_block_bytes(k_dim);
     const uint32_t kv_elem_bytes = window_bfp8 ? 2u : row_bfp4 ? window->element_size() : t.kv.element_size();
+    // KV_WINDOW (fork option): BF16 kv rows after a bf16 kv_window (chunk 0); the plain path's CBs for both, the
+    // window's accessor and address where ROW_BFP4 puts them (SPARSE_SDPA_KV_WINDOW)
+    const bool kv_window_bf16 = !row_bfp4 && t.kv_window.has_value();
+    const Tensor* split_window = row_bfp4 ? window : (kv_window_bf16 ? &t.kv_window.value() : nullptr);
 
     const uint32_t idx_elem_bytes = t.indices.element_size();  // uint32 -> 4
     const uint32_t out_elem_bytes = output.element_size();
@@ -284,8 +288,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
-    if (row_bfp4) {
-        tt::tt_metal::TensorAccessorArgs(window->buffer()).append_to(reader_ct, reader_crt);
+    if (split_window != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(split_window->buffer()).append_to(reader_ct, reader_crt);
     }
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
     std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
@@ -306,8 +310,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         .append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(use_attention_sink ? t.attention_sink->buffer() : nullptr)
         .append_to(writer_ct, writer_crt);
-    if (row_bfp4) {
-        tt::tt_metal::TensorAccessorArgs(window->buffer()).append_to(writer_ct, writer_crt);
+    if (split_window != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(split_window->buffer()).append_to(writer_ct, writer_crt);
     }
 
     std::vector<uint32_t> compute_ct = {H,
@@ -418,6 +422,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             }
         }
     }
+    if (kv_window_bf16) {
+        for (auto* k : {&reader_desc, &writer_desc, &compute_desc}) {
+            k->defines.emplace_back("SPARSE_SDPA_KV_WINDOW", "1");
+        }
+    }
     // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
@@ -453,9 +462,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         reader_desc.common_runtime_args.size() == ::sparse_sdpa::reader_common_arg::END &&
             writer_desc.common_runtime_args.size() == ::sparse_sdpa::writer_common_arg::END,
         "sparse_sdpa common runtime argument layout is out of sync");
-    if (row_bfp4) {  // the window's address right after the fixed common args (ROW_BFP4_COMMON_COUNT)
-        reader_desc.emplace_common_runtime_args({window->buffer()});
-        writer_desc.emplace_common_runtime_args({window->buffer()});
+    if (split_window != nullptr) {  // the window's address right after the fixed common args (ROW_BFP4_COMMON_COUNT)
+        reader_desc.emplace_common_runtime_args({split_window->buffer()});
+        writer_desc.emplace_common_runtime_args({split_window->buffer()});
     }
     reader_desc.common_runtime_args.insert(reader_desc.common_runtime_args.end(), reader_crt.begin(), reader_crt.end());
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());

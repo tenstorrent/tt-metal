@@ -112,6 +112,11 @@ void kernel_main() {
     // the window as bfloat8_b row records (kv_window uint8, or kv itself with ROW_BFP8): its own staging block
     experimental::CB k8_rm_cb(get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K8_RM));
 #endif
+#elif defined(SPARSE_SDPA_KV_WINDOW)
+    // KV_WINDOW (fork option): kv = bf16 rows (chunks >= 1), kv_window = the bf16 rows of chunk 0
+    constexpr auto kvw_args =
+        TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
+    const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::END));
 #endif
     // Reader-internal scratch for one token's index row (reserved once, reused).
     idx_cb.reserve_back(1);
@@ -145,7 +150,7 @@ void kernel_main() {
             }
             nv = lo == 0 ? 1 : lo;  // contract guarantees >=1 valid; guard anyway
         }
-#ifdef SPARSE_SDPA_ROW_BFP4
+#ifdef SPARSE_SDPA_SPLIT_WINDOW
         // [window k_chunk | top-k]: each part has its own sentinel tail. nv0 = the window's valid keys (>= 1),
         // nvk = the top-k's (may be 0); VALID_KEYS keeps the meaning "keys up to the last chunk's boundary".
         uint32_t nv0 = k_chunk, nvk = topk - k_chunk;
@@ -185,7 +190,7 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
             cp[sparse_sdpa::control_message::ACTIVE_CHUNKS] = n_active;
             cp[sparse_sdpa::control_message::VALID_KEYS] = nv;
-#ifdef SPARSE_SDPA_ROW_BFP4
+#ifdef SPARSE_SDPA_SPLIT_WINDOW
             cp[sparse_sdpa::control_message::WINDOW_VALID] = nv0;
 #endif
         }
@@ -295,6 +300,41 @@ void kernel_main() {
                 k_cb.push_back(k_chunk);
 #endif
             }
+#elif defined(SPARSE_SDPA_KV_WINDOW)
+            // chunk 0: the window's bf16 rows (kv_window, its own sentinel tail), chunks >= 1: the bf16 kv rows; both
+            // gathered into cb_k_rm and tilized by compute, split over both NoCs as the plain path
+            const uint32_t valid = chunk == 0 ? nv0 : ((nv - base) < k_chunk ? (nv - base) : k_chunk);
+            {
+                k_cb.reserve_back(k_chunk);
+                const uint32_t k_write_ptr = k_cb.get_write_ptr();
+                const uint32_t half = valid >> 1;
+                kreq_cb.reserve_back(1);
+                {
+                    volatile tt_l1_ptr uint32_t* request =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                    request[sparse_sdpa::gather_request::BASE] = base;
+                    request[sparse_sdpa::gather_request::SPLIT] = half;
+                    request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
+                    request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
+                    request[sparse_sdpa::gather_request::KIND] =
+                        chunk == 0 ? sparse_sdpa::gather_request::KIND_WINDOW : sparse_sdpa::gather_request::KIND_BFP4;
+                }
+                kreq_cb.push_back(1);
+                if (chunk == 0) {
+                    sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                        noc, kvw, k_write_ptr, idx_ptr, base, half, valid, k_row_bytes, 0);
+                } else {
+                    sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                        noc, kv, k_write_ptr, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
+                }
+                kack_cb.wait_front(1);
+                kack_cb.pop_front(1);
+                if (valid < k_chunk) {
+                    noc.async_write_zeros(k_cb, (k_chunk - valid) * k_row_bytes, {.offset_bytes = valid * k_row_bytes});
+                    noc.write_zeros_l1_barrier();
+                }
+                k_cb.push_back(k_chunk);
+            }
 #else
             const uint32_t valid = (nv - base) < k_chunk ? (nv - base) : k_chunk;  // (0, k_chunk]
 
@@ -397,7 +437,7 @@ void kernel_main() {
             // `valid` (tile valid/32) needs cols >= valid%32 set to -inf; the tiles after it are fully
             // masked (compute bcast-adds the persistent cb_neginf there). Build the single partial-boundary
             // tile here only when the boundary lands mid-tile; row 0 only (compute adds it row-broadcast).
-#ifdef SPARSE_SDPA_ROW_BFP4
+#ifdef SPARSE_SDPA_SPLIT_WINDOW
             const bool masked_chunk = chunk == n_active - 1 || chunk == 0;  // the window has its own tail
 #else
             const bool masked_chunk = chunk == n_active - 1;

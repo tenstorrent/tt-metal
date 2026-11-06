@@ -48,8 +48,13 @@ Realistic (use by default):
 - `sparse_sdpa(q, kv, indices, v_dim, kv_format=SparseKVFormat.ROW_BFP4, kv_window=w, ...)` (fork, opt-in): kv
   `[B, 1, T, 320]` uint8 row records, kv_window `[1, 1, Tw, 512]` bf16 DRAM interleaved ROW_MAJOR; the index row is
   `[window k_chunk | top-k]`, each part with its own sentinel tail (no compaction). Needs K_DIM 512, a bf16 q,
-  TOPK > k_chunk_size, no block_cyclic. kv_window is given exactly with ROW_BFP4. kv_window may instead be
+  TOPK > k_chunk_size, no block_cyclic. ROW_BFP4 needs kv_window (BF16 may take one, below). kv_window may instead be
   `[1, 1, Tw, 576]` uint8 bfloat8_b records (`ttnn.bringup.ckv_bfp4(dtype=ttnn.bfloat8_b)`), read into bfloat8_b tiles.
+- `sparse_sdpa(q, kv, indices, v_dim, kv_format=SparseKVFormat.BF16, kv_window=w, ...)` (fork, opt-in, KV_WINDOW,
+  P.38): kv bf16 rows `[B, 1, T, K_DIM]`, kv_window `[1, 1, Tw, K_DIM]` bf16 DRAM interleaved ROW_MAJOR (chunk 0); the
+  index row `[window k_chunk | top-k]`, each part with its own sentinel tail (no compaction), as ROW_BFP4. Needs a bf16
+  q, TOPK > k_chunk_size, no block_cyclic; a uint8 kv_window is refused. Full windows: bit-identical to the plain BF16
+  path on one `[window; history]` table.
 - `sparse_sdpa(q, kv, indices, v_dim, kv_format=SparseKVFormat.ROW_BFP8, ...)` (fork, opt-in): kv `[1, 1, T, 576]` uint8
   bfloat8_b records, every index a window row (TOPK == k_chunk_size), no kv_window, no cache_batch_idx.
 
@@ -129,8 +134,10 @@ Tests: `tests/test_sdpa.py` (model cases, `tests/cases.py`), `tests/unit/test_sd
   C.dsa_moe.attention, O.1.
 - xing40_a4b_d_p: `tt/attention.py`, `ring_mla` at HiFi2 + fp32 DEST (`XING_MLA_SDPA_FIDELITY`, default HiFi2; `XING_MLA_SDPA=source` keeps the source op at bf16 DEST);
   C.dense.attention, X.3, O.1.
-- deepseek_v41_flash_d_p: sparse_sdpa `ROW_BFP4` + `kv_window` (`tt/attention.py` `_sdpa`, the compressed layers'
-  attention; `CKV_FORMAT=bf16` keeps stock ttnn.transformer.sparse_sdpa); FIX.8 (2026-10-28, 2x2 and Galaxy 8x4).
+- deepseek_v41_flash_d_p: sparse_sdpa `BF16` + `kv_window` (P.38, the default since 2026-11-06: `CKV_FORMAT=bf16`
+  with `WINDOW_KV_FORMAT=bf16_tiles`, the compressed layers' bf16 history + per-chip bf16 window region,
+  `tt/attention.py` `_sdpa`, max_grid 11x10 on the Galaxy); `ROW_BFP4` + `kv_window` (`CKV_FORMAT=bfp4_rows`); FIX.8
+  (2026-10-28, 2x2 and Galaxy 8x4). Window-only layers: `BF16` / `ROW_BFP8` with max_grid.
   Earlier: none since FIX.8 (2026-10-21; the model runs stock ttnn.transformer.sparse_sdpa, the
   settings `DS41_WINDOW_SDPA*` are deleted). Before: `tt/attention.py`, `tt/sparse_attention.py`, sparse_sdpa
   `high_precision` + sink + `fp32_scores` + `bf16_probs`; C.swa.attention, S.swa.06, S.swa.11, FIX.2. The options

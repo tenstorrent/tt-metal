@@ -1,0 +1,97 @@
+{
+ "used": [
+  {
+   "id": "K-81",
+   "how": "the new BF16 + kv_window option takes [window k_chunk | top-k] lists with a sentinel tail per part, as ROW_BFP4, so the model's lists need no compaction (sparse_attention._index_static skips it for a history-only table)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-204",
+   "how": "bf16_tiles where a chip owns < 128 rows (the replay128 tail) falls back per geometry, as bfp8_tiles -> bfp8_blocks: to bf16 rows, compressed layers via WindowTables.window_rows as kv_window",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-182",
+   "how": "kept the per-chip region as bf16 ROW_MAJOR rows (one row a page) read by the row gather; no TILE-layout band read",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "WindowTables.window_rows allocated at load time, not mid-forward",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-143",
+   "how": "served caches already bf16: contract and state.formats() unchanged",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-101",
+   "how": "memory check of the bf16 history table (1024 B vs 320 B a row), against plan.md's bf16 budget",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the A/B runs of a quick-mode perf task are named quick / p51200; `measure --part test_ladder` is refused there (no run matches)",
+  "test_logit_kl.py hard-asserts the shipped WINDOW_KV_FORMAT=bfp8_tiles, so a default change breaks it"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: the fork reads the bf16 region and history as they are; no table copies"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added or touched (sparse_sdpa is a C++ device op); WindowSend stays prepared; slice_write as before"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "only the new fork test file (10 passed) and the edited row_bfp4 test_refusals (1 passed) ran; no fork suite"
+  }
+ ],
+ "cited_only": [
+  "DS41-212"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.38",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-06T20:25:22",
+  "head": "922ae06e2bc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.38.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.38.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/README.md",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/compute/sparse_sdpa_compute.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/dataflow/sparse_sdpa_reader.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/dataflow/sparse_sdpa_writer.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/sparse_sdpa_common.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_program_factory.cpp",
+   "ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_kv_window_bf16.py",
+   "ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_row_bfp4.py"
+  ]
+ }
+}
