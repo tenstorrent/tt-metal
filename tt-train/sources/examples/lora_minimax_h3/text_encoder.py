@@ -16,9 +16,9 @@ from pathlib import Path
 
 import ml_dtypes
 import numpy as np
-import ttnn
 import ttml
 from ttml.common.utils import unpermute_proj_rows
+from ttml.models.minimax_h3.weights import load_planned_weights
 from ttml.models.qwen3 import Qwen3RMSNorm
 from ttml.modules import (
     AbstractModuleBase,
@@ -187,52 +187,19 @@ def prepare_weight(name: str, arrays: tuple[np.ndarray, ...], config: TextTowerC
 
 
 def load_text_tower(model: TextTower, weights_dir: Path, verbose: bool = True) -> None:
-    """Fill `model` from the HF `text_encoder/` safetensors shards. Numpy only, one shard open at a time."""
-    from safetensors import safe_open
-
-    weights_dir = Path(weights_dir)
-    index = json.loads((weights_dir / "model.safetensors.index.json").read_text())["weight_map"]
+    """Fill `model` from the HF `text_encoder/` safetensors shards (`load_planned_weights`)."""
     params = model.parameters()
     root = next(iter(params)).split("/", 1)[0]
     mesh = ttml.mesh()
     tp = mesh.axis_size("tp")
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    replicate = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
-
-    plan = weight_plan(model.config, root)
-    missing = [n for n in plan if n not in params]
-    if missing:
-        raise KeyError(f"model has no parameters {missing[:5]}...; have {sorted(params)[:5]}...")
-
-    by_shard: dict[str, list[tuple[str, tuple[str, ...], int | None]]] = {}
-    for name, (hf_keys, tdim) in plan.items():
-        shard = index[HF_PREFIX + hf_keys[0]]
-        by_shard.setdefault(shard, []).append((name, hf_keys, tdim))
-
-    loaded = 0
-    for shard, entries in sorted(by_shard.items()):
-        with safe_open(str(weights_dir / shard), framework="np") as f:
-            for name, hf_keys, tdim in entries:
-                arrays = []
-                for key in hf_keys:
-                    src = index[HF_PREFIX + key]
-                    if src == shard:
-                        arrays.append(f.get_tensor(HF_PREFIX + key))
-                    else:
-                        with safe_open(str(weights_dir / src), framework="np") as g:
-                            arrays.append(g.get_tensor(HF_PREFIX + key))
-                w = prepare_weight(name, tuple(arrays), model.config, tp)
-                expected = list(params[name].shape())
-                if tdim is not None:
-                    expected[tdim] *= tp
-                if list(w.shape) != expected:
-                    raise ValueError(f"{name}: checkpoint {list(w.shape)} vs model {expected}")
-                mapper = mesh.axis_mapper("tp", tdim=tdim) if tdim is not None else replicate
-                params[name].assign(
-                    ttml.autograd.Tensor.from_numpy(w, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-                )
-                loaded += 1
-        if verbose:
-            print(f"  {shard}: {len(entries)} params ({loaded}/{len(plan)})", flush=True)
-    if loaded != len(plan):
-        raise RuntimeError(f"loaded {loaded} of {len(plan)} parameters")
+    load_planned_weights(
+        params,
+        weight_plan(model.config, root),
+        weights_dir,
+        "model.safetensors.index.json",
+        lambda name, arrays: prepare_weight(name, arrays, model.config, tp),
+        tp,
+        mesh,
+        key_prefix=HF_PREFIX,
+        verbose=verbose,
+    )

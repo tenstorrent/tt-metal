@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Callable
 
 import ml_dtypes
 import numpy as np
@@ -123,30 +124,93 @@ def read_time_embedder(weights_dir: Path) -> dict[str, np.ndarray]:
     return out
 
 
-def load_transformer(model, weights_dir: Path, only: tuple[str, ...] | None = None, verbose: bool = True) -> int:
-    """Fill the ttml model from the HF `transformer/` shards; numpy only, one shard open at a time.
+def load_planned_weights(
+    params: dict,
+    plan: dict[str, tuple[tuple[str, ...], int | None]],
+    weights_dir: Path,
+    index_file: str,
+    prepare: Callable[[str, tuple[np.ndarray, ...]], np.ndarray],
+    tp: int,
+    mesh=None,
+    key_prefix: str = "",
+    verbose: bool = True,
+) -> int:
+    """Assign every planned parameter from HF safetensors shards; numpy only, one shard open at a time.
 
-    `only`: load just the parameters whose ttml name (after the root) starts with one of these prefixes.
-    Attentions whose q/k/v were loaded are fused at the end (`H3Attention.fuse_qkv`)."""
+    `plan`: ttml name -> (HF keys, TP-sharded tensor dim or None); a fused parameter's keys may sit in other shards.
+    `prepare(name, arrays)` returns the global 4-D bf16 array. Sharded dims go over `mesh`'s tp axis; without a
+    mesh everything is replicated."""
     import ttnn
     import ttml
     from safetensors import safe_open
 
     weights_dir = Path(weights_dir)
-    index = json.loads((weights_dir / "diffusion_pytorch_model.safetensors.index.json").read_text())["weight_map"]
+    index = json.loads((weights_dir / index_file).read_text())["weight_map"]
+    missing = [n for n in plan if n not in params]
+    if missing:
+        raise KeyError(f"model lacks {missing[:4]}... ; model has {sorted(params)[:4]}...")
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    replicate = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+
+    by_shard: dict[str, list] = {}
+    for name, (hf_keys, tdim) in plan.items():
+        by_shard.setdefault(index[key_prefix + hf_keys[0]], []).append((name, hf_keys, tdim))
+    loaded = 0
+    timing = {"read": 0.0, "prepare": 0.0, "upload": 0.0}
+    for shard, entries in sorted(by_shard.items()):
+        with safe_open(str(weights_dir / shard), framework="np") as f:
+            for name, hf_keys, tdim in entries:
+                t0 = time.perf_counter()
+                arrays = []
+                for key in (key_prefix + k for k in hf_keys):
+                    if index[key] == shard:
+                        arrays.append(f.get_tensor(key))
+                    else:
+                        with safe_open(str(weights_dir / index[key]), framework="np") as g:
+                            arrays.append(g.get_tensor(key))
+                t1 = time.perf_counter()
+                w = prepare(name, tuple(arrays))
+                expected = list(params[name].shape())
+                if tdim is not None:
+                    expected[tdim] *= tp
+                if list(w.shape) != expected:
+                    raise ValueError(f"{name}: checkpoint {list(w.shape)} vs model {expected}")
+                mapper = mesh.axis_mapper("tp", tdim=tdim) if (tdim is not None and mesh is not None) else replicate
+                t2 = time.perf_counter()
+                params[name].assign(
+                    ttml.autograd.Tensor.from_numpy(w, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+                )
+                timing["read"] += t1 - t0
+                timing["prepare"] += t2 - t1
+                timing["upload"] += time.perf_counter() - t2
+                loaded += 1
+        t3 = time.perf_counter()
+        ttnn.synchronize_device(device)  # uploads are queued; charge the wait to "upload", not the next shard
+        timing["upload"] += time.perf_counter() - t3
+        if verbose:
+            print(
+                f"  {shard}: {len(entries)} params ({loaded}/{len(plan)}) | read {timing['read']:.0f} s "
+                f"prepare {timing['prepare']:.0f} s upload {timing['upload']:.0f} s",
+                flush=True,
+            )
+    return loaded
+
+
+def load_transformer(model, weights_dir: Path, only: tuple[str, ...] | None = None, verbose: bool = True) -> int:
+    """Fill the ttml model from the HF `transformer/` shards (`load_planned_weights`).
+
+    `only`: load just the parameters whose ttml name (after the root) starts with one of these prefixes.
+    Attentions whose q/k/v were loaded are fused at the end (`H3Attention.fuse_qkv`)."""
+    import ttml
+
     params = model.parameters()
     root = next(iter(params)).split("/", 1)[0]
     mesh = ttml.maybe_mesh() if hasattr(ttml, "maybe_mesh") else None
     tp = mesh.axis_size("tp") if (mesh is not None and model.config.use_tp) else 1
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    replicate = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
 
     plan = weight_plan(model.config, root)
     if only is not None:
         plan = {n: v for n, v in plan.items() if any(n[len(root) + 1 :].startswith(p) for p in only)}
-    missing = [n for n in plan if n not in params]
-    if missing:
-        raise KeyError(f"model lacks {missing[:4]}... ; model has {sorted(params)[:4]}...")
     to_fuse = []
     for prefix, attn in model.attentions():
         hits = sum(f"{root}/{prefix}{p}/weight" in plan for p in ("to_q", "to_k", "to_v"))
@@ -155,42 +219,16 @@ def load_transformer(model, weights_dir: Path, only: tuple[str, ...] | None = No
         if hits == 3:
             to_fuse.append(attn)
 
-    by_shard: dict[str, list] = {}
-    for name, (hf_keys, tdim) in plan.items():
-        by_shard.setdefault(index[hf_keys[0]], []).append((name, hf_keys, tdim))
-    loaded = 0
-    timing = {"read": 0.0, "prepare": 0.0, "upload": 0.0}
-    for shard, entries in sorted(by_shard.items()):
-        with safe_open(str(weights_dir / shard), framework="np") as f:
-            for name, hf_keys, tdim in entries:
-                t0 = time.perf_counter()
-                arrays = tuple(f.get_tensor(k) for k in hf_keys)
-                t1 = time.perf_counter()
-                w = prepare_weight(name, arrays, model.config, tp)
-                expected = list(params[name].shape())
-                if tdim is not None and tp > 1:
-                    expected[tdim] *= tp
-                if list(w.shape) != expected:
-                    raise ValueError(f"{name}: checkpoint {list(w.shape)} vs model {expected}")
-                mapper = mesh.axis_mapper("tp", tdim=tdim) if (tdim is not None and tp > 1) else replicate
-                t2 = time.perf_counter()
-                params[name].assign(
-                    ttml.autograd.Tensor.from_numpy(w, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-                )
-                t3 = time.perf_counter()
-                timing["read"] += t1 - t0
-                timing["prepare"] += t2 - t1
-                timing["upload"] += t3 - t2
-                loaded += 1
-        t4 = time.perf_counter()
-        ttnn.synchronize_device(device)  # uploads are queued; charge the wait to "upload", not the next shard
-        timing["upload"] += time.perf_counter() - t4
-        if verbose:
-            print(
-                f"  {shard}: {len(entries)} params ({loaded}/{len(plan)}) | read {timing['read']:.0f} s "
-                f"prepare {timing['prepare']:.0f} s upload {timing['upload']:.0f} s",
-                flush=True,
-            )
+    loaded = load_planned_weights(
+        params,
+        plan,
+        weights_dir,
+        "diffusion_pytorch_model.safetensors.index.json",
+        lambda name, arrays: prepare_weight(name, arrays, model.config, tp),
+        tp,
+        mesh if tp > 1 else None,
+        verbose=verbose,
+    )
     for attn in to_fuse:
         attn.fuse_qkv()
     return loaded
