@@ -1252,9 +1252,6 @@ def _mesh_tp(default=4):
         return default
 
 
-@MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
-)
 class _SpecStepClock:
     """QWEN36_SPEC_STEP_TIMING=1: mean host wall time per spec decode step spent inside the model (decode_forward and
     propose_draft_tokens) and between those calls (the plugin runner and the scheduler), logged every 256 steps. A
@@ -1312,6 +1309,9 @@ def _spec_step_timed(step_end):
     return deco
 
 
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+)
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Plugin spec-decode contract adapter (B * (K+1) <= 32) over the MTP engine in tt/spec_engine.py."""
 
