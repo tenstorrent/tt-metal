@@ -62,7 +62,7 @@ from models.demos.blackhole.qwen36.tests.test_kv_cache_spec_host import TEXT_CON
 from models.demos.blackhole.qwen36.tt import spec_block_state as sbs  # noqa: E402
 from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words  # noqa: E402
 from models.demos.blackhole.qwen36.tt.kv_cache_spec import qwen36_kv_cache_spec  # noqa: E402
-from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine  # noqa: E402
+from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine, _CheckpointSnapRun  # noqa: E402
 
 K = 3
 T = K + 1
@@ -309,6 +309,11 @@ class _BookAsState(sbs.SpecBlockBook):
         for g, b in enumerate(blocks):
             self.forget_block(b)
             self.dev.write_block(g, b, self.scratch)
+
+    def write_checkpoint_snapshot(self, blocks, k):
+        """SpecGdnBlockState.write_checkpoint_snapshot: in-replay snapshot k holds the state a segment ending at the
+        checkpoint would leave in the scratch (the label the harness sets before each save)."""
+        self.write_checkpoint(blocks)
 
 
 class _Harness:
@@ -848,6 +853,22 @@ def test_a_prefill_that_skips_its_checkpoints_serves_a_stale_state(tmp_path, mon
     monkeypatch.setattr(_BookAsState, "write_checkpoint", lambda self, blocks: None)
     with pytest.raises(AssertionError, match="restore"):  # allow-pytest.raises: --noconftest host test
         _checkpoint_run(tmp_path / "ckpt", 0, True)
+
+
+def test_in_replay_checkpoints_come_from_the_snapshot_and_replay_ends_from_the_scratch():
+    """QWEN36_PREFILL_INTRACE_SNAP with vLLM's checkpoints (one prefill call, one segment): a checkpoint strictly inside
+    a replay is written from that replay's snapshot slot, one at a replay end from the bound state, in position order."""
+    calls = []
+    points = sbs.CheckpointPoints(
+        [(1024, [5]), (2048, [6]), (3072, [7]), (3584, [8])],
+        lambda blocks: calls.append(("scratch", blocks)),
+        lambda blocks, k: calls.append(("snapshot", blocks, k)),
+    )
+    run = _CheckpointSnapRun(None, points)
+    for cs in (0, 2048):
+        run.after(cs, 2048, run.inside(cs, 2048))
+    assert calls == [("snapshot", [5], 0), ("scratch", [6]), ("snapshot", [7], 0), ("snapshot", [8], 1)]
+    assert run.saved == [1024, 2048, 3072, 3584] and run.n_inside == 3
 
 
 def test_a_checkpoint_off_the_block_grid_or_outside_the_prefill_is_refused():

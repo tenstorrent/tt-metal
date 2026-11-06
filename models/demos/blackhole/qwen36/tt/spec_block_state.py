@@ -572,16 +572,21 @@ class SpecBlockBook:
 
 
 class CheckpointPoints(list):
-    """The segment ends of a prefill that leaves vLLM's prefill checkpoints inside its chunk: after the segment that
-    ends at n, the bound scratch holds the state after n tokens, and ``save(n)`` writes it into vLLM's block for n."""
+    """The positions where a prefill must leave vLLM's prefill checkpoint states inside its chunk. ``save(n)`` writes
+    the state after n tokens into vLLM's block for n: from the bound scratch when a segment or replay ends at n, or
+    from in-replay snapshot ``snap`` of the replay that passed n (QWEN36_PREFILL_INTRACE_SNAP)."""
 
-    def __init__(self, entries, write):
+    def __init__(self, entries, write, write_snap=None):
         super().__init__(n for n, _ in entries)
         self._blocks = dict(entries)
         self._write = write
+        self._write_snap = write_snap
 
-    def save(self, n):
-        self._write(self._blocks[int(n)])
+    def save(self, n, snap=None):
+        if snap is None:
+            self._write(self._blocks[int(n)])
+        else:
+            self._write_snap(self._blocks[int(n)], snap)
 
 
 def group_windows(windows_per_layer, layer_groups, G):
@@ -1030,6 +1035,25 @@ class SpecGdnBlockState:
         """Write the bound B=1 prefill scratch into ``blocks`` ([G] block ids, one per group): a prefill checkpoint,
         the state after the tokens the prefill has run so far."""
         self._write_scratch(blocks, "checkpoint block writes")
+
+    def write_checkpoint_snapshot(self, blocks, k):
+        """Write in-replay snapshot k of the last prefill replay (QWEN36_PREFILL_INTRACE_SNAP) into ``blocks``: a
+        prefill checkpoint that lies inside that replay. The snapshot holds the same state a segment ending there
+        would leave in the scratch (TPGatedDeltaNet.copy_snapshot_to takes the same slices for the prefix cache)."""
+        import ttnn
+
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        with self._timed("checkpoint snapshot writes", len(self.layers)), _PageTables(self) as pts:
+            for _, dn, g in self.layers:
+                b = int(blocks[g])
+                self.book.forget_block(b)
+                rec = ttnn.slice(dn._snap_rec, [k, 0, 0, 0], [k + 1, dn.Nv, dn.Dk, dn.Dv], memory_config=dram)
+                self._write_rec(dn, b, rec, pts)
+                ttnn.deallocate(rec)
+                n = dn.K - 1
+                rows = ttnn.slice(dn._snap_conv_rm, [0, n * k, 0], [1, n * k + n, dn.qkv_dim_tp], memory_config=dram)
+                self._write_carry(dn, b, rows, pts)
+                ttnn.deallocate(rows)
 
     def _write_scratch(self, blocks, kind):
         import ttnn

@@ -952,6 +952,25 @@ class _SnapRun:
         self.saved.append(p)
 
 
+class _CheckpointSnapRun(_SnapRun):
+    """_SnapRun for vLLM's prefill checkpoints (QWEN36_MAMBA_PREFILL_CKPT): a checkpoint strictly inside a replay is
+    written into its vLLM block from the replay's in-replay snapshot, one at a replay end from the bound state, so the
+    prefill call runs as one segment instead of splitting at every checkpoint."""
+
+    def __init__(self, model, points):
+        super().__init__(model, None, None, points)
+        self._ckpt = points
+
+    def after(self, cs, rows, inside):
+        for k, p in enumerate(inside):
+            self._ckpt.save(p, snap=k)
+            self.saved.append(p)
+            self.n_inside += 1
+        if cs + rows in self._set:
+            self._ckpt.save(cs + rows)
+            self.saved.append(cs + rows)
+
+
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
@@ -3021,7 +3040,7 @@ class MTPSpecEngine:
                 )
         if s == 0 and final and not ckpts:
             return None
-        points = CheckpointPoints(ckpts, paged.write_checkpoint) if ckpts else []
+        points = CheckpointPoints(ckpts, paged.write_checkpoint, paged.write_checkpoint_snapshot) if ckpts else []
         return (s, (paged, gdn_req) if s > 0 else None, points)
 
     def _paged_reprefill(self, row):
@@ -3591,8 +3610,9 @@ class MTPSpecEngine:
         choice, passed on to it so the decision is made once)."""
         model = self.model
         cache = getattr(model, "_prefix_cache", None)
+        ckpt = isinstance(points, CheckpointPoints)  # vLLM's checkpoints: written into its blocks, no prefix cache
         active = getattr(model, "gdn_snap_active", None)  # absent on test fakes
-        if cache is None or active is None or not active() or not points:
+        if (cache is None and not ckpt) or active is None or not active() or not points:
             return None, None
         chunk = model._chunked_chunk_size or 2048
         n = Tp - s0
@@ -3636,6 +3656,8 @@ class MTPSpecEngine:
         if cost_one >= cost_split:
             self.intrace_declined = getattr(self, "intrace_declined", 0) + 1
             return None, None
+        if ckpt:
+            return _CheckpointSnapRun(model, points), choice
         return _SnapRun(model, cache, prompt[0], points), choice
 
     _MASKED_BIG_LOG_FIRST = 20  # INFO-log the first N plan decisions
