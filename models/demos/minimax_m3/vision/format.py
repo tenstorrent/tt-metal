@@ -11,12 +11,12 @@ import numpy as np
 _BF16_BYTES = 2
 
 
-def value_size(n_tokens: int, hidden: int) -> int:
+def stored_nbytes(n_tokens: int, hidden: int) -> int:
     return n_tokens * hidden * _BF16_BYTES
 
 
 def embeddings(buf: memoryview, hidden: int) -> np.ndarray:
     """[n_tokens, hidden] view of the value as bf16 bit patterns (uint16). Row i is the i-th image token's."""
-    if not len(buf) or len(buf) % value_size(1, hidden):
+    if not len(buf) or len(buf) % stored_nbytes(1, hidden):
         raise ValueError(f"stored value of {len(buf)} B is not whole bf16 rows of width {hidden}")
     return np.frombuffer(buf, dtype=np.uint16).reshape(-1, hidden)

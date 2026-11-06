@@ -80,8 +80,8 @@ class MiniMaxM3Media:
     def expansion(self, item: M3Image) -> list[tuple[int, int]]:
         return [(IMAGE_START, 1), (self.placeholder_token_ids["image"], item.n_tokens), (IMAGE_END, 1)]
 
-    def value_size(self, item: M3Image) -> int:
-        return media_format.value_size(item.n_tokens, self.hidden)
+    def stored_nbytes(self, item: M3Image) -> int:
+        return media_format.stored_nbytes(item.n_tokens, self.hidden)
 
     def load(self, mesh_device, weights_path: str, kind: str, options: dict) -> None:
         if kind not in self.placeholder_token_ids:

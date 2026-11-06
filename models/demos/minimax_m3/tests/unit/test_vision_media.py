@@ -64,7 +64,7 @@ def test_stub_encode_writes_a_value_prefill_reads(expect_error):
         media.load(None, "", "image", {})
     media.load(None, "", "image", {"stub_embeddings": True})
     item = media.prepare("image", rgb(100, 60))
-    bufs = [memoryview(bytearray(media.value_size(item))) for _ in range(2)]
+    bufs = [memoryview(bytearray(media.stored_nbytes(item))) for _ in range(2)]
     media.encode([item], bufs[:1])
     media.encode([item], bufs[1:])
 
@@ -72,13 +72,13 @@ def test_stub_encode_writes_a_value_prefill_reads(expect_error):
     assert rows.shape == (item.n_tokens, 64) and rows.any()
     assert bytes(bufs[0]) == bytes(bufs[1])
     transposed = M3Image(item.pixels.reshape(item.pixels.shape[1], item.pixels.shape[0], 3), item.grid_w, item.grid_h)
-    other = memoryview(bytearray(media.value_size(transposed)))
+    other = memoryview(bytearray(media.stored_nbytes(transposed)))
     media.encode([transposed], [other])
     assert bytes(other) != bytes(bufs[0])
 
 
 def test_format_rejects_bad_values(expect_error):
-    buf = memoryview(bytearray(media_format.value_size(6, 64)))
+    buf = memoryview(bytearray(media_format.stored_nbytes(6, 64)))
     assert media_format.embeddings(buf, 64).shape == (6, 64)
     with expect_error(ValueError, "whole bf16 rows"):
         media_format.embeddings(buf[:-2], 64)
