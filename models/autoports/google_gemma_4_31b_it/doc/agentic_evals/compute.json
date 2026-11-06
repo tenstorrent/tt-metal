@@ -1269,6 +1269,26 @@
           "ended_at": "2026-11-06T20:44:51.568246+00:00",
           "actual_device_hours": 0.08852622055555555,
           "remaining_owners": []
+        },
+        {
+          "arm": "gpqa-b8-c4-timing-baseline",
+          "owner": "coordinator",
+          "device": "local",
+          "status": "running",
+          "queued_at": "2026-11-06T20:56:18.566803+00:00",
+          "planned_clients": 4,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "batch_reason": "Smallest supported batch>=4; matching default-pool long-context cadence",
+          "predicted_hours": 0.2,
+          "box_hours": 0.3,
+          "request_timeout_seconds": 14400,
+          "max_output_tokens": 126976,
+          "runtime_candidate_sha": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
+          "pool_override": null,
+          "scope": "Synthetic full-limit own-stream-disconnect diagnostic, no scores; source guard before launch",
+          "started_at": "2026-11-06T20:56:18.627470+00:00",
+          "start_basis": "source-launch snapshot immediately before subprocess; exact wrapper timestamp reconciled at completion"
         }
       ]
     },
@@ -2689,7 +2709,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T19:44:22.821358+00:00",
+          "last_observed_at": "2026-11-06T20:55:24.945853+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-frkdx",
           "build_started_at": "2026-11-06T18:46:22Z",
           "build_completed_at": "2026-11-06T19:42:24Z",

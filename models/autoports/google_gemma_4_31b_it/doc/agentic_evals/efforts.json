@@ -3353,14 +3353,14 @@
 "method": "Model-only optional pool, hosttests, native3 exact pairs atC2/B8, independentC8 growing-history residency/allocator check, stock frozen20 scored candidate versus repaired20 currentbest",
 "success": "No lost validity, no preemptions or missing longcontext residency; compare actual completion, aggregate work and95%score intervals. Capacity gain can be kept while speed remains open; no2x claim from concurrency alone."
 },
-"box_hours": 2.5,
+"box_hours": 3.5,
 "status": "running",
 "admission": "Host implementation/client preparation admitted; root must queue each device run. Capacity subbox0.65h. Normal40 neverwaits.",
 "baseline_reuse": "Explicitly accepted repaired20 C4 baseline onab273; logging exactness-proven separately. If source/config incompatibility affects outputs, repeat appropriate baseline and reprice.",
 "prediction_correction_pending": false,
 "re_estimate": {
-"at": "2026-11-06T20:34:58.620304+00:00",
-"reason": "Two initialcap tails dominate20; sameB8 cannotassume2x per-user speed",
+"at": "2026-11-06T20:54:20.739620+00:00",
+"reason": "Measured C8 completion cadence at131K makes ideal2x scaling invalid. Sensitivity is not an upper bound or observed GPQA duration. Box widened from2.5 to3.2 to admit scored20 after valid repaired20; normal40 proceeds first, independently. Supplemental matching C4 cadence authorized before CI comparison, +0.30h box to3.5; local idle and CI running, no rung delay.",
 "candidate20_eval_hours_guess": 1.52,
 "candidate20_device_hours_guess": 1.66,
 "local_capacity_hours_guess": 0.3,
@@ -3372,7 +3372,19 @@
 ],
 "negative_saving_possible": true,
 "credited_saving_hours": 0,
-"evidence": "runs/gpqa-b8-expanded-pool/reprice-note.md"
+"evidence": "runs/gpqa-b8-expanded-pool/reprice-note.md",
+"local_actual_device_hours": 0.33019785944444446,
+"high_context_c8_tail_hours_sensitivity": 2.251949,
+"setup_hours_historical": 0.137184,
+"total_device_hours_high_context_sensitivity": 2.7193308594444443,
+"timing_evidence": "runs/gpqa-b8-expanded-pool/timing-note.md",
+"matching_c4_cadence": {
+"predicted_device_hours": 0.2,
+"box_hours": 0.3,
+"basis": "guess from C8 full capacity hold0.24167h, omit exactness",
+"reason": "Existing C4 residency proof lacks completion timestamps; matching context-dependent cadence addresses measured C8 attention-cost uncertainty, no redundant capacity claim",
+"status": "preparing"
+}
 }
 }
 ],
@@ -20305,6 +20317,36 @@
 }
 ],
 "reason": "Validity remainsfirst. Running capacityeffort not interrupted by reprice; admitted2.5hbox stillcovers revisedpoint. No rungdelay."
+},
+{
+"after": "C8 long-context completion cadence and local confirmation",
+"at": "2026-11-06T20:54:20.739620+00:00",
+"order": [
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"valid20 and next40"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "frozen initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "gpqa-b8-expanded-pool",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 2.7193308594444443,
+"basis": "diagnostic sensitivity, not measured job or bound"
+}
+],
+"reason": "Validity first; capacity confirmed but speed remains unknown. Coordinator widens existing effort box to3.2h with about0.48h over this sensitivity. No rung waits and no speed saving credited."
 }
 ],
 "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

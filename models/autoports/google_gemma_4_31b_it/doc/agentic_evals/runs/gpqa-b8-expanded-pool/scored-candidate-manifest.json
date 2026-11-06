@@ -36,12 +36,12 @@
   "workflow": "evals",
   "retention_enabled": true,
   "arm": "gpqa20-c8-expanded-pool-comparison",
-  "status": "held_until_local_capacity_and_valid_repaired20",
+  "status": "held_until_valid_repaired20_and_normal40_dispatch",
   "planned_clients": 8,
   "tti_sha": "7ad6cf50d160a2e9cbe007fc4475af3c8f8bf365",
   "tt_metal_sha": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
-  "batch_reason": "Smallest validated physical batch>=8; enlargedpool must pass live long-history capacity before dispatch",
-  "capacity_evidence": "pending runs/gpqa-b8-expanded-pool local confirmation",
+  "batch_reason": "Smallest validated physical batch>=8; eight independent131K histories passed local live capacity, zero preemption",
+  "capacity_evidence": "runs/gpqa-b8-expanded-pool/local-confirmation.json",
   "pool_ids": 20480,
   "env": {
     "GEMMA4_B8_KV_POOL_IDS": "20480",
@@ -53,5 +53,7 @@
   "baseline_run_id": 42273660905,
   "baseline_reuse": "Coordinator approved comparative score/work/time, not controlled causal speed claim; actuallogging/source config differences recorded",
   "no_dispatch": true,
-  "prepared_at": "2026-11-06T20:32:05.089339+00:00"
+  "prepared_at": "2026-11-06T20:32:05.089339+00:00",
+  "effort_box_hours": 3.2,
+  "diagnostic_device_hours_sensitivity": 2.389133
 }

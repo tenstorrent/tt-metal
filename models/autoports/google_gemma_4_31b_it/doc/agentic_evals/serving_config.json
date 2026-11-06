@@ -314,6 +314,12 @@
       "planned_clients": 1,
       "max_num_seqs": 1,
       "batch_reason": "Exactheadlineandunchangedstage11matrix eachC1; B1regressionrow"
+    },
+    "gpqa-b8-c4-timing-baseline": {
+      "batch": 8,
+      "max_num_seqs": 8,
+      "planned_clients": 4,
+      "batch_reason": "Smallest supported batch>=4; matching default-pool long-context cadence"
     }
   },
   "release_limits": {
