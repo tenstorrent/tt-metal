@@ -100,6 +100,22 @@ def test_bias_split_on_out(mesh_device):
     assert_with_pcc(x @ w.mT + bias, _gathered(out), 0.999)
 
 
+def test_bias_label_of_higher_mesh_rank_split_on_out(mesh_device):
+    """Collapsed 1-D labels on x and w and a per-axis label on the [1, out] bias: the bias's label, of the higher mesh
+    rank, is the one the output takes, so its Shard(1) moves to the output's columns too."""
+    x, w, bias = torch.randn(1, 1, S, K), torch.randn(1, 1, N, K), torch.randn(1, N)
+
+    out = ttnn.linear(
+        _replicated(x, mesh_device, nd=False),
+        _sharded(w, mesh_device, 2, nd=False),
+        bias=_sharded(bias, mesh_device, 1),
+        transpose_b=True,
+    )
+
+    assert _placements(out) == [REPLICATE, "PlacementShard(3)"]
+    assert_with_pcc(x @ w.mT + bias, _gathered(out), 0.999)
+
+
 def test_transposed_activation_split_on_rows(mesh_device):
     """An a stored [K, M] and split on M: with transpose_a each device computes its slice of the output's rows."""
     a, b = torch.randn(1, 1, K, S), torch.randn(1, 1, K, N)
@@ -175,6 +191,18 @@ def test_contracted_dim_split_with_a_moved_shard_keeps_default_label(mesh_device
     )
 
     assert _placements(out)[1] != REPLICATE
+
+
+def test_preallocated_output_label_replaced(mesh_device):
+    """A preallocated output of the product's shape whose label still describes earlier contents (a Shard on the first
+    mesh axis): the output takes the operands' label, not the buffer's."""
+    x, w = torch.randn(1, 1, S, K), torch.randn(1, 1, N, K)
+    out = _sharded(torch.zeros(1, 1, S, N), mesh_device, 3, first_axis=ttnn.PlacementShard(0))
+
+    ttnn.linear(_replicated(x, mesh_device), _sharded(w, mesh_device, 2), transpose_b=True, optional_output_tensor=out)
+
+    assert _placements(out) == [REPLICATE, "PlacementShard(3)"]
+    assert_with_pcc(x @ w.mT, _gathered(out), 0.999)
 
 
 def test_preallocated_output_of_another_shape_keeps_default_label(mesh_device):
