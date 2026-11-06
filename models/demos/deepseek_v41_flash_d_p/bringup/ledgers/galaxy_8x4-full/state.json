@@ -3426,6 +3426,92 @@
   },
   "waiting": null
  },
+ "P.34": {
+  "ab_pending": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.34.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_hc_sfpu.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_collapse.py"
+  ],
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "446c8e0becaa7b6d93f8901bdf15b6b63572b8d5",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "dcb033c874cea5d21a17080d74e83e95d53bff57",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "a078beee-2a9a-4ad5-a674-d10ca6f2e0ee"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 1421.2,
+  "history": [
+   {
+    "attempt": 1,
+    "from": "RUNNING",
+    "role": "perf",
+    "status": "RESUMED",
+    "t": "2026-11-06T12:15:20"
+   },
+   {
+    "s": 1421.2,
+    "status": "PASS",
+    "t": "2026-11-06T14:20:59"
+   }
+  ],
+  "last_run": "2026-11-06T14:20:58",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.34.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [],
+   "units": {
+    "P.34#test_adapter_acks": "1682661971f3ee14",
+    "P.34#test_contract": "c7a7926c137a0bf9",
+    "P.34#test_kv_layout": "9089ed572968bd55",
+    "P.34#test_ladder": "4bfd218ebd71645b",
+    "P.34#test_profile": "8f190ca251e05f2a"
+   }
+  },
+  "started": "2026-11-06T13:57:17",
+  "status": "PASS",
+  "units": {
+   "P.34#test_adapter_acks": "PASS",
+   "P.34#test_contract": "PASS",
+   "P.34#test_kv_layout": "PASS",
+   "P.34#test_ladder": "PASS",
+   "P.34#test_profile": "PASS"
+  },
+  "waiting": null
+ },
  "P.4": {
   "agent": {
    "defs": {

@@ -1,0 +1,92 @@
+{
+ "used": [
+  {
+   "id": "DS41-3",
+   "how": "the next step collapses with the pre the residual already holds (its own mixes, cols 0..3), so mhc_post(collapse_pre=mix) in attn/ffn_residual and collapse_pre=pending pre in engram_add",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-174",
+   "how": "the collapse's hc / y go into the consuming TtHcMixes' load-time sites (fork.attn_hc.hc/.y, fork.ffn_hc.y) via hc_output / y_output: no new allocations",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-149",
+   "how": "TtHcMixes.collapse_outputs returns the kept site objects, not the op's new wrappers",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "the hc scalars (33) and the 3 addresses are common runtime args, not per-core args on 110 cores",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-104",
+   "how": "the collapse reads the bf16 X' tiles the stats matmul already reads (exact in fp32 DEST), so y equals mhc_pre_xing's collapse of the bf16 streams",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a ProgramDescriptor factory's override_runtime_arguments sees per-core args padded to the kernel's maximum length: a slot after variable-length per-core lists cannot be located with args.size() (now DS41-210)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the collapse is a fork option of mhc_post (tests/unit/test_mhc_post_collapse.py), the pre read as the mixes tensor as is"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched: mhc_post is a C++ device op (program cache + override_runtime_arguments); one fewer mhc_pre_xing (C++) per hc step"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "only the new test file ran on the 8x4 (8 passed); no fork regression / unit suite"
+  }
+ ],
+ "cited_only": [
+  "DS41-210"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.34",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-06T11:45:55",
+  "head": "e807aeb8d7c",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.34.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_hc_sfpu.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_collapse.py"
+  ]
+ }
+}
