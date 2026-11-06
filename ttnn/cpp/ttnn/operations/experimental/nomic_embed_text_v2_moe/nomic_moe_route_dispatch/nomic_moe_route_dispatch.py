@@ -40,7 +40,9 @@ MAX_ROWS_PER_SHARD = 4  # packed u16 count table and the fp32 DEST matmul subblo
 GRID_X, GRID_Y = 11, 10
 NUM_CORES = GRID_X * GRID_Y
 COORDINATOR = NUM_CORES - 1  # receives the count rows, multicasts the table
-W_SENDER_TOP = NUM_CORES - 2  # sender of W slice c is core W_SENDER_TOP - c
+# Sender of W slice c is core W_SENDER_TOP - c. Channel 0 (NOC0) shares the coordinator's reader, so it and the count
+# table, the two unreserved NOC0 broadcasts, leave one command buffer and VC in order (deadlock freedom).
+W_SENDER_TOP = COORDINATOR
 # NoCs the W slice multicasts alternate over: slice c goes out on the writer RISC (NOC1) when c % W_SLICE_NOCS == 1,
 # else on the reader (NOC0). Full-grid multicasts on one NoC serialize, so 2 runs two slices at once; 1 = all NOC0.
 W_SLICE_NOCS = 2
@@ -52,8 +54,6 @@ READER_SPLIT_TOKENS = 16  # granule of the reader/writer token split (16 u32 com
 PUSH_BYTES_IN_FLIGHT = 4096
 # Token offset per group at which a RISC starts its slot walk (perf lamp L7, catalog `bank_stagger`); 0 = lockstep.
 PUSH_STAGGER_TOKENS = 0
-# NoC write command buffers a pushing RISC round-robins over (1 or 2).
-PUSH_CMD_BUFS = 1
 # Push whole output pieces (perf lamp L2, member balance): each piece of w tiles is pushed by the group member that
 # holds most of it, which first gathers the piece's other tiles from its peers' x shards, so a row costs one write
 # per piece instead of one per (slice, piece) intersection. Off: every member pushes its slice's intersections.

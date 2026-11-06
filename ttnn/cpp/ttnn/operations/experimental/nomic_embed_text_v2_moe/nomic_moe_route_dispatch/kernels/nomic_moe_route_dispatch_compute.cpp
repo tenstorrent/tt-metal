@@ -22,6 +22,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "nomic_moe_route_dispatch_softmax8.hpp"
+#include "nomic_moe_route_dispatch_fused_copy.hpp"
 #include "nomic_moe_route_dispatch_w_layout.hpp"
 
 namespace ckl = compute_kernel_lib;
@@ -41,6 +42,8 @@ void kernel_main() {
     constexpr uint32_t cb_partials = get_named_compile_time_arg_val("cb_partials");
     constexpr uint32_t cb_scores = get_named_compile_time_arg_val("cb_scores");
     constexpr uint32_t cb_code_stage = get_named_compile_time_arg_val("cb_code_stage");
+    constexpr uint32_t cb_partial_faces = get_named_compile_time_arg_val("cb_partial_faces");
+    constexpr uint32_t cb_code_faces = get_named_compile_time_arg_val("cb_code_faces");
     constexpr uint32_t cb_x_rows = get_named_compile_time_arg_val("cb_x_rows");
     constexpr bool push_gather = get_named_compile_time_arg_val("push_gather") != 0;
     constexpr uint32_t stage_tiles = get_named_compile_time_arg_val("stage_tiles");
@@ -72,6 +75,9 @@ void kernel_main() {
         // cb_w_faces; the partial is packed straight into this member's region of cb_partials (the reader / writer
         // send it to the peers from there).
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_faces, cb_partials);
+        // The softmax's SFPU config, ADDR_MOD_7 and programmable constants, in the W wait (the matmul uses
+        // ADDR_MOD_0..6)
+        MATH((route_dispatch_softmax8::init()));
 
         // ---- partial_logits_block: x[rps x ht] @ W[slice member] -> rps fp32 tiles ----
         {
@@ -130,11 +136,19 @@ void kernel_main() {
             MaybeDeviceZoneScope("cmp_softmax");
             reconfig_data_format_srca(cb_partials);
             pack_reconfig_data_format(cb_scores);
-            copy_init(cb_partials);
-            MATH((route_dispatch_softmax8::init()));
+            if constexpr (G == 1) {
+                copy_init(cb_partials);
+            } else {
+                // one-face copy / pack through the 16x16-tile views of cb_partials / cb_code_stage
+                copy_init(cb_partial_faces);
+                pack_init(cb_code_faces);
+            }
             if constexpr (G == 1) {
                 for (uint32_t tile = 0; tile < rps; ++tile) {
-                    partials.wait_front(G * (tile + 1));
+                    {
+                        MaybeDeviceZoneScope("cmp_wait_pass");
+                        partials.wait_front(G * (tile + 1));
+                    }
                     scores.reserve_back(1);
                     tile_regs_acquire();
                     copy_tile(cb_partials, tile, 0);
@@ -147,19 +161,39 @@ void kernel_main() {
                 }
             } else {
                 DataflowBuffer code_stage(cb_code_stage);
+                uint32_t pass = 0;
                 for (uint32_t pos = member; pos < split.hn; pos += G) {
                     const uint32_t half = route_dispatch::half_at_rank(pos, split);
                     const uint32_t tile = half / 2;
-                    partials.wait_front(G * (tile_order.slot[tile] + 1));
-                    code_stage.reserve_back(1);
-                    tile_regs_acquire();
-                    for (uint32_t contributor = 0; contributor < G; ++contributor) {
-                        copy_tile(cb_partials, contributor * rps + tile, contributor);
+                    {
+                        MaybeDeviceZoneScope("cmp_wait_pass");
+                        partials.wait_front(G * (tile_order.slot[tile] + 1));
                     }
-                    MATH((route_dispatch_softmax8::share_faces<G>(half % 2 == 0, half % 2 == 1)));
+                    code_stage.reserve_back(1);
+                    const uint32_t face = 2 * (half % 2);
+                    tile_regs_acquire();
+                    // the half's face of each contributor's partial (views never popped: absolute face indices) into
+                    // face 0 of DEST tiles 0 .. G-1, under one unpack <-> math handshake
+                    UNPACK((
+                        route_dispatch_fused_copy::unpack_contributors<G>(cb_partial_faces, 4 * tile + face, 4 * rps)));
+                    // the next pass's unpack lands in the other DEST half while this pass's band runs
+                    const bool has_next = pos + G < split.hn;
+                    MATH((pass == 0 ? route_dispatch_fused_copy::contributors_send() : (void)0));
+                    MATH((route_dispatch_fused_copy::contributors_wait<G>()));
+                    MATH((has_next ? route_dispatch_fused_copy::pass_marker() : (void)0));
+                    MATH((route_dispatch_softmax8::face0_only<G, 2>([has_next] {
+                        if (has_next) {
+                            route_dispatch_fused_copy::send_next_half();
+                        }
+                    })));
+#ifdef ABLATE_DELAY_SOFTMAX  // /perf-measure: +500 cycles a pass on MATH (critical-path probe)
+                    MATH((riscv_wait(500)));
+#endif
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(0, cb_code_stage);
+                    // only the code face, into its place (face 0 / 2) of this pass's cb_code_stage page
+                    pack_tile<true>(0, cb_code_faces, 4 * pass + face);
+                    ++pass;  // on every TRISC: MATH branches on it
                     tile_regs_release();
                     code_stage.push_back(1);
                 }
