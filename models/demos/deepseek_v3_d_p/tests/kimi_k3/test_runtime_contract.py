@@ -256,6 +256,7 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1)
     layer.weights = SimpleNamespace(convolution_taps=())
     layer.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
+    layer.kda_compute_config = object()
     for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
         setattr(layer, name, None)
     layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
