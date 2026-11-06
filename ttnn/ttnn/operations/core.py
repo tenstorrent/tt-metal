@@ -590,6 +590,11 @@ ttnn.attach_golden_function(
     golden_function=_make_copy_transfer_golden_function("device_tensor", "host_tensor"),
 )
 
+# Byte-range copies between a device tensor's per-device buffers and caller-owned host memory (KV page transfers).
+# Exported as they are: they take raw addresses, so there is no golden function or tensor-level tracing to attach.
+ttnn.copy_device_to_host_regions = ttnn._ttnn.operations.core.copy_device_to_host_regions
+ttnn.copy_host_to_device_regions = ttnn._ttnn.operations.core.copy_host_to_device_regions
+
 doc = """
 Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
