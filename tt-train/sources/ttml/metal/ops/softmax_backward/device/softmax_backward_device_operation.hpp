@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <ttnn/device_operation.hpp>
 #include <variant>
 
 #include "softmax_backward_device_operation_types.hpp"

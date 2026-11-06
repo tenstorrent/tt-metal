@@ -1005,6 +1005,7 @@ def test_attn_matmul_compute_grid_shorter_than_device(device):
     assert torch.equal(sub_grid_output, full_grid_output)
 
 
+@pytest.mark.use_module_device
 @pytest.mark.parametrize("in1_origin", [(0, 1), (1, 0), (1, 1)], ids=["off01", "off10", "off11"])
 def test_group_attn_matmul_rejects_offset_in1_shard_grid(in1_origin, device, expect_error):
     compute_grid_size = device.compute_with_storage_grid_size()
