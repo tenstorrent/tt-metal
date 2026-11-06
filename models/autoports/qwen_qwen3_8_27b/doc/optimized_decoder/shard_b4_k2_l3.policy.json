@@ -1,6 +1,0 @@
-{
-  "dram_sharded": true,
-  "fidelity": "LoFi",
-  "mlp_dtype": "bfloat4_b",
-  "block": 2
-}

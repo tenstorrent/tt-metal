@@ -1,5 +1,0 @@
-{
-  "fidelity": "LoFi",
-  "mlp_dtype": "bfloat4_b",
-  "down_dtype": "bfloat4_b"
-}

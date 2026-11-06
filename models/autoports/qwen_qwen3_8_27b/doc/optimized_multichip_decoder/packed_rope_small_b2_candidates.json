@@ -1,7 +1,0 @@
-{
-  "control": {},
-  "shared": {
-    "packed_rope_candidate": "shared_tables",
-    "packed_rope_min_batch": 2
-  }
-}

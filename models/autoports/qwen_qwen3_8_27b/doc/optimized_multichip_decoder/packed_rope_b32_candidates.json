@@ -1,9 +1,0 @@
-{
-  "control": {},
-  "packed_shared": {
-    "packed_rope_candidate": "shared_tables"
-  },
-  "packed_separate": {
-    "packed_rope_candidate": "separate_tables"
-  }
-}

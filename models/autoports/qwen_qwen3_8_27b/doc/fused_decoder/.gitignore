@@ -1,5 +1,0 @@
-# Large raw captures remain locally available; compact tables/CSV are checkpointed explicitly.
-.logs/
-reports/
-*.tracy
-*current
