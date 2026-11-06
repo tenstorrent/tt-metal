@@ -1460,8 +1460,16 @@ SITU_GLU_SWEEP = dict(
 @skip_for_wormhole
 @parametrize(**SITU_GLU_SWEEP)
 def test_eltwise_binary_sfpu_situ_glu(formats, dest_acc, mathop, **run_kwargs):
-    # situ_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
-    sfpu_binary(formats, dest_acc, mathop, **run_kwargs)
+    # situ_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel. Both signs, past
+    # the kernel's clamps (|gate| 19.5, |up| 121.875), with gate above the logistic flush at -87.5.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-80.0, high=40.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0),
+        **run_kwargs,
+    )
 
 
 # =============================================================================
