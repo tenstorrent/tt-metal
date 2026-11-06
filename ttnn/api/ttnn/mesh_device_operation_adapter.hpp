@@ -852,8 +852,7 @@ public:
     // op-owned tensors, rebuilds a TensorArgument for every binding using the
     // stored indices, and applies via tt::tt_metal::experimental::UpdateTensorArgs — no Program
     // rebuild. Op-owned tensors are re-patched even though their address is
-    // unchanged, because UpdateTensorArgs is currently all-or-nothing; this
-    // stepping-stone concept accepts that redundancy.
+    // unchanged, because UpdateTensorArgs is currently all-or-nothing.
     //
     // Contract: every TensorArgument returned by the factory must reference a
     // MeshTensor reachable from tensor_args / tensor_return_value, or one of the

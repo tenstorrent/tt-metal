@@ -14,7 +14,7 @@
 
 namespace ttnn::device_operation {
 
-// Build product of a Metal 2.0 op-porting stepping-stone factory: the immutable
+// Build product of a Metal 2.0 factory: the immutable
 // ProgramSpec, the mutable ProgramRunArgs, and any op-owned tensors the factory
 // allocates for itself. Returned by a ProgramSpecFactoryConcept or
 // CustomProgramSpecFactoryConcept factory's

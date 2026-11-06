@@ -109,7 +109,7 @@ static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloa
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
 
 // ---------------------------------------------------------------------------
-// ProgramSpecFactoryConcept (Metal 2.0 op-porting stepping stone)
+// ProgramSpecFactoryConcept (Metal 2.0)
 //
 // Real ops already use create_program_artifacts (typecast, prod_all, …). The
 // checks below still (a) pin the concept's classification (it recognizes a
