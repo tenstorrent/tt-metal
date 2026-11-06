@@ -2662,7 +2662,99 @@ void check_relay_peer(const RelayPeer& peer, const RelayLocal& relay) {
     }
 }
 
-// Trade RelayPeer with the other process, in the same send/recv order as exchange_service_cores.
+// Every relay exchange message starts with this header: whether the side that sent it built its relay
+// state, and how many payload words follow (none when it failed). The words count lets a side that failed
+// before making its own plan still read the peer's payload.
+struct RelayExchangeHeader {
+    uint32_t status = 0;
+    uint32_t words = 0;
+};
+constexpr uint32_t kRelayStatusOk = 0x52454C59;      // 'RELY'
+constexpr uint32_t kRelayStatusFailed = 0x4641494C;  // 'FAIL'
+
+// One relay exchange message: the header, then this side's payload when it has one (nullopt: this
+// side failed to set up its relay).
+void send_relay_words(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    distributed::multihost::Rank peer_rank,
+    std::optional<std::vector<uint32_t>> words) {
+    const distributed::multihost::Tag tag{kRelayExchangeTag};
+    RelayExchangeHeader header{
+        .status = words.has_value() ? kRelayStatusOk : kRelayStatusFailed,
+        .words = words.has_value() ? static_cast<uint32_t>(words->size()) : 0u,
+    };
+    ctx->send(ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&header), sizeof(header)), peer_rank, tag);
+    if (header.words > 0) {
+        ctx->send(
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(words->data()), words->size() * sizeof(uint32_t)),
+            peer_rank,
+            tag);
+    }
+}
+
+// The peer's relay exchange message: its payload, or nullopt when it reports a failed relay setup.
+std::optional<std::vector<uint32_t>> recv_relay_words(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx, distributed::multihost::Rank peer_rank) {
+    const distributed::multihost::Tag tag{kRelayExchangeTag};
+    RelayExchangeHeader header;
+    ctx->recv(ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&header), sizeof(header)), peer_rank, tag);
+    TT_FATAL(
+        header.status == kRelayStatusOk || header.status == kRelayStatusFailed,
+        "D2DStreamService relay: unexpected relay exchange status {:#x} from rank {}",
+        header.status,
+        *peer_rank);
+    if (header.status == kRelayStatusFailed) {
+        return std::nullopt;
+    }
+    std::vector<uint32_t> words(header.words, 0u);
+    if (!words.empty()) {
+        ctx->recv(
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(words.data()), words.size() * sizeof(uint32_t)),
+            peer_rank,
+            tag);
+    }
+    return words;
+}
+
+// Trade relay words with the other process, in the same send/recv order as exchange_service_cores:
+// the sender sends first, the receiver receives first. Each side sends exactly one message and reads
+// exactly one, whether or not its own setup succeeded, so a failed side still unblocks its peer and
+// leaves no unread message on kRelayExchangeTag for a later service between the same ranks. Returns
+// the peer's payload, or nullopt when the peer failed.
+std::optional<std::vector<uint32_t>> trade_relay_words(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    bool is_sender,
+    distributed::multihost::Rank peer_rank,
+    std::optional<std::vector<uint32_t>> out) {
+    if (is_sender) {
+        send_relay_words(ctx, peer_rank, std::move(out));
+        return recv_relay_words(ctx, peer_rank);
+    }
+    auto in = recv_relay_words(ctx, peer_rank);
+    send_relay_words(ctx, peer_rank, std::move(out));
+    return in;
+}
+
+// Called from a side's failure path between the MeshSocket handshake and the relay exchange: tell the
+// peer, which is waiting in exchange_relay_peer (or in its own failure path), that this side's relay
+// setup failed, so it throws instead of waiting forever. Never throws, so the caller rethrows its own error.
+void report_relay_failure(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    bool is_sender,
+    distributed::multihost::Rank peer_rank) noexcept {
+    try {
+        (void)trade_relay_words(ctx, is_sender, peer_rank, std::nullopt);
+    } catch (const std::exception& e) {
+        log_error(
+            tt::LogMetal,
+            "D2DStreamService relay: could not tell rank {} that this side's relay setup failed: {}",
+            *peer_rank,
+            e.what());
+    }
+}
+
+// Trade RelayPeer with the other process (trade_relay_words). Throws when the peer reports that its
+// relay setup failed.
 RelayPeer exchange_relay_peer(
     const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
     bool is_sender,
@@ -2685,27 +2777,28 @@ RelayPeer exchange_relay_peer(
              c.z_lanes});
     }
     out.insert(out.end(), local.staging_addrs.begin(), local.staging_addrs.end());
-    std::vector<uint32_t> in(out.size(), 0u);
 
-    const distributed::multihost::Tag tag{kRelayExchangeTag};
-    const auto as_bytes = [](std::vector<uint32_t>& v) {
-        return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(uint32_t));
-    };
-    if (is_sender) {
-        ctx->send(as_bytes(out), peer_rank, tag);
-        ctx->recv(as_bytes(in), peer_rank, tag);
-    } else {
-        ctx->recv(as_bytes(in), peer_rank, tag);
-        ctx->send(as_bytes(out), peer_rank, tag);
-    }
+    const auto in = trade_relay_words(ctx, is_sender, peer_rank, out);
+    TT_FATAL(
+        in.has_value(),
+        "D2DStreamService relay: the {} (rank {}) failed to set up its relay side; see its log",
+        is_sender ? "receiver" : "sender",
+        *peer_rank);
+    TT_FATAL(
+        in->size() == out.size(),
+        "D2DStreamService relay: the {} (rank {}) sent {} relay words, this side expects {}",
+        is_sender ? "receiver" : "sender",
+        *peer_rank,
+        in->size(),
+        out.size());
 
     RelayPeer peer;
     const size_t n = local.cables.size();
     for (size_t p = 0; p < n; ++p) {
-        const uint32_t* w = in.data() + p * kRelayCableWords;
+        const uint32_t* w = in->data() + p * kRelayCableWords;
         peer.cables.push_back(RelayPeerCable{w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9]});
     }
-    peer.staging_addrs.assign(in.begin() + n * kRelayCableWords, in.end());
+    peer.staging_addrs.assign(in->begin() + n * kRelayCableWords, in->end());
     check_relay_peer(peer, relay);
     return peer;
 }
@@ -3556,9 +3649,10 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
     // Build + assemble (shared with create_pair). The service cores move into the
     // handle Impl here, emptying the map sender_guard references.
     // The sender's routers (and so its lane count) are chosen in finalize_sender; the
-    // receiver process waits for the counts before building its kernels, so it hears
-    // about a failure here too.
+    // receiver process waits for the counts (relay mode: for the relay exchange) before
+    // building its kernels, so it hears about a failure here too.
     std::unique_ptr<D2DStreamServiceSender> sender_handle;
+    std::optional<CMAKE_UNIQUE_NAMESPACE::RelayPeer> relay_local;
     try {
         sender_handle = finalize_sender(
             sender_mesh,
@@ -3567,8 +3661,15 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
             receiver_tensor_addrs,
             sender_backings,
             cfg);
+        if (cfg.relay) {
+            const auto& s = *sender_handle->impl_;
+            relay_local =
+                CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*s.relay, s.mesh_device, s.service_cores, /*is_sender=*/true);
+        }
     } catch (...) {
-        if (!cfg.relay) {
+        if (cfg.relay) {
+            CMAKE_UNIQUE_NAMESPACE::report_relay_failure(ctx, /*is_sender=*/true, endpoints.receiver_rank);
+        } else {
             CMAKE_UNIQUE_NAMESPACE::send_sender_lanes(ctx, endpoints.receiver_rank, mo.coords, /*lane_links=*/nullptr);
         }
         throw;
@@ -3580,12 +3681,10 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
     }
     if (cfg.relay) {
         const auto& s = *sender_handle->impl_;
-        const auto local =
-            CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*s.relay, s.mesh_device, s.service_cores, /*is_sender=*/true);
         build_relay_sender(
             *sender_handle,
             RelayInfo{CMAKE_UNIQUE_NAMESPACE::exchange_relay_peer(
-                ctx, /*is_sender=*/true, endpoints.receiver_rank, local, *s.relay)});
+                ctx, /*is_sender=*/true, endpoints.receiver_rank, *relay_local, *s.relay)});
     }
     EnqueueMeshWorkload(
         sender_handle->impl_->mesh_device->mesh_command_queue(), *sender_handle->impl_->workload, /*blocking=*/false);
@@ -3651,22 +3750,35 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
                                   : CMAKE_UNIQUE_NAMESPACE::recv_sender_lanes(ctx, endpoints.sender_rank, mo.coords);
 
     // Build + assemble (shared with create_pair). The service cores move into the
-    // handle Impl here, emptying the map receiver_guard references.
-    auto receiver_handle = finalize_receiver(
-        receiver_mesh,
-        std::move(receiver_socket),
-        std::move(receiver_service_cores),
-        receiver_backings,
-        cfg,
-        sender_lanes);
+    // handle Impl here, emptying the map receiver_guard references. In relay mode the
+    // sender waits in the relay exchange meanwhile, so a failure here is reported to it.
+    std::unique_ptr<D2DStreamServiceReceiver> receiver_handle;
+    std::optional<CMAKE_UNIQUE_NAMESPACE::RelayPeer> relay_local;
+    try {
+        receiver_handle = finalize_receiver(
+            receiver_mesh,
+            std::move(receiver_socket),
+            std::move(receiver_service_cores),
+            receiver_backings,
+            cfg,
+            sender_lanes);
+        if (cfg.relay) {
+            const auto& r = *receiver_handle->impl_;
+            relay_local =
+                CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*r.relay, r.mesh_device, r.service_cores, /*is_sender=*/false);
+        }
+    } catch (...) {
+        if (cfg.relay) {
+            CMAKE_UNIQUE_NAMESPACE::report_relay_failure(ctx, /*is_sender=*/false, endpoints.sender_rank);
+        }
+        throw;
+    }
     if (cfg.relay) {
         const auto& r = *receiver_handle->impl_;
-        const auto local =
-            CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*r.relay, r.mesh_device, r.service_cores, /*is_sender=*/false);
         build_relay_receiver(
             *receiver_handle,
             RelayInfo{CMAKE_UNIQUE_NAMESPACE::exchange_relay_peer(
-                ctx, /*is_sender=*/false, endpoints.sender_rank, local, *r.relay)});
+                ctx, /*is_sender=*/false, endpoints.sender_rank, *relay_local, *r.relay)});
     }
     EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), *receiver_handle->impl_->workload, /*blocking=*/false);
     receiver_handle->impl_->launched = true;
