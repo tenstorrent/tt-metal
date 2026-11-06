@@ -7,6 +7,10 @@
 //   - the column broadcast on rows 0..15 only (VectorMode::R) and on one 4-row band (sfpu_*_bcast_col_band), where
 //     the rows the form does not write must stay as they were and the parts of the column tile the form does not
 //     read are planted with NaN / Inf that must not leak into the output;
+//   - the parked scalar (sfpu_bcast_scalar_load, sfpu_mul_bcast_scalar): bit-identical to the column broadcast with
+//     a uniform column and to the host product, reads only element [0, 0], copies special bit patterns, survives a
+//     broadcast op and is re-loaded after exp_tile_init, over the (ITERATIONS, VectorMode) extents and the DEST
+//     slots of both the immediate and the generic address paths (fp32 full sync for slots 4..7).
 // Goldens are host-side; fp32 compares bit-exact (Blackhole unpacks fp32 straight to DEST; Wormhole's TF32 SrcA
 // path is modelled by quantising the inputs), bf16 at about one ulp.
 
@@ -495,9 +499,185 @@ std::string bcast_config_name(const SfpuBcastConfig& cfg) {
     return name;
 }
 
+// -----------------------------------------------------------------------------
+// The parked scalar
+// -----------------------------------------------------------------------------
+
+// How the scalar tile holds the scalar: alone at [0, 0] with NaN everywhere else (the load must read nothing else),
+// or in every row of column 0 with NaN elsewhere (so the column broadcast of the same tile is the reference).
+enum class ScalarLayout : uint8_t { LONE, COLUMN };
+
+struct ScalarCase {
+    std::string name;
+    uint32_t variant;  // the kernel's SCALAR_VARIANT_VAL: 0 scalar form, 1 plus the column form, 2 survive, 3 re-init
+    int iterations;    // SFPU vectors per face, 8 or 2 (4 is fine too; odd counts cover one column parity)
+    uint32_t mode;     // 0 RC, 1 R, 2 C
+    uint32_t dst_data;
+    uint32_t dst_scalar;
+    uint32_t dst_coldata;
+    uint32_t scalar_bits;
+    ScalarLayout layout;
+    bool full_sync;     // fp32 full sync: eight DEST slots, so slots 4..7 take the generic address path
+    bool host_compare;  // the scalar is a normal fp32 the host product is defined for (bit-exact on the device)
+};
+
+// Does sfpu_mul_bcast_scalar<iterations>(dst, mode) write element (r, c)?
+bool scalar_writes(uint32_t mode, int iterations, uint32_t r, uint32_t c) {
+    const bool face_upper = r < 16, face_left = c < 16;
+    bool face_selected = true;
+    if (mode == 1) {
+        face_selected = face_upper;  // R: faces 0 and 1
+    } else if (mode == 2) {
+        face_selected = face_left;  // C: faces 0 and 2
+    }
+    // Iteration k of a face is face rows 4 * (k / 2) .. +3; with an even count both column parities are covered.
+    return face_selected && static_cast<int>(2 * ((r % 16) / 4)) < iterations;
+}
+
+bool run_sfpu_bcast_scalar(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ScalarCase& sc) {
+    const tt::DataFormat df = tt::DataFormat::Float32;
+    const bool use_fp32_unpack_to_dest = fp32_unpacks_to_dest(mesh_device, df);
+    const uint32_t num_out_tiles = (sc.variant == 1 || sc.variant == 2) ? 2 : 1;
+
+    std::map<std::string, std::string> compute_defines = {
+        {"FORM_VAL", "3"},
+        {"SCALAR_VARIANT_VAL", std::to_string(sc.variant)},
+        {"SCALAR_ITER_VAL", std::to_string(sc.iterations)},
+        {"SCALAR_MODE_VAL", std::to_string(sc.mode)},
+        {"DST_DATA_VAL", std::to_string(sc.dst_data)},
+        {"DST_SCALAR_VAL", std::to_string(sc.dst_scalar)},
+        {"DST_COLDATA_VAL", std::to_string(sc.dst_coldata)},
+        {"NUM_OUT_TILES_VAL", std::to_string(num_out_tiles)},
+    };
+
+    // Fixed seeds: a failure must reproduce.
+    auto src_a_rm = generate_random_tile(0x5CA1A7u + sc.dst_data, -2.0f, 2.0f);
+    std::vector<float> src_b_rm(kTileHW, std::bit_cast<float>(kQuietNaNBits));
+    const float s = std::bit_cast<float>(sc.scalar_bits);
+    src_b_rm[0] = s;
+    if (sc.layout == ScalarLayout::COLUMN) {
+        for (uint32_t r = 0; r < 32; ++r) {
+            src_b_rm[r * 32] = s;
+        }
+    }
+
+    // The inputs as DEST sees them (TF32 on the Wormhole SrcA path; the scalar bits included).
+    const auto a_rm = use_fp32_unpack_to_dest ? src_a_rm : quantize_to_tf32_float(src_a_rm);
+    const float s_seen = use_fp32_unpack_to_dest ? s : std::bit_cast<float>(sc.scalar_bits & TF32_MASK);
+
+    ::unit_tests::compute::GoldenConfig gc{.num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .datum_bytes = 4};
+    auto src_a_tiled = ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(src_a_rm), gc);
+    auto src_b_tiled = ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(src_b_rm), gc);
+    auto a_tiled_f =
+        widen_to_floats(::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(a_rm), gc), true);
+
+    const auto device_f =
+        run_bcast_program(mesh_device, df, compute_defines, num_out_tiles, src_a_tiled, src_b_tiled, sc.full_sync);
+    if (device_f.size() != num_out_tiles * kTileHW) {
+        log_error(tt::LogTest, "{}: device returned {} elements", sc.name, device_f.size());
+        return false;
+    }
+
+    // The tile-order index of element (r, c): the face, then the position in it.
+    auto tile_index = [](uint32_t r, uint32_t c) { return ((r / 16) * 2 + (c / 16)) * 256 + (r % 16) * 16 + (c % 16); };
+    auto bits = [](float f) { return std::bit_cast<uint32_t>(f); };
+
+    size_t mismatches = 0;
+    constexpr size_t max_report = 8;
+    auto report = [&](const char* what, uint32_t r, uint32_t c, float expected, float got) {
+        if (mismatches < max_report) {
+            log_error(
+                tt::LogTest,
+                "{}: {} at ({}, {}): expected {:#x} ({}) got {:#x} ({})",
+                sc.name,
+                what,
+                r,
+                c,
+                bits(expected),
+                expected,
+                bits(got),
+                got);
+        }
+        ++mismatches;
+    };
+
+    for (uint32_t r = 0; r < 32; ++r) {
+        for (uint32_t c = 0; c < 32; ++c) {
+            const uint32_t i = tile_index(r, c);
+            const float a = a_tiled_f[i];
+            const float d = device_f[i];
+            const bool written = scalar_writes(sc.mode, sc.iterations, r, c);
+            if (!written) {
+                if (bits(d) != bits(a)) {
+                    report("untouched element changed", r, c, a, d);
+                }
+                continue;
+            }
+            if (num_out_tiles == 2) {
+                // The column form of the same scalar on the same data: the same multiply, so the same bits.
+                const float col = device_f[kTileHW + i];
+                if (bits(d) != bits(col)) {
+                    report("scalar form differs from the column form", r, c, col, d);
+                }
+            }
+            if (sc.host_compare) {
+                const float g = a * s_seen;
+                if (bits(d) != bits(g)) {
+                    report("not the host product", r, c, g, d);
+                }
+            } else if (std::isnan(s_seen)) {
+                if (!std::isnan(d)) {
+                    report("a NaN scalar did not propagate", r, c, s_seen, d);
+                }
+            } else if (std::isinf(s_seen)) {
+                const float g = a * s_seen;
+                if (!(d == g)) {
+                    report("not the host product (inf)", r, c, g, d);
+                }
+            }
+        }
+    }
+    if (mismatches != 0) {
+        log_error(tt::LogTest, "{}: {} mismatches", sc.name, mismatches);
+        return false;
+    }
+    return true;
+}
+
+std::vector<ScalarCase> all_scalar_cases() {
+    constexpr uint32_t kNegZero = 0x80000000u;
+    constexpr uint32_t kInf = 0x7F800000u;
+    constexpr uint32_t kDenormal = 0x00000001u;
+    auto f = [](float v) { return std::bit_cast<uint32_t>(v); };
+    // name, variant, iterations, mode, dst_data, dst_scalar, dst_coldata, scalar, layout, full_sync, host_compare
+    return {
+        {"identity_rc8", 1, 8, 0, 0, 1, 2, f(0.75f), ScalarLayout::COLUMN, false, true},
+        {"identity_rc8_negative", 1, 8, 0, 0, 1, 2, f(-2.5f), ScalarLayout::COLUMN, false, true},
+        {"lone_rc8", 0, 8, 0, 0, 1, 2, f(1.25f), ScalarLayout::LONE, false, true},
+        {"lone_rc2", 0, 2, 0, 0, 1, 2, f(1.25f), ScalarLayout::LONE, false, true},
+        {"lone_r8", 0, 8, 1, 0, 1, 2, f(1.25f), ScalarLayout::LONE, false, true},
+        {"lone_r2", 0, 2, 1, 0, 1, 2, f(1.25f), ScalarLayout::LONE, false, true},
+        {"lone_c8", 0, 8, 2, 0, 1, 2, f(1.25f), ScalarLayout::LONE, false, true},
+        {"lone_rc4", 0, 4, 0, 0, 1, 2, f(0.5f), ScalarLayout::LONE, false, true},
+        // The SFPU multiply gives a positive zero where the host product is -0.0, so this case is device against
+        // device only: the parked -0.0 scales exactly as the column broadcast of -0.0 does.
+        {"negative_zero", 1, 8, 0, 0, 1, 2, kNegZero, ScalarLayout::COLUMN, false, false},
+        {"nan", 1, 8, 0, 0, 1, 2, kQuietNaNBits, ScalarLayout::COLUMN, false, false},
+        {"inf", 1, 8, 0, 0, 1, 2, kInf, ScalarLayout::COLUMN, false, false},
+        {"denormal", 1, 8, 0, 0, 1, 2, kDenormal, ScalarLayout::COLUMN, false, false},
+        {"survives_bcast_op", 2, 8, 0, 0, 1, 2, f(0.5f), ScalarLayout::COLUMN, false, true},
+        {"survives_bcast_op_r2", 2, 2, 1, 0, 1, 2, f(0.5f), ScalarLayout::COLUMN, false, true},
+        {"reload_after_exp_init", 3, 8, 0, 0, 1, 2, f(1.5f), ScalarLayout::LONE, false, true},
+        {"slots_3_2", 0, 8, 0, 3, 2, 0, f(1.25f), ScalarLayout::LONE, false, true},
+        {"slots_7_4_full_sync", 1, 8, 0, 7, 4, 5, f(0.75f), ScalarLayout::COLUMN, true, true},
+        {"slots_6_1_full_sync_r2", 0, 2, 1, 6, 1, 0, f(1.25f), ScalarLayout::LONE, true, true},
+    };
+}
+
 }  // namespace unit_tests::compute::sfpu_binary_bcast
 
 using unit_tests::compute::sfpu_binary_bcast::bcast_config_name;
+using unit_tests::compute::sfpu_binary_bcast::ScalarCase;
 using unit_tests::compute::sfpu_binary_bcast::SfpuBcastConfig;
 
 class SfpuBinaryBcastFixture : public MeshDeviceFixture, public ::testing::WithParamInterface<SfpuBcastConfig> {};
@@ -521,5 +701,26 @@ INSTANTIATE_TEST_SUITE_P(
     SfpuBinaryBcastFixture,
     ::testing::ValuesIn(unit_tests::compute::sfpu_binary_bcast::all_bcast_configs()),
     [](const ::testing::TestParamInfo<SfpuBcastConfig>& info) { return bcast_config_name(info.param); });
+
+class SfpuBcastScalarFixture : public MeshDeviceFixture, public ::testing::WithParamInterface<ScalarCase> {};
+
+TEST_P(SfpuBcastScalarFixture, TensixSfpuBcastScalar) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0 && this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "The SFPU scalar broadcast is only supported on Wormhole B0 and Blackhole";
+    }
+
+    const ScalarCase sc = GetParam();
+    log_info(tt::LogTest, "Testing SFPU bcast scalar: {}", sc.name);
+
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::sfpu_binary_bcast::run_sfpu_bcast_scalar(device, sc));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SfpuBcastScalarAllVariants,
+    SfpuBcastScalarFixture,
+    ::testing::ValuesIn(unit_tests::compute::sfpu_binary_bcast::all_scalar_cases()),
+    [](const ::testing::TestParamInfo<ScalarCase>& info) { return info.param.name; });
 
 }  // namespace tt::tt_metal
