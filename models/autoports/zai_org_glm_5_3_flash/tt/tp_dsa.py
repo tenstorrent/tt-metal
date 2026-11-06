@@ -274,8 +274,11 @@ class TPDsaLayer:
         self.dsa_pending = bool(dsa and defer)
         self._attach = (cfg, source, ocfg, tuple(ts)) if self.dsa_pending else None
         self.attn, self.mla = self._build_mla(cfg, source, ocfg, ts, share, dsa and not defer)
+        # GLM53_MOE_SHARE_M (default 1): every sparse_dsa layer's MoE shares the first layer's shared-expert intermediate
+        # m (MkMoE.persist): one L1 buffer per stack instead of one per layer (mk_moe.MkMoE.__call__)
+        shm = share.moe.mk.persist if share is not None and os.environ.get("GLM53_MOE_SHARE_M", "1") == "1" else None
         self.moe = TPMoE(mesh, mhc_host_args(source, cfg, layer, "ffn"), moe, ts=ts,
-                         fabrics=share.moe.fabrics if share else None)  # fmt: skip
+                         fabrics=share.moe.fabrics if share else None, persist=shm)  # fmt: skip
 
     # ---- the slice sidecar (GLM53_DSA_SLICE_CACHE=<local dir>; unset: off): MeshHeadShard's fp32 host copies of q_b /
     # o_proj / W_uk / W_uv (what the per-rank uploads and host_weights are cut from), saved by the first attach_dsa of a

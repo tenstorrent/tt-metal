@@ -49,12 +49,15 @@ class MkMoE:
     def __init__(self, device, mhc_args: dict, mlp, *, e_lo: int = 0, num_experts: int | None = None,
                  expert_ring_slots: int | None = None, xtp: int | None = None,
                  local_experts: list | None = None, replica_home: list | None = None,
-                 chip: int = 0, xsl: int | None = None, xsl_tp: int = 8, xsl_sliced: bool = False):  # fmt: skip
+                 chip: int = 0, xsl: int | None = None, xsl_tp: int = 8, xsl_sliced: bool = False,
+                 persist: dict | None = None):  # fmt: skip
         """mlp: the decoder layer's OptimizedMoE (router DSLinear + its RouterTail bias, the shared expert's DSLinears,
         the routed experts' weight lists); e_lo / num_experts: expert parallelism (this chip's experts are mlp.gate_up /
         mlp.down); xtp = c: expert TP slice c of every expert (mk_experts.ReaderExperts; its semaphore SEM_XTP = 15 is
         free on these readers); xsl = c: batched expert TP slice c (MKX_XSL); local_experts: a load-aware EP placement
-        (this chip's expert ids in slot order, mk_experts.ReaderExperts)."""
+        (this chip's expert ids in slot order, mk_experts.ReaderExperts). persist: another MkMoE's persistent-tensor
+        dict (tp_dsa.TPDsaLayer: every sparse_dsa layer of a stack shares the first layer's shared-expert intermediate
+        `m` -- layers never run concurrently and each layer's program writes m before reading it)."""
         self.device = device
         router, shared = mlp.router, mlp.shared
         if expert_ring_slots is None:  # read per construction (a long-lived process keeps the module imported)
@@ -87,7 +90,7 @@ class MkMoE:
         assert self.i_tiles % len(self.place["k"]) == 0
         self.nt = self.i_tiles // len(self.place["k"])
         self.limit_shared = shared.limit
-        self.persist = {}
+        self.persist = persist if persist is not None else {}
         self.calls = 0
 
     def _persistent(self, key, make):
@@ -117,7 +120,10 @@ class MkMoE:
         # row, so a server's widths (32, 8, 16, narrow 1..4) share ONE buffer per layer instead of each width's first
         # call allocating another L1 buffer below the programs already compiled (Stage 14b: 11 sparse_dsa layers x ~1 KB
         # per L1 bank per extra width; a later allocation overlaps captured programs' static CBs). Widths never run
-        # concurrently and each step writes m before reading it.
+        # concurrently and each step writes m before reading it. Shared across the stack's sparse_dsa layers too
+        # (`persist`, GLM53_MOE_SHARE_M): the owners' swiglu of layer L + 1 runs after they left layer L's program,
+        # whose post phase waited for every reader's y (the down readers read m before that) -- 10 x 2 KB per L1
+        # bank under the 45-layer stack (the 8x4 sharded B = 16 floor: 2026-11-06 program.cpp CB / L1 clash by 640 B).
         mrows = -(-t // TILE) * TILE
         m = self._persistent(("m", mrows), lambda: mk((1, 1, mrows, self.shared_i), BF16))
         ids = mk((1, 1, t, self.experts.top_k), ttnn.uint16)

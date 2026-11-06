@@ -76,3 +76,30 @@ RS1 along the column with 8 destinations, and a new 2-row slice format serves RS
 3. `tp_dsa_shard.py` streams / audits for P = 8; `mk_mla.py` shard_lanes_check (helpers >= NCHIPS).
 4. Device unit on the 8x4 (the shard job on a short context, numerics vs the unsharded TP32 ids 785 1196 702 ...),
    then the e2e rows: 32 K x 32, 128 K x 8 / 16 / 32, 512 K x 4-32, 1 M x 4-16.
+
+## 6. Device results (2026-11-06, chain_mk126 on l2-34; 45 layers, tile cache v3, TP prefill)
+
+| Context | Users | Decode | TTFT | Notes |
+|---|---|---|---|---|
+| 4 K | 4 identical | 26.8 ms = 37.4 tok/s/u | 8.6 s | ids 785 1196 702 3267 ... (the 2x4 sharded ids); unsharded TP32 18.8 ms / 4.2 s |
+| 32 K | 4 identical | 27.2 ms = 36.8 tok/s/u | 35.4 s | ids = the 2x4 sharded 32 K row exactly; unsharded TP32 20.5 ms / 35.1 s |
+| 128 K | 8 distinct | 43.3 ms = 23.1 tok/s/u | 290 s | 8 x 128 K resident (the unsharded pool holds 4) |
+| 512 K | 4 distinct | 28.9 ms = 34.6 tok/s/u | 626 s | 6 GB trace region; the unsharded pool OOMs at 512 K x 1 |
+| 1 M | 1 | 19.3 ms = 51.7 tok/s/u | 345 s | 8 GB trace region, 1,402 / 1,649 MiB DRAM free per bank after compile |
+| 1 M | 4 distinct | 28.2 ms = 35.4 tok/s/u | 1,379 s | 4 x 1 M resident, 1,534 / 1,516 MiB DRAM per bank after gc |
+| 32 K / 128 K | 16 distinct | build throw | | the MoE decode program's static CBs at t = 16 vs the L1 floor (section 7) |
+
+Prefill runs 3.0-3.7 K tok/s flat from 32 K to 1 M (the TP prefill path, unchanged by the shard). The exchange costs
++7-8 ms per decode step at 4 K / 32 K against the unsharded TP32 (the optimisation item), and the per-user decode
+at 128 K x 8 (43.3 ms) is the first measurement of the sharded split-K at 8 token lanes on 32 helpers.
+
+## 7. Open: B = 16 (the L1 floor)
+
+`program.cpp validate_circular_buffer_region`: "Statically allocated circular buffers in program N clash with L1
+buffers on core range [0-1 - 0-7]. L1 buffer allocated at 1253248 and static circular buffer region ends at
+1253888" from `tp_dsa.TPMoE.__call__` (the MoE decode program at t = 16, `stack_model.prepare_decode`). The check
+compares every CB core range of the program against the mesh-wide lowest L1 buffer address, so the reported 640 B
+is the first clashing allocator, not the maximum. The unsharded TP32 B = 16 row built the same program; the shard
+adds the stream sync words (4 x 1.5 KB per row count, shared across layers: `GLM53_DSA_SHARD_SHARE_SYNC`) under the
+floor. The 2x4 sharded B = 16 row threw the same with the floor at 1245056. Diagnostic: `GLM53_MK_CB_REPORT=2` (the
+shard CB report, the L1 census with tensors, the MoE CB map of `TPMoE._cb_map`).
