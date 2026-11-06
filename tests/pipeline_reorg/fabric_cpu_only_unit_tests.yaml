@@ -171,6 +171,6 @@
     cpu_medium:
       timeout: 5
   team: runtime
-  budget_type: unit
+  budget_type: profiler
   arch: wormhole_b0
   owner_id: U03BJ1L3LUQ # Mo Memarian

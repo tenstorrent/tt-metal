@@ -472,8 +472,6 @@ std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) 
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
         return fabric_program;
     }
-    // Lay out the kernel config buffer here, on the host, so a router that overflows it fails before configure_fabric
-    // writes to this device, and also on a mock cluster, which never configures.
     fabric_program->impl().finalize_offsets(dev);
     return fabric_program;
 }

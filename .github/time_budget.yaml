@@ -275,7 +275,6 @@ runtime:
     bh_p100a_civ2_viommu: 79
     bh_loudbox: 20
     wh_galaxy: 39
-    cpu_medium: 5  # Streaming profiler torus router fit check on mock clusters.
   integration:
     wh_n150_civ2: 360
     bh_p150b_civ2: 360
@@ -290,6 +289,7 @@ runtime:
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
     bh_loudbox: 20
+    cpu_medium: 5  # Streaming profiler torus router fit check on mock clusters.
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50

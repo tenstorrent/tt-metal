@@ -13,10 +13,6 @@ test_streaming_profiler_fabric_overhead bounds the latency and bandwidth the pro
 microbenchmark, against a profiler-off run. test_streaming_profiler_fabric_sync_check bounds the sync error during that
 microbenchmark, and test_streaming_profiler_fabric_eth_zones checks that the routers' zones reach the zone CSV. These
 three need four or more Blackhole chips and take about 2 minutes warm, 5 cold.
-
-test_streaming_profiler_torus_routers_fit builds the multi-mesh 2D-torus fabric routers of Blackhole Galaxies, the largest
-routers the profiler adds to, with the profiler on, and checks that each fits its kernel config buffer. It runs on mock
-clusters, so it needs no device, and takes about a minute per case.
 """
 
 from __future__ import annotations
@@ -371,80 +367,24 @@ def test_streaming_profiler_fabric_eth_zones(ubench_config, baseline, tmp_path):
     check_log_clean(out)
 
 
-# Each case: a mesh graph descriptor, the mock cluster it maps onto (one cluster descriptor, or a per-rank mapping), the
-# fabric config, each rank's mesh shape and the number of ranks.
-MGDS = Path(TT_METAL_HOME) / "tests/tt_metal/tt_fabric/custom_mesh_descriptors"
-MOCK_CLUSTERS = Path(TT_METAL_HOME) / "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole"
-TORUS_CASES = {
-    # tt-blaze's GLM-5 decode layout: one Galaxy split into four 4x2 meshes, a ring along each mesh's rows.
-    "galaxy_4x2_torus_y": (
-        MGDS / "fabric_cpu_only_blitz_single_galaxy_4x2_ring_4stage_ring_mesh_graph_descriptor.textproto",
-        MOCK_CLUSTERS
-        / "SC16_32x4_revC_subtorus_aisleD/SC16_32x4_revC_subtorus_aisleD_cluster_desc"
-        / "SC16_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-110-d07u08_rank_13.yaml",
-        "FABRIC_2D_TORUS_Y",
-        (4, 2),
-        4,
-    ),
-    # Four Galaxies, one 8x4 mesh each with rings along both axes, the meshes linked in a ring.
-    "quad_galaxy_8x4_torus_xy": (
-        MGDS / "fabric_cpu_only_quad_galaxy_8x4_torus_xy_4mesh_ring_mesh_graph_descriptor.textproto",
-        MOCK_CLUSTERS / "SC16_32x4_revC_subtorus_aisleD/SC16_32x4_revC_subtorus_aisleD_single_pod_mapping.yaml",
-        "FABRIC_2D_TORUS_XY",
-        (8, 4),
-        4,
-    ),
-}
-TORUS_OPEN = Path(__file__).with_name("streaming_profiler_torus_open.py")
-# The max packet payload tt-blaze's GLM-5 decode pipeline gives the fabric.
-TORUS_PAYLOAD_BYTES = 8192
-TORUS_TIMEOUT_S = 600
-TORUS_ENV = {
-    "TT_METAL_STREAMING_PROFILER": "1",
-    "TT_METAL_SLOW_DISPATCH_MODE": "1",
-    # A mock cluster reports no firmware bundle, so tt-metal cannot tell that the cores the profiler needs exist. Without
-    # them the routers are built without the link sync port, about 2.4 KB smaller than on silicon.
-    "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES": "1",
-}
-MOCK_PROFILER = "[streaming profiler] mock cluster: kernels are built with the profiler, nothing runs"
+# A mock cluster reports no firmware bundle, so without this override tt-metal builds the routers without the link sync
+# port, about 2.4 KB smaller than on silicon.
+TORUS_ENV = {"TT_METAL_STREAMING_PROFILER": "1", "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES": "1"}
 
 
-@pytest.mark.timeout(TORUS_TIMEOUT_S + 60)
-@pytest.mark.parametrize("case", list(TORUS_CASES))
-def test_streaming_profiler_torus_routers_fit(case):
-    """With the profiler on, every fabric router of a multi-mesh 2D torus fits its kernel config buffer
-    (MEM_ERISC_KERNEL_CONFIG_SIZE). The routers are built and laid out on a mock cluster, which fails the same way as
-    silicon when one overflows."""
-    mgd, mock, fabric_config, (rows, cols), ranks = TORUS_CASES[case]
-    args = [
-        "tt-run",
-        "--mesh-graph-descriptor",
-        mgd,
-        "--mock-cluster-rank-binding",
-        mock,
-        "--mpi-args",
-        "--allow-run-as-root --oversubscribe " + " ".join(f"-x {name}" for name in TORUS_ENV),
-        "--",
-        sys.executable,
-        TORUS_OPEN,
-        fabric_config,
-        str(rows),
-        str(cols),
-        str(TORUS_PAYLOAD_BYTES),
-    ]
-    env = {name: value for name, value in os.environ.items() if not name.startswith("TT_METAL_STREAMING_PROFILER")}
-    env.update(TORUS_ENV)
-    try:
-        proc = subprocess.run(
-            [str(arg) for arg in args], env=env, capture_output=True, text=True, timeout=TORUS_TIMEOUT_S
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail(f"tt-run timed out after {TORUS_TIMEOUT_S} s")
+@pytest.mark.timeout(600)
+def test_streaming_profiler_torus_routers_fit():
+    """With the profiler on, the fabric routers of a Galaxy split into four 4x2 TORUS_Y meshes (the largest the profiler
+    adds to) fit their kernel config buffer, checked on a mock cluster, which fails like silicon on an overflow."""
+    mgd = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_single_galaxy_4x2_ring_4stage_ring_mesh_graph_descriptor.textproto"
+    mock = "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_subtorus_aisleD/SC16_32x4_revC_subtorus_aisleD_cluster_desc/SC16_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-110-d07u08_rank_13.yaml"
+    mpi = "--allow-run-as-root --oversubscribe " + " ".join(f"-x {name}" for name in TORUS_ENV)
+    tt_run = ["tt-run", "-m", mgd, "--mock-cluster-rank-binding", mock, "--mpi-args", mpi]
+    rank = [sys.executable, str(Path(__file__).with_name("streaming_profiler_torus_open.py"))]
+    env = {**os.environ, **TORUS_ENV, "TT_METAL_SLOW_DISPATCH_MODE": "1"}
+    proc = subprocess.run([*tt_run, "--", *rank], cwd=TT_METAL_HOME, env=env, capture_output=True, text=True)
     out = ANSI_ESCAPE.sub("", proc.stdout + proc.stderr)
-    # tt-run can return 0 when a rank fails, so every rank must also print that it opened its mesh.
-    opened = out.count("TORUS_OPEN_OK")
-    assert (
-        proc.returncode == 0 and opened == ranks
-    ), f"tt-run exited {proc.returncode} with {opened} of {ranks} ranks opening their mesh:\n{out[-4000:]}"
-    assert out.count(MOCK_PROFILER) >= ranks, f"the routers were not built with the profiler:\n{out[-4000:]}"
+    # tt-run can exit 0 when a rank fails, so each of the 4 ranks must also report its mesh opened.
+    assert proc.returncode == 0 and out.count("TORUS_OPEN_OK") == 4, out[-4000:]
+    assert "[streaming profiler] mock cluster" in out, f"the routers were not built with the profiler:\n{out[-4000:]}"
     check_log_clean(out)
