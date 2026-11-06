@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
@@ -17,7 +18,9 @@ constexpr uint32_t local_rows = get_compile_time_arg_val(6);
 constexpr uint32_t kt = get_compile_time_arg_val(7);  // key tiles; the state is kt x kt tiles
 // cb_ein's storage again, as compute's exact (UnpackToDest) view of the entry state.
 constexpr uint32_t cb_ein_exact = get_compile_time_arg_val(8);
-constexpr auto packed_args = TensorAccessorArgs<9>();
+// One BF16 32x32 identity tile, for compute's exact I @ B.
+constexpr uint32_t cb_identity = get_compile_time_arg_val(9);
+constexpr auto packed_args = TensorAccessorArgs<10>();
 constexpr auto init_args = TensorAccessorArgs<packed_args.next_compile_time_args_offset()>();
 constexpr auto start_args = TensorAccessorArgs<init_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
@@ -47,6 +50,19 @@ void kernel_main() {
             noc_async_read_page(page + kt, packed, get_write_ptr(cb_b) + (r * kt + c) * eb_tile);
         }
     }
+    // The identity tile while the reads are in flight: BF16 1.0 on the diagonal, which lies in the top-left and
+    // bottom-right 16x16 faces.
+    cb_reserve_back(cb_identity, 1);
+    auto* identity = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_identity));
+    for (uint32_t i = 0; i < tt::constants::TILE_HW; ++i) {
+        identity[i] = 0;
+    }
+    constexpr uint16_t one_bf16 = 0x3F80;
+    for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
+        identity[row * tt::constants::FACE_WIDTH + row] = one_bf16;
+        identity[3 * tt::constants::FACE_HW + row * tt::constants::FACE_WIDTH + row] = one_bf16;
+    }
+    cb_push_back(cb_identity, 1);
     noc_async_read_barrier();
     const uint32_t actual_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_chron))[0];
     const auto topology = kda_chronology::derive(actual_start, sp_rank, sp_size, local_rows);
