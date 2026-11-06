@@ -805,18 +805,20 @@
       printf '%s' "$summary"
     }
 
+    # Measured 2.1 min x 1.25 + 1.
     section_start 1
     (
-      timeout -k 2m 6m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_chunked_prefill_mesh -k "flash and chunk5120-varying and torus-xy-8x4" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 2.1 min x 1.25 + 1.
     section_start 2
     (
-      timeout -k 2m 8m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_swa.py::test_swa_long_prefill_mesh -k "flash and mixed5120 and torus-xy-8x4" -vvv --tb=short
       '
@@ -833,19 +835,20 @@
     section_end 0
 
     # Production-width chunked CSA with the real sparse top-k: 5120+5120+3000 actual tokens, fixed
-    # 5120 device width, and the variant's stock index_topk.
+    # 5120 device width, and the variant's stock index_topk. Measured 1.7 min x 1.25 + 1.
     section_start 4
     (
-      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "flash and 3chunk-production and torus-xy-8x4" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 1.9 min x 1.25 + 1.
     section_start 5
     (
-      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "pro and 3chunk-production and torus-xy-8x4" -vvv --tb=short
       '
@@ -861,9 +864,10 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 0.7 min x 1.25 + 1.
     section_start 7
     (
-      timeout -k 2m 3m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 2m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head_tp_sharded -k "torus-xy-8x4" -vvv --tb=short
       '
@@ -877,8 +881,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12+15+25+2+3 = 71).
-      timeout: 71
+      # Sum of the section timeouts (4+4+12+4+4+2+2 = 32).
+      timeout: 32
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -887,14 +891,15 @@
   sp_config: sc1
 
 
-- name: "(DeepSeek-V4) transformer accuracy 5k + transformer chunked accuracy 10k@5k + transformer pipeline-split accuracy 5k + transformer chunked accuracy 55k@5k vs vLLM golden"
+- name: "(DeepSeek-V4) transformer accuracy 5k + transformer chunked accuracy 10k@5k, two users interleaved + transformer pipeline-split accuracy 5k + transformer chunked accuracy 55k@5k vs vLLM golden + prefill runtime two users interleaved with slot reuse 10k@5k"
   fabric_profile: torus_xy
   cmd: |
     titles=(
       "(DeepSeek-V4) transformer accuracy 5k"
-      "(DeepSeek-V4) transformer chunked accuracy 10k@5k"
+      "(DeepSeek-V4) transformer chunked accuracy 10k@5k, two users interleaved"
       "(DeepSeek-V4) transformer pipeline-split accuracy 5k"
       "(DeepSeek-V4) transformer chunked accuracy 55k@5k vs vLLM golden"
+      "(DeepSeek-V4) prefill runtime two users interleaved with slot reuse 10k@5k"
     )
     summary=""
     section_start() {
@@ -931,11 +936,12 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 31.1 min x 1.25 + 1.
     section_start 2
     (
-      timeout -k 2m 34m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4 and users2" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
@@ -958,6 +964,16 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 23.4 min (Flash 9.7 + Pro 13.7) x 1.25 + 1.
+    section_start 5
+    (
+      timeout -k 2m 31m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_runtime_two_users.py -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
     finish
   test_type: dsv4_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
@@ -965,8 +981,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (37+34+27+30 = 128).
-      timeout: 128
+      # Sum of the section timeouts (37+40+27+30+31 = 165).
+      timeout: 165
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -1184,10 +1200,10 @@
 # ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the
-# canonical production shape (traced, 256k context, 8k chunk, 8x4 = CP8/TP4)
+# canonical production shape (traced, 256k context, service chunk size, 8x4 = CP8/TP4)
 # exercised end to end on real text. Golden GPU-trace comparisons are staged
 # separately on /mnt/models; this leg only checks the path runs.
-- name: "(Gemma4-31B-it) D_P prefill sanity 256k@8k"
+- name: "(Gemma4-31B-it) D_P prefill sanity 256k"
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
@@ -1214,7 +1230,7 @@
   sp_config: sc1
 
 
-- name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k@8k"
+- name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k"
   fabric_profile: 1d
   artifact_subdir: gemma4_mock256k
   cmd: |
@@ -1245,7 +1261,7 @@
 
 # Prefill accuracy outside the migration path: one traced runtime prefills each GPU-trace dataset, then
 # checks every KV head and the next-token likelihoods (per context-depth bin) against the trace.
-- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy full@8k"
+- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy full"
   fabric_profile: 1d
   artifact_subdir: gemma4_d_p_prefill_accuracy
   cmd: |
@@ -1300,6 +1316,30 @@
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+# Gemma4's sliding layers run ttnn.experimental.gemma4.sliding_ring_sdpa, a Gemma4-owned fork of ring joint
+# SDPA's sliding path: the shared Gemma4 chunked perf check's sliding cases (256k at chunk 2k/4k/8k, same configs
+# and bands), timed on the fork. The global cases stay on the shared op in the ring joint SDPA perf leg.
+- name: "(Gemma4-31B-it) sliding ring SDPA perf 256k@2k, 256k@4k, 256k@8k"
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/gemma4/test_sliding_ring_sdpa.py::test_gemma4_chunked_perf_check -svv
+    '
+  test_type: gemma4_sliding_sdpa_perf
+  test_tags: [gemma4_d_p, sdpa, swa]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1_high_power:
+      timeout: 8
+      tier: 2
+      release_ready: false
+  owner_id: UT1JL93D5 # Kyle Mabee
   team: models
   sp_config: sc1
 
@@ -2007,9 +2047,8 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # 20 on the 8x4 layout. The 4x4 trunk leg's job takes 19 min, and the drafter adds its own load and KV,
-      # so 30 until a 4x4 run measures it.
-      timeout: 30
+      # The test step takes about 14 min warm (run 41911365787); 25 leaves 1.7x for a slower Weka cache.
+      timeout: 25
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -2117,25 +2156,8 @@
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
 
-# 4-galaxy (SC4) disaggregated prefill for Kimi-K3: all 93 layers as 8 stages of [4,4], SP on mesh axis 1,
-# two ranks per galaxy (one per tray half), 12 layers each and 9 on the last, chained along the hosts'
-# cabled ring. Every boundary is a multiple of ATTN_RES_BLOCK_SIZE=12, or a rank inherits a partial
-# sealed set and its local layer 0 seals a block that is not there; the adapter's layer_split_boundaries
-# snaps the even split there, so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
-# run_multirank_pcc.sh checks the 4x4 weight cache (kimi_k3_bh_16dev/4x4_sp1) on every host, then tt-run
-# discovery binds the ranks against the 8-mesh descriptor: it finds the ring order from the cabling, so
-# the hosts can come in any order. The stage shape, 2560-token chunks (640 tokens per chip), the TP-deduped
-# KV, tracing and the slot count all come from the kimi_k3 manifest, so this leg carries no fabric_profile
-# -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it. 127 slots at the 1M window: the per-stage
-# capacity probe (two stages per Galaxy via PREFILL_PP_LAYER_OFFSET, a full 1M request at each N) fits 129
-# traced on every stage. Stage 1, the tightest, runs out at 130. 127 keeps two slots of margin, as #63502
-# did on 8x4 (PR #61481). The request runs to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd,
-# the tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
-# prefill SC4 perf" summary job. run_multirank_pcc.sh's sc4_8x4 keeps the 4 stages of 8x4 for hand
-# comparisons; no leg runs it.
-# Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
-# four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
-# also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
+# SC4 Kimi-K3: 93 layers as 8 stages of [4,4], two per galaxy; stage shape, chunk, KV dedup and slots come from
+# the kimi_k3 manifest. Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
 - name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
@@ -2150,10 +2172,8 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Run 41533146872 (2026-11-03): 12 min for this step and 19 min for the job, against 24-27 min for
-      # the 8x4 layout this replaced, with the same 1.5 TB of weights. 90 keeps over 4x of the job for a
-      # cold Weka cache. shield/demo bh_sc4 is a SUM over the team's legs on that SKU, not a per-leg cap:
-      # 60 (GLM-5.3) + 30 (DSpark) + 90 of 380.
+      # The job takes about 19 min warm; 90 leaves room for a cold Weka cache of the 1.5 TB of weights.
+      # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 25 (DSpark) + 90 of 380.
       timeout: 90
       tier: 1
       release_ready: false
@@ -2168,8 +2188,8 @@
 # MLA layer and is the deepest depth the golden's decoder-output stream covers, making this a real
 # accuracy gate rather than a smaller copy of sc4. sc4's 127 slots, traced like sc4, and timed to sc4's
 # 1M request (the capacity probe ran exactly this: stages 0+1 on one Galaxy, 129 traced); 24 layers are
-# no baseline for 93, so its numbers are gated and reported in this job's summary but kept out of the
-# sc4 summary.
+# no baseline for 93, so its numbers are gated against their own kimi_k3 sc1 baseline and reported in
+# this job's summary, kept out of the sc4 summary.
 - name: "(Kimi-K3-2.8T) disaggregated prefill L24 2x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2200,6 +2220,8 @@
   # Split-KV ring MLA gathers KV over the full-mesh snake, so only its perf check gets the
   # TorusXY descriptor (see fabric_profile); it holds split KV within 2.5% of the classic SP
   # ring measured back to back. Its accuracy cases run on QB2 (blackhole_multi_card_sanity_tests).
+  # The Gemma4 check runs only its global cases here: Gemma4's sliding layers use the Gemma4 fork,
+  # so its sliding cases run in the "(Gemma4-31B-it) sliding ring SDPA perf" leg.
   cmd: |
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export LOGURU_LEVEL=ERROR
@@ -2209,7 +2231,7 @@
       export OMP_NUM_THREADS=$(nproc)
       rc=0
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
-      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -svv || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -k gemma4_global -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy -k "kimi_k3" -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_determinism -k "kimi_k3" -svv || rc=1
@@ -2222,7 +2244,8 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 45
+      # The test step takes ~21 min; 8 of the old 45 fund the Gemma4 sliding ring SDPA perf leg.
+      timeout: 37
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic

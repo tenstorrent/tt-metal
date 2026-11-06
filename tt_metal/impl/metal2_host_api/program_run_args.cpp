@@ -19,7 +19,6 @@
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/fmt.hpp>
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/tensor_binding_crtas.hpp"
 #include "impl/program/program_impl.hpp"
@@ -141,22 +140,36 @@ static void report_tensor_arg_mismatch(
     const TensorSpec& expected_spec,
     const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
+        // Checked in two parts, because the alignment is the one component of tensor_layout that
+        // relax_tensor_layout_alignment frees.
+        const TensorLayout& runtime_layout = runtime_spec.tensor_layout();
+        const TensorLayout& expected_layout = expected_spec.tensor_layout();
         TT_FATAL(
-            runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
+            runtime_layout.get_data_type() == expected_layout.get_data_type() &&
+                runtime_layout.get_page_config() == expected_layout.get_page_config() &&
+                runtime_layout.get_memory_config() == expected_layout.get_memory_config(),
             "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-            "binding's "
-            "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
-            "page_config, memory_config, and alignment must still match exactly.",
+            "binding's declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
+            "page_config, and memory_config must still match exactly.",
             param_name);
+        if (!relaxation.relax_tensor_layout_alignment) {
+            TT_FATAL(
+                runtime_layout.get_alignment() == expected_layout.get_alignment(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
+                "declares {}. dynamic_tensor_shape lets the shape values vary, but the tensor must still be padded to "
+                "the declared alignment. To accept other alignments, also set relax_tensor_layout_alignment.",
+                param_name,
+                runtime_layout.get_alignment(),
+                expected_layout.get_alignment());
+        }
         // The rank is the one shape term dynamic_tensor_shape still pins, and relax_logical_rank
-        // frees it. When it is set, tensor_layout above is the whole match, so there is nothing
-        // further to report and the trailing TT_THROW handles the rejection.
+        // frees it.
         if (!relaxation.relax_logical_rank) {
             TT_FATAL(
                 runtime_spec.logical_shape().rank() == expected_spec.logical_shape().rank(),
                 "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
                 "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
-                "remain constant. Set relax_logical_rank as well if it must not.",
+                "remain constant. To accept other ranks, also set relax_logical_rank.",
                 param_name,
                 runtime_spec.logical_shape().rank(),
                 expected_spec.logical_shape().rank());
@@ -247,9 +260,13 @@ static void report_tensor_arg_mismatch(
 //       - match_page_size=true (with dynamic_tensor_shape): as above, plus the page size must
 //         match. A TIGHTENING rather than a relaxation -- it declares that the width is constant
 //         even though the shape varies, so the accessor can keep the page size compile-time.
-//     relax_logical_rank is inert unless dynamic_tensor_shape is also set; the load-bearing field
-//     set for every combination is derived in one place, by pertinent_fields()
-//     (tensor_spec_relaxations.cpp), which both this validation and the relaxation-aware hash use.
+//       - relax_tensor_layout_alignment=true (with dynamic_tensor_shape): tensor_layout() need not match on its
+//         alignment, so a tensor padded differently from the declared one is accepted. Composes
+//         with the two flags above.
+//     relax_logical_rank and relax_tensor_layout_alignment are inert unless dynamic_tensor_shape is also set;
+//     the load-bearing field set for every combination is derived in one place, by
+//     pertinent_fields() (tensor_spec_relaxations.cpp), which both this validation and the
+//     relaxation-aware hash use.
 //     See the field doc comments in tensor_spec_relaxations.hpp for the full contracts.
 //   - When require_all is true: every declared TensorParameter must be set.
 //   - When require_all is false (partial update): any TensorParameter may be omitted; its
@@ -309,8 +326,9 @@ void RejectPrefetcherPipeRelayResize(
 //   - The supplied pipe's geometry (receiver nodes, ring size) matches the parameter's. The spec
 //     names no sender; when this Program runs the sender kernel, the pipe's sender must be one of
 //     that kernel's nodes, which the bind checks per slot.
-//   - The binding is sticky: a parameter already bound to a different pipe object is rejected
-//     (re-supplying the same object is a no-op).
+//   - The binding is sticky: a parameter already bound to a different pipe object is rejected,
+//     unless that pipe has the bound one's binding key (a re-carve at the same addresses), which
+//     replaces it. Re-supplying the same object is a no-op.
 //   - When require_all is true: every declared parameter must be supplied, unless it is already
 //     bound (the binding is program-lifetime state, so a later full SetProgramRunArgs may omit it).
 // Pipe-object-dependent checks that need the slot (lane capacity, relay ring agreement) run at
@@ -338,10 +356,10 @@ void ValidatePrefetcherPipeArgs(
             "Program's mesh.",
             param_name);
         TT_FATAL(
-            binding->bound_pipe == nullptr || binding->bound_pipe_identity == pipe.identity(),
+            binding->accepts(pipe.impl()),
             "PrefetcherPipeArgument for '{}' supplies a different PrefetcherPipe object than the one this Program "
-            "is bound to. A Program binds a parameter to one pipe for its lifetime; build a new Program to use "
-            "another pipe.",
+            "is bound to. A Program binds a parameter to one pipe, or to one that replaces it at the same addresses "
+            "with the same geometry; build a new Program to use another pipe.",
             param_name);
         TT_FATAL(
             pipe.receiver_cores().num_cores() == binding->receivers.num_cores() &&
@@ -365,7 +383,7 @@ void ValidatePrefetcherPipeArgs(
                 continue;
             }
             TT_FATAL(
-                program_impl.get_prefetcher_pipe_parameter(declared)->bound_pipe != nullptr,
+                program_impl.get_prefetcher_pipe_parameter(declared)->is_bound(),
                 "PrefetcherPipeParameter '{}' is declared in the Program but has no PrefetcherPipeArgument entry.",
                 declared);
         }
@@ -373,7 +391,7 @@ void ValidatePrefetcherPipeArgs(
 }
 
 // Bind every supplied PrefetcherPipe to its parameter's slots, as one all-or-nothing batch: the
-// program preflights every binding (slot geometry, lane capacity, relay ring agreement) before it
+// program preflights every binding (slot geometry, credit lanes, relay ring agreement) before it
 // mutates anything, so a rejected SetProgramRunArgs leaves no parameter half-bound. Sticky: an
 // already-bound parameter re-supplied with the same object is a no-op (validation rejected a
 // different object).

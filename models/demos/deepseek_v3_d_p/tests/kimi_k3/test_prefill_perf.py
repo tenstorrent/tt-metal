@@ -180,8 +180,8 @@ def test_prefill_cost(mesh_device, device_params, sp_axis, tp_axis, num_layers, 
     ]
 
     def once():
-        """One whole prefill: every chunk, in order, as a request would arrive."""
-        model.reset_streams()
+        """One whole prefill: every chunk, in order, as a request would arrive. Chunk 0 starts at 0, so
+        its KDA layers load zero carries on device: the head-of-request reset is part of the measurement."""
         for index, tokens in enumerate(chunks):
             start = index * seq_len if num_chunks > 1 else None
             out = model.forward(tokens, kvpe_cache=kvpe, actual_start=start)
@@ -234,7 +234,6 @@ def test_prefill_cost(mesh_device, device_params, sp_axis, tp_axis, num_layers, 
         # far, so chunk N should cost more than chunk N-1 while the KDA layers stay flat. Profiling each
         # chunk separately is the only way to see that curve.
         if num_chunks > 1:
-            model.reset_streams()
             per_chunk = []
             for index, tokens in enumerate(chunks):
 
