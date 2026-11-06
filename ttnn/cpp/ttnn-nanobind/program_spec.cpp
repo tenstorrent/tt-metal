@@ -1008,6 +1008,10 @@ void bind_program_run_args(nb::module_& mod) {
             },
             nb::arg("name"),
             nb::arg("value").none())
+        .def(
+            "__delattr__",
+            [](nb::handle self, const nb::str& name) { delete_known_attribute(self, name); },
+            nb::arg("name"))
         .def_rw("kernel_run_args", &m2::ProgramRunArgs::kernel_run_args, COPY)
         .def_prop_rw(
             "tensor_args",
@@ -1023,17 +1027,22 @@ void bind_program_run_args(nb::module_& mod) {
         .def_rw("dfb_run_overrides", &m2::ProgramRunArgs::dfb_run_overrides, COPY);
 }
 
-}  // namespace
-
-void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type) {
-    // Another value there would leave the C++ object referring to tensors that nothing keeps alive.
-    if (name.equal(nb::str(TENSOR_ARGS_ATTRIBUTE))) {
+// Another value, or none, in the attribute that holds the tensors, or in the instance dict that holds it, would leave
+// the C++ object referring to tensors that nothing keeps alive.
+void check_not_tensor_owners(nb::handle self, const nb::str& name) {
+    if (name.equal(nb::str(TENSOR_ARGS_ATTRIBUTE)) || name.equal(nb::str("__dict__"))) {
         throw nb::attribute_error(fmt::format(
                                       "'{}' object attribute '{}' is read-only",
                                       nb::cast<std::string>(self.type().attr("__name__")),
-                                      TENSOR_ARGS_ATTRIBUTE)
+                                      nb::cast<std::string>(name))
                                       .c_str());
     }
+}
+
+}  // namespace
+
+void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type) {
+    check_not_tensor_owners(self, name);
     if (self.type().is(bound_type) && !nb::hasattr(bound_type, name)) {
         throw nb::attribute_error(fmt::format(
                                       "'{}' object has no attribute '{}'",
@@ -1042,6 +1051,13 @@ void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value,
                                       .c_str());
     }
     if (PyObject_GenericSetAttr(self.ptr(), name.ptr(), value.ptr()) != 0) {
+        throw nb::python_error();
+    }
+}
+
+void delete_known_attribute(nb::handle self, const nb::str& name) {
+    check_not_tensor_owners(self, name);
+    if (PyObject_GenericSetAttr(self.ptr(), name.ptr(), nullptr) != 0) {
         throw nb::python_error();
     }
 }

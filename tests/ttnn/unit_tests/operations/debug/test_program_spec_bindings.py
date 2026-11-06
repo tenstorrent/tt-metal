@@ -194,6 +194,20 @@ def test_constructors_take_keywords_and_need_the_required_fields(expect_error):
         E.WorkUnitSpec(target_nodes=ttnn.CoreCoord(0, 0))
     with expect_error(TypeError, "incompatible function arguments"):
         E.ArrayArgDecl(name="coords")
+    # One required field left out each.
+    for construct in (
+        lambda: E.DFBBinding(dfb_spec_name="in", accessor_name="in"),
+        lambda: E.SemaphoreSpec(unique_id="sem"),
+        lambda: E.WorkUnitSpec(name="unit"),
+        lambda: E.TensorParameter(unique_id="input"),
+        lambda: E.KernelRunArgs(),
+        lambda: E.DFBRunOverrides(num_entries=2),
+        lambda: E.KernelSpec.SourceCode(),
+        lambda: E.DataMovementHardwareConfig.DataMovement1XXConfig(noc=ttnn.NOC.NOC_0),
+        lambda: E.DataMovementHardwareConfig.DataMovement1XXConfig(processor=ttnn.DataMovementProcessor.RISCV_0),
+    ):
+        with expect_error(TypeError, "incompatible function arguments"):
+            construct()
 
 
 def test_names_are_str_and_tables_are_dicts():
@@ -434,6 +448,38 @@ def test_each_field_reads_back_what_it_was_given():
     bindings = [(binding.scratchpad_spec_name, binding.accessor_name) for binding in kernel.scratchpad_bindings]
     assert bindings == [("scratch", "s")]
 
+    # The kernel's other lists, and the lists and names of the spec and the run args.
+    kernel = _kernel(
+        num_threads=2,
+        dfb_bindings=[E.producer_of("in", "dfb_in")],
+        semaphore_bindings=[E.SemaphoreBinding(semaphore_spec_name="sem", accessor_name="sem_in")],
+        tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="src")],
+    )
+    assert kernel.num_threads == 2
+    assert [(b.dfb_spec_name, b.accessor_name) for b in kernel.dfb_bindings] == [("in", "dfb_in")]
+    assert [(b.semaphore_spec_name, b.accessor_name) for b in kernel.semaphore_bindings] == [("sem", "sem_in")]
+    assert [(b.tensor_parameter_name, b.accessor_name) for b in kernel.tensor_bindings] == [("input", "src")]
+    unit_nodes, sem_nodes = ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)
+    spec = E.ProgramSpec(
+        name="program",
+        kernels=[kernel],
+        dataflow_buffers=[dfb],
+        semaphores=[E.SemaphoreSpec(unique_id="sem", target_nodes=sem_nodes)],
+        scratchpads=[scratchpad],
+        tensor_parameters=[E.TensorParameter(unique_id="input", spec=TENSOR_SPEC)],
+        work_units=[E.WorkUnitSpec(name="unit", kernels=["reader"], target_nodes=unit_nodes)],
+    )
+    assert spec.name == "program"
+    assert [k.unique_id for k in spec.kernels] == ["reader"]
+    assert [d.unique_id for d in spec.dataflow_buffers] == ["in"]
+    assert [(s.unique_id, s.target_nodes) for s in spec.semaphores] == [("sem", sem_nodes)]
+    assert [s.unique_id for s in spec.scratchpads] == ["scratch"]
+    assert [p.unique_id for p in spec.tensor_parameters] == ["input"]
+    assert [(w.name, w.kernels, w.target_nodes) for w in spec.work_units] == [("unit", ["reader"], unit_nodes)]
+    run_args = E.ProgramRunArgs(kernel_run_args=[kernel_run_args], dfb_run_overrides=[overrides])
+    assert [k.kernel for k in run_args.kernel_run_args] == ["reader"]
+    assert [o.dfb for o in run_args.dfb_run_overrides] == ["in"]
+
 
 def test_writes_reach_nested_objects():
     kernel = _kernel()
@@ -574,16 +620,26 @@ def test_run_args_reject_unknown_attributes(expect_error):
     # The attribute that keeps the tensors alive changes only with tensor_args.
     with expect_error(AttributeError, "'ProgramRunArgs' object attribute '_tensor_args' is read-only"):
         run_args._tensor_args = {}
+    with expect_error(AttributeError, "'ProgramRunArgs' object attribute '_tensor_args' is read-only"):
+        del run_args._tensor_args
+    with expect_error(AttributeError, "'ProgramRunArgs' object attribute '__dict__' is read-only"):
+        run_args.__dict__ = {}
+    with expect_error(AttributeError, "'ProgramRunArgs' object attribute '__dict__' is read-only"):
+        del run_args.__dict__
 
-    # A Python subclass may add attributes of its own, as for the other classes.
+    # A Python subclass may add attributes of its own, and delete them, as for the other classes.
     class StepRunArgs(E.ProgramRunArgs):
         pass
 
     subclass_run_args = StepRunArgs()
     subclass_run_args.step = 1
     assert subclass_run_args.step == 1
+    del subclass_run_args.step
+    assert not hasattr(subclass_run_args, "step")
     with expect_error(AttributeError, "'StepRunArgs' object attribute '_tensor_args' is read-only"):
         subclass_run_args._tensor_args = {}
+    with expect_error(AttributeError, "'StepRunArgs' object attribute '_tensor_args' is read-only"):
+        del subclass_run_args._tensor_args
 
 
 def test_tensor_args_hold_the_tensors(device, expect_error):
