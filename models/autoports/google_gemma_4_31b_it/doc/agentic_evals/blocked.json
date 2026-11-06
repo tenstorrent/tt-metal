@@ -29,7 +29,7 @@
     "Closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T16:52:32.848759+00:00",
+  "updated_at": "2026-11-06T17:45:09.270296+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -40,7 +40,7 @@
       42247098210,
       42256121890
     ],
-    "status": "SWE retained-runtime same5 and GPQA retained-runtime same20 active on new11a387 image. Prior20 completed raw16/20 unbanked: two capped emptyresponses lack hidden-token cause evidence. Local replay preparing exact saved inputs."
+    "status": "Retained-runtime GPQA20 and SWE5 continue; latestavailableprogress17/20 and3/5. Localreplays confirmedtwo loops; conditionalHF/prefill/incremental comparisons foundno actionable discrepancy. Nooriginalunretainedtrajectory claim."
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",

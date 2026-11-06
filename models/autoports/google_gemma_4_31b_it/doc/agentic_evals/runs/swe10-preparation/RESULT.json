@@ -1,0 +1,77 @@
+{
+  "status": "prepared_local_only_hold_until_current5_banked",
+  "candidate_sha": "09ef82f9afe2b227473e152f0b261e97fb071db4",
+  "base_sha": "37ee508969c730320c01259fafe340e6c2c14d4e",
+  "runtime_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "branch": "prep/swe10-retained",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-swe10-retained",
+  "tasks": [
+    "pylint-dev__pylint-7080",
+    "django__django-11265",
+    "psf__requests-1766",
+    "pydata__xarray-4966",
+    "astropy__astropy-14598",
+    "pallets__flask-5014",
+    "scikit-learn__scikit-learn-10297",
+    "pytest-dev__pytest-7236",
+    "sphinx-doc__sphinx-7757",
+    "mwaskom__seaborn-3069"
+  ],
+  "cohort_source": "runs/larger-cohort-preparation/candidates.json:swe_bench_verified.candidates.10",
+  "source_catalog": {
+    "registry": "Harbor registry.json@e76c762fca5267dfb36e1f900f0a7724ed72e735",
+    "registry_file_sha256": "da1446bce05eabbd72a25eb9eef5a2f5db94645ce88c28e2497581433b3d2e60",
+    "catalog_version": "1.0",
+    "task_repository": "https://github.com/laude-institute/harbor-datasets.git",
+    "task_revision": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+    "catalog_count": 500,
+    "stratum_definition": "task name prefix before '__' (original frozen owner grouping)"
+  },
+  "first5_exact": true,
+  "rule_independently_reproduced": true,
+  "resource_hashes_verified": true,
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "nightly_sizes": [
+    0,
+    10,
+    0
+  ],
+  "context": 262144,
+  "agent_timeout_seconds": 21600,
+  "request_timeout_seconds": 3600,
+  "max_output_tokens": 32768,
+  "retention": {
+    "model_decode": true,
+    "swe_return_token_ids": true,
+    "terminal_store_all_messages_preserved": true
+  },
+  "device_hours": 0,
+  "forecast_device_hours": 0,
+  "box_device_hours": 0,
+  "checks": {
+    "focused_tests": "34 passed",
+    "full_hooks": "ruff/format/pytest/copyright passed",
+    "production_AST": "Only SWE nightly task list5to10 and nightly limits GPQA20to0/SWE0to10; all other source configuration identical",
+    "git_diff_check": "pass"
+  },
+  "projection": {
+    "workflow_hours": null,
+    "formula": "2*T5_eval_hours + measured_current_reusable_image_device_setup_hours +6 + queue_margin_hours + image_build_hours_if_needed",
+    "missing_reason": "Current retained SWE5 not yet banked; completed valid timing/admissible projection pending",
+    "assumptions": "Linear task-count extrapolation is a guess; full6h tail retained; queue margin explicit; immutable matching image required for build0",
+    "admission": "Populate measured components and ensure<=12h plus stage schedule before dispatch; no output/timeout reduction"
+  },
+  "publication": false,
+  "dispatch": false,
+  "central_docs_modified": false,
+  "evidence": [
+    "plan.md",
+    "cohort.json",
+    "source-audit.json",
+    "candidate.patch",
+    "hooks-final.log"
+  ],
+  "corrections": "Disabled-GPQA test expectation updated to empty; list formatting; no runtime correction"
+}

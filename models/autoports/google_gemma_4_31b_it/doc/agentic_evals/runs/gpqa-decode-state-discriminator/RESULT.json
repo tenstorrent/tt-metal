@@ -1,0 +1,206 @@
+{
+  "status": "diagnostic_complete_no_concrete_incremental_discrepancy_found",
+  "recommendation": "Stop this diagnostic line unless new served-state evidence identifies a concrete mechanism.",
+  "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "source_hashes_match_current_and_publication": true,
+  "source_snapshot_note": "Reused previously frozen13-file hash map; coordinator checked identity before launch; final comparison confirms unchanged. Snapshot timestamp is not this job launch time.",
+  "planned_clients": 2,
+  "batch": 8,
+  "layers": 60,
+  "checkpoints": [
+    {
+      "case_index": 0,
+      "actual_dataset_index": 7,
+      "checkpoint": "before_period2_onset",
+      "input_position": 4584,
+      "prefix_tokens": 4585,
+      "prefix_sha256": "0e9402c3dad267cf11e8450b7c5b3f43469e65e61e1ca812960448b08344e792",
+      "hf_vs_incremental": {
+        "kl_hf_tt": 0.020048906551992825,
+        "js": 0.004531979456240117,
+        "top1_equal": true
+      },
+      "prefill_vs_incremental": {
+        "kl_hf_tt": 0.005843547837967877,
+        "js": 0.0014309110390723547,
+        "top1_equal": true
+      },
+      "observed_next_token_release_probability": {
+        "hf": 0.5592525178370176,
+        "tt_prefill": 0.5773095066830043,
+        "tt_incremental": 0.5682187438260167
+      }
+    },
+    {
+      "case_index": 0,
+      "actual_dataset_index": 7,
+      "checkpoint": "within_period2_16",
+      "input_position": 4600,
+      "prefix_tokens": 4601,
+      "prefix_sha256": "eec0f7dd192a3273073e8a506eca1259b157053e91ce044cb8995d0a9b044dd3",
+      "hf_vs_incremental": {
+        "kl_hf_tt": 0.00015895571013067595,
+        "js": 4.25288299522018e-05,
+        "top1_equal": true
+      },
+      "prefill_vs_incremental": {
+        "kl_hf_tt": 1.027791990090356e-05,
+        "js": 2.451682460325678e-06,
+        "top1_equal": true
+      },
+      "observed_next_token_release_probability": {
+        "hf": 1.0,
+        "tt_prefill": 1.0,
+        "tt_incremental": 1.0
+      }
+    },
+    {
+      "case_index": 0,
+      "actual_dataset_index": 7,
+      "checkpoint": "within_period2_17",
+      "input_position": 4601,
+      "prefix_tokens": 4602,
+      "prefix_sha256": "f87c72af1c280552e6aeab8cd684da3114ece4cd32bc17b824ca4f7fbf60987c",
+      "hf_vs_incremental": {
+        "kl_hf_tt": 0.006680250334656501,
+        "js": 0.0009580758866303634,
+        "top1_equal": true
+      },
+      "prefill_vs_incremental": {
+        "kl_hf_tt": 0.0011452550988442659,
+        "js": 0.00021531068482596674,
+        "top1_equal": true
+      },
+      "observed_next_token_release_probability": {
+        "hf": 1.0,
+        "tt_prefill": 1.0,
+        "tt_incremental": 1.0
+      }
+    },
+    {
+      "case_index": 1,
+      "actual_dataset_index": 20,
+      "checkpoint": "before_period2_onset",
+      "input_position": 3436,
+      "prefix_tokens": 3437,
+      "prefix_sha256": "a10c74a27d8101c28d3ea85847b24965b383e3bd3c3c499fd8427c2b050f8ba4",
+      "hf_vs_incremental": {
+        "kl_hf_tt": 0.0019501176061310385,
+        "js": 0.00031719188212600693,
+        "top1_equal": true
+      },
+      "prefill_vs_incremental": {
+        "kl_hf_tt": 6.029702089641969e-05,
+        "js": 1.3585576178215924e-05,
+        "top1_equal": true
+      },
+      "observed_next_token_release_probability": {
+        "hf": 1.0,
+        "tt_prefill": 1.0,
+        "tt_incremental": 1.0
+      }
+    },
+    {
+      "case_index": 1,
+      "actual_dataset_index": 20,
+      "checkpoint": "within_period2_16",
+      "input_position": 3452,
+      "prefix_tokens": 3453,
+      "prefix_sha256": "2709bcd2241b21db82fe6a19aab866c021e0d2e717bf5b32216d2946fff50c38",
+      "hf_vs_incremental": {
+        "kl_hf_tt": 0.0024037263933427092,
+        "js": 0.00037045355131803135,
+        "top1_equal": true
+      },
+      "prefill_vs_incremental": {
+        "kl_hf_tt": 3.288551166406912e-05,
+        "js": 7.551768564582055e-06,
+        "top1_equal": true
+      },
+      "observed_next_token_release_probability": {
+        "hf": 1.0,
+        "tt_prefill": 1.0,
+        "tt_incremental": 1.0
+      }
+    },
+    {
+      "case_index": 1,
+      "actual_dataset_index": 20,
+      "checkpoint": "within_period2_17",
+      "input_position": 3453,
+      "prefix_tokens": 3454,
+      "prefix_sha256": "dce1ad1872de0017b45d09848748d817f18912cb0b736ccb530ac5f18585d60a",
+      "hf_vs_incremental": {
+        "kl_hf_tt": 0.013641504752766449,
+        "js": 0.002719836246940384,
+        "top1_equal": true
+      },
+      "prefill_vs_incremental": {
+        "kl_hf_tt": 0.0015412346529568603,
+        "js": 0.00035895424432689344,
+        "top1_equal": true
+      },
+      "observed_next_token_release_probability": {
+        "hf": 1.0,
+        "tt_prefill": 1.0,
+        "tt_incremental": 1.0
+      }
+    }
+  ],
+  "all_six_top1_match_hf": true,
+  "all_six_top1_match_prefill": true,
+  "hf_kl_range": [
+    0.00015895571013067595,
+    0.020048906551992825
+  ],
+  "prefill_kl_range": [
+    1.027791990090356e-05,
+    0.005843547837967877
+  ],
+  "driver_elapsed_seconds": 275.5606072660303,
+  "decode_seconds": 114.71259109000675,
+  "generator_counters": {
+    "model_replays": 4121,
+    "sample_replays": 0,
+    "token_refreshes": 4121,
+    "position_refreshes": 4121,
+    "page_refreshes": 60,
+    "readbacks": 14,
+    "captures": 3
+  },
+  "cost": {
+    "forecast_device_hours": 0.12,
+    "box_device_hours": 0.25,
+    "actual_device_hours": 0.07783478684723377,
+    "forecast_ratio": 0.6486232237269481
+  },
+  "potential_avoided_tail_hours": {
+    "guess": 1.3,
+    "scope": "Provisional20 capped-tail opportunity shared/nonadditive with prior diagnostics; unconfirmed, no speed credit"
+  },
+  "accepted_runtime_changes": [],
+  "score": null,
+  "launch_adjustments": {
+    "cache": "proven cache-env-validation/tt-metal-jit",
+    "execution_timeout_seconds": 860,
+    "kill_grace_seconds": 15,
+    "queue_margin_seconds": 25
+  },
+  "device_closed": true,
+  "evidence": [
+    "bringup/artifacts/gpqa-decode-state-discriminator/run/result.json",
+    "bringup/artifacts/gpqa-decode-state-discriminator/run/case-0/result.json",
+    "bringup/artifacts/gpqa-decode-state-discriminator/run/case-1/result.json",
+    "bringup/artifacts/gpqa-decode-state-discriminator/compare-hf-0/result.json",
+    "bringup/artifacts/gpqa-decode-state-discriminator/compare-hf-1/result.json",
+    "bringup/artifacts/gpqa-decode-state-discriminator/compare-prefill-0/result.json",
+    "bringup/artifacts/gpqa-decode-state-discriminator/compare-prefill-1/result.json"
+  ],
+  "limits": [
+    "Exact captured input tokens and cumulative incrementalKV through modeldecode trace; direct static pages/forcedreload/sampler bypass differ original vLLM APC/remaps/bufferedfeedback.",
+    "No original served-state/sampler equivalence; no threshold-based correctness gate or proof all states are healthy.",
+    "Fullvocabulary conditional distributions on6states, not autoregressive performance or taskaccuracy.",
+    "Inside-loop top20/top_p probabilities are CPU-derived transforms, not device RNG observations.",
+    "Generic compare-prefill tool labels reference hf and kl_hf_tt; here those mean TTprefill and KL(TTprefill||TTincremental)."
+  ]
+}

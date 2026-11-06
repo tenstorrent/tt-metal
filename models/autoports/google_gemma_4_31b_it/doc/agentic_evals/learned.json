@@ -166,6 +166,10 @@
     {
       "fact": "Two captured GPQA loop prefixes: HF and TT prefill support observed next token at all six checkpoints; this does not establish autonomousHF or serveddecode behavior.",
       "evidence": "runs/gpqa-loop-logits-discriminator/RESULT.json"
+    },
+    {
+      "fact": "Direct forced-token incrementalB8 full60 decode on exact capturedGPQA paths matchesHF/prefill top1 at6checkpoints; originalvLLM scheduler/sampler/APC state not reproduced. No automatic seed/precision sweep justified.",
+      "evidence": "runs/gpqa-decode-state-discriminator/RESULT.json"
     }
   ],
   "suite_timings": [

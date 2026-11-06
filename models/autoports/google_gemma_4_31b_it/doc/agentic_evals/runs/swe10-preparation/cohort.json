@@ -1,0 +1,163 @@
+{
+  "source": "existing_larger_cohort_preparation",
+  "source_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-cohort-preparation/candidates.json",
+  "source_sha256": "42fb66264c3fc9f6acc8a753f2bc061c21dd504f6dedcafd5af9b2c5df2f792c",
+  "seed": "gemma4-goal12-v3-842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "rule": "Sort strata and task names by SHA256(UTF8(seed + NUL + name)); round-robin one task from each nonempty stratum in that fixed order until exhausted.",
+  "catalog": {
+    "registry": "Harbor registry.json@e76c762fca5267dfb36e1f900f0a7724ed72e735",
+    "registry_file_sha256": "da1446bce05eabbd72a25eb9eef5a2f5db94645ce88c28e2497581433b3d2e60",
+    "catalog_version": "1.0",
+    "task_repository": "https://github.com/laude-institute/harbor-datasets.git",
+    "task_revision": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+    "catalog_count": 500,
+    "stratum_definition": "task name prefix before '__' (original frozen owner grouping)"
+  },
+  "tasks": [
+    "pylint-dev__pylint-7080",
+    "django__django-11265",
+    "psf__requests-1766",
+    "pydata__xarray-4966",
+    "astropy__astropy-14598",
+    "pallets__flask-5014",
+    "scikit-learn__scikit-learn-10297",
+    "pytest-dev__pytest-7236",
+    "sphinx-doc__sphinx-7757",
+    "mwaskom__seaborn-3069"
+  ],
+  "first5_exact": true,
+  "independently_reproduced": true,
+  "resources": {
+    "pylint-dev__pylint-7080": {
+      "stratum": "pylint-dev",
+      "definition": "datasets/swebench-verified/pylint-dev__pylint-7080/task.toml",
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "django__django-11265": {
+      "stratum": "django",
+      "definition": "datasets/swebench-verified/django__django-11265/task.toml",
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "psf__requests-1766": {
+      "stratum": "psf",
+      "definition": "datasets/swebench-verified/psf__requests-1766/task.toml",
+      "definition_sha256": "e9a5d7dd94ed43a89396fc12e7b7b32578c9114806bf017620aa694525dd9cba",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "pydata__xarray-4966": {
+      "stratum": "pydata",
+      "definition": "datasets/swebench-verified/pydata__xarray-4966/task.toml",
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "astropy__astropy-14598": {
+      "stratum": "astropy",
+      "definition": "datasets/swebench-verified/astropy__astropy-14598/task.toml",
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "pallets__flask-5014": {
+      "stratum": "pallets",
+      "definition": "datasets/swebench-verified/pallets__flask-5014/task.toml",
+      "definition_sha256": "e9a5d7dd94ed43a89396fc12e7b7b32578c9114806bf017620aa694525dd9cba",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "scikit-learn__scikit-learn-10297": {
+      "stratum": "scikit-learn",
+      "definition": "datasets/swebench-verified/scikit-learn__scikit-learn-10297/task.toml",
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "pytest-dev__pytest-7236": {
+      "stratum": "pytest-dev",
+      "definition": "datasets/swebench-verified/pytest-dev__pytest-7236/task.toml",
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "sphinx-doc__sphinx-7757": {
+      "stratum": "sphinx-doc",
+      "definition": "datasets/swebench-verified/sphinx-doc__sphinx-7757/task.toml",
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    },
+    "mwaskom__seaborn-3069": {
+      "stratum": "mwaskom",
+      "definition": "datasets/swebench-verified/mwaskom__seaborn-3069/task.toml",
+      "definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "environment_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "agent_timeout_sec": 3000,
+      "verifier_timeout_sec": 3000
+    }
+  },
+  "score_independent": true
+}

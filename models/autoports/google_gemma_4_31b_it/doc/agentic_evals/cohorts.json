@@ -458,6 +458,18 @@
         "psf__requests-1766",
         "pydata__xarray-4966",
         "astropy__astropy-14598"
+      ],
+      "prepared-larger10-c2-retained": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265",
+        "psf__requests-1766",
+        "pydata__xarray-4966",
+        "astropy__astropy-14598",
+        "pallets__flask-5014",
+        "scikit-learn__scikit-learn-10297",
+        "pytest-dev__pytest-7236",
+        "sphinx-doc__sphinx-7757",
+        "mwaskom__seaborn-3069"
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562736+00:00",
@@ -484,6 +496,16 @@
       "rule": "Preserve nightly task list to avoid shrinking after nightly; measured current capacityC2; run validates repeated server-sized workload at same C2/B8, not claim of higher capacity",
       "source_rung": "nightly",
       "tasks": 5
+    },
+    "rung_metadata": {
+      "prepared-larger10-c2-retained": {
+        "registered_at": "2026-11-06T17:45:50.892088+00:00",
+        "source": "default_rule",
+        "source_file": "runs/larger-cohort-preparation/candidates.json:swe_bench_verified.candidates.10",
+        "candidate_sha": "09ef82f9afe2b227473e152f0b261e97fb071db4",
+        "status": "prepared_not_run_hold_until5banked",
+        "details": "runs/swe10-preparation/cohort.json"
+      }
     }
   },
   "terminal_bench_2_1": {

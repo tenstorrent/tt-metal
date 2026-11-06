@@ -1,0 +1,20 @@
+{
+  "base": "37ee508969c730320c01259fafe340e6c2c14d4e",
+  "changes": [
+    [
+      20,
+      0,
+      ".body[33].value.elts[148].keywords[1].value.elts[0].keywords[10].value.values[1].value"
+    ],
+    [
+      "nested5to10",
+      ".body[33].value.elts[148].keywords[1].value.elts[1].keywords[4].value.keywords[7].value.values[1].elts"
+    ],
+    [
+      0,
+      10,
+      ".body[33].value.elts[148].keywords[1].value.elts[1].keywords[5].value.values[1].value"
+    ]
+  ],
+  "all_other_production_ast_exact": true
+}
