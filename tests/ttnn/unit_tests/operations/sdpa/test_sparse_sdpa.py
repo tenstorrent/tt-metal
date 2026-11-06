@@ -69,7 +69,8 @@ def make_scaled_kv_cache(device, batch, T, seed, round_scale):
 
 def split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc):
     """True if the program has the split-K merge CBs: more CBs than the whole-token split at S = cores.
-    NO_DISPATCH builds the program without compiling, running, or caching it."""
+    On a cache miss, NO_DISPATCH builds the program without compiling, running, or caching it.
+    On a cache hit, it reports the cached program."""
     grid = device.compute_with_storage_grid_size()
     H, topk = tt_q.shape[1], tt_idx.shape[3]
     whole_q = to_dev(torch.zeros(1, H, grid.x * grid.y, K_DIM, dtype=torch.bfloat16), device, ttnn.bfloat16)
@@ -850,3 +851,67 @@ def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id
     score = pcc(actual, expected)
     worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
     assert score >= 0.999 and worst >= 0.995, f"PCC {score:.5f}, worst token {worst:.5f}"
+
+
+# ---- the split-K plan reads the free L1, so the program hash includes it: less free L1 must give a new program ----
+@run_for_blackhole()
+def test_sparse_sdpa_split_k_plan_follows_free_l1(device):
+    """An L1 tensor that leaves room for the whole-token CBs but not for the split-K CBs must give a new
+    whole-token program. A cache hit would reuse the split-K program, whose CB region overlaps the tensor."""
+    H, S, T, TOPK, kc = 64, 160, 4096, 2048, 128
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    if S <= cores or S % cores == 0:
+        pytest.skip(f"split-K needs S > cores ({cores}) and S % cores != 0")
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=75)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=76, round_scale=True)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    whole_q = to_dev(torch.zeros(1, H, cores, K_DIM, dtype=torch.bfloat16), device, ttnn.bfloat16)
+    whole_idx = to_dev(torch.zeros(1, 1, cores, TOPK, dtype=torch.int32), device, ttnn.uint32)
+    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+
+    def run(q_in, idx_in):
+        """Run the op. Return the output and the end of the CB region (0 on a program-cache hit)."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            out = ttnn.transformer.sparse_sdpa(
+                q_in, tt_packed, idx_in, V_DIM, kv_format=SCALED_FP8_KV, scale=K_DIM**-0.5, k_chunk_size=kc
+            )
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+        cbs = [node["params"] for node in graph if node["node_type"] == "circular_buffer_allocate"]
+        return out, max((int(p["address"]) + int(p["size"]) for p in cbs), default=0)
+
+    def l1_tensor(tiles_per_core):
+        shape = [1, 1, cores * tiles_per_core * 32, 32]
+        mem = ttnn.create_sharded_memory_config(shape, ttnn.CoreGrid(y=grid.y, x=grid.x), ttnn.ShardStrategy.HEIGHT)
+        data = torch.randn(shape, dtype=torch.bfloat16)
+        return data, ttnn.from_torch(
+            data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
+        )
+
+    device.clear_program_cache()
+    out_split, split_end = run(tt_q, tt_idx)
+    _, whole_end = run(whole_q, whole_idx)
+    assert split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc)
+    assert 0 < whole_end < split_end, f"CB region ends: whole-token {whole_end}, split-K {split_end}"
+
+    # L1 tensors are allocated top-down, so a one-tile probe finds the top of the free L1.
+    _, probe = l1_tensor(1)
+    top = probe.buffer_address() + 2048
+    ttnn.deallocate(probe)
+    data, blocker = l1_tensor(-(-(top - (whole_end + split_end) // 2) // 2048))
+    low = blocker.buffer_address()
+    assert whole_end <= low < split_end, f"L1 tensor at {low}, not in [{whole_end}, {split_end})"
+
+    assert not split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc)
+    entries = device.num_program_cache_entries()
+    out_whole, whole_run_end = run(tt_q, tt_idx)
+    assert device.num_program_cache_entries() == entries + 1, "less free L1 must give a new program"
+    assert 0 < whole_run_end <= low, f"CB region ends at {whole_run_end}, L1 tensor starts at {low}"
+    assert torch.equal(ttnn.to_torch(blocker), data), "the op wrote over the L1 tensor"
+    ttnn.deallocate(blocker)
+    for name, out in (("split-K", out_split), ("whole-token", out_whole)):
+        score = pcc(ttnn.to_torch(out), expected)
+        assert score >= 0.999, f"{name} PCC {score:.5f}"
