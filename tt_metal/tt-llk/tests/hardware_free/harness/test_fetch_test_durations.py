@@ -10,10 +10,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "llk-fetch-test-durations.sh"
+import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import llk_sum_test_durations as summing  # noqa: E402
+# tt-llk is also consumed out of tree, where the tt-metal CI scripts are absent.
+SCRIPTS = Path(__file__).resolve().parents[5] / ".github" / "scripts"
+SCRIPT = SCRIPTS / "llk-fetch-test-durations.sh"
+pytestmark = pytest.mark.skipif(not SCRIPT.is_file(), reason="the tt-metal CI scripts are not in this checkout")
+
+if SCRIPT.is_file():
+    sys.path.insert(0, str(SCRIPTS / "utils"))
+    import llk_sum_test_durations as summing
 
 FAKE_GH = """#!/usr/bin/env bash
 if [[ "$2" == list ]]; then cat "$FIXTURE/runs"; exit 0; fi
@@ -37,9 +43,18 @@ def _fetch(tmp_path, runs, artifacts):
     (bin_dir / "gh").write_text(FAKE_GH)
     (bin_dir / "gh").chmod(0o755)
     output = tmp_path / "github_output"
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FIXTURE=str(fixture), GITHUB_OUTPUT=str(output))
+    env = dict(
+        os.environ,
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+        FIXTURE=str(fixture),
+        GITHUB_OUTPUT=str(output),
+    )
     out_dir = tmp_path / "out"
-    subprocess.run(["bash", str(SCRIPT), "wf.yaml", "main", "push", str(out_dir)], env=env, check=True)
+    subprocess.run(
+        ["bash", str(SCRIPT), "wf.yaml", "main", "push", str(out_dir)],
+        env=env,
+        check=True,
+    )
     tables = {p.stem: json.loads(p.read_text()) for p in out_dir.glob("*.json")}
     return output.read_text().strip(), tables
 
@@ -55,7 +70,10 @@ def test_newest_run_with_durations_wins_and_parts_are_summed(tmp_path):
         {
             11: {
                 "test-durations-blackhole-1": {"a.py::t[1]": 1.0},
-                "test-durations-blackhole-1-compile": {"a.py::t[1]": 0.5, "a.py::t[2]": 2.0},
+                "test-durations-blackhole-1-compile": {
+                    "a.py::t[1]": 0.5,
+                    "a.py::t[2]": 2.0,
+                },
                 "test-durations-wormhole-2": {"b.py::t": 3.0},
             },
             10: {"test-durations-blackhole-1": {"old.py::t": 9.0}},
@@ -69,7 +87,6 @@ def test_newest_run_with_durations_wins_and_parts_are_summed(tmp_path):
 
 
 def test_the_summing_runs_on_its_own(tmp_path):
-    """The legs are summed by a module, so it can be called without the shell."""
     for name, durations in {
         "test-durations-blackhole-1": {"a.py::t": 1.0},
         "test-durations-blackhole-1-compile": {"a.py::t": 0.5},

@@ -4,8 +4,7 @@
 
 """Sum the per-leg test durations of one run into one table per architecture.
 
-A leg writes the seconds of its own tests, and the compile pass writes a file
-of its own, so a test appears once per leg that ran it and its seconds add up.
+A test appears once per leg that ran it, compile pass included, and adds up.
 """
 
 from __future__ import annotations

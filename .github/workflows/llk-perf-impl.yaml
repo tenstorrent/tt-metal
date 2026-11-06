@@ -165,8 +165,8 @@ jobs:
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name == 'merge_group' && 'merge_group' || '' }}
 
-      # Durations do not scale between run types, so they come from runs that
-      # measured the same ones: the merge gate from the merge gate.
+      # Durations do not scale between run types, so both gates, which measure
+      # L1_TO_L1, read the merge gate's runs rather than an ALL_MODES nightly.
       - name: Fetch test durations
         id: durations
         continue-on-error: true
@@ -174,10 +174,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          SOURCE: ${{ inputs.pipeline == 'merge_baseline' && 'merge-gate.yaml' || (inputs.speed-of-light && 'llk-perf.yaml' || 'llk-perf-gate.yaml') }}
-          SOURCE_BRANCH: ${{ inputs.pipeline == 'merge_baseline' && '' || 'main' }}
-          SOURCE_EVENT: ${{ inputs.pipeline == 'merge_baseline' && 'merge_group' || 'schedule' }}
-        run: .github/scripts/llk-fetch-test-durations.sh "$SOURCE" "$SOURCE_BRANCH" "$SOURCE_EVENT" split-durations
+          PIPELINE: ${{ inputs.pipeline }}
+          SOL: ${{ inputs.speed-of-light }}
+        run: |
+          case "$PIPELINE" in
+            merge_baseline|pr) set -- merge-gate.yaml "" merge_group ;;
+            *) set -- "$([ "$SOL" = true ] && echo llk-perf.yaml || echo llk-perf-gate.yaml)" main schedule ;;
+          esac
+          .github/scripts/llk-fetch-test-durations.sh "$1" "$2" "$3" split-durations
       # The legs read the outcome of this upload, so an artifact fault here
       # falls back to the tables instead of skipping every leg.
       - name: Upload test durations for the legs
