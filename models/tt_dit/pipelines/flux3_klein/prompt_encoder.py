@@ -45,7 +45,8 @@ class Flux3KleinPromptEncoder:
         return inputs["input_ids"], inputs["attention_mask"], valid
 
     def encode(self, prompt: str, length: int | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
-        """`[L, 20480]` bf16 text tokens, their RoPE ids and the attended length (see `tokenize`)."""
+        """`[1, L, 20480]` bf16 text tokens on device (replicated), their RoPE ids and the attended length (see
+        `tokenize`)."""
         input_ids, attention_mask, valid = self.tokenize(prompt, length)
 
         # HF's positions for right padding; pad rows are real DiT inputs up to the multiple of 80
@@ -67,6 +68,4 @@ class Flux3KleinPromptEncoder:
         for t in (*taps, tt_ids, tt_mask, *pos_embeds):
             ttnn.deallocate(t)
 
-        rows = ttnn.to_torch(ttnn.get_device_tensors(tokens)[0])[0]
-        ttnn.deallocate(tokens)
-        return rows, text_ids(rows.shape[0]), valid
+        return tokens, text_ids(tokens.shape[-2]), valid

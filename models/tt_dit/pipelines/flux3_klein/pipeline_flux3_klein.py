@@ -275,6 +275,7 @@ class Flux3KleinPipeline:
         state, cached_steps = self._denoise(
             request.model, make_noise(seed, h, w), image_ids(h, w), text, image_cond, steps, guidance, request.cache
         )
+        ttnn.deallocate(text[0])
         timings["denoise"] = time.time() - t0
 
         t0 = time.time()
@@ -303,7 +304,12 @@ class Flux3KleinPipeline:
             final_tokens=final_tokens,
         )
 
-    def _upload_rows(self, rows: torch.Tensor, sp_factor: int) -> ttnn.Tensor:
+    def _upload_rows(self, rows: torch.Tensor | ttnn.Tensor, sp_factor: int) -> ttnn.Tensor:
+        if isinstance(rows, ttnn.Tensor):
+            # replicated device rows (the text encoding) are split over SP on device
+            if rows.shape[-2] != padded_length(rows.shape[-2], sp_factor):
+                raise ValueError(f"{rows.shape[-2]} device rows are not a multiple of {sp_factor} tiles")
+            return ttnn.mesh_partition(rows, dim=1, cluster_axis=self._sp_axis)
         rows = pad_rows(rows.to(torch.bfloat16), padded_length(rows.shape[0], sp_factor))
         return tensor.from_torch(
             rows[None], device=self._device, dtype=ttnn.bfloat16, mesh_axes=[None, self._sp_axis, None]
@@ -332,8 +338,8 @@ class Flux3KleinPipeline:
             cond_embedded = transformer.embed_image_cond(tokens)
             ttnn.deallocate(tokens)
 
-        def sample(text_rows: torch.Tensor, text_ids: torch.Tensor, text_valid: int):
-            lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[0]}
+        def sample(text_rows: ttnn.Tensor, text_ids: torch.Tensor, text_valid: int):
+            lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[-2]}
             layout = Flux3KleinSequenceLayout(sp, lengths, text_valid)
             sample_ids = {"image": ids, "text": text_ids}
             if image_cond is not None:
