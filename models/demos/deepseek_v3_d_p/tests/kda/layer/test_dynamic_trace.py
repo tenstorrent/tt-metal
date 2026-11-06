@@ -13,11 +13,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     LayerNrmseThresholds,
     assert_matches_reference,
     build_layer,
-    deallocate_state,
     mla_row_permutation,
     reference_case,
     to_sp_input,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 

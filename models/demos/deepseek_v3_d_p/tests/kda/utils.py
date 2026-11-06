@@ -476,11 +476,6 @@ def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
     return weights
 
 
-def deallocate_state(state: KdaState) -> None:
-    ttnn.deallocate(state.recurrent)
-    ttnn.deallocate(state.convolution)
-
-
 def mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> torch.Tensor:
     """Natural-order index carried by each MLA row, flattened in chip-major order."""
     positions = rotated_chip_positions(actual_start, sp_size, local_rows)
