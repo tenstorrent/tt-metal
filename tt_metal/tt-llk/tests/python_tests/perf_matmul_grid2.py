@@ -24,7 +24,6 @@ from helpers.llk_params import (
     DestSync,
     L1Accumulation,
     MathFidelity,
-    PerfRunType,
     StochasticRounding,
     Transpose,
     format_tile_sizes,
@@ -39,7 +38,7 @@ from helpers.matmul_sweep import (
 from helpers.param_config import (
     parametrize,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -322,14 +321,6 @@ def test_perf_matmul_grid2(
         num_blocks,
     ) = case
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
     # Calculate all matmul dimensions using helper function
     dims = generate_tile_dims((matrix_a, matrix_b))
 
@@ -410,7 +401,7 @@ def test_perf_matmul_grid2(
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync),

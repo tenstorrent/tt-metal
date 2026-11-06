@@ -5,10 +5,10 @@
 import pytest
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat, is_dest_acc_needed
-from helpers.llk_params import DestAccumulation, MathFidelity, PerfRunType, Transpose
+from helpers.llk_params import DestAccumulation, MathFidelity, Transpose
 from helpers.matmul_sweep import PERF_RING_TILES, generate_tile_dims, matmul_pack_form
 from helpers.param_config import parametrize
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -581,14 +581,6 @@ def test_perf_matmul_mix(
 
     formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
     # Calculate all matmul dimensions using helper function
     dims = generate_tile_dims((matrix_a, matrix_b))
 
@@ -601,7 +593,7 @@ def test_perf_matmul_mix(
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, 0),

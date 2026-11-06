@@ -12,7 +12,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     MathFidelity,
-    PerfRunType,
 )
 from helpers.matmul_sweep import (
     matmul_pack_form,
@@ -20,7 +19,7 @@ from helpers.matmul_sweep import (
 from helpers.param_config import (
     parametrize,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -70,14 +69,6 @@ def test_perf_matmul_grid2_tiny(case, perf_report):
     num_faces_in0 = matmul_config.face_layout_config.num_faces_in0
     num_faces_in1 = matmul_config.face_layout_config.num_faces_in1
     num_faces = matmul_config.face_layout_config.num_faces
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
     variant_tile_count = (
         matmul_config.tile_dimensions.rt_dim
         * matmul_config.tile_dimensions.ct_dim
@@ -137,7 +128,7 @@ def test_perf_matmul_grid2_tiny(case, perf_report):
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),

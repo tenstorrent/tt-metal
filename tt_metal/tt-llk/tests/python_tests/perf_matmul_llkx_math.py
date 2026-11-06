@@ -17,7 +17,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     MathFidelity,
-    PerfRunType,
     Transpose,
 )
 from helpers.matmul_sweep import (
@@ -30,7 +29,7 @@ from helpers.matmul_sweep import (
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -148,7 +147,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     MathFidelity,
-    PerfRunType,
     StochasticRounding,
 )
 from helpers.matmul_sweep import (
@@ -522,14 +520,6 @@ def test_perf_matmul_llkx_math(
     if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
     variant_tile_count = (
         matmul_config.tile_dimensions.rt_dim
         * matmul_config.tile_dimensions.ct_dim
@@ -539,7 +529,7 @@ def test_perf_matmul_llkx_math(
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             *MATMUL_PHASE_ELIDE.for_block(
