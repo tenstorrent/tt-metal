@@ -12,6 +12,7 @@ CASES = [
         "task": "O.1",
         "sig": "eee7cc7ddf",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input F [1, 1, 1280, 4096] bf16, residual X [1, 1, 1280, 16384] bf16, post [1, 1, 1280, 4] fp32,
         # comb [1, 1, 1280, 16] fp32; all TILE DRAM interleaved (per device)
@@ -34,6 +35,7 @@ CASES = [
         "task": "P.2",
         "sig": "f7215974bc",  # O.1: the captured call this case reproduces (fork_calls.json)
         "mesh": [4, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "input": {"shape": [1, 1, 1280, 1792], "dtype": "FLOAT32", "layout": "TILE"},
         "residual": {"shape": [1, 1, 1280, 7168], "dtype": "FLOAT32", "layout": "TILE"},
@@ -58,6 +60,7 @@ _DS41 = {
     "model": "deepseek_v41_flash_d_p",
     "task": "O.1",
     "mesh": [2, 2],
+    "submesh_ok": True,  # F256: its three cases passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
     "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
     "input": {"shape": [1, 1, 1024, 2560], "dtype": "BFLOAT16", "layout": "TILE"},
     "residual": {"shape": [1, 1, 1024, 10240], "dtype": "BFLOAT16", "layout": "TILE"},

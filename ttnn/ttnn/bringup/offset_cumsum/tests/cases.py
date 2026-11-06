@@ -12,6 +12,7 @@ CASES = [
         "task": "O.1",
         "sig": "70b8c49b0a",
         "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "hist_shape": [256],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
         "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
@@ -33,6 +34,7 @@ CASES = [
         "task": "O.1",
         "sig": "e9fc860f6a",
         "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "hist_shape": [128],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
         "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
@@ -140,6 +142,7 @@ CASES = [
         "task": "O.1",
         "sig": "803a41809b",
         "mesh": [4, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "hist_shape": [64],
         "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},

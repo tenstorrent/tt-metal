@@ -12,6 +12,7 @@ CASES = [
         "task": "O.1",
         "sig": "fa2baf9135",
         "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "seq_len_per_chip": 5120,
         "emb_dim": 4096,
@@ -44,6 +45,7 @@ CASES = [
         "task": "O.1",
         "sig": "4600d93ca9",
         "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "seq_len_per_chip": 5120,
         "emb_dim": 2816,
@@ -207,6 +209,7 @@ CASES = [
         "task": "O.1",
         "sig": "68cb6cf249",
         "mesh": [4, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "seq_len_per_chip": 1280,
         "emb_dim": 3584,

@@ -12,6 +12,7 @@ CASES = [
         "task": "O.1",
         "sig": "20199b7d97",
         "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # dispatched buffer [42976, 4096] BFLOAT16 ROW_MAJOR; regions / counts [1, 256] UINT32 ROW_MAJOR;
         # global_expert_idx_table [64] UINT32 ROW_MAJOR; DRAM interleaved, the expert weights DRAM ND-sharded
@@ -55,6 +56,7 @@ CASES = [
         "task": "O.1",
         "sig": "1c94598792",
         "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # dispatched buffer [41952, 2816] BFLOAT16 ROW_MAJOR; regions / counts [1, 128] UINT32 ROW_MAJOR;
         # global_expert_idx_table [32] UINT32 ROW_MAJOR; DRAM interleaved, the expert weights DRAM ND-sharded
@@ -236,6 +238,7 @@ CASES = [
         "task": "O.1",
         "sig": "f47242da7f",
         "mesh": [4, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "buffer_rows": 20704,
         "emb_dim": 3584,
