@@ -1,0 +1,56 @@
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -12057,16 +12057,27 @@
+                         },
+                     },
+                     task_names_map={
+-                        mode: [
++                        EvalLimitMode.SMOKE_TEST: [
+                             "terminal-bench/llm-inference-batching-scheduler",
+                             "terminal-bench/mailman",
+-                        ]
+-                        for mode in (EvalLimitMode.SMOKE_TEST, EvalLimitMode.CI_NIGHTLY)
++                        ],
++                        EvalLimitMode.CI_NIGHTLY: [
++                            "terminal-bench/llm-inference-batching-scheduler",
++                            "terminal-bench/mailman",
++                            "terminal-bench/db-wal-recovery",
++                            "terminal-bench/winning-avg-corewars",
++                            "terminal-bench/feal-linear-cryptanalysis",
++                            "terminal-bench/fix-code-vulnerability",
++                            "terminal-bench/constraints-scheduling",
++                            "terminal-bench/sparql-university",
++                            "terminal-bench/dna-insert",
++                            "terminal-bench/video-processing",
++                        ],
+                     },
+                 ),
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 2,
++                    EvalLimitMode.CI_NIGHTLY: 10,
+                 },
+             ),
+         ],
+--- a/tests/workflows/test_gemma4_autoport_smoke_suites.py
++++ b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+@@ -95,6 +95,19 @@
+     tmp_path, mode, index, names
+ ):
+     task = TASKS[index]
++    if mode == "ci-nightly" and task.task_name == "terminal_bench_2_1":
++        names = [
++            "terminal-bench/llm-inference-batching-scheduler",
++            "terminal-bench/mailman",
++            "terminal-bench/db-wal-recovery",
++            "terminal-bench/winning-avg-corewars",
++            "terminal-bench/feal-linear-cryptanalysis",
++            "terminal-bench/fix-code-vulnerability",
++            "terminal-bench/constraints-scheduling",
++            "terminal-bench/sparql-university",
++            "terminal-bench/dna-insert",
++            "terminal-bench/video-processing",
++        ]
+     if mode == "ci-nightly" and task.task_name == "r1_gpqa_diamond":
+         names = [152, 189, 46, 87, 52, 181, 31, 185, 50, 187]
+     config = build_harbor_config(

@@ -6,32 +6,48 @@
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "busy_rows": {
-      "evidence": "runs/gpqa-workload/RESULT.json",
+      "evidence": "runs/gpqa-nightly-runtime-analysis/RESULT.json",
       "limitation": "Submission rows are not emitted token counts.",
       "value": {
         "eval": "r1_gpqa_diamond",
         "peak_active_rows": 2,
         "decode_submission_rows_histogram": {
-          "2": 3151,
-          "1": 2329
+          "2": 26554,
+          "1": 2934
         },
-        "mean_active_rows_over_batch": 0.196875
+        "mean_active_rows_over_batch": 0.23756273738469885
       },
       "healthy": false,
       "reason": "C2 smoke on minimum supportedB8 leaves padding. Capacity effort awaits representative histories."
     },
     "live_prefill_rows": {
-      "evidence": "runs/gpqa-workload/RESULT.json",
+      "evidence": "runs/gpqa-nightly-runtime-analysis/RESULT.json",
       "value": {
         "logical": [
+          166,
+          222,
+          181,
+          240,
+          173,
           485,
+          285,
+          184,
+          156,
           298
         ],
         "physical": [
+          192,
+          224,
+          192,
+          256,
+          192,
           512,
+          288,
+          192,
+          160,
           320
         ],
-        "useful_fraction": 0.9411057692307693
+        "useful_fraction": 0.9454113924050633
       },
       "healthy": true
     },
@@ -72,35 +88,35 @@
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "cutoffs": {
-      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
+      "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json",
       "limitation": "Exact finish_reason absent from sample schema; tool trajectories pending.",
       "value": {
-        "gpqa_smoke_complete_final_answers": 2,
+        "gpqa_nightly_complete_final_answers": 10,
         "observed_timeouts": 0
       },
       "not_measured": "Tool trajectories pending; GPQA completed answers but exact finish reason absent.",
       "test": "Audit Harbor terminal conditions and complete task trajectories."
     },
     "eval_validity": {
-      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
+      "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json",
       "remaining": [
         "swe_bench_verified",
         "terminal_bench_2_1"
       ],
       "value": {
-        "r1_gpqa_diamond": "valid_smoke2"
+        "r1_gpqa_diamond": "valid_nightly10"
       },
       "not_measured": "Tool-suite trajectories pending; GPQA smoke valid.",
       "test": "Collect active CI tool runs and audit network/fetched fixes and harness outcomes."
     },
     "accuracy_drift": {
-      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
-      "limitation": "n=2 cannot distinguish full-suite reference or precision effects.",
+      "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json",
+      "limitation": "n10 cannot establish precision drift; saved content omits separated reasoning",
       "value": {
-        "gpqa_accuracy_fraction": 1,
+        "gpqa_accuracy_fraction": 0.9,
         "wilson95": [
-          0.34237195288961925,
-          1
+          0.5958499732047615,
+          0.9821237869049271
         ]
       },
       "not_measured": "Score is not long-prefix KL; no real tool prefixes available yet.",
@@ -161,9 +177,10 @@
     "run_hours": {
       "measured": {
         "gpqa_smoke_evaluation_hours": 0.04538443775795814,
-        "gpqa_nightly10_evaluation_projection_hours": 0.2269221887897907
+        "gpqa_nightly10_evaluation_projection_hours": 0.2269221887897907,
+        "gpqa_nightly10_evaluation_hours": 0.263041830388053
       },
-      "reason": "Next-rung estimate only: n2 does not measure slow tail. Build/queue/startup separately; no frozen release projection."
+      "reason": "Measured nightly10 replaces smoke projection; server-sized same10 C2 next. Full198 linear5.208h before tail/overhead; not frozen release."
     },
     "task_lists": {
       "source": "cohorts.json",
@@ -222,5 +239,5 @@
       "evidence": "runs/prefill-under-load/RESULT.md"
     }
   ],
-  "last_updated": "2026-11-06T08:35:46.657708+00:00"
+  "last_updated": "2026-11-06T09:36:27.643712+00:00"
 }

@@ -1,0 +1,3 @@
+# Nightly GPQA runtime analysis
+
+Extract original chronological container-stream events before the final Docker-log dump. Count ten actual zero-start prefills, sampling modes and active decode rows; pair before/after-prefill snapshots for host log-observation windows. Preserve line references and source digest. Distinguish logged submissions, replay snapshots and emitted usage; do not infer per-request identities, final positions or true model execution time from adapter submission events. Return null where exact working sets, request durations or scheduler waits cannot be established. Zero device hours, no central edits.

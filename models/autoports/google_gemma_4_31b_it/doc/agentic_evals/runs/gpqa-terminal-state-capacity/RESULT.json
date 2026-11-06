@@ -1,0 +1,101 @@
+{
+  "status": "complete_no_device_run",
+  "decision": "do_not_launch_terminal_state_replay",
+  "used_device_hours": 0,
+  "device_box_hours": 0.25,
+  "predicted_saving_hours": 0,
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/nightly-gpqa-explicit-autoport/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-9eb35b6120404b7893ab412e7f0636d6/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-06T09-22-00.519183.jsonl",
+  "source_sha256": "f55e9c86ceaa63eda09e29b70a33dce8a10b41fc68d27e5cccf1aaddf2042a97",
+  "runtime_model_spec": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/nightly-gpqa-explicit-autoport/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/runtime_model_specs/runtime_model_spec_2026-11-06_08-38-23_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2_YKiaiRue.json",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "distinct_samples": 10,
+  "samples": [
+    {
+      "sample_id": 152,
+      "prompt_hash": "5986c3a844807bed907bcd683046b0e7ba29c5fd2633fb652c954f2b0c7d7cb4",
+      "reconstructed_response_tokens": 642,
+      "reconstructed_terminal_tokens": 834,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 189,
+      "prompt_hash": "921120ecd78db1d8d57cc1ecf89aae3b441e684946dc6a7d57c331f81270ef23",
+      "reconstructed_response_tokens": 836,
+      "reconstructed_terminal_tokens": 1082,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 46,
+      "prompt_hash": "3b702c7f0c8d7b25d6b04232b658bd8bcca3eb034d3e2f5a1f715aa739f73fa8",
+      "reconstructed_response_tokens": 637,
+      "reconstructed_terminal_tokens": 836,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 87,
+      "prompt_hash": "9b2a32b3b026c28757fc17a246ed137060bf2089f157021b13a60cd376434627",
+      "reconstructed_response_tokens": 697,
+      "reconstructed_terminal_tokens": 959,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 52,
+      "prompt_hash": "797230b268e9b048a017fd5e7b9dce969c747e2ceca37a48cc3830e515ac6f78",
+      "reconstructed_response_tokens": 524,
+      "reconstructed_terminal_tokens": 719,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 181,
+      "prompt_hash": "26fa8f9e8fe3bb8ee9bb7ff00ffa5cc3d6a095e578eacd37ca863598f8fed823",
+      "reconstructed_response_tokens": 841,
+      "reconstructed_terminal_tokens": 1349,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 31,
+      "prompt_hash": "a5478c3344a4e1cc9f0b8ce51f3b5aa217bfb8c268b7208f3253dede88f5cfac",
+      "reconstructed_response_tokens": 582,
+      "reconstructed_terminal_tokens": 890,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 185,
+      "prompt_hash": "ef7bca5f3f0e858fa8e2f4a212d8c212476760fb14a177ed44c2fd3f961b29e7",
+      "reconstructed_response_tokens": 599,
+      "reconstructed_terminal_tokens": 805,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 50,
+      "prompt_hash": "63539ec251278faac85a99e34cdfb83713c46dbc2f9bd0ba201ba20dede46f3c",
+      "reconstructed_response_tokens": 656,
+      "reconstructed_terminal_tokens": 839,
+      "explicit_thought_markers_present": false
+    },
+    {
+      "sample_id": 187,
+      "prompt_hash": "31fc18bdb7bf073553a44e9dff6a87210d6fc6c7b3a3077d250270b815930187",
+      "reconstructed_response_tokens": 667,
+      "reconstructed_terminal_tokens": 994,
+      "explicit_thought_markers_present": false
+    }
+  ],
+  "largest_eight_reconstructed_terminal_sum": 7783,
+  "pool_comparison": "Not a capacity test: reconstructed short states cannot be established as complete generated working sets. Do not use their sum for admission.",
+  "evidence": [
+    "Actual nightly runtime model spec declares reasoning_parser gemma4.",
+    "Saved samples retain one response string per item, with no separate reasoning field; all ten response strings lack thought control markers.",
+    "Locally inspected lm_eval local-chat parse_generations reads choices.message.content and postprocesses it; it does not preserve separate reasoning. Actual nightly installed implementation revision is not independently pinned by this analysis.",
+    "Pinned Gemma4 template encodes these terminal assistant states successfully; encoding success does not restore missing reasoning."
+  ],
+  "interpretation": "Strong evidence that saved final-content strings omit separated reasoning; completeness is unproven, which fails the stated replay prerequisite. Treat reconstructed terminal lengths as retained-content diagnostics only.",
+  "additional_barrier": "Unmodified agent_replay uses max_tokens1 and eight threads but does not hold eight terminal states resident simultaneously. Successful requests alone cannot prove C8 admission.",
+  "recommended_next_action": "Use actual nightly runtime maximum active rows and observed KV occupancy as measured observations at C2; do not extrapolate them into C8 capacity. Recover full per-request response/usage or complete terminal positions before reconstructing states. If unavailable, retain C2 conservative admission until actual higher-concurrency rung measures its own pool/working-set behavior.",
+  "missing_reasons": {
+    "complete_generated_histories": "Saved final content lacks separately parsed reasoning, or cannot prove its retention.",
+    "C8_residency": "No suitable full-history replay and no simultaneous-residency evidence.",
+    "exact_api_usage": "Pinned tokenizer reconstruction of saved text is not original token IDs or response usage."
+  },
+  "raw_data_policy": "Only metadata, lengths and hashes in this result; gated prompts/responses remain in collected local artifacts."
+}

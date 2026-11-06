@@ -36,17 +36,17 @@
   "accuracy": [
     {
       "name": "r1_gpqa_diamond",
-      "value": 1.0,
+      "value": 0.9,
       "unit": "fraction",
-      "phase": "agentic_smoke",
-      "completed_samples": 2,
+      "phase": "agentic-evals-nightly",
+      "completed_samples": 10,
       "dataset_samples": 198,
       "scope": "subset",
       "confidence_interval_95": [
-        0.34237195288961925,
-        1.0
+        0.5958499732047615,
+        0.9821237869049271
       ],
-      "evidence": "runs/smoke2-r1_gpqa_diamond/collected; CI42166117505; doc_ids152,189"
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/nightly-gpqa-explicit-autoport/audit.json"
     }
   ],
   "missing_reasons": {

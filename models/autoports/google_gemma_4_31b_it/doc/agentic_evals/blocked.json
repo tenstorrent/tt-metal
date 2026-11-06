@@ -104,5 +104,16 @@
     "reason": "30s Docker startup timeout followed by own-container port collision; no scored tasks",
     "retry_run_id": 42190891568,
     "tti_sha": "2c4a2628b974acc7ebc7a4fa867db68f0b108019"
+  },
+  "gpqa_corrected_startup_observation": {
+    "run_id": 42182664252,
+    "implementation": "gemma4-31b-autoport-v3",
+    "full60_loaded": true,
+    "ready": true,
+    "snapshot_last_time": "2026-11-06T09:14:08Z",
+    "evidence": "bringup/artifacts/stage12-gpqa-explicit-0914.log",
+    "note": "Exact10doc_ids/C2/release caps/pinnedrevision command observed; score pending.",
+    "ready_at": "2026-11-06T09:06:04Z",
+    "eval_started_at": "2026-11-06T09:06:12Z"
   }
 }

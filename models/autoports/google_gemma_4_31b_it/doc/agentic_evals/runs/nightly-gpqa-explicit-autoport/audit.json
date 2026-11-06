@@ -1,0 +1,173 @@
+{
+  "status": "valid_nightly_rung",
+  "functional_at": 10,
+  "run_id": 42182664252,
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "completed_samples": 10,
+  "dataset_samples": 198,
+  "scope": "subset",
+  "sample_ids": [
+    152,
+    189,
+    46,
+    87,
+    52,
+    181,
+    31,
+    185,
+    50,
+    187
+  ],
+  "scores": {
+    "correct": 9,
+    "total": 10,
+    "accuracy_fraction": 0.9,
+    "wilson95_fraction": [
+      0.5958499732047615,
+      0.9821237869049271
+    ],
+    "reference_published_percent": 84.3,
+    "reference_gpu_percent": 83.33,
+    "interpretation": "Ten samples do not establish parity with full-suite references."
+  },
+  "samples": [
+    {
+      "doc_id": 152,
+      "target": "(B)",
+      "final_answer": "B",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 1620,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 189,
+      "target": "(A)",
+      "final_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2422,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 46,
+      "target": "(A)",
+      "final_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 1936,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 87,
+      "target": "(B)",
+      "final_answer": "B",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2219,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 52,
+      "target": "(B)",
+      "final_answer": "B",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2296,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 181,
+      "target": "(C)",
+      "final_answer": "C",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2576,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 31,
+      "target": "(D)",
+      "final_answer": "D",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2556,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 185,
+      "target": "(C)",
+      "final_answer": "D",
+      "exact_match": 0,
+      "complete_final_answer": true,
+      "response_characters": 1810,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 50,
+      "target": "(A)",
+      "final_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 1614,
+      "finish_reason": null
+    },
+    {
+      "doc_id": 187,
+      "target": "(A)",
+      "final_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2411,
+      "finish_reason": null
+    }
+  ],
+  "limits": {
+    "stream": false,
+    "max_gen_toks": 126976,
+    "until": [],
+    "do_sample": true,
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95,
+    "seed": 42
+  },
+  "request_timeout_seconds": 14400,
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "trajectory_validity": {
+    "mode": "Stock local-chat-completions, no agent tools",
+    "quarantined_samples": [],
+    "network_or_fetched_fix": "No tool executor in GPQA protocol and no response URLs. Dataset acquisition and model API transport are harness operations.",
+    "cutoff": "All ten responses have complete final answers. No client timeout/error. Raw finish reasons and usage are not retained; unknown.",
+    "sampling_note": "Gemma4 reasoning parser enabled. Saved content suffices for grades; completeness for capacity replay requires separate token accounting."
+  },
+  "timing": {
+    "evaluation_wall_seconds": 946.9505893969908,
+    "evaluation_wall_hours": 0.263041830388053,
+    "predicted_evaluation_seconds": 816.9198796432465,
+    "actual_to_prediction_ratio": 1.1591719249267498,
+    "device_job_seconds": 2804,
+    "workflow_seconds": 5978,
+    "agent_hours": null,
+    "full198_linear_evaluation_hours": 5.20822824168345,
+    "full_projection_caveat": "C2 linear projection only; slow tail, startup, queue and margin not yet release-ready."
+  },
+  "sources": {
+    "results": "collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-9eb35b6120404b7893ab412e7f0636d6/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/results_2026-11-06T09-22-00.519183.json",
+    "samples": "collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-9eb35b6120404b7893ab412e7f0636d6/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-06T09-22-00.519183.jsonl",
+    "lm_eval_version": "0.4.10.dev0",
+    "task_version": {
+      "r1_gpqa_diamond": 1.0
+    },
+    "tti_sha": "a0c8bde35bb9f5c3dd7318883c8c29c29baa2540",
+    "runtime_log": "bringup/artifacts/stage12-gpqa-nightly-complete.log",
+    "registration": "Log autoport_registration confirms all60 layers,1x4,model/tokenizer revision,context262144."
+  },
+  "metadata_correction": "Metadata effective198 is dataset size; JSONL proves10 completed.",
+  "missing_reasons": {
+    "per_call_latency_and_tokens": "Samples omit usage and timing; aggregate evaluation duration measured."
+  },
+  "device_work_for_audit": 0
+}

@@ -99,6 +99,22 @@
       "timeouts": 0,
       "score": 1.0,
       "evidence": "runs/smoke2-r1_gpqa_diamond/collected"
+    },
+    {
+      "run_id": 42182664252,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 10,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 0.263041830388053,
+      "agent_hours": null,
+      "timeouts": 0,
+      "score": 0.9,
+      "confidence_interval_95": [
+        0.5958499732047615,
+        0.9821237869049271
+      ],
+      "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json"
     }
   ],
   "generic_fixes": [

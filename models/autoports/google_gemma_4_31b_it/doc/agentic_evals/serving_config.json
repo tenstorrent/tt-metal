@@ -98,6 +98,15 @@
       "batch": 8,
       "planned_clients": 2,
       "max_num_seqs": 8
+    },
+    "server-sized-gpqa-c2": {
+      "eval": "r1_gpqa_diamond",
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "reason": "Smallest validated batch>=2; C8 not admitted",
+      "pool_basis": "Conservative observedC2: prior full-context physical envelope and actual nightly10 completed at max2 active rows. Not a C8 or maximum-capacity claim. GPQA has no Docker task sandboxes.",
+      "host_limit_basis": "No task sandboxes for GPQA; observedC2 stock client"
     }
   },
   "release_limits": {
@@ -236,12 +245,12 @@
   },
   "measured_suites": {
     "r1_gpqa_diamond": {
-      "planned_clients": 2,
-      "observed_peak_running": 2,
+      "functional_at": 10,
+      "observed_max_active_rows": 2,
       "batch": 8,
-      "max_num_seqs": 8,
-      "eval_seconds": 163.3839759286493,
-      "reference": "runs/smoke2-r1_gpqa_diamond/audit.json"
+      "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json; runs/gpqa-nightly-runtime-analysis/RESULT.json",
+      "max_capacity": null,
+      "reason": "Measured C2; C8 reconstruction unavailable"
     }
   },
   "cache_routing": {

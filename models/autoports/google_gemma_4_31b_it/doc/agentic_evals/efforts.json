@@ -998,6 +998,152 @@
         "published": false
       },
       "evidence": "runs/terminal-current-base-preparation/RESULT.md"
+    },
+    {
+      "problem": "gpqa-terminal-state-capacity",
+      "owner": "local_serving_check",
+      "goal": "Confirm admission with distinct observed GPQA generated working sets, not short initialprompts or duplicatedhistories",
+      "plan": "runs/gpqa-terminal-state-capacity/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0
+        },
+        "device_hours": 0.1,
+        "basis": "guess",
+        "reason": "Startup plus eight one-token state probes if reconstruction valid; no speed credit before measured C8 rung"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond"
+      ],
+      "confirm": {
+        "method": "Pinned tokenizer/stocktemplate, distinct real generatedstate provenance, unmodifiedagent_replay and runtimepool/preemption counters",
+        "success": "Eight concurrent observed working sets fit with no errors/preemption; no invented followup or exactwire claim"
+      },
+      "box_hours": 0.25,
+      "status": "done",
+      "launch_gate": "Host plan and nightly10 validity first; coordinator owns hardware launch",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": {
+        "C8_admitted": false,
+        "reason": "Saved final content omits separated reasoning; cannot reconstruct complete real generated states or simultaneous C8 residency. Retain observed C2."
+      },
+      "evidence": "runs/gpqa-terminal-state-capacity/RESULT.json"
+    },
+    {
+      "problem": "gpqa-current-base-confirmation",
+      "owner": "suite_registration",
+      "goal": "Reconfirm GPQA10/C8 candidate after genericDockerfix and current Terminal configuration",
+      "plan": "runs/gpqa-server-sized-current-base/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond"
+      ],
+      "confirm": {
+        "method": "Stockresolver and modeltests/fullhooks on isolated2c4a262base",
+        "success": "ExactGPQA10/C8,B8,peers0; genericfix/pins/limitsretained"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "focused_tests": 32,
+        "full_hooks": "pass",
+        "stock_resolved": "exactGPQA10/C8/B8,peers0",
+        "publication": "not applied"
+      },
+      "evidence": "runs/gpqa-server-sized-current-base/RESULT.md"
+    },
+    {
+      "problem": "nightly-current-base-reconfirmation",
+      "owner": "suite_registration",
+      "goal": "Refresh exact tool nightly cohorts on Docker lifecycle repair base",
+      "plan": "runs/nightly-current-base-preparation/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Source resolution and host checks",
+        "success": "Both patches32 focused tests/fullhooks, current2c4 base"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": "Both patches32 focused tests/fullhooks, current2c4 base",
+      "evidence": "runs/nightly-current-base-preparation/RESULT.md"
+    },
+    {
+      "problem": "gpqa-server-sized-c2-preparation",
+      "owner": "suite_registration",
+      "goal": "Prepare conservative next rung without waiting for C8",
+      "plan": "runs/gpqa-server-sized-c2-preparation/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond"
+      ],
+      "confirm": {
+        "method": "Source resolution and host checks",
+        "success": "Exact frozen10,C2/B8,peers0;32focused/fullhooks"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": "Exact frozen10,C2/B8,peers0;32focused/fullhooks",
+      "evidence": "runs/gpqa-server-sized-c2-preparation/RESULT.md"
+    },
+    {
+      "problem": "gpqa-nightly-runtime-analysis",
+      "owner": "local_serving_check",
+      "goal": "Measure actual GPQA concurrency and timing bounds",
+      "plan": "runs/gpqa-nightly-runtime-analysis/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond"
+      ],
+      "confirm": {
+        "method": "Original chronological runtime stream without duplicated dump",
+        "success": "Ten prefills,max2active rows;29488device decode submissions; full-state/per-request tail unavailable"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": "Ten prefills,max2active rows;29488device decode submissions; full-state/per-request tail unavailable",
+      "evidence": "runs/gpqa-nightly-runtime-analysis/RESULT.json"
     }
   ],
   "rankings": [
@@ -2111,6 +2257,56 @@
       ],
       "basis": "hostfix0; future diagnosticcost guesses, no unmeasuredspeedcredit",
       "reason": "Validity first. Startup fix live confirmation rides requeued normal smoke; real-history capacity and release-cost estimates await scored tool trajectories."
+    },
+    {
+      "after": "gpqa-nightly10-valid-capacity-preparation-closed",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "docker-startup-timeout-leaks-own-container",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "basis": "hostfix0; future diagnosticcost guesses, no unmeasuredspeedcredit",
+      "reason": "Validity first; C8 capacity remains unproved, so next rung proceeds C2 without waiting for speed effort. Tool smoke validity and dry route remain ahead of speed. Costs for future device work are guesses; zero speed savings credited."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

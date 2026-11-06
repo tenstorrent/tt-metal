@@ -21,11 +21,28 @@
         185,
         50,
         187
+      ],
+      "server-sized-gpqa-c2": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562725+00:00",
     "selection_note": "Inputs has no task_lists; requested tool suites absent from model config. GPQA has no explicit nightly task list, so skill default10 is used rather than an implicit full-dataset run.",
-    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score."
+    "runtime_validation_pending": "Verify resolved dataset version/task identities in stock harness lock before accepting any score.",
+    "server_sized_selection": {
+      "at": "2026-11-06T09:34:16.536087+00:00",
+      "source": "default_rule",
+      "reason": "Retain nested nightly10; conservative observed two real concurrent agents. C8 excluded without complete-state replay. Selection independent of per-task outcomes."
+    }
   },
   "swe_bench_verified": {
     "source": "default_rule",

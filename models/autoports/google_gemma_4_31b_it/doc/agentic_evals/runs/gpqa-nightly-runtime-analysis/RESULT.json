@@ -1,0 +1,302 @@
+{
+  "status": "complete_host_analysis",
+  "used_device_hours": 0,
+  "source": "bringup/artifacts/stage12-gpqa-nightly-complete.log",
+  "source_sha256": "2f538a6119a3f6a49e3d98d2688396d0d691200e00c4c9d10b845f729264a2a3",
+  "selection": {
+    "original_stream_lines": [
+      1,
+      39701
+    ],
+    "container_prefix": "tt-inference-server-367d5020",
+    "excluded": "Final Docker dump duplicates events."
+  },
+  "requests": {
+    "zero_start_prefill_count": 10,
+    "all_logical_starts_zero": true,
+    "initial_prompt_tokens_arrival_order": [
+      166,
+      222,
+      181,
+      240,
+      173,
+      485,
+      285,
+      184,
+      156,
+      298
+    ],
+    "physical_rows": [
+      192,
+      224,
+      192,
+      256,
+      192,
+      512,
+      288,
+      192,
+      160,
+      320
+    ],
+    "prefill_lines": [
+      9614,
+      9618,
+      12868,
+      16641,
+      20174,
+      21206,
+      21740,
+      24614,
+      26702,
+      33069
+    ],
+    "sample_id_mapping": null,
+    "completed_requests": 10,
+    "completion_evidence": "Progress10/10 lines39151\u201339152; enginewaiting line39149",
+    "individual_start_end_pairs": null
+  },
+  "sampling_submissions": {
+    "prefill:device": 10,
+    "decode:device": 29488
+  },
+  "active_rows_histogram": {
+    "2": 26554,
+    "1": 2934
+  },
+  "max_active_rows": 2,
+  "row_transitions": [
+    {
+      "line": 12865,
+      "at": "2026-11-06T09:08:01.5133691Z",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "line": 12870,
+      "at": "2026-11-06T09:08:01.6719942Z",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "line": 16638,
+      "at": "2026-11-06T09:10:01.2057310Z",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "line": 16643,
+      "at": "2026-11-06T09:10:01.3670623Z",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "line": 20171,
+      "at": "2026-11-06T09:11:55.7685116Z",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "line": 20176,
+      "at": "2026-11-06T09:11:55.9231308Z",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "line": 21203,
+      "at": "2026-11-06T09:12:28.2882892Z",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "line": 21208,
+      "at": "2026-11-06T09:12:28.4762888Z",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "line": 21737,
+      "at": "2026-11-06T09:12:44.8555757Z",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "line": 21742,
+      "at": "2026-11-06T09:12:45.0207133Z",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "line": 24611,
+      "at": "2026-11-06T09:14:14.4775098Z",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "line": 24616,
+      "at": "2026-11-06T09:14:14.6351301Z",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "line": 26699,
+      "at": "2026-11-06T09:15:20.5608179Z",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "line": 26704,
+      "at": "2026-11-06T09:15:20.7146252Z",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "line": 33066,
+      "at": "2026-11-06T09:18:42.7565283Z",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "line": 33071,
+      "at": "2026-11-06T09:18:42.9227901Z",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "line": 36223,
+      "at": "2026-11-06T09:20:24.6176273Z",
+      "from": 2,
+      "to": 1
+    }
+  ],
+  "timing": {
+    "first_prefill_at": "2026-11-06T09:06:21.1362530Z",
+    "last_decode_submission_at": "2026-11-06T09:22:00.2986752Z",
+    "observed_span_seconds": 939.1624219417572,
+    "prefill_log_windows": [
+      {
+        "lines": [
+          9612,
+          9615
+        ],
+        "start": "2026-11-06T09:06:21.1222906Z",
+        "end": "2026-11-06T09:06:21.2240551Z",
+        "observed_seconds": 0.10176515579223633
+      },
+      {
+        "lines": [
+          9616,
+          9619
+        ],
+        "start": "2026-11-06T09:06:21.2298019Z",
+        "end": "2026-11-06T09:06:21.3363467Z",
+        "observed_seconds": 0.10654497146606445
+      },
+      {
+        "lines": [
+          12866,
+          12869
+        ],
+        "start": "2026-11-06T09:08:01.5497257Z",
+        "end": "2026-11-06T09:08:01.6559217Z",
+        "observed_seconds": 0.10619592666625977
+      },
+      {
+        "lines": [
+          16639,
+          16642
+        ],
+        "start": "2026-11-06T09:10:01.2427950Z",
+        "end": "2026-11-06T09:10:01.3516208Z",
+        "observed_seconds": 0.1088249683380127
+      },
+      {
+        "lines": [
+          20172,
+          20175
+        ],
+        "start": "2026-11-06T09:11:55.8049060Z",
+        "end": "2026-11-06T09:11:55.9076974Z",
+        "observed_seconds": 0.10279107093811035
+      },
+      {
+        "lines": [
+          21204,
+          21207
+        ],
+        "start": "2026-11-06T09:12:28.3244232Z",
+        "end": "2026-11-06T09:12:28.4607694Z",
+        "observed_seconds": 0.13634586334228516
+      },
+      {
+        "lines": [
+          21738,
+          21741
+        ],
+        "start": "2026-11-06T09:12:44.8917086Z",
+        "end": "2026-11-06T09:12:45.0046735Z",
+        "observed_seconds": 0.11296510696411133
+      },
+      {
+        "lines": [
+          24612,
+          24615
+        ],
+        "start": "2026-11-06T09:14:14.5148235Z",
+        "end": "2026-11-06T09:14:14.6178853Z",
+        "observed_seconds": 0.10306215286254883
+      },
+      {
+        "lines": [
+          26700,
+          26703
+        ],
+        "start": "2026-11-06T09:15:20.5968344Z",
+        "end": "2026-11-06T09:15:20.7000142Z",
+        "observed_seconds": 0.1031801700592041
+      },
+      {
+        "lines": [
+          33067,
+          33070
+        ],
+        "start": "2026-11-06T09:18:42.7937750Z",
+        "end": "2026-11-06T09:18:42.9069188Z",
+        "observed_seconds": 0.1131429672241211
+      }
+    ],
+    "prefill_log_windows_sum_seconds": 1.094818353652954,
+    "basis": "Chronological collection timestamps, host log observation windows, not isolated device execution.",
+    "exact_prefill_seconds": null,
+    "exact_decode_seconds": null,
+    "exact_wait_seconds": null,
+    "per_request_tail_seconds": null
+  },
+  "last_snapshot": {
+    "line": 33070,
+    "at": "2026-11-06T09:18:42.9069188Z",
+    "counters": {
+      "model_replays": 23411,
+      "sample_replays": 23421,
+      "token_refreshes": 16,
+      "position_refreshes": 16,
+      "page_refreshes": 89340,
+      "readbacks": 23421,
+      "captures": 3
+    },
+    "scope": "After tenth prefill; remaining decode not covered."
+  },
+  "startup_prepare_events": 1,
+  "workload_prepare_events": 0,
+  "working_set_tokens": null,
+  "max_context_tokens": null,
+  "emitted_output_tokens": null,
+  "preemptions": null,
+  "forecast": "Use completed aggregate C2 duration and subsequent sameC2 rung, with slow-tail margin. Do not infer C8 capacity or per-task tail from row transitions.",
+  "missing_reasons": {
+    "working_set": "No request token positions or complete reasoning/output usage; initial prompts and cumulative checked-row counts cannot establish working-set maxima.",
+    "boundaries": "No request IDs connect prefills, row transitions and completions. Tqdm text is buffered and count often lags its log timestamp.",
+    "phase_split": "Sampling events are asynchronous submissions, not completion boundaries. Cannot separate device work/host time/scheduler wait.",
+    "preemptions": "No exact preemption counter snapshot in selected stream.",
+    "tail": "Overlapping requests lack start/end identity mapping."
+  }
+}
