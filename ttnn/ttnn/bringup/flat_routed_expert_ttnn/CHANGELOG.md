@@ -565,3 +565,28 @@ shapes, mesh, row-major y).
   .tensorbin path; GB/s of each path).
 - Needed by: deepseek_v41_flash_d_p (tt/experts.py EXPERTS_PREFETCH)
 - Files: bank_major.py, flat_expert.py
+
+### One weight cache layout: bank-major .bm.bin only (2026-11-06, owner: one copy per thing, one layout)
+- A cache hit = every laid-out weight file of the layer is a complete `<cache_prefix>.flat.<dtype>.lay<key>.<name>.bm.bin`
+  (`FlatRoutedExpert.cache_files` now names them); its 4 KiB header carries everything the loader needs (rows, banks,
+  dtype, the width-sharded shape, tile bytes, mesh, shard bytes, stride), so no other file is read. A miss writes
+  only the .bm.bin (`bank_major.write_from_host`, tmp + rename); the .tensorbin flatbuffer dump is gone.
+- The loader never reads a .tensorbin. A miss whose old-layout `<stem>.tensorbin` files are present logs one
+  `FLAT_CACHE miss` warning naming them and the migration: models/demos/deepseek_v41_flash_d_p/tools/
+  convert_expert_cache.py (host only, ~11 s a layer; kept for boxes that still have .tensorbin-only caches; it now
+  skips a complete .bm.bin, --force rewrites, and writes the same bytes as the miss path).
+- Removed: `FLAT_CACHE_BANK_MAJOR` (one layout), `_load_cached` (the .tensorbin load), `_adopt_legacy` and
+  `FLAT_CACHE_NO_ADOPT` (it hard-linked pre-layout-key .tensorbin sets: nothing reads those any more).
+- `PinnedStager` logs one line when TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES (unset: tt-metal's 4 GiB) is below its
+  staging (depth x a layer): the upload stays correct (issue-queue copy for the chips past the limit), only slower.
+  The model sets it before the mesh opens (deepseek_v41_flash_d_p tt/settings.py export_pinned_limit). The upload
+  asserts the file's mesh is the device's.
+- Users of the cache (cache_prefix): deepseek_v41_flash_d_p (tt/experts.py, tt/moe_block_adapter.py) and
+  glm53_flash_d_p (tt/experts_ag.py, GLM_EXPERTS_CACHE): both now hit only on .bm.bin; an existing .tensorbin cache
+  converts with the tool (positional file args) or is repacked once on its first miss. Every other FlatRoutedExpert
+  caller passes no cache_prefix (no change).
+- Test: tests/unit/test_bank_major_cache.py (CPU: file round trip / completeness, the permutation, hit = all .bm.bin,
+  a missing or damaged file misses the whole layer, a .tensorbin never read and named in the miss line, the pin-limit
+  line once); deepseek_v41_flash_d_p/tests/test_expert_cache_layout.py (the converter's file == the miss path's,
+  under tt-metal's mock cluster).
+- Files: bank_major.py, flat_expert.py

@@ -2,15 +2,24 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Host only (no device): write the bank-major twin (<stem>.bm.bin, bank_major.py) of laid-out expert weight cache
-files (<stem>.tensorbin, WIDTH_SHARDED). The .tensorbin files are left as they are.
+"""The migration of an old routed-expert weight cache to the only layout the loader reads (owner 2026-11-06).
+
+Caches written before 2026-11-06 hold each laid-out weight tensor as <stem>.tensorbin (a ttnn flatbuffer of the
+WIDTH_SHARDED tensor). The loader (flat_routed_expert flat_expert._load_cached_set) reads only the bank-major file
+<stem>.bm.bin (bank_major.py), so on a box whose cache is .tensorbin-only every layer misses and is repacked from the
+checkpoint (the host dequant + packing, ~1 h for a whole model). Converting is the fast way (host only, no device;
+about 11 s a layer, 8 min for DS41's 40 layers): this writes <stem>.bm.bin beside each <stem>.tensorbin (the same
+bytes per chip and DRAM bank; --verify reads them back and compares every shard after the inverse permutation). The .tensorbin files are left as they are: delete them yourself
+once converted (nothing reads them; the weight cache's shared master never takes them, core/weight_cache.py).
 
     cd /scratch/dnijemcevic/tt-metal-rebase && source python_env/bin/activate
     PYTHONPATH=$PWD ionice -c3 nice -n19 python models/demos/deepseek_v41_flash_d_p/tools/convert_expert_cache.py \\
-        --layers $(seq 0 39) [--impl bfp4_mse] [--verify]
+        --layers $(seq 0 39) [--impl bfp4_mse] [--cache <dir>] [--verify]
+    ... convert_expert_cache.py <file>.tensorbin ...      # any FlatRoutedExpert cache file (e.g. another model's)
 
---out: write the .bm.bin files there (default: beside the .tensorbin). --verify: read the written file back and
-compare every shard with the source after the inverse permutation."""
+--cache: the mesh dir of the experts cache (<art>/tt_cache/<mesh>/<version>/experts-<rev>/<rows>x<cols>). --out: write
+the .bm.bin files there (default: beside the .tensorbin). A complete .bm.bin already there is kept (--force rewrites).
+"""
 
 from __future__ import annotations
 
@@ -45,12 +54,15 @@ def warm(path, threads=8):
         os.close(fd)
 
 
-def convert(src: str, out_dir: str | None, verify: bool) -> str:
+def convert(src: str, out_dir: str | None, verify: bool, force: bool = False) -> str:
     import ttnn
 
     dst = bm.bm_path(src)
     if out_dir:
         dst = str(Path(out_dir) / Path(dst).name)
+    if not force and bm.is_complete(dst):
+        print(f"{os.path.basename(dst)}: already converted (--force rewrites it)")
+        return dst
     t0 = time.time()
     warm(src)
     t1 = time.time()
@@ -62,7 +74,6 @@ def convert(src: str, out_dir: str | None, verify: bool) -> str:
     tiles = (info["rows"] // 32) * info["banks"]
     assert n % tiles == 0, (n, tiles)
     info["tile_bytes"] = n // tiles
-    info["src"] = os.path.basename(src)
     outs = [torch.empty(n, dtype=torch.uint8) for _ in srcs]
     for s, o in zip(srcs, outs):
         bm.width_to_bank_major(s, info["banks"], info["tile_bytes"], o)
@@ -88,7 +99,7 @@ def convert(src: str, out_dir: str | None, verify: bool) -> str:
     return dst
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="*")
     ap.add_argument("--layers", type=int, nargs="*", default=[])
@@ -96,7 +107,8 @@ def main():
     ap.add_argument("--cache", default=CACHE)
     ap.add_argument("--out", default=None)
     ap.add_argument("--verify", action="store_true")
-    a = ap.parse_args()
+    ap.add_argument("--force", action="store_true", help="rewrite a .bm.bin that is already complete")
+    a = ap.parse_args(argv)
     torch.set_num_threads(8)
     files = list(a.files)
     for L in a.layers:
@@ -106,7 +118,7 @@ def main():
     if a.out:
         os.makedirs(a.out, exist_ok=True)
     for f in files:
-        convert(f, a.out, a.verify)
+        convert(f, a.out, a.verify, a.force)
 
 
 if __name__ == "__main__":

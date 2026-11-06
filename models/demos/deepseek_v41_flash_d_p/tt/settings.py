@@ -347,7 +347,9 @@ TABLE = {
         "(<art>/tt_cache/<mesh>[-scaled]/<version>/experts-<revision>/, tt/experts.py:expert_cache_prefix: keyed by "
         "the layer's stored expert tensors, the layer and EXPERTS_IMPL; the fork's file names add the dtype and the "
         "layout's hash), with a completion marker that also keeps bfp4_stats. A hit skips the host dequant, checks "
-        "and packing. off = build from the checkpoint every time (the miss path, no files). 8x4 layer 0, bfp4: see "
+        "and packing. One on-disk layout (owner 2026-11-06): the fork's bank-major files (<stem>.bm.bin, "
+        "bank_major.py; a hit = the layer's .bm.bin files, a miss writes only those); an old .tensorbin-only cache is "
+        "never read: convert it (tools/convert_expert_cache.py, host only). off = build from the checkpoint every time (the miss path, no files). 8x4 layer 0, bfp4: see "
         "BREADCRUMBS FIX.4 for miss / hit times; 7.6 GB of disk per layer (bfp4), 13.6 GB (bfp8)",
     ),
     "EXPERTS_PREFETCH": Setting(
@@ -355,9 +357,10 @@ TABLE = {
         ("on", "off"),
         "Load time only (upload/README.md): after a layer's routed experts are uploaded, the next layer's weight cache "
         "(set_load_order) is read into the fork's pinned host staging in the background (flat_expert.prefetch_cached: "
-        "its bank-major twins, FLAT_CACHE_BANK_MAJOR), so the read overlaps that layer's dense weight load. No effect "
-        "without the twins (convert_cache.py, or written on a cache miss). off = each layer reads its own files when "
-        "it loads them. Device bytes identical either way",
+        "its bank-major files), so the read overlaps that layer's dense weight load. No effect on a miss. off = each "
+        "layer reads its own files when it loads them. Device bytes identical either way. The staging (2 slots x a "
+        "layer) stays pinned only when TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES covers it: export_pinned_limit below "
+        "sets it before the mesh opens",
     ),
     "EXPERTS_PRECISION": Setting(
         "glm",
@@ -982,3 +985,31 @@ TABLE = {
 # second expert pipeline (EXPERTS_KERNEL loop / unified, EXPERTS_IMPL fp4_decode, EXPERTS_DECODE, EXPERTS_COMBINE separate,
 # SHARED_EXPERT_IMPL linear): the flat routed expert with the weighted combine and the flat shared expert are the only path.
 settings = Settings("DS41_", TABLE)
+
+
+# ---- the routed experts' pinned weight staging (flat_routed_expert bank_major.PinnedStager): not a switch, a fact of
+# the process. tt-metal reads TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES once, when the process first touches it (before
+# the mesh opens), and keeps at most that many bytes of host memory pinned (default 4 GiB). The stager's 2 slots hold 2
+# layers' routed experts (7.6 GB a layer at bfp4 / bfp4_mse, 13.6 GB at bfp8): below that, the chips past the limit
+# take the slower issue-queue copy (same bytes) and their pins are redone every layer.
+PINNED_LIMIT_ENV = "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES"
+
+
+def pinned_limit_bytes() -> int:
+    """2 staging slots x one layer's routed experts, rounded up: 16 GiB at bfp4 / bfp4_mse, 32 GiB with bfp8 weights."""
+    return (32 if settings.get("EXPERTS_IMPL").startswith("bfp8") else 16) << 30
+
+
+def export_pinned_limit(env=None) -> str | None:
+    """Set TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES to pinned_limit_bytes() in this process's environment when unset,
+    before anything opens the device: bringup/hooks.py:device_params (every bring-up test's mesh, at collection, and
+    harness.open_mesh) and tt/runners/adapter.py (the prefill runner, at import). An explicit value is kept (e.g. 0,
+    the KMD 2.9 file-backed pin workaround some runner tests set): the stager then logs one line and stays correct.
+    Returns the value set, or None."""
+    import os
+
+    env = os.environ if env is None else env
+    if env.get(PINNED_LIMIT_ENV):
+        return None
+    env[PINNED_LIMIT_ENV] = str(pinned_limit_bytes())
+    return env[PINNED_LIMIT_ENV]
