@@ -15,8 +15,8 @@ as safe to reuse and none of it measured until here:
     "carries nothing between reads".
   * `_exchange_semaphore` — one global arrival semaphore for the whole walk, deliberately
     not program-local, reset in kernel after the wait rather than at launch.
-  * `_query_columns` — the transposed query stack, memoized on `id(q)`, so a block's second
-    read takes a different host path to the same operand than its first.
+  * `_score_columns` — the block's stacked query columns, memoized on the queries' `id`s, so
+    a second run of a block takes a different host path to the same operand than its first.
 
 A second run of an identical read is what tests all three at once, and it needs no oracle:
 same inputs, same state, same program, so the only correct answer is the same bits. The
@@ -33,6 +33,11 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
 from models.demos.deepseek_v3_d_p.tests.attn_res.assertions import assert_bit_identical
+from models.demos.deepseek_v3_d_p.tests.attn_res.device_determinism import (
+    device_mismatch_marker_is_set,
+    fold_mismatches,
+    mismatch_report,
+)
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     FABRIC,
     HIDDEN_SIZE,
@@ -45,7 +50,6 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     placements,
     random_case,
     random_queries,
-    read_block,
 )
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -53,18 +57,20 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import TT_CCL
 
 TP_AXIS = 1
 
-# The op's contract with the statistics all-reduce: two barriers, the reduce-scatter's
-# three, the all-gather's two.
-STATS_SEMAPHORES = 7
+# `attn_res_block_stats` counts its peers' arrivals on a semaphore of the op's own: it is
+# consumed by subtraction, so it is not one to share. It is the only global semaphore the
+# constructor makes.
+BLOCK_STATS_SEMAPHORES = 1
 
 # One full 12-layer block of read sites against the widest sealed set the walk reaches, so
 # the batch axis, the site-major permute and every candidate-axis kernel are all live.
 READ_SITES = 24
 NUM_SEALED = 8
+# Back-to-back runs of that block with no sync between them; the first is the reference.
+REPEATS = 50
 
 # Trace capture needs its own region; the rest of the suite runs eager and does not reserve one.
 TRACE_REGION_SIZE = 23887872
@@ -109,19 +115,36 @@ def _host_inputs(num_tokens, seed=0):
     return running_sum, block_residual, random_queries(rng, READ_SITES)
 
 
+def _read_block_on_device(op, tt_block, tt_prefix, tt_queries):
+    """Every read site of one block, in the order the walk issues them, left on device.
+
+    `read_block` without the host: composing each site would sync the chips 24 times a block
+    and hide the skew a reuse race needs.
+    """
+    partials, shifts, masses, _ = op.inter_block(tt_block, tt_queries)
+    reads = [op.merge(partials, shifts, masses, tt_prefix, q, site) for site, q in enumerate(tt_queries)]
+    for tensor in (partials, shifts, masses):
+        ttnn.deallocate(tensor)
+    return reads
+
+
 @on_mesh
 def test_read_repeats_exactly_without_disturbing_its_inputs(mesh_device, device_params):
-    """Two identical runs of a 24-site block: same bits out, same bits left behind.
+    """`REPEATS` back-to-back runs of a 24-site block, no sync between them: same bits out,
+    same bits left behind.
 
-    The second run is the one carrying the signal. It reuses the scratch the first run
-    wrote, waits on a semaphore the first run's kernels released, and takes the memoized
-    query stack rather than building one. A stale plane in the scratch, a semaphore left
-    off zero, or a freed memo entry all first become visible here.
+    Every run after the first carries the signal. It reuses the scratch, the gathered
+    statistics and the semaphores the run before wrote, and takes the memoized query stack
+    rather than building one. A stale plane in the scratch, a semaphore left off zero, a
+    peer writing a buffer this chip is still reading, or a freed memo entry all show up as
+    a run that disagrees with the first. The first run's reads stay on device as the
+    reference and each later run's mismatch folds into one device marker, read back once at
+    the end, so the chips are free to drift apart (`device_determinism.py`).
 
-    Inputs are borrowed by both `inter_block` and `merge`, so they are also compared before
-    and after. The op reaches its operands through slices that share their parent's buffer,
-    which makes an accidental in-place write land in a caller's tensor rather than a
-    temporary — and every read after it would still match its own oracle.
+    Inputs are borrowed by both `inter_block` and `merge`, so they are also compared, on
+    device, against copies made up front. The op reaches its operands through slices that
+    share their parent's buffer, which makes an accidental in-place write land in a caller's
+    tensor rather than a temporary — and every read after it would still match its own oracle.
     """
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
@@ -129,35 +152,42 @@ def test_read_repeats_exactly_without_disturbing_its_inputs(mesh_device, device_
 
     tt_prefix, tt_block = place_case(op, running_sum, block_residual)
     tt_queries = [op.to_query(q) for q in queries]
-    before = (compose(op, tt_prefix), compose(op, tt_block), [compose(op, q) for q in tt_queries])
+    borrowed = [tt_prefix, tt_block, *tt_queries]
+    originals = [ttnn.clone(tensor) for tensor in borrowed]
 
-    first = list(read_block(op, tt_block, tt_prefix, tt_queries))
-    ttnn.synchronize_device(mesh_device)
-    warm_entries = mesh_device.num_program_cache_entries()
+    references = _read_block_on_device(op, tt_block, tt_prefix, tt_queries)
 
-    second = list(read_block(op, tt_block, tt_prefix, tt_queries))
-    ttnn.synchronize_device(mesh_device)
+    # Counted around the reads only: the compares build programs of their own on the first fold.
+    compiled = 0
+    marker = None
+    for repeat in range(1, REPEATS):
+        warm_entries = mesh_device.num_program_cache_entries()
+        reads = _read_block_on_device(op, tt_block, tt_prefix, tt_queries)
+        compiled += mesh_device.num_program_cache_entries() - warm_entries
+        marker = fold_mismatches(marker, references, reads)
+        # The last run's reads stay for the failure report.
+        if repeat < REPEATS - 1:
+            for tensor in reads:
+                ttnn.deallocate(tensor)
+    untouched = fold_mismatches(None, originals, borrowed)
 
-    for site, (once, twice) in enumerate(zip(first, second, strict=True)):
-        assert_bit_identical(once, twice, name=f"site {site} repeat")
-
-    assert_bit_identical(before[0], compose(op, tt_prefix), name="running_sum immutability")
-    assert_bit_identical(before[1], compose(op, tt_block), name="block_residual immutability")
-    for site, was in enumerate(before[2]):
-        assert_bit_identical(was, compose(op, tt_queries[site]), name=f"query {site} immutability")
+    site_names = [f"site {site} repeat" for site in range(READ_SITES)]
+    assert not device_mismatch_marker_is_set(marker), mismatch_report(site_names, references, reads)
+    input_names = ["running_sum", "block_residual", *(f"query {site}" for site in range(READ_SITES))]
+    assert not device_mismatch_marker_is_set(untouched), mismatch_report(input_names, originals, borrowed)
 
     entries = mesh_device.num_program_cache_entries()
-    assert entries == warm_entries, (
-        f"the second run compiled {entries - warm_entries} more programs than the first — "
+    assert compiled == 0, (
+        f"the later runs compiled {compiled} more programs than the first — "
         f"the read is not hitting the program cache it already populated"
     )
 
     logger.info(
-        f"{READ_SITES} sites x2 at S={NUM_SEALED}, T={num_tokens} ({PER_CHIP_TOKENS}/chip): "
+        f"{READ_SITES} sites x{REPEATS} at S={NUM_SEALED}, T={num_tokens} ({PER_CHIP_TOKENS}/chip): "
         f"bit-identical, inputs unchanged, {entries} cached programs"
     )
 
-    for tensor in (tt_prefix, tt_block, *tt_queries):
+    for tensor in (*borrowed, *originals, *references, *reads, marker, untouched):
         ttnn.deallocate(tensor)
 
 
@@ -182,7 +212,7 @@ def test_trace_replay_matches_eager(mesh_device, device_params):
     tt_prefix, tt_block = place_case(op, running_sum, block_residual)
     tt_queries = [op.to_query(q) for q in queries]
 
-    partials, shifts, masses = op.inter_block(tt_block, tt_queries)
+    partials, shifts, masses, _ = op.inter_block(tt_block, tt_queries)
 
     # Capture replays programs, it does not build them: the compile pass, the query stack and
     # the lazily-created scratch and semaphore all have to exist before the region opens.
@@ -232,21 +262,11 @@ def test_the_statistics_semaphores_predate_the_first_read(mesh_device, device_pa
     monkeypatch.setattr(ttnn, "create_global_semaphore", counting)
     try:
         TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
-        own = len(created)
-
-        pool = TT_CCL(mesh_device)
-        created.clear()
-        TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS, tt_ccl=pool)
-        shared = len(created)
     finally:
         monkeypatch.undo()
 
-    assert own == STATS_SEMAPHORES, (
-        "constructing without a pool has to make the whole statistics set up front -- two "
-        f"barriers, the scatter's three and the gather's two: got {own}"
+    assert len(created) == BLOCK_STATS_SEMAPHORES, (
+        "construction has to make the block statistics' arrival semaphore up front, and it is "
+        f"the only one the constructor owns: got {len(created)}"
     )
-    assert shared == 0, (
-        "a caller that brought its own pool has to be taken at its word; allocating anyway "
-        f"puts a mesh write back where a capture can reach it: got {shared}"
-    )
-    logger.info(f"semaphores at construction: {own} on its own, {shared} with a shared pool")
+    logger.info(f"semaphores at construction: {len(created)}")
