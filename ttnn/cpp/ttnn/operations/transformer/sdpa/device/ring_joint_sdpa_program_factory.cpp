@@ -3389,9 +3389,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
+    // dst_size above comes from get_dest_reg_count(compute_kernel_config), which doubles with dst_full_sync_en, so the
+    // kernel must be built in the same sync mode (joint_sdpa / ring_distributed_sdpa already pass it).
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
     if (ksplit_count > 1) {
