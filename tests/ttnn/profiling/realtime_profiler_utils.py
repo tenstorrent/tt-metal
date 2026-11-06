@@ -15,7 +15,11 @@ from loguru import logger
 # load (DVFS), the duration grows with it. ("clock_ghz" is the average device clock the program ran at.) The real-time
 # profiler this replaced converted cycles at a clock fitted over seconds (~nominal), so it did not see throttling;
 # baselines calibrated under it read low for ops that throttle. Kernels run instrumented in this mode, so durations
-# include the zone-marker cost (measured negligible for ms-scale ops). Recommended setup for perf jobs:
+# include the zone-marker cost (measured negligible for ms-scale ops).
+#
+# The streaming profiler is a process-wide mode, read once when tt-metal builds its runtime options (the first device
+# open or cluster query, which collection-time skipif/parametrize code often does), so it must be in the environment
+# before pytest starts; the perf jobs in tests/pipeline_reorg set it on their commands:
 #   TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16
 # (direct push: no GDDR spool reservation, small host FIFOs; same delivery latency).
 
@@ -56,8 +60,8 @@ def profile_realtime_program(
 
     if not is_streaming_profiler_active():
         raise RuntimeError(
-            "Streaming profiler is not active: run with TT_METAL_STREAMING_PROFILER=1 "
-            "(see tests/ttnn/profiling/realtime_profiler_utils.py for the recommended setup)."
+            "Streaming profiler is not active: run pytest with TT_METAL_STREAMING_PROFILER=1 "
+            "TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 set in the environment."
         )
 
     # Everything dispatched before the measured region finishes here, so its programs start before region_start_ns
@@ -128,7 +132,10 @@ def require_realtime_profiler(what: str) -> None:
     import pytest
 
     if not is_perf_profiler_active():
-        pytest.fail(f"Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for {what}")
+        pytest.fail(
+            f"Streaming profiler must be active for {what}: run pytest with TT_METAL_STREAMING_PROFILER=1 "
+            "TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16"
+        )
 
 
 def profile_realtime_program_merged(

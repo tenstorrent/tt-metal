@@ -411,11 +411,11 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
     '
   test_type: k3_mla_perf
   test_tags: [kimi_k3, kda, mla, k3_kda_perf]
@@ -1023,7 +1023,7 @@
     (
       timeout -k 2m 6m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_hca_perf.py -k "flash and torus-xy-8x4" -vvv --tb=short
+        TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_hca_perf.py -k "flash and torus-xy-8x4" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
@@ -1032,7 +1032,7 @@
     (
       timeout -k 2m 6m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_swa_perf.py -k "flash and torus-xy-8x4" -vvv --tb=short
+        TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_swa_perf.py -k "flash and torus-xy-8x4" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
@@ -2288,9 +2288,9 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       rc=0
-      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
-      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -k gemma4_global -svv || rc=1
-      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -k gemma4_global -svv || rc=1
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy -k "kimi_k3" -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_determinism -k "kimi_k3" -svv || rc=1
       TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto \
@@ -2337,11 +2337,11 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       rc=0
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q || rc=1
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_whole_mesh_accuracy -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_glm_perf -q -s || rc=1
