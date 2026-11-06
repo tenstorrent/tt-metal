@@ -8,8 +8,9 @@
 
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
-// Per-worker slice of one (batch, channel) plane of the all-gather input, derived on device from the
-// common row count so the reader and the writer of a worker always agree and a hit rewrites one word.
+// A worker's slice of each (batch, channel) plane of the all-gather input. The plane's input_Ht * input_Wt
+// tiles are split evenly across the workers; the slice's first tile gives the column it starts in
+// (start_pages_read_in_row) and the output-tile offset of its row (start_row_offset, output_Wt tiles per row).
 struct AllGatherWorkerSplit {
     uint32_t input_tile_id_start;
     uint32_t input_tile_id_end;
