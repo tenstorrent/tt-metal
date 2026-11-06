@@ -14,6 +14,7 @@ from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .llk_params import PerfRunType
 from .perf.schema import MARKER, MEAN, STD, stat_column, stat_prefix
+from .perf.window_hash import marker_id
 from .test_config import TestConfig
 
 
@@ -217,6 +218,9 @@ def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
     )
 
 
+_FUSED_STAGE_ZONE = re.compile(r"(INIT|TILE_LOOP|UNINIT)\d+")
+
+
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
 
@@ -238,35 +242,41 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     threads = raw_data["thread"].to_numpy(dtype=object)
     types = raw_data["type"].to_numpy(dtype=object)
     stamps = raw_data["timestamp"].to_numpy()
-    is_start = types == "ZONE_START"
-    is_end = types == "ZONE_END"
-    zone_threads = ("unpack", "pack")
+    is_start = (threads == "unpack") & (types == "ZONE_START")
+    is_end = (threads == "pack") & (types == "ZONE_END")
 
     timing_markers, timing_values = [], []
     for marker, run_index in sorted(set(zip(markers, runs))):
         group = (markers == marker) & (runs == run_index)
+        unpack_start = np.flatnonzero(group & is_start)
+        pack_end = np.flatnonzero(group & is_end)
 
-        if not set(zone_threads) <= set(threads[group]):
+        if len(unpack_start) == 0 or len(pack_end) == 0:
             raise ValueError(
                 f"Zone must be captured on both unpack and pack for L1_TO_L1 to work properly "
                 f"(marker={marker}, run_index={run_index})"
             )
 
-        starts = [stamps[group & is_start & (threads == t)] for t in zone_threads]
-        ends = [stamps[group & is_end & (threads == t)] for t in zone_threads]
-        counts = {len(s) for s in starts + ends}
-
-        if len(counts) != 1:
+        if len(unpack_start) != len(pack_end):
             raise ValueError(
-                f"Zone starts and ends must be paired on unpack and pack for L1_TO_L1 to work properly "
+                f"Unpack and pack must be paired properly for L1_TO_L1 to work properly "
                 f"(marker={marker}, run_index={run_index}, "
-                f"starts={[len(s) for s in starts]}, ends={[len(e) for e in ends]})"
+                f"unpack_count={len(unpack_start)}, pack_count={len(pack_end)})"
             )
 
-        timing_markers += [marker] * counts.pop()
-        timing_values.append(
-            np.vstack(ends).max(axis=0) - np.vstack(starts).min(axis=0)
-        )
+        first_start, last_end = stamps[unpack_start], stamps[pack_end]
+        if _FUSED_STAGE_ZONE.fullmatch(marker):
+            pack_start = np.flatnonzero(
+                group & (threads == "pack") & (types == "ZONE_START")
+            )
+            unpack_end = np.flatnonzero(
+                group & (threads == "unpack") & (types == "ZONE_END")
+            )
+            first_start = np.minimum(first_start, stamps[pack_start])
+            last_end = np.maximum(last_end, stamps[unpack_end])
+
+        timing_markers += [marker] * len(unpack_start)
+        timing_values.append(last_end - first_start)
 
     return _stats_timings(
         pd.DataFrame(
@@ -426,16 +436,6 @@ class Profiler:
     SUPPORTED_RUNS = STATS_FUNCTION.keys()
 
     @staticmethod
-    def _hash_meta(s: str) -> int:
-        hash32 = 2166136261
-        for c in s.encode("ascii"):
-            hash32 ^= c
-            hash32 = (
-                hash32 * 16777619
-            ) & 0xFFFFFFFF  # simulate 32-bit unsigned overflow
-        return (hash32 ^ (hash32 >> 16)) & 0xFFFF  # fold to 16 bits
-
-    @staticmethod
     def _assert_no_collision(messages, message):
         existing = messages.get(message.id)
         if existing is not None and existing != message:
@@ -449,7 +449,7 @@ class Profiler:
                 marker=groups["marker"],
                 file=groups["file"],
                 line=int(groups["line"]),
-                id=(Profiler._hash_meta(groups["file"]) + int(groups["line"])) & 0xFFFF,
+                id=marker_id(groups["file"], int(groups["line"])),
             )
         else:
             return None

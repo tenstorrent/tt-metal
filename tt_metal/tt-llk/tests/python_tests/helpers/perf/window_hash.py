@@ -22,8 +22,11 @@ _TARGET = re.compile(r"\b([0-9a-f]+) <([^>+]+)(?:\+0x([0-9a-f]+))?>")
 _CALLS = ("jal", "call", "tail", "j")
 _BRANCH = re.compile(r"^(b[a-z]*|j|c\.j|c\.b[a-z]*)$")
 _ENDS = ("ret", "jr", "mret", "c.jr")
-_TILE_LOOP = re.compile(rb"LLK_PROFILER:[^\x00]*?:TILE_LOOP\x00")
+_TILE_LOOP = re.compile(
+    rb"LLK_PROFILER:(?P<file>[^\x00]*?):(?P<line>\d+):TILE_LOOP\x00"
+)
 _CACHE = {}
+MARKER_ID_MASK = 0xFFFF
 
 
 def _functions(text):
@@ -47,7 +50,13 @@ def _hash16(text):
     h = 2166136261
     for c in text:
         h = ((h ^ c) * 16777619) & 0xFFFFFFFF
-    return (h ^ (h >> 16)) & 0xFFFF
+    return (h ^ (h >> 16)) & MARKER_ID_MASK
+
+
+def marker_id(file, line):
+    if isinstance(file, str):
+        file = file.encode("ascii")
+    return (_hash16(file) + line) & MARKER_ID_MASK
 
 
 def _zone_lui(mnemonic, operands):
@@ -121,7 +130,7 @@ def _region(insns, start, ids):
 
 
 def _window(insns, elf_bytes):
-    ids = {_hash16(m.group(0)[:-1]) for m in _TILE_LOOP.finditer(elf_bytes)}
+    ids = {marker_id(m["file"], int(m["line"])) for m in _TILE_LOOP.finditer(elf_bytes)}
     found = []
     for k in range(len(insns)):
         if not _starts(insns, k):
