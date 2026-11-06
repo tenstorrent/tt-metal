@@ -319,8 +319,9 @@ void bind_resources(nb::module_& mod) {
         "A dataflow buffer (DFB): a FIFO between a producer kernel and a consumer kernel on each node. "
         "data_format_metadata is a ttnn data type; ttnn.int8 is stored as the UInt8 format, as in ttnn's own ops, and "
         "reads back as ttnn.uint8. borrowed_from, when set, names the tensor parameter whose memory the buffer uses "
-        "instead of its own, as for a buffer on a sharded tensor's shards. advanced_options refers into this object. "
-        "See dataflow_buffer_spec.hpp.")
+        "instead of its own, as for a buffer on a sharded tensor's shards. advanced_options refers into this object, "
+        "but its alias_with list, like every list these classes return, is a copy: assign the whole list to change "
+        "it. See dataflow_buffer_spec.hpp.")
         .def(
             "__init__",
             [](m2::DataflowBufferSpec* self,
