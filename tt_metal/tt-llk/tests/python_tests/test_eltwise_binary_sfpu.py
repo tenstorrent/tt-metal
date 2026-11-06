@@ -2427,6 +2427,9 @@ _BINARY_EDGE_OPS = sorted(
     key=lambda op: op.name,
 )
 
+# Ops whose BinaryOp member and kernel exist on Blackhole only; elsewhere the edge sweep skips them.
+_BLACKHOLE_ONLY_BINARY_OPS = frozenset({MathOperation.SfpuSwigluOai})
+
 assert _BINARY_EDGE_OPS, (
     "no float binary op reaching sfpu_binary() has an entry in "
     "sfpu_domains._OP_SINGULARITIES or in BINARY_SPECIALS_READY_OPS, so "
@@ -2459,6 +2462,11 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     One variant per (op, class) rather than per op: see the comment above _EDGE_CLASSES for
     why a single tensor holding every pole cannot report which behaviour changed.
     """
+    if (
+        mathop in _BLACKHOLE_ONLY_BINARY_OPS
+        and TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(reason=f"{mathop.name} has a kernel on Blackhole only")
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden

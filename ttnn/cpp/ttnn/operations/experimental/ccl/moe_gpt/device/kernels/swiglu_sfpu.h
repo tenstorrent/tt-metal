@@ -41,9 +41,8 @@
 
 namespace ckernel::sfpu {
 
-// A Config opts in to swiglu_oai's fitted kernel (ckernel_sfpu_swiglu_oai.h) with
-// `static constexpr bool fitted_swiglu_oai = true;`. It then must hold alpha = 1.702, clamp_limit = 7, and the
-// kernel runs for 16-bit (BF16) DEST; every other Config keeps this file's own body.
+// A Config with `static constexpr bool fitted_swiglu_oai = true;` runs ckernel_sfpu_swiglu_oai.h
+// for BF16 DEST with AddUpBias; every other instantiation keeps the body below.
 template <class Config, class = void>
 struct uses_fitted_swiglu_oai : std::false_type {};
 template <class Config>
@@ -89,7 +88,7 @@ sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SwiGLUConfigGPTOSS, bool AddUpBias = true>
 inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
 #if defined(ARCH_BLACKHOLE)
-    if constexpr (!is_fp32_dest_acc_en && uses_fitted_swiglu_oai<Config>::value) {
+    if constexpr (!is_fp32_dest_acc_en && AddUpBias && uses_fitted_swiglu_oai<Config>::value) {
         static_assert(
             Config::alpha >= 1.7020000219345093f && Config::alpha <= 1.7020000219345093f &&
                 Config::clamp_limit >= 7.0f && Config::clamp_limit <= 7.0f,

@@ -22,15 +22,7 @@ namespace ckernel {
 /**
  * Performs swiglu_oai over the tiles at idst0 (gate) and idst1 (up), writing the result to odst in DST:
  *
- *   odst = gate_leaf(idst0) * up_leaf(idst1)
- *   gate_leaf(x) = x/(1+exp(-1.702*x))
- *   up_leaf(x) = x+1
- *   (gate enters its leaf clamped: min(gate, 7.0))
- *   (up enters its leaf clamped: clamp(up, -7.0, 7.0))
- *
- * BF16 (Float16_b) inputs, Blackhole only. The result is BF16-accurate in either DEST mode: at most 0.526 ULP of
- * the exact value over every finite BF16 pair. With FP32 DEST the FP32 result is not FP32-accurate: it is within
- * 1.0e-04 relative of the exact value.
+ *   odst = swiglu_oai(gate = idst0, up = idst1); see ckernel_sfpu_swiglu_oai.h for the formula and accuracy.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
