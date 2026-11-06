@@ -77,13 +77,19 @@ FORCE_INLINE void with_other_erisc_parked(F&& f) {
     }
 }
 
-// Non-master: park while the master switches.
+// Non-master: park while the master switches. After the ack, wait for the register to leave COMPLETE_ACK, not for
+// NORMAL_EXECUTION: the master may already have moved on to its next RETRAIN_INTENT (a PAUSE right after a switch),
+// which the next round's check then acknowledges.
 FORCE_INLINE void follow_context_switch() {
     if (context_switch_state() == static_cast<uint32_t>(ContextSwitchState::RETRAIN_INTENT)) {
         set_context_switch_state(ContextSwitchState::INTENT_ACK);
         wait_for_context_switch_state(ContextSwitchState::RETRAIN_COMPLETE);
         set_context_switch_state(ContextSwitchState::COMPLETE_ACK);
-        wait_for_context_switch_state(ContextSwitchState::NORMAL_EXECUTION);
+        while (context_switch_state() == static_cast<uint32_t>(ContextSwitchState::COMPLETE_ACK)) {
+            if (terminating()) {
+                return;
+            }
+        }
     }
 }
 
