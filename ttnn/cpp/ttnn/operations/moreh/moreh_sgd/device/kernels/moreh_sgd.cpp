@@ -6,27 +6,27 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
-    constexpr auto cb_param_in = tt::CBIndex::c_0;
+    static constexpr auto cb_param_in = tt::CBIndex::c_0;
     DataflowBuffer dfb_param_in_obj(cb_param_in);
-    constexpr auto cb_grad = tt::CBIndex::c_1;
+    static constexpr auto cb_grad = tt::CBIndex::c_1;
     DataflowBuffer dfb_grad_obj(cb_grad);
-    constexpr auto cb_momentum_in = tt::CBIndex::c_2;
+    static constexpr auto cb_momentum_in = tt::CBIndex::c_2;
     DataflowBuffer dfb_momentum_in_obj(cb_momentum_in);
 
-    constexpr auto cb_param_out = tt::CBIndex::c_16;
+    static constexpr auto cb_param_out = tt::CBIndex::c_16;
     DataflowBuffer dfb_param_out_obj(cb_param_out);
-    constexpr auto cb_momentum_out = tt::CBIndex::c_17;
+    static constexpr auto cb_momentum_out = tt::CBIndex::c_17;
     DataflowBuffer dfb_momentum_out_obj(cb_momentum_out);
 
-    constexpr auto cb_scalar_args = tt::CBIndex::c_24;
+    static constexpr auto cb_scalar_args = tt::CBIndex::c_24;
     DataflowBuffer dfb_scalar_args_obj(cb_scalar_args);
-    constexpr auto cb_tmp1 = tt::CBIndex::c_25;
+    static constexpr auto cb_tmp1 = tt::CBIndex::c_25;
     DataflowBuffer dfb_tmp1_obj(cb_tmp1);
-    constexpr auto cb_tmp2 = tt::CBIndex::c_26;
+    static constexpr auto cb_tmp2 = tt::CBIndex::c_26;
     DataflowBuffer dfb_tmp2_obj(cb_tmp2);
-    constexpr auto cb_tmp3 = tt::CBIndex::c_27;
+    static constexpr auto cb_tmp3 = tt::CBIndex::c_27;
     DataflowBuffer dfb_tmp3_obj(cb_tmp3);
-    constexpr auto cb_tmp4 = tt::CBIndex::c_28;
+    static constexpr auto cb_tmp4 = tt::CBIndex::c_28;
     DataflowBuffer dfb_tmp4_obj(cb_tmp4);
 
     constexpr uint32_t lr_tile = 0;
@@ -43,30 +43,30 @@ void kernel_main() {
     dfb_scalar_args_obj.wait_front(5);
 
 #if defined(WEIGHT_DECAY)
-    constexpr auto cb_grad_tmp = cb_tmp2;
+    static constexpr auto cb_grad_tmp = cb_tmp2;
     auto& dfb_grad_tmp_obj = dfb_tmp2_obj;
 #else
-    constexpr auto cb_grad_tmp = cb_grad;
+    static constexpr auto cb_grad_tmp = cb_grad;
     auto& dfb_grad_tmp_obj = dfb_grad_obj;
 #endif
 
 #if defined(MOMENTUM)
 #if defined(MOMENTUM_INITIALIZED)
-    constexpr auto cb_momentum_tmp = cb_tmp1;
+    static constexpr auto cb_momentum_tmp = cb_tmp1;
     auto& dfb_momentum_tmp_obj = dfb_tmp1_obj;
 #else
-    constexpr auto cb_momentum_tmp = cb_grad_tmp;
+    static constexpr auto cb_momentum_tmp = cb_grad_tmp;
     auto& dfb_momentum_tmp_obj = dfb_grad_tmp_obj;
 #endif
 #if defined(NESTEROV)
-    constexpr auto cb_final_grad = cb_tmp4;
+    static constexpr auto cb_final_grad = cb_tmp4;
     auto& dfb_final_grad_obj = dfb_tmp4_obj;
 #else
-    constexpr auto cb_final_grad = cb_momentum_tmp;
+    static constexpr auto cb_final_grad = cb_momentum_tmp;
     auto& dfb_final_grad_obj = dfb_momentum_tmp_obj;
 #endif
 #else
-    constexpr auto cb_final_grad = cb_grad_tmp;
+    static constexpr auto cb_final_grad = cb_grad_tmp;
     auto& dfb_final_grad_obj = dfb_grad_tmp_obj;
 #endif
 

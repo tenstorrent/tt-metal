@@ -1,0 +1,4 @@
+{
+  "arch": "Gemma4A4BForCausalLM",
+  "main_class": "models.demos.gemma4_26b_a4b_qb2.tt.generator_vllm:Gemma4ForCausalLM"
+}

@@ -26,7 +26,7 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         "Operands to update_cache need to be on device!");
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(
-        input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr,
+        input_tensor.is_allocated() and cache_tensor.is_allocated(),
         "Operands to update_cache need to be allocated in buffers on device!");
     TT_FATAL(
         (input_tensor.layout() == Layout::TILE && cache_tensor.layout() == Layout::TILE),
@@ -132,6 +132,17 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             "Cache tensor batch size ({}) must be <= input tensor height ({})",
             cache_tensor.padded_shape()[0],
             input_tensor.padded_shape()[-2]);
+        // update_idx is the sequence position written in every user's cache. The program factory
+        // turns it into a tile row (update_idx / TILE_HEIGHT) and a row offset within that tile, with
+        // no bound of its own, so a position past the end of the sequence would land in the next
+        // head's or user's rows, or past the end of the cache buffer. Checked here rather than once
+        // per program: compute_program_hash excludes update_idx, and this validation also runs on
+        // every program-cache hit.
+        TT_FATAL(
+            args.update_idx < cache_tensor.padded_shape()[-2],
+            "update_idx ({}) must be less than cache tensor sequence length ({})",
+            args.update_idx,
+            cache_tensor.padded_shape()[-2]);
         const auto Bcache = cache_tensor.padded_shape()[0];
         const auto Binput = input_tensor.padded_shape()[-2];
         TT_FATAL(

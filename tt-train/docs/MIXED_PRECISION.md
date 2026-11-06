@@ -55,7 +55,6 @@ These optimizers write in place, and all of them take views:
 |---|---|
 | `AdamW` (fused) | the parameter and its moments |
 | `SGD` (fused) | the parameter and its momentum buffer |
-| `AdamWFullPrecision` | its fp32 master weights and moments |
 | `MorehAdamW` | the parameter and its moments, as `ttnn::moreh_adamw` output tensors |
 | `RemoteOptimizer` | the parameter, received from the aggregator |
 
@@ -71,10 +70,29 @@ a new path in an existing one (for example a config option that changes which te
 - Fused `AdamW` accepts bf16 and fp32 parameters. Its moments take the parameter's native dtype, which its kernel
   requires.
 - Every other optimizer that updates parameters has a bf16 update only. It rejects an fp32 parameter at
-  construction, with an error that names the parameter. `AdamWFullPrecision` keeps its own fp32 master weights for
-  bf16 parameters.
+  construction, with an error that names the parameter.
 - Stochastic rounding (`AdamWConfig::stochastic_rounding`) applies to bf16 parameters only. An fp32 parameter keeps
   the low bits that rounding would lose, so it is updated without it.
+
+## fp32 master weights
+
+`training_config.precision.master_dtype: float32` stores every trainable parameter, the master weight, in fp32, while
+forward and backward keep running in bf16. This is not PyTorch FSDP2's `MixedPrecisionPolicy(param_dtype=...)`, which
+names the compute dtype. It is applied by `core::apply_precision_config()`
+(`sources/ttml/core/parameter_dtype.{hpp,cpp}`) after the model is built and before the optimizer is created, so the
+optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config (as in
+`train.py`), and in C++ by the `nano_gpt` runner and the 3-tier optimizer worker. Runners that pass only the optimizer
+section, such as the SFT and GRPO trainers, don't apply it. Loading has to fit around it: a checkpoint loads after it,
+because checkpoint loading uses `assign()`, which casts into the dtype a tensor is stored in, so an fp32 checkpoint
+loaded into bf16 parameters would be rounded first; loaders that install tensors with `set_value()`, such as the C++
+safetensors loaders, run before it, or they would put bf16 tensors back. `train.py` and the `nano_gpt` runner keep this
+order. 3-tier workers keep bf16 parameters for `RemoteOptimizer`; the optimizer worker holds the fp32 master weights.
+The fp32 parameter is the master weight: fused `AdamW` updates it in place with fp32 moments, and forward and backward
+read its bf16 view, which is refreshed into its existing buffer the first time it is read after the step. Parameters
+managed by `ttml.fsdp.fully_shard` are the exception: FSDP swaps the gathered weight and the cached fp32 shard in with
+`set_value()` (`ttml/fsdp.py`), so each managed shard is cast into a new bf16 buffer every step. Frozen parameters and
+non-float tensors keep their dtype. `bfloat16` stores the trainable parameters in bf16; unset, they keep the dtype the
+model builds them in, so existing configs don't change.
 
 ## Loading values into a tensor
 
@@ -83,14 +101,26 @@ file.
 
 - `Tensor::assign()` sets a value cast to the dtype the tensor is stored in. The cast applies between bf16 and fp32.
   A value of the stored dtype, an empty value, or any value for an empty tensor is taken as is; any other dtype
-  mismatch is an error. The Python `Tensor.assign()` calls it, so the safetensors loaders and the in-place
-  initializers in `ttml.init` keep each tensor's dtype, and so does `ttml.checkpointing`, which loads parameters and
-  optimizer state into the live tensors.
+  mismatch is an error. The Python `Tensor.assign()` calls it, so the in-place initializers in `ttml.init` keep each
+  tensor's dtype.
+- `ttml.autograd.assign_numpy()` loads a numpy array into a tensor in its stored dtype, converted on the host: an
+  fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. `ttml.checkpointing` (which
+  loads parameters and optimizer state into the live tensors), the safetensors loaders, the SFT trainer's default
+  checkpoint loader and `LinearLayer.__setstate__` use it.
 - C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
   optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
   way round, and the AdamW moments follow the parameters, as the fused kernel requires.
-- `SocketManager::recv_value()` receives a tensor's value, which is sent as its bf16 view (`get_value()`): a bf16
-  tensor receives it in place, any other tensor through `assign()`. `RemoteOptimizer` receives its weights with it.
+- Transfers through `SocketManager` carry the bf16 view, from C++ and from Python. `SocketManager::recv_value()`
+  receives a tensor's value: a bf16 tensor in place through `get_value_for_update()`, any other tensor into a bf16
+  buffer that `assign()` installs, so it keeps the dtype it is stored in. `RemoteOptimizer` and the Python
+  `SocketManager.recv()` receive values this way.
+
+## Reading values from Python
+
+- `Tensor.to_numpy()` reads the tensor as stored. A bf16 tensor gives a float32 array by default, converted on the
+  host, so the read leaves no fp32 copy on the device. `precision=` reads one view instead, and `new_type=` picks
+  the array's dtype.
+- `Tensor.dtype()` and `Tensor.to_string()` describe the tensor as stored.
 
 ## Why this design
 
@@ -99,6 +129,11 @@ file.
 - **No cached copy at all** can never be stale, but a weight is read by several ops per step, so it would be cast
   and allocated several times per step, and `get_value()` could no longer return a reference.
 - **Letting both copies be written** would round the fp32 tensor to bf16 on write and erase its sub-ulp progress.
+- **Keeping the fp32 master weights in the optimizer**, next to bf16 parameters, means casting each master into a new
+  bf16 tensor and installing it after every step: an allocation per parameter per step and a buffer address that
+  moves. With the master in the parameter, the bf16 view is refreshed in place and the step runs the same `AdamW`
+  kernel, so one optimizer covers both precisions. Parameters managed by FSDP still get a new bf16 buffer each step,
+  from FSDP's own swap of the gathered weight and the shard.
 
 PyTorch uses the same idea: one source of truth with a version counter (`c10::VariableVersion`), bumped by in-place
 operations in its autograd layer while the kernels take plain tensors. Here the bump happens when the view is

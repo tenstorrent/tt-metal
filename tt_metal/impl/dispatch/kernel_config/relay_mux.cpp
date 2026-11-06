@@ -5,15 +5,14 @@
 #include "relay_mux.hpp"
 #include "context/context_descriptor.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
-#include "dispatch_core_common.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
 #include <bit>
 #include <tt-logger/tt-logger.hpp>
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <algorithm>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>

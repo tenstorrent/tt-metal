@@ -19,6 +19,16 @@ void RecvAsyncDeviceOperation::validate_on_program_cache_miss(
     std::vector<Tensor> output_tensors = {output_tensor};
     send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
         output_tensors, mesh_socket, "recv_async");
+
+    // The program factory builds per mesh coordinate and emits an empty descriptor (no program) for
+    // devices that hold no receiver core. Catch a socket that misses the tensor's coordinates entirely
+    // here, otherwise it would dispatch an empty workload instead of reporting the mismatch.
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    for (const auto& coord : output_tensor.device_storage().get_coords()) {
+        tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
+    }
+    send_recv_utils::get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
+        tensor_coords, mesh_socket);
 }
 
 RecvAsyncDeviceOperation::spec_return_value_t RecvAsyncDeviceOperation::compute_output_specs(
@@ -35,6 +45,9 @@ ttsl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RecvAsyncDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& output_tensor = tensor_args;
+    // The MeshSocket hashes its config, endpoint type and fabric node map, not its config buffer
+    // address; RecvAsyncProgramFactory::override_runtime_arguments re-applies that address (and the
+    // output tensor address) on every cache hit.
     return tt::tt_metal::operation::hash_operation<RecvAsyncDeviceOperation>(args.mesh_socket, output_tensor);
 }
 
