@@ -53,9 +53,17 @@ def pytest_generate_tests(metafunc):
     metafunc.parametrize("weights", weights, scope="session")
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    """On ttsim, skip this folder's device tests that are not marked `simulator`. CPU-only tests
+    """Each case keeps only the weights mark it runs with, so `-m synthetic`, `-m real` and `-k` select
+    by weights (the decorators put both marks on every case). Runs before pytest's `-m`/`-k` filter.
+
+    On ttsim, skip this folder's device tests that are not marked `simulator`. CPU-only tests
     (no `mesh_device`) still run."""
+    for item in items:
+        weights = item.callspec.params.get("weights") if hasattr(item, "callspec") else None
+        if weights is not None:
+            item.own_markers = [m for m in item.own_markers if m.name not in WEIGHTS or m.name == weights]
     if not ON_SIMULATOR:
         return
     skip = pytest.mark.skip(reason=f"not a sim test (no `{SIMULATOR_MARK}` mark); too slow on ttsim")
@@ -67,14 +75,19 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def mesh_device(request, device_params):
-    """`(1, 1)`: one chip, opened on its own. `(1, RING_SIZE)`: the first row of the LoudBox's 2x4 mesh.
+    """`(1, 1)`: one chip, opened on its own. `(1, RING_SIZE)`: the first row of the system mesh, which
+    must be RING_SIZE wide: the LoudBox's 2x4 mesh, or a Galaxy's 8x4.
 
-    All 8 chips are opened for the ring because fabric setup on a chip waits for every one of its
-    ethernet links, including those to the other row, and times out if those chips are not opened
-    too. Replaces the repo-wide fixture rather than wrapping it: a wrapper would take the mesh
+    Every chip of the system mesh is opened for the ring because fabric setup on a chip waits for every
+    one of its ethernet links, including those to the other rows, and times out if those chips are not
+    opened too. Replaces the repo-wide fixture rather than wrapping it: a wrapper would take the mesh
     parameter, and the repo fixture would then open its default mesh."""
     shape = tuple(request.param)
-    open_shape = LOUDBOX_SHAPE if shape == (1, RING_SIZE) else shape
+    open_shape = shape
+    if shape == (1, RING_SIZE):
+        open_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+        if len(open_shape) != 2 or open_shape[1] != RING_SIZE or open_shape[0] < LOUDBOX_SHAPE[0]:
+            pytest.skip(f"needs a system mesh {RING_SIZE} wide with at least {LOUDBOX_SHAPE[0]} rows, got {open_shape}")
     num_chips = open_shape[0] * open_shape[1]
     if ttnn.get_num_devices() < num_chips:
         pytest.skip(f"needs {num_chips} chips, the machine has {ttnn.get_num_devices()}")

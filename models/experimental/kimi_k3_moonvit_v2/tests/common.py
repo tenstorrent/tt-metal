@@ -152,7 +152,7 @@ def assert_quality_parts(
 
 # The ring: 4 Blackhole chips along mesh axis 1, 2 links between neighbours. On a LoudBox (8 chips,
 # 2x4 mesh, torus links along the 4-long axis) it is the first row: `mesh_device` in conftest.py
-# opens all 8 chips and hands the test that row. `FABRIC_2D_TORUS_X` because `FABRIC_1D_RING` cannot
+# opens all 8 chips and hands the test that row. On a Galaxy (8x4) it opens all 32 and does the same. `FABRIC_2D_TORUS_X` because `FABRIC_1D_RING` cannot
 # route the ring's wraparound link there.
 LOUDBOX_SHAPE = (2, RING_SIZE)
 RING_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}

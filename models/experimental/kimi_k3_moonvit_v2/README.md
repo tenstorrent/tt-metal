@@ -115,9 +115,10 @@ pytest models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
 pytest models/experimental/kimi_k3_moonvit_v2/tests -m simulator
 ```
 
-Ring tests (`ring1x4`) skip on machines with fewer chips. Row-wise tests run on one P150 (`p150`)
-standing in for one ring chip: it runs that chip's 16,384-row quarter of the padded sequence
-(`MeshRows`).
+Ring tests (`ring1x4`) run on row 0 of any system mesh 4 chips wide (LoudBox 2x4, Galaxy 8x4) and skip
+elsewhere. CI (Blaze models prefill, `kimi_k3_moonvit`) runs `-m synthetic -k real_rows_from_each_chip` on a Galaxy.
+Row-wise tests run on one P150 (`p150`) standing in for one ring chip: it runs that chip's 16,384-row
+quarter of the padded sequence (`MeshRows`).
 
 Image sizes (`tests/common.py`):
 
