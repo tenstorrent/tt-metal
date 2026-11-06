@@ -59,9 +59,10 @@ CSRRC_ZERO_CFG0_T1 = 0x7C033073  # csrrc zero, 0x7c0, t1   (funct3=011)
 # pinned separately by test_harness_gathering_sequence_matches_tt_metal below.
 MIN_CSRRS = 2
 MIN_CSRRC = 1
-# The three words span 7 words when emitted (one asm block, so the compiler cannot
-# interleave); allow slack for scheduling changes without admitting unrelated writes.
-SEQUENCE_WINDOW_WORDS = 16
+# The three words span 27 words when emitted (one asm block, so the compiler cannot
+# interleave; 20 of them are the nop drain); allow slack for scheduling changes without
+# admitting unrelated writes.
+SEQUENCE_WINDOW_WORDS = 36
 
 
 def _has_gathering_sequence(words):
@@ -170,7 +171,9 @@ def test_harness_gathering_sequence_matches_tt_metal():
         return [
             line.strip()
             for line in body.splitlines()
-            if "0x7c0" in line or "slli" in line or line.strip().startswith("li ")
+            if "0x7c0" in line
+            or "slli" in line
+            or line.strip().startswith(("li ", ".rept"))
         ]
 
     assert csr_ops(harness) == csr_ops(metal), (
