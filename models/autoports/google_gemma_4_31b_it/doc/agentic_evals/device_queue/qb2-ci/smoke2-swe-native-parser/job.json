@@ -1,0 +1,32 @@
+{
+  "arm": "smoke2-swe-native-parser",
+  "eval": "swe_bench_verified",
+  "device": "qb2-ci",
+  "owner": "coordinator",
+  "status": "queued",
+  "run_id": 42173587147,
+  "workflow": "agentic",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "tasks": 2,
+  "task_ids": [
+    "pylint-dev__pylint-7080",
+    "django__django-11265"
+  ],
+  "tt_metal_sha": "08ee8790bcbcd9e85cb799593b2bbaf40b785134",
+  "tti_sha": "da219dd56a241bb5314ae1da4b87104b84b0da15",
+  "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "predicted_hours": 7,
+  "prediction_basis": "Conservative6hagent ceiling+~1h observedfirstCIbuild/startup; no validscoredsmoketimeyet",
+  "run_timeout_hours": 12,
+  "ci_job_timeout_hours": 18,
+  "created_at": "2026-11-06T06:18:20.635121+00:00",
+  "start": null,
+  "end": null,
+  "exit_status": null,
+  "supersedes_run_id": 42166151590,
+  "reason": "Native-tool registration repaired: baselineHTTP400,candidate200actualminiparser;paired2x168tokenIDs exact;hosthooks pass",
+  "submitted_at": "2026-11-06T06:18:22Z",
+  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42173587147"
+}

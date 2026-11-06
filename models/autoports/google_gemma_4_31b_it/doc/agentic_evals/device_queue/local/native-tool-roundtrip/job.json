@@ -1,0 +1,19 @@
+{
+  "arm": "native-tool-roundtrip",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "predicted_seconds": 10,
+  "box_device_hours": 0.05,
+  "start": "2026-11-06T06:26:35.337640+00:00",
+  "purpose": "Actualmini secondturn payload acceptance using synthetic harmless toolresult; no taskscore or commands executed",
+  "measurement_seconds": 1.8671444079373032,
+  "measurement_end": "2026-11-06T06:26:37.204784+00:00",
+  "end": "2026-11-06T06:31:04.895253+00:00",
+  "exit_status": 0,
+  "used_device_hours": 0.0005186512244270287,
+  "shutdown": "Owned idle API gracefully stopped; server wrapper exit1 is expected shutdown, clients passed"
+}

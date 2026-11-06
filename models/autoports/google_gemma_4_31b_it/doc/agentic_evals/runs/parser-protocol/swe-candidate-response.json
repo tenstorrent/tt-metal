@@ -1,0 +1,56 @@
+{
+  "http_status": 200,
+  "elapsed_seconds": 3.7344507690286264,
+  "body": {
+    "id": "chatcmpl-9d58b938d9a9c4df",
+    "object": "chat.completion",
+    "created": 1793945677,
+    "model": "google/gemma-4-31B-it",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "I will now perform the protocol probe by calling the bash tool with the command `printf protocol_ok`.",
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [
+            {
+              "id": "chatcmpl-tool-aa93bf91d34bd5e4",
+              "type": "function",
+              "function": {
+                "name": "bash",
+                "arguments": "{\"command\": \"printf protocol_ok\"}"
+              }
+            }
+          ],
+          "reasoning": "The user wants me to perform a protocol probe.\nThe instruction is: \"Protocol probe only: call the bash tool with command printf protocol_ok. Do not solve a repository issue.\"\n\nPlan:\n1. Call the bash tool with the command `printf protocol_ok`.\n2. Finish the task by issuing `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`."
+        },
+        "logprobs": null,
+        "finish_reason": "tool_calls",
+        "stop_reason": 50,
+        "token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.31.0-278d35f8",
+    "usage": {
+      "prompt_tokens": 819,
+      "total_tokens": 941,
+      "completion_tokens": 122,
+      "prompt_tokens_details": null,
+      "completion_tokens_details": {
+        "reasoning_tokens": 82
+      }
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "prompt_text": null,
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  }
+}

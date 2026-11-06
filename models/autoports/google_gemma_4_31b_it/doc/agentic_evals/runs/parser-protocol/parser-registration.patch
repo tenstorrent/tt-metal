@@ -1,0 +1,26 @@
+--- a/workflows/model_specs/dev/llm.yaml
++++ b/workflows/model_specs/dev/llm.yaml
+@@ -7631,6 +7631,10 @@
+         max_num_batched_tokens: "2048"
+         revision: "842da3794eaa0b77d5f08bae87a17459d91ff475"
+         tokenizer_revision: "842da3794eaa0b77d5f08bae87a17459d91ff475"
++        # Native HF thought channels and mini-swe-agent v2 function calls.
++        reasoning_parser: gemma4
++        tool_call_parser: gemma4
++        enable_auto_tool_choice: true
+         language_model_only: true
+         async_scheduling: true
+         enable_prefix_caching: true
+--- a/tests/workflows/test_gemma4_31b_autoport_v3.py
++++ b/tests/workflows/test_gemma4_31b_autoport_v3.py
+@@ -78,3 +78,10 @@
+         (row.isl, row.osl, row.max_concurrency, row.num_prompts) for row in rows
+     ] == [(128, 128, 1, 8)]
+     assert not rows[0].targets
++
++
++def test_autoport_native_thinking_and_tool_protocol_flags():
++    args = _spec().device_model_spec.vllm_args
++    assert args["reasoning_parser"] == "gemma4"
++    assert args["tool_call_parser"] == "gemma4"
++    assert args["enable_auto_tool_choice"] is True

@@ -14,5 +14,35 @@
   "start": "2026-11-06T05:48:33.328934+00:00",
   "end": null,
   "exit_status": null,
-  "timeout_seconds": 1800
+  "timeout_seconds": 1800,
+  "phases": [
+    {
+      "name": "through131072",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "elapsed_seconds": 140.41494534397498,
+      "status": "pass"
+    },
+    {
+      "name": "advertised_context",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "contexts": [
+        131072,
+        196608,
+        262136
+      ],
+      "output_tokens": 8,
+      "predicted_seconds": 600,
+      "prediction_basis": "conservative~4x measured131072 phase140.415s for doubled attentionlength; guess, not release projection",
+      "timeout_seconds": 1000,
+      "status": "pass",
+      "start": "2026-11-06T05:54:48.889994+00:00",
+      "elapsed_seconds": 443.72461584897246
+    }
+  ],
+  "measurement_end": "2026-11-06T06:03:47.779193+00:00",
+  "idle_after_measurement": "Await host-only protocol investigation for next queued APIcheck; this gap not charged to effort"
 }

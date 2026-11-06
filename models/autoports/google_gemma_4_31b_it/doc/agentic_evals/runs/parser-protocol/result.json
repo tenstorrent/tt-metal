@@ -1,0 +1,71 @@
+{
+  "status": "done",
+  "unblocks": [
+    "swe_bench_verified"
+  ],
+  "device_hour_box_after_restart": 0.25,
+  "sources": {
+    "harbor_commit": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+    "harbor_ref": "tt-inference-server (same ref as TTI workflow_venvs.py; actual CI fetched SHA must be verified)",
+    "mini_swe_agent_version": "2.2.8",
+    "mini_swe_agent_commit": "58ad92fc1385be3f8f2326b7a42320bb3655e169",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "vllm": "0.31.0",
+    "vllm_source_commit": "db9527a46873454610df6dbedf79a36d6bf1a7f6"
+  },
+  "original_resolved_flags": {
+    "tool_call_parser": null,
+    "enable_auto_tool_choice": null,
+    "reasoning_parser": null
+  },
+  "suite_protocols": {
+    "swe_bench_verified": "Harbor mini-swe-agent2.2.8 LitellmModel native bash function calls through chat completions; requires message.tool_calls",
+    "terminal_bench_2_1": "Harbor terminus-2 plain JSON content, required analysis/plan/commands, no native tools or structured response_format",
+    "r1_gpqa_diamond": "lm-eval chat text with thinking=true, no native tools"
+  },
+  "confirmation": {
+    "swe": "HTTP200; actual mini2.2.8 parser accepts bash command printf protocol_ok",
+    "terminal": "HTTP200; actual TerminusJSONPlainParser accepts JSON content; separate reasoning present; fenced-JSON extra-text warnings remain",
+    "exact_pair": "2 of2 deterministic pairs each168 generated token IDs identical, same finish reason",
+    "host": "30 focused tests and full pytest/Ruff/format/copyright precommit hooks passed"
+  },
+  "quality_verdict": null,
+  "notes": [
+    "Stock plugin/runtime unchanged; coordinator applied three server flags in TTI and local tests/run_serving.sh.",
+    "No HF control or model-quality verdict; these are API protocol and paired token-equivalence checks.",
+    "Candidate server exit1 records deliberate idle shutdown; client exit0 and successful API/parser results are recorded independently.",
+    "CI scored suite validity remains pending; replacement run uses immutable published SHA."
+  ],
+  "goal": "Restore stock mini-swe-agent native tool-call protocol and separate native thought channels without changing generated token IDs on the paired confirmation.",
+  "predicted": {
+    "device_hours": 0.1,
+    "basis": "guess",
+    "saving_hours": null,
+    "reason": "Validity repair, not speed work."
+  },
+  "box_hours": 0.25,
+  "used_device_hours": 0.10579572916666666,
+  "baseline_device_hours": 0.06370596722222223,
+  "total_baseline_and_candidate_device_hours": 0.1695016963888889,
+  "change": "kept",
+  "problem_status": "solved",
+  "suite_validity": "pending CI scored trajectories",
+  "acceptance": "Exact paired token check plus coordinator API protocol confirmation; no model-quality or score claim.",
+  "published_tti_sha": "da219dd56a241bb5314ae1da4b87104b84b0da15",
+  "replacement_swe_ci_run": 42173587147,
+  "canceled_swe_ci_run": {
+    "id": 42166151590,
+    "reason": "Confirmed HTTP400 missing tool-parser flags; no valid score possible. Not canceled for queue delay."
+  },
+  "evidence": [
+    "candidate-audit.json",
+    "swe-baseline-response.json",
+    "../../device_queue/local/parser-protocol-candidate/job.json",
+    "bringup/artifacts/stage12-parser-tti-hooks.log"
+  ],
+  "accepted_flags": {
+    "tool_call_parser": "gemma4",
+    "enable_auto_tool_choice": true,
+    "reasoning_parser": "gemma4"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "http_status": 200,
+  "elapsed_seconds": 6.282747913035564,
+  "body": {
+    "id": "chatcmpl-9fa709a5f2f80748",
+    "object": "chat.completion",
+    "created": 1793945677,
+    "model": "google/gemma-4-31B-it",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "```json\n{\n  \"analysis\": \"The task is to emit a specific command 'printf protocol_ok' with a trailing newline to verify the protocol probe.\",\n  \"plan\": \"I will execute the command 'printf \\\"protocol_ok\\\\n\\\"' and then mark the task as complete.\",\n  \"commands\": [\n    {\n      \"keystrokes\": \"printf \\\"protocol_ok\\\\n\\\"\\n\",\n      \"duration\": 0.1\n    }\n  ],\n  \"task_complete\": true\n}\n```",
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "reasoning": "The user wants me to emit a specific command: `printf protocol_ok` followed by a newline, and then mark the task as complete.\n\n1.  **Analysis**: The task is a simple protocol probe. I need to execute `printf protocol_ok\\n`.\n2.  **Plan**:\n    *   Run `printf \"protocol_ok\\n\"`.\n    *   Set `task_complete` to true."
+        },
+        "logprobs": null,
+        "finish_reason": "stop",
+        "stop_reason": 106,
+        "token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.31.0-278d35f8",
+    "usage": {
+      "prompt_tokens": 742,
+      "total_tokens": 956,
+      "completion_tokens": 214,
+      "prompt_tokens_details": null,
+      "completion_tokens_details": {
+        "reasoning_tokens": 93
+      }
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "prompt_text": null,
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  }
+}

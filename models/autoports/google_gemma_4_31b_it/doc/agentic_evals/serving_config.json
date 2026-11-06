@@ -1,7 +1,7 @@
 {
   "status": "not_release_ready",
   "max_concurrency": null,
-  "max_num_seqs": null,
+  "max_num_seqs": 8,
   "prefix_caching": true,
   "validated_batches": [
     1,
@@ -9,7 +9,7 @@
     16,
     32
   ],
-  "evidence": "../agentic_serving.json stage10; no fresh stage12 configuration measurement",
+  "evidence": "runs/local-serving-check/RESULT.md; runs/local-long-context/RESULT.md; runs/parser-protocol/RESULT.md; real agent capacity remains pendingCI",
   "batch_by_eval": {
     "smoke2-r1_gpqa_diamond": {
       "eval": "r1_gpqa_diamond",
@@ -44,12 +44,63 @@
       "max_num_seqs": 8,
       "reason": "smallest validated batch at or above smoke clients; synthetic startup/calibration only",
       "additional_phase": "overlap check uses8clients:7decodes+1prefill, sameB8; separate fromC2 growing phase"
+    },
+    "smoke2-swe-native-parser": {
+      "eval": "swe_bench_verified",
+      "batch": 8,
+      "planned_clients": 2,
+      "reason": "smallest validated batch at or above planned clients; no measured alternative yet",
+      "max_num_seqs": 8,
+      "pool_basis": "LocalC2/B8 confirmed through262136+8 each; realCIoccupancy pending",
+      "host_limit_basis": "operator stock runner approx31 networks; planned2; no added admission wrapper",
+      "run_id": 42173587147,
+      "tti_sha": "da219dd56a241bb5314ae1da4b87104b84b0da15"
     }
   },
-  "release_limits": "preflight.json release_values; incomplete for requested tool suites",
-  "agent_time_limit": null,
-  "request_time_limit": null,
-  "output_cap": null,
+  "release_limits": {
+    "ok": true,
+    "source": "tt-inference-server@411057222c2dc5a4268e693b0bd57bc0e2571f38 reference_config/evals/eval_config.py:11933",
+    "r1_gpqa_diamond": {
+      "request_timeout_sec": 14400,
+      "max_output_tokens": 126976,
+      "thinking": true,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "published_reference_percent": 84.3,
+      "gpu_reference_percent": 83.33
+    },
+    "swe_bench_verified": {
+      "agent_timeout_sec": 21600,
+      "request_timeout_sec": 3600,
+      "max_output_tokens": 32768,
+      "source": "new model registration on stock-main harness",
+      "task_resources": "task definition; no overrides"
+    },
+    "terminal_bench_2_1": {
+      "agent_timeout_sec": 21600,
+      "request_timeout_sec": 3600,
+      "max_output_tokens": 32768,
+      "source": "new model registration on stock-main harness",
+      "task_resources": "task definition; no overrides"
+    },
+    "reason": "Pinned GPQA limits; newly registered conservative tool defaults, no prior requested tool protocol exists."
+  },
+  "agent_time_limit": {
+    "r1_gpqa_diamond": null,
+    "swe_bench_verified": 21600,
+    "terminal_bench_2_1": 21600
+  },
+  "request_time_limit": {
+    "r1_gpqa_diamond": 14400,
+    "swe_bench_verified": 3600,
+    "terminal_bench_2_1": 3600
+  },
+  "output_cap": {
+    "r1_gpqa_diamond": 126976,
+    "swe_bench_verified": 32768,
+    "terminal_bench_2_1": 32768
+  },
   "context_tokens": 262144,
   "served_generation_override": {
     "top_k": 32
@@ -78,6 +129,66 @@
       "max_num_seqs": 8,
       "task_containers": 0,
       "max_context_tested_target": 131072
+    },
+    {
+      "run": "local-long-context/advertised_context",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "task_containers": 0,
+      "contexts": [
+        131072,
+        196608,
+        262136
+      ],
+      "output_tokens": 8,
+      "purpose": "advertised context cache and admission boundary; no accuracy claim"
+    },
+    {
+      "run": "parser-protocol-baseline",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "task_containers": 0
+    },
+    {
+      "run": "parser-protocol-candidate",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "task_containers": 0,
+      "candidate_flags": [
+        "--reasoning-parser gemma4",
+        "--tool-call-parser gemma4",
+        "--enable-auto-tool-choice"
+      ]
     }
-  ]
+  ],
+  "ci_confirmation_runs": [
+    {
+      "run": "smoke2-swe-native-parser",
+      "run_id": 42173587147,
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "task_containers": 2,
+      "tti_sha": "da219dd56a241bb5314ae1da4b87104b84b0da15",
+      "cohort": "cohorts.json swe_bench_verified.rungs.smoke"
+    }
+  ],
+  "native_protocol_parsers": {
+    "reasoning_parser": "gemma4",
+    "tool_call_parser": "gemma4",
+    "enable_auto_tool_choice": true,
+    "source": "TTI da219dd56a241bb5314ae1da4b87104b84b0da15",
+    "confirmed": "runs/parser-protocol/candidate-audit.json"
+  },
+  "synthetic_admission": {
+    "clients": 2,
+    "max_prompt_tokens_each": 262136,
+    "output_tokens_each": 8,
+    "batch": 8,
+    "working_set_is_real_agent_measurement": false,
+    "source": "runs/local-long-context/RESULT.md"
+  }
 }

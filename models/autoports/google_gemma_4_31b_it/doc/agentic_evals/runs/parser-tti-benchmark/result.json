@@ -1,0 +1,38 @@
+{
+  "source": "vllm",
+  "tti_matrix": {
+    "source": "tti",
+    "completed": 8,
+    "input_tokens": 128,
+    "output_tokens": 128,
+    "planned_clients": 1,
+    "batch": 1,
+    "duration_seconds": 27.120889400946908,
+    "evidence": "bringup/artifacts/stage12-parser-tti-benchmark/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_06-20-53-820784_isl-128_osl-128_maxcon-1_n-8.json"
+  },
+  "headline": {
+    "completed": 8,
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "planned_clients": 1,
+    "batch": 1,
+    "duration_seconds": 34.80392373201903,
+    "ttft_ms": 752.8436765132938,
+    "decode_tps": 35.3042433377839,
+    "mean_tpot_ms": 28.32520698523974,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-tti-benchmark/headline.json"
+  },
+  "full_layers": 60,
+  "mesh": [
+    1,
+    4
+  ],
+  "native_parser_flags": [
+    "reasoning_parser=gemma4",
+    "tool_call_parser=gemma4",
+    "enable_auto_tool_choice=true"
+  ],
+  "tti_sha": "da219dd56a241bb5314ae1da4b87104b84b0da15",
+  "device_time_measured": false,
+  "release": false
+}

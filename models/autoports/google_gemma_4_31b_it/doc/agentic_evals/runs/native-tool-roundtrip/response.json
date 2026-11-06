@@ -1,0 +1,56 @@
+{
+  "http_status": 200,
+  "elapsed_seconds": 1.8671444079373032,
+  "body": {
+    "id": "chatcmpl-98858a932dc354d0",
+    "object": "chat.completion",
+    "created": 1793946395,
+    "model": "google/gemma-4-31B-it",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [
+            {
+              "id": "chatcmpl-tool-93ccdeb039e2bfac",
+              "type": "function",
+              "function": {
+                "name": "bash",
+                "arguments": "{\"command\": \"echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\"}"
+              }
+            }
+          ],
+          "reasoning": "I have already executed `printf protocol_ok`. Now I need to finish the task by issuing `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`."
+        },
+        "logprobs": null,
+        "finish_reason": "tool_calls",
+        "stop_reason": 50,
+        "token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.31.0-76c7b105",
+    "usage": {
+      "prompt_tokens": 978,
+      "total_tokens": 1039,
+      "completion_tokens": 61,
+      "prompt_tokens_details": null,
+      "completion_tokens_details": {
+        "reasoning_tokens": 35
+      }
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "prompt_text": null,
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  }
+}

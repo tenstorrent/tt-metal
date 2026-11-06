@@ -1,0 +1,52 @@
+{
+  "terminal": [
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-protocol/terminal-candidate-response.json",
+      "parsed": {
+        "commands": [
+          {
+            "keystrokes": "printf \"protocol_ok\\n\"\n",
+            "duration": 0.1
+          }
+        ],
+        "is_task_complete": true,
+        "error": "",
+        "warning": "- Extra text detected before JSON object\n- Extra text detected after JSON object",
+        "analysis": "The task is to emit a specific command 'printf protocol_ok' with a trailing newline to verify the protocol probe.",
+        "plan": "I will execute the command 'printf \"protocol_ok\\n\"' and then mark the task as complete."
+      },
+      "has_separate_reasoning": true
+    }
+  ],
+  "swe": [
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-protocol/swe-candidate-response.json",
+      "ok": true,
+      "actions": [
+        {
+          "command": "printf protocol_ok",
+          "tool_call_id": "chatcmpl-tool-aa93bf91d34bd5e4"
+        }
+      ],
+      "has_separate_reasoning": true
+    }
+  ],
+  "pairs": [
+    {
+      "baseline": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-protocol/paired-baseline-0.json",
+      "candidate": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-protocol/paired-candidate-0.json",
+      "baseline_tokens": 168,
+      "candidate_tokens": 168,
+      "exact_token_ids": true,
+      "same_finish_reason": true
+    },
+    {
+      "baseline": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-protocol/paired-baseline-1.json",
+      "candidate": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-protocol/paired-candidate-1.json",
+      "baseline_tokens": 168,
+      "candidate_tokens": 168,
+      "exact_token_ids": true,
+      "same_finish_reason": true
+    }
+  ]
+}

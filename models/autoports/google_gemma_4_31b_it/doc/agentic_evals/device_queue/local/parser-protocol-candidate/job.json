@@ -1,0 +1,20 @@
+{
+  "arm": "parser-protocol-candidate",
+  "device": "local",
+  "owner": "coordinator",
+  "status": "completed",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_hours": 0.1,
+  "box_device_hours": 0.25,
+  "queued_at": "2026-11-06T06:10:11.226462+00:00",
+  "purpose": "Confirm native tool parser fix with exact pairedtokenIDs and suiteprotocol requests",
+  "end": "2026-11-06T06:16:57.768819+00:00",
+  "exit_status": 1,
+  "start": "2026-11-06T06:10:36.904194+00:00",
+  "timeout_seconds": 1200,
+  "client_exit_status": 0,
+  "result": "SWE/TBAPI200parsed;2x168generatedtokenIDs exact; deliberate idle shutdown",
+  "actual_hours": 0.10579572916666666
+}

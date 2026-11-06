@@ -1,0 +1,40 @@
+{
+  "arm": "parser-tti-benchmark",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "predicted_hours": 0.1,
+  "box_device_hours": 0.25,
+  "queued_at": "2026-11-06T06:16:09.490250+00:00",
+  "purpose": "Confirm exact stage11 TTI benchmark matrix after nativeparser registration; not release",
+  "end": "2026-11-06T06:31:04.895253+00:00",
+  "exit_status": 0,
+  "start": "2026-11-06T06:16:57.768819+00:00",
+  "timeout_seconds": 1200,
+  "phases": [
+    {
+      "name": "tti-release-matrix",
+      "planned_clients": 1,
+      "batch": 1,
+      "input_tokens": 128,
+      "output_tokens": 128,
+      "num_prompts": 8,
+      "predicted_seconds": 27.078
+    },
+    {
+      "name": "headline-config-validation",
+      "planned_clients": 1,
+      "batch": 1,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "num_prompts": 8,
+      "predicted_seconds": 35,
+      "reason": "Parser flags changed servingconfiguration; refresh exact requested headline afterconfigchange"
+    }
+  ],
+  "server_exit_status": 1,
+  "shutdown": "Idle API SIGTERM after successor roundtrip; both benchmark clients succeeded"
+}

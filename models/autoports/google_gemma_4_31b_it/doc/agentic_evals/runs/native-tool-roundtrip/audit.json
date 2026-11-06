@@ -1,0 +1,17 @@
+{
+  "terminal": [],
+  "swe": [
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/native-tool-roundtrip/response.json",
+      "ok": true,
+      "actions": [
+        {
+          "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT",
+          "tool_call_id": "chatcmpl-tool-93ccdeb039e2bfac"
+        }
+      ],
+      "has_separate_reasoning": true
+    }
+  ],
+  "pairs": []
+}

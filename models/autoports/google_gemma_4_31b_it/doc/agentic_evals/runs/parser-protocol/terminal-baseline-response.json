@@ -1,0 +1,44 @@
+{
+  "http_status": 200,
+  "elapsed_seconds": 5.082943330984563,
+  "body": {
+    "id": "chatcmpl-b1a71006c73d017d",
+    "object": "chat.completion",
+    "created": 1793945207,
+    "model": "google/gemma-4-31B-it",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "thought\nThe user wants to execute a specific command `printf protocol_ok` followed by a newline and then mark the task as complete.\n\nPlan:\n1. Execute `printf \"protocol_ok\\n\"`\n2. Set `task_complete` to `true`.```json\n{\n  \"analysis\": \"The task requires emitting a single command `printf protocol_ok` with a trailing newline and then marking the task as complete.\",\n  \"plan\": \"I will run the command `printf 'protocol_ok\\\\n'` and then set task_complete to true.\",\n  \"commands\": [\n    {\n      \"keystrokes\": \"printf 'protocol_ok\\\\n'\\n\",\n      \"duration\": 0.1\n    }\n  ],\n  \"task_complete\": true\n}\n```",
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "reasoning": null
+        },
+        "logprobs": null,
+        "finish_reason": "stop",
+        "stop_reason": 106,
+        "token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.31.0-278d35f8",
+    "usage": {
+      "prompt_tokens": 742,
+      "total_tokens": 921,
+      "completion_tokens": 179,
+      "prompt_tokens_details": null,
+      "completion_tokens_details": null
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "prompt_text": null,
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  }
+}

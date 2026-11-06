@@ -18,5 +18,5 @@ exec timeout 7200 python_env/bin/python -m readiness_check.run_vllm_server \
   --server-timeout 1800 --sampling-profile smoke \
   --benchmark-prompt-len 4096 --benchmark-output-len 128 \
   --tt-config '{"trace_region_size":134217728,"fabric_config":"FABRIC_1D_RING"}' \
-  --additional-server-args "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it $HF_SNAPSHOT" \
+  --additional-server-args "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --reasoning-parser gemma4 --tool-call-parser gemma4 --enable-auto-tool-choice --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it $HF_SNAPSHOT" \
   "$@"

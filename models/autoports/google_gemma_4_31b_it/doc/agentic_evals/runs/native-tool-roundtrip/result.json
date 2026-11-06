@@ -1,0 +1,23 @@
+{
+  "status": "done",
+  "goal": "Second-turn API acceptance and native action parse after actual mini-swe-agent tool-result schema",
+  "prediction_seconds": 10,
+  "box_device_hours": 0.05,
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "elapsed_seconds": 1.8671444079373032,
+  "used_device_hours": null,
+  "confirmation": "HTTP200; actualmini parser accepts echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT action; separate reasoning present",
+  "evidence": [
+    "request.json",
+    "response.json",
+    "audit.json",
+    "../../device_queue/local/native-tool-roundtrip/job.json"
+  ],
+  "commands_executed": false,
+  "quality_score": null,
+  "notes": [
+    "Synthetic harmless tool observation, no real task execution. Protocol validity only; no HF quality control asserted."
+  ]
+}

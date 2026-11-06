@@ -310,7 +310,63 @@
         "success": "Every request succeeds or quantified physical shortfall"
       },
       "box_hours": 0.5,
-      "status": "running"
+      "status": "done",
+      "used_device_hours": 0.254014,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "success": true,
+        "phase_seconds": [
+          140.41494534397498,
+          443.72461584897246
+        ],
+        "max_prompt_tokens": 262136,
+        "generated_tokens": 8,
+        "concurrency": 2,
+        "preemptions": 0,
+        "new_trace_captures": 0,
+        "quality": "not measured; deterministic continuation stress"
+      },
+      "evidence": "runs/local-long-context/RESULT.md"
+    },
+    {
+      "problem": "parser-protocol",
+      "owner": "harness_registration",
+      "goal": "Establish whether dispatched suite protocols require parser flags absent inmodelentry",
+      "plan": "runs/parser-protocol/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0.1,
+        "basis": "guess"
+      },
+      "unblocks": [
+        "swe_bench_verified",
+        "terminal_bench_2_1",
+        "r1_gpqa_diamond"
+      ],
+      "confirm": {
+        "method": "Hostresolve+focusedtests; suiteAPIprobes; identical deterministic terminalgeneratedtokenIDs before/afterparser flags",
+        "success": "Protocol compatibility established or minimalregistrationrepair identified"
+      },
+      "box_hours": 0.25,
+      "status": "done",
+      "used_device_hours": 0.105796,
+      "change": "kept",
+      "problem_status": "solved",
+      "confirmed": {
+        "swe_baseline_http": 400,
+        "candidate_http": 200,
+        "actual_mini_parser": "pass",
+        "actual_terminal_parser": "pass",
+        "exact_generated_token_pairs": [
+          168,
+          168
+        ],
+        "focused_tests": 30,
+        "full_host_hooks": "pass",
+        "ci_score_validity": "pending"
+      },
+      "evidence": "runs/parser-protocol/RESULT.md; runs/parser-protocol/AUTOFIX.md"
     }
   ],
   "rankings": [
@@ -636,6 +692,61 @@
         }
       ],
       "reason": "CI smoke builds and operator dry-run decision pending; primarydevice tests unmeasured long-history envelope, no speed tuning before validsmoke."
+    },
+    {
+      "after": "local-long-context-and-native-tool-baseline",
+      "order": [
+        {
+          "problem": "parser-protocol",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "device_hours": 0.1,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Proven SWE HTTP400 is a validity blocker and ranks aboveall speed work; GPQA/TB existingbuilds continue."
+    },
+    {
+      "after": "native-parser-repair",
+      "order": [
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Native-tool validity issue solved locally and replacementCIqueued; score/trajectory validity and dryrunroute decision remain. No speed tuning before validsmoke."
     }
   ]
 }

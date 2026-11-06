@@ -1,0 +1,18 @@
+{
+  "arm": "parser-protocol-baseline",
+  "device": "local",
+  "owner": "coordinator",
+  "status": "completed",
+  "start": "2026-11-06T06:06:47.562712+00:00",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_hours": 0.1,
+  "box_device_hours": 0.25,
+  "reason": "Actual stock SWE native-tool and TBJSON requests against currentdispatched serverflags; sameB8server afteridlelong-context test",
+  "task_containers": 0,
+  "end": "2026-11-06T06:10:36.904194+00:00",
+  "exit_status": 0,
+  "server_exit_status": 1,
+  "result": "SWE400missingflags; TB200thought+JSON; deterministic pairedoutputs collected; idle shutdown"
+}

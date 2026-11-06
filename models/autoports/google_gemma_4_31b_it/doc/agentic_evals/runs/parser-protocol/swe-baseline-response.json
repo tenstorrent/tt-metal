@@ -1,0 +1,12 @@
+{
+  "http_status": 400,
+  "elapsed_seconds": 0.00588538299780339,
+  "body": {
+    "error": {
+      "message": "\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set",
+      "type": "BadRequestError",
+      "param": null,
+      "code": 400
+    }
+  }
+}
