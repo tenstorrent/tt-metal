@@ -220,11 +220,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     per_chunk_layer_pccs = {}
 
     for chunk in range(NUM_CHUNKS):
+        # Chunk 0 is the request head, whose KDA layers start from zero carries on device; every later
+        # chunk must continue the carry, which is precisely what this test exists to catch.
         start = chunk * CHUNK
-        if chunk == 0:
-            # Only at the head of a request: a carry summarizes the prefix behind it, so zeroing it
-            # between chunks is precisely the bug this test exists to catch.
-            model.reset_streams()
 
         tokens_tt = prepare_prefill_input_tensor(
             trace.token_ids(CHUNK, start)[0].tolist(),

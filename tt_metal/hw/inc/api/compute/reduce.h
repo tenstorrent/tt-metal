@@ -65,7 +65,6 @@ namespace ckernel {
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_init(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
     // REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
     // Caller must call reconfig_data_format(icb_scaler, icb) before reduce_init for this path.
     constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
@@ -74,9 +73,6 @@ ALWI void reduce_init(
     } else {
         state_configure(icb, icb_scaler, ocb, call_line);
     }
-#else
-    state_configure(icb, icb_scaler, ocb, call_line);
-#endif
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler)));
     PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
@@ -99,12 +95,7 @@ ALWI void reduce_init(
 // clang-format on
 ALWI void reduce_uninit(std::uint32_t icb = 0) {
 #ifdef ARCH_QUASAR
-    // (Quasar) A column reduce over an MxFp4 operand with an MxFp4 scaler overrides both operands' unpacker
-    // OUT_DATA_FORMAT and ALU src formats to MxFp4_2x_B in reduce_init, diverging from the op-agnostic
-    // unpack_dst_format[] table. That override persists (non-reduce inits never restore OUT_DATA_FORMAT, and
-    // reconfig_data_format is skipped for a same-format operand), so restore it here before the next op. The scaler's
-    // unpacker is restored from what reduce_init recorded, whatever icb is; the data operand's unpacker and the ALU
-    // formats only when icb is the MxFp4 data operand.
+    // (Quasar) Restore the formats a 2x MxFp4 column reduce set in reduce_init; no-op unless icb is MxFp4.
     UNPACK((llk_unpack_AB_reduce_uninit(icb)));
     MATH((llk_math_reduce_uninit(icb)));
 #elif defined(ARCH_BLACKHOLE)
@@ -157,11 +148,10 @@ ALWI void reduce_tile(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler, idst)));
-    UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
-    UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
 #endif
+    UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 }
 
 // clang-format off

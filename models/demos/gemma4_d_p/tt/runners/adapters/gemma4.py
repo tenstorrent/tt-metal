@@ -14,7 +14,7 @@ class Gemma4ServiceConfig:
     FABRIC_PAYLOAD_SIZE = 8192
     MESH_SHAPE = (8, 4)
     # Validation runs may set GEMMA4_TEST_CHUNK_SIZE to test another chunk size.
-    CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 8192))
+    CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 4096))
     MAX_SEQ_LEN = 262144
     MAX_USER_SLOTS = 6
 

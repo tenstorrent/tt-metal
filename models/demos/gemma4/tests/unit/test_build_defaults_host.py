@@ -126,7 +126,10 @@ def test_profile_and_env_override(monkeypatch):
 
 @pytest.mark.usefixtures("_clean")
 def test_four_chip_blackhole_dense_runs_the_combined_dense_configuration():
-    for shape in ((1, 4), (4, 1)):
+    """The 4-chip meshes and the (1,8) Galaxy DP line (TP=8, the same plain-TP DramShardedLinear build) run the
+    combined dense configuration; the fractured TP-8 meshes, the (8,1) column line, one chip and Wormhole do not."""
+    assert mo.DENSE_FUSED_SHAPES == ((1, 4), (4, 1), (1, 8))
+    for shape in ((1, 4), (4, 1), (1, 8)):
         assert mo.dense_fused_decode_build(shape, blackhole=True, moe=False)
         assert not mo.fused_decode_build(shape, blackhole=True, moe=False)
         d = mo.decode_fusion_defaults(shape, blackhole=True, moe=False)
@@ -141,11 +144,15 @@ def test_four_chip_blackhole_dense_runs_the_combined_dense_configuration():
     assert d == mo.DECODE_FUSION_ON
     for name in mo.DENSE_DECODE_FUSION_ON:
         assert d.get(name, "0") == mo.DECODE_FUSION_ON.get(name, "0")
-    # Wormhole, one chip and the (1,8) line keep the old dense defaults
-    assert not mo.dense_fused_decode_build((1, 4), blackhole=False, moe=False)
-    for shape in ((1, 1), (1, 8), (4, 8)):
+    # Wormhole, one chip, the (8,1) column line and the fractured Galaxy meshes keep the old dense defaults; the
+    # (1,8) MoE build (no such engine) stays on the MoE rules
+    for shape in ((1, 4), (1, 8)):
+        assert not mo.dense_fused_decode_build(shape, blackhole=False, moe=False)
+    for shape in ((1, 1), (8, 1), (2, 4), (4, 8), (8, 4)):
         assert not mo.dense_fused_decode_build(shape, blackhole=True, moe=False)
         assert mo.decode_fusion_defaults(shape, blackhole=True, moe=False) == mo.DECODE_FUSION_OFF
+    assert not mo.dense_fused_decode_build((1, 8), blackhole=True, moe=True)
+    assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=True) == mo.DECODE_FUSION_OFF
 
 
 @pytest.mark.usefixtures("_clean")
@@ -194,13 +201,13 @@ def test_fused_qkv_norm_rope_prefill_is_the_four_chip_blackhole_dense_default(mo
     assert mo.DECODE_FUSION_OFF["GEMMA4_QKV_NORM_ROPE_PREFILL"] == "0"
     mo.clear_decode_fusion_profile()
     assert mo.qkv_norm_rope_prefill_enabled(True) is False
-    for shape in ((1, 4), (4, 1)):
+    for shape in ((1, 4), (4, 1), (1, 8)):
         mo.set_decode_fusion_profile(shape, blackhole=True, moe=False)
         assert mo.qkv_norm_rope_prefill_enabled(True) is True
         assert mo.qkv_norm_rope_prefill_enabled(False) is False
     mo.set_decode_fusion_profile((1, 4), blackhole=True, moe=True)  # the MoE profile: composite prefill
     assert mo.qkv_norm_rope_prefill_enabled(True) is False
-    for shape in ((1, 1), (1, 8), (4, 8)):
+    for shape in ((1, 1), (8, 1), (2, 4), (4, 8)):
         mo.set_decode_fusion_profile(shape, blackhole=True, moe=False)
         assert mo.qkv_norm_rope_prefill_enabled(True) is False
     mo.set_decode_fusion_profile((1, 4), blackhole=False, moe=False)  # Wormhole build: no dense profile
