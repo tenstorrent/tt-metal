@@ -3004,6 +3004,48 @@ tasks:
       short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
+- id: P.38
+  title: 'KV in bf16 for now: CKV_FORMAT=bf16 and a bf16 window KV (computed, not only served), default until the owner returns to 4-bit'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.37
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-06 (PD migration first cut: decode''s cache formats are still open, so for now both KV caches are 16-bit end to end; the owner will return to 4-bit compressed KV later, so keep bfp4_rows / bfp8_tiles working and only change the defaults). Make the default compressed KV attention table bf16 (CKV_FORMAT=bf16: the history as bf16 rows, read by sparse_sdpa in bf16) and the window KV bf16 (computed and read in bf16, no 8-bit rounding). Today WINDOW_KV_FORMAT=bf16_tiles (P.26: the per-chip region with the neighbour send) asserts CKV_FORMAT=bfp4_rows on compressed layers (tt/sparse_attention.py:301: the window comes to the fork as kv_window next to the bfp4 table). Prefer making bf16_tiles work with CKV_FORMAT=bf16 (keep the per-chip region and neighbour send; the compressed layers read the bf16 table plus the bf16 region, e.g. through the sdpa fork''s kv_window with a bf16 table, or stock sparse_sdpa if it can take both); if that is not reasonable, use WINDOW_KV_FORMAT=bf16 (the row table before P.18) and say what it costs. INDEX_K_FORMAT stays bfp4. The served caches are already bf16 (contract unchanged). Add fork tests for every fork option you add. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold. Do not profile the model yourself: the orchestrator measures off vs on at 51200. Report in plain language: what changed, accuracy (it should be closer to the golden than 4/8-bit: err_state_compress_kv_*, err_state_window_kv_*, layers, final hidden) and device / host ms a chunk before / after.'
+  ab:
+    env:
+      CKV_FORMAT: bfp4_rows
+      WINDOW_KV_FORMAT: bfp8_tiles
+      ENGRAM_TABLE: resident
+    change:
+      CKV_FORMAT: bf16
+      WINDOW_KV_FORMAT: bf16_tiles
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
