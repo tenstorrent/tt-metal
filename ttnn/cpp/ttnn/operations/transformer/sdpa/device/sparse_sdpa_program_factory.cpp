@@ -470,8 +470,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             tail_c1 = c1;  // TAIL = token t1, chunks [0, c1)
             if (head_c0 != 0) {
                 TT_FATAL(i > 0, "sparse_sdpa split-K: core 0 cannot have a HEAD segment");
-                const auto prev =
-                    device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{(i - 1) % grid.x, (i - 1) / grid.x});
+                const auto prev = device->worker_core_from_logical_core(cores[i - 1]);
                 prev_x = prev.x;
                 prev_y = prev.y;
             }
