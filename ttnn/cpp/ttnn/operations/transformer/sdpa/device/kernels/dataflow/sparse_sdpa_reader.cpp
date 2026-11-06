@@ -21,6 +21,21 @@
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 constexpr uint16_t neg_inf_bf16 = 0xFF80u;
 
+// Binary-search the first sentinel of an index row (sentinels are a contiguous tail) -> valid-key count.
+template <uint32_t topk>
+FORCE_INLINE uint32_t count_valid_keys(volatile tt_l1_ptr uint32_t* idx_ptr) {
+    uint32_t lo = 0, hi = topk;
+    while (lo < hi) {
+        const uint32_t mid = (lo + hi) >> 1;
+        if (idx_ptr[mid] == sentinel) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo == 0 ? 1 : lo;  // contract guarantees >=1 valid; guard anyway
+}
+
 FORCE_INLINE uint32_t valid_rows_in_slab(uint32_t valid, uint32_t row_base) {
     if (valid <= row_base) {
         return 0;
@@ -37,15 +52,14 @@ void kernel_main() {
     constexpr uint32_t k_dim =
         get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::K_DIM);  // q/kv head dim (from the tensor)
 
-    // CB ids — passed by the factory (the SparseCB enum is the single source); order must match the
-    // factory's reader CB-arg block (compile args 5..9).
+    // CB ids from the factory (the SparseCB enum is the single source).
     constexpr uint32_t cb_q_rm = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_Q_RM);
     constexpr uint32_t cb_k_rm = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_K_RM);
     constexpr uint32_t cb_mask_part = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_MASK_PART);
     constexpr uint32_t cb_idx = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_IDX);
     constexpr uint32_t cb_ctrl = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_CTRL);
 
-    // Element sizes (from the tensors' dtypes; passed after the CB ids so their indices stay fixed).
+    // Element sizes (from the tensors' dtypes).
     constexpr uint32_t q_elem_bytes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::Q_ELEM_BYTES);  // bf16
     constexpr uint32_t kv_elem_bytes =
         get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::KV_ELEM_BYTES);  // bf16 or fp8_e4m3
@@ -56,6 +70,7 @@ void kernel_main() {
     constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::BC_SHARD_STRIDE_GAP);
     constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::BC_SLAB_STRIDE_GAP);
     constexpr bool scaled_kv = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::SCALED_KV) != 0;
+    constexpr bool fused_dequant = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::FUSED_DEQUANT) != 0;
     constexpr uint32_t latent_width = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::LATENT_WIDTH);
     constexpr uint32_t cb_k_scale_bcast = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_K_SCALE_BCAST);
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PACKED_ROW_BYTES);
@@ -117,20 +132,8 @@ void kernel_main() {
         noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = tok}, {.offset_bytes = 0});
         noc.async_read_barrier();
 
-        // binary-search the first sentinel -> nv (valid-key count); only ceil(nv/k_chunk) chunks are active.
-        uint32_t nv = topk;
-        {
-            uint32_t lo = 0, hi = topk;
-            while (lo < hi) {
-                const uint32_t mid = (lo + hi) >> 1;
-                if (idx_ptr[mid] == sentinel) {
-                    hi = mid;
-                } else {
-                    lo = mid + 1;
-                }
-            }
-            nv = lo == 0 ? 1 : lo;  // contract guarantees >=1 valid; guard anyway
-        }
+        // nv = valid-key count; only ceil(nv/k_chunk) chunks are active.
+        const uint32_t nv = count_valid_keys<topk>(idx_ptr);
         const uint32_t n_active = (nv + k_chunk - 1) / k_chunk;  // whole-token active chunk count
         const uint32_t seg_hi = c_hi < n_active ? c_hi : n_active;
         const uint32_t n_seg = seg_hi > c_lo ? seg_hi - c_lo : 0u;  // only a HEAD segment can be empty
@@ -208,8 +211,8 @@ void kernel_main() {
                         sparse_sdpa::SCALED_K_TRID_RING>(
                         noc, kv, k_write_ptr, idx_ptr, slab_base, split, rows, packed_row_bytes, kv_batch_page_offset);
                     // Expand the scale rows from the reader's gathered half while the writer handles its
-                    // own half. The two RISCs write disjoint rows of the same FP32 broadcast tiles.
-                    sparse_sdpa::scatter_packed_scales<scale_blocks>(
+                    // own half. The two RISCs write disjoint rows of the same scale broadcast tiles.
+                    sparse_sdpa::scatter_packed_scales<scale_blocks, fused_dequant>(
                         k_write_ptr, scale_write_ptr, split, rows, packed_row_bytes, latent_row_bytes);
                     kack_cb.wait_front(1);
                     kack_cb.pop_front(1);
@@ -222,7 +225,8 @@ void kernel_main() {
                         noc.write_zeros_l1_barrier();
                     }
                     // Zero the scale rows for the padded suffix after both real-row halves have joined.
-                    sparse_sdpa::clear_scale_rows<scale_blocks>(scale_write_ptr, rows, tt::constants::TILE_HEIGHT);
+                    sparse_sdpa::clear_scale_rows<scale_blocks, fused_dequant>(
+                        scale_write_ptr, rows, tt::constants::TILE_HEIGHT);
                     k_cb.push_back(tt::constants::TILE_HEIGHT);
                     scale_bcast_cb.push_back(scale_blocks);
                 }
