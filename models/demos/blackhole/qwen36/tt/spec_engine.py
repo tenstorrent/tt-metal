@@ -571,7 +571,7 @@ def spec_round_up(n, mult=32):
 
 def spec_table_width(max_seq_len, draft_len, block_size=None):
     """Page-table width (blocks) the engine needs: max_seq_len + K + 1 lookahead (no padding; fits vLLM's pool).
-    ``block_size`` None = kv_block_size() (QWEN36_KV_BLOCK_SIZE)."""
+    ``block_size`` None = kv_block_size() (runs without vLLM; the vLLM class passes its cache's block size)."""
     block_size = kv_block_size() if block_size is None else block_size
     return -(-(int(max_seq_len) + int(draft_len) + 1) // int(block_size))
 

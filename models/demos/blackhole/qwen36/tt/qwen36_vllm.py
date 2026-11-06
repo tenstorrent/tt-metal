@@ -31,7 +31,6 @@ from models.demos.blackhole.qwen36.tt.model import paged_block_size, serve_devic
 from models.demos.blackhole.qwen36.tt.spec_engine import rows_to_engine, slot_map_after_remap, slot_map_inverse
 from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
-    kv_block_size,
     kv_cache_bf8_enabled,
     mamba_spec_enabled,
     spec_chain_enabled,
@@ -174,7 +173,7 @@ def _build_model_capabilities():
     caps = {
         # Automatic prefix caching: vLLM reuses the attention KV blocks and passes start_pos (cached tokens, a multiple
         # of the KV block size); the model keeps its own GDN-state snapshots (tt/prefix_cache.py). QWEN36_PREFIX_CACHE=0
-        # disables it. Run vLLM with --block-size 64 (or QWEN36_KV_BLOCK_SIZE) and --enable-prefix-caching.
+        # disables it. Run vLLM with --block-size 64 and --enable-prefix-caching.
         "supports_prefix_caching": os.environ.get("QWEN36_PREFIX_CACHE", "1") == "1",
         # vLLM chunked prefill: a prompt longer than the per-step token budget (--max-num-batched-tokens) is prefilled
         # over several engine steps, with decode steps in between. Batched TP resumes each chunk from a GDN snapshot
@@ -1133,7 +1132,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             # Round to a multiple of 32: paged/chunked SDPA needs the page-table stick % 32 == 0.
             num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         else:
-            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / kv_block_size())
+            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / paged_block_size(model))
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
         # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1. Bind
         # the PERSISTENT B=1 GDN prefill scratch and capture the chunk trace against IT, so long prompts
@@ -1540,10 +1539,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             )
         if requested_k < k:
             return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
+        # The engine takes vLLM's block size (the cache vLLM allocates); paged cache updates write whole 32-row tiles.
         bs = getattr(getattr(vllm_config, "cache_config", None), "block_size", None)
-        if bs is not None and int(bs) != kv_block_size():
+        if bs is not None and (int(bs) <= 0 or int(bs) % 32):
             return SpecReject(
-                reason=f"block_size={bs} unsupported; the engine serves QWEN36_KV_BLOCK_SIZE={kv_block_size()}",
+                reason=f"block_size={bs} unsupported; need a positive multiple of 32 (pass --block-size, e.g. 64)",
                 supported_k=(),
             )
         try:

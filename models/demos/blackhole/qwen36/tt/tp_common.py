@@ -60,10 +60,11 @@ KV_BLOCK_SIZE_DEFAULT = 64
 
 
 def kv_block_size():
-    """QWEN36_KV_BLOCK_SIZE (default 64): tokens per paged KV block for the callers that size a cache or a page table
-    before one exists (demo and test allocations, the vLLM spec gate, the prefill warmup without a cache). Code that
-    holds a paged cache reads the block size from its shape (get_block_size), so this value only has to match the
-    cache that is allocated. A positive multiple of the 32-row tile: paged cache updates write whole tiles."""
+    """QWEN36_KV_BLOCK_SIZE (default 64): tokens per paged KV block for the runs without vLLM (the standalone demo and
+    the device tests) that size a cache or a page table before one exists. A vLLM launch does not need it: the vLLM
+    classes take vllm_config.cache_config.block_size (spec_plan) or the block size of the cache vLLM allocated
+    (paged_block_size), so --block-size alone sets it. Code that holds a paged cache reads the block size from its
+    shape (get_block_size). A positive multiple of the 32-row tile: paged cache updates write whole tiles."""
     bs = _env_int(KV_BLOCK_SIZE_ENV, KV_BLOCK_SIZE_DEFAULT)
     if bs <= 0 or bs % 32:
         raise ValueError(f"{KV_BLOCK_SIZE_ENV}={bs}: need a positive multiple of 32")

@@ -96,7 +96,7 @@ def test_mtp_prefill_inputs_segment_with_only_slot_tp_minus_1():
 
 @pytest.mark.parametrize("Tp,cs,bucket", [(300, 0, 512), (1024 + 200, 1024, 256), (1024, 0, 1024)])
 def test_mtp_prefill_inputs_bucket_shorter_than_block(Tp, cs, bucket):
-    """QWEN36_KV_BLOCK_SIZE=1024: a 128..512 bucket fills the first rows of the segment's one block."""
+    """KV block size 1024: a 128..512 bucket fills the first rows of the segment's one block."""
     bs = 1024
     row = torch.arange(1, 9, dtype=torch.int32).reshape(1, 8)
     toks, full, chunk = mtp_prefill_inputs(list(range(Tp)), cs, bucket, row, bs, SCRATCH, 8)

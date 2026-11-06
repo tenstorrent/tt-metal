@@ -55,7 +55,8 @@ def serve_device_decode_env_enabled():
 
 
 def paged_block_size(model):
-    """Tokens per paged KV block: the bound cache's (model._paged_kv_caches), else kv_block_size()."""
+    """Tokens per paged KV block: the bound cache's (model._paged_kv_caches; under vLLM its --block-size), else
+    kv_block_size() (no cache bound: runs without vLLM)."""
     kv = getattr(model, "_paged_kv_caches", None)
     return get_block_size(kv) if kv else kv_block_size()
 
