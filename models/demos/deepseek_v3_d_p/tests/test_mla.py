@@ -54,8 +54,19 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
+from tests.didt.op_test_base import chip_locations
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+# Output shards on host, keyed by the metal device id of the chip that holds each one. get_device_tensors labels
+# each shard with its own mesh coordinate (DeviceStorage::single_shard), so this does not assume that shard order
+# matches get_device_ids() order.
+def _shards_by_device(mesh_device, tt_out):
+    return {
+        mesh_device.get_device_id(shard.tensor_topology().mesh_coords()[0]): ttnn.to_torch(shard)
+        for shard in ttnn.get_device_tensors(tt_out)
+    }
 
 
 def run_mla_inference(
@@ -780,6 +791,9 @@ def _run_chunked_prefill(
 
     # ---- iterate: interleave users by local iter index (exercises cross-user isolation) ----
     det_failures = []
+    # Per-device ND count (reps whose shard differs from that shard at rep 0), keyed by metal device id.
+    # MLA uses CCLs: a bad shard shows where bad values landed, not necessarily the chip that produced them.
+    det_nd_per_device = {}
     profiled_ns = 0.0
     n_iters = max(len(u["group"]) for u in users)
     logger.info(f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)")
@@ -877,6 +891,7 @@ def _run_chunked_prefill(
                     continue
                 if rep == 0:
                     det_baseline = out_flat.clone()
+                    det_baseline_shards = _shards_by_device(mesh_device, tt_out)
                     continue
                 # Collect rather than assert: one report listing every non-deterministic (user, iter,
                 # rep) beats aborting on the first, same as the prefill-block/transformer checks.
@@ -885,9 +900,18 @@ def _run_chunked_prefill(
                     continue
                 diff = (det_baseline.float() - out_flat.float()).abs()
                 det_failures.append((u, i, rep, int((diff > 0).sum()), float(diff.max())))
+                # Shards are read again only on a mismatch, so a clean rep costs no extra readback.
+                nd_devices = sorted(
+                    d
+                    for d, shard in _shards_by_device(mesh_device, tt_out).items()
+                    if not torch.equal(det_baseline_shards[d], shard)
+                )
+                for d in nd_devices:
+                    det_nd_per_device[d] = det_nd_per_device.get(d, 0) + 1
                 logger.error(
                     f"[determinism] user {u} iter {i} rep {rep} output DIFFERS from rep 0: "
-                    f"{det_failures[-1][3]} element(s), max abs delta {det_failures[-1][4]:.3e}"
+                    f"{det_failures[-1][3]} element(s), max abs delta {det_failures[-1][4]:.3e}, "
+                    f"on device(s) {nd_devices}"
                 )
             if kv_pad_metadata is not None:
                 # .scalars: field 3 is a persistent buffer allocated outside this loop, so a
@@ -916,6 +940,14 @@ def _run_chunked_prefill(
         return profiled_ns
 
     if determinism_check:
+        # Same per-device lines as the di/dt tests (tests/didt/op_test_base.py), so ND triage can name the chip.
+        locations = chip_locations()
+        for device_id in sorted(mesh_device.get_device_ids()):
+            logger.info(f"Chip map device {device_id}: {locations.get(device_id, 'unknown')}")
+        for device_id in sorted(mesh_device.get_device_ids()):
+            logger.info(
+                f"Number of non-deterministic outputs on device {device_id} is {det_nd_per_device.get(device_id, 0)}"
+            )
         if det_failures:
             pytest.fail(
                 "chunked prefill is not deterministic: "

@@ -13,6 +13,29 @@ import ttnn
 from tests.didt import nd_core_map
 
 
+# Physical location of each device id, e.g. "UBB3 ASIC2 /dev/tenstorrent/17 0000:c2:00.0 board=0x47331831011",
+# read from the cluster descriptor metal is already using (same source as tt-triage's T<tray>:N<asic> labels)
+def chip_locations():
+    locations = {}
+    try:
+        import tt_umd
+
+        with open(ttnn.cluster.serialize_cluster_descriptor()) as f:
+            cd = tt_umd.ClusterDescriptor.create_from_yaml_content(f.read())
+        pci, bdfs = cd.get_chips_with_mmio(), cd.get_chip_pci_bdfs()
+        for chip in cd.get_all_chips():
+            tray = cd.get_tray_id(chip)
+            where = f"UBB{tray} ASIC{cd.get_asic_location(chip)}" if tray is not None else "non-UBB"
+            if chip in pci:
+                where += f" /dev/tenstorrent/{pci[chip]}"
+            if chip in bdfs:
+                where += f" {bdfs[chip]}"
+            locations[chip] = f"{where} board=0x{cd.get_board_id_for_chip(chip):x}"
+    except Exception as e:
+        logger.warning(f"Chip location lookup failed, ND logs will show device ids only: {e}")
+    return locations
+
+
 class OpParameter:
     def __init__(self, shape, dtype, layout, mem_config):
         self.shape = shape
@@ -116,27 +139,9 @@ class OpTestBase:
                 self.nd_core_translated[key] = None
         return self.nd_core_translated[key]
 
-    # Physical location of each device id, e.g. "UBB3 ASIC2 /dev/tenstorrent/17 0000:c2:00.0 board=0x47331831011",
-    # read from the cluster descriptor metal is already using (same source as tt-triage's T<tray>:N<asic> labels)
     def chip_locations(self):
         if self._chip_locations is None:
-            self._chip_locations = {}
-            try:
-                import tt_umd
-
-                with open(ttnn.cluster.serialize_cluster_descriptor()) as f:
-                    cd = tt_umd.ClusterDescriptor.create_from_yaml_content(f.read())
-                pci, bdfs = cd.get_chips_with_mmio(), cd.get_chip_pci_bdfs()
-                for chip in cd.get_all_chips():
-                    tray = cd.get_tray_id(chip)
-                    where = f"UBB{tray} ASIC{cd.get_asic_location(chip)}" if tray is not None else "non-UBB"
-                    if chip in pci:
-                        where += f" /dev/tenstorrent/{pci[chip]}"
-                    if chip in bdfs:
-                        where += f" {bdfs[chip]}"
-                    self._chip_locations[chip] = f"{where} board=0x{cd.get_board_id_for_chip(chip):x}"
-            except Exception as e:
-                logger.warning(f"Chip location lookup failed, ND logs will show device ids only: {e}")
+            self._chip_locations = chip_locations()
         return self._chip_locations
 
     # End of run: location of every device in the test, then a short report per device with ND: where it is,
