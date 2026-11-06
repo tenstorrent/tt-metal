@@ -8,7 +8,11 @@
 
 namespace tt::tt_fabric {
 
-enum class Topology { NeighborExchange = 0, Linear = 1, Ring = 2, Mesh = 3, Torus = 4 };
+// AllToAll: every device has a direct path to every other device, so every destination is one hop away --
+// effectively N-1 two-device 1D lines per device, where N is the world size.
+// The topology is logical; the transport that implements it (ethernet links, or the NoC crossbar on
+// fabric-over-NoC architectures) is chosen separately.
+enum class Topology { NeighborExchange = 0, Linear = 1, Ring = 2, Mesh = 3, Torus = 4, AllToAll = 5 };
 
 // Topology classification utilities
 constexpr bool is_2D_topology(Topology topology) { return topology == Topology::Mesh || topology == Topology::Torus; }

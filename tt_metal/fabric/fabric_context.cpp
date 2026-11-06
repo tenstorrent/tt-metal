@@ -122,8 +122,8 @@ void FabricContext::compute_packet_specifications(
 
         routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(required_action_map_bytes);
     } else {
-        // 1D mode: query topology and validate against limits
-        max_1d_hops_ = get_max_1d_hops_from_topology(control_plane);
+        // 1D mode: query topology and validate against limits. All-to-all reaches every device in one hop.
+        max_1d_hops_ = topology_ == Topology::AllToAll ? 1 : get_max_1d_hops_from_topology(control_plane);
 
         if (max_1d_hops_ == 0) {
             log_warning(
@@ -161,6 +161,7 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_ALL_TO_ALL: return tt::tt_fabric::Topology::AllToAll;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config: {}", enchantum::to_string(fabric_config));
@@ -423,6 +424,9 @@ void FabricContext::compute_routing_mode() {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
     } else if (topology_ == Topology::Torus) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
+    } else if (topology_ == Topology::AllToAll) {
+        // All-to-all is N-1 two-device 1D lines per device (N = world size): every destination is one hop.
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_ALL_TO_ALL);
     }
 
     mode |= ROUTING_MODE_LOW_LATENCY;
@@ -436,8 +440,8 @@ void FabricContext::compute_routing_mode() {
     TT_FATAL(
         __builtin_popcount(
             mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_NEIGHBOR_EXCHANGE | ROUTING_MODE_MESH |
-                    ROUTING_MODE_TORUS)) == 1,
-        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS) can be active at once");
+                    ROUTING_MODE_TORUS | ROUTING_MODE_ALL_TO_ALL)) == 1,
+        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS, ALL_TO_ALL) can be active at once");
 
     // Validate 1D can't be used with MESH or TORUS
     TT_FATAL(

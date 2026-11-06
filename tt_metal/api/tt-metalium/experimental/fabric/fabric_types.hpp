@@ -25,7 +25,8 @@ enum class FabricConfig : uint32_t {
     FABRIC_2D_TORUS_X = 5,            // 2D routing and deadlock avoidance along X axis
     FABRIC_2D_TORUS_Y = 6,            // 2D routing and deadlock avoidance along Y axis
     FABRIC_2D_TORUS_XY = 7,           // 2D routing and deadlock avoidance along XY axes
-    CUSTOM = 8
+    CUSTOM = 8,
+    FABRIC_ALL_TO_ALL = 9,  // Every device reaches every other directly (one hop); no forwarding
 };
 
 // tensix extension for fabric routers, used to build connections between worker - fabric router, upstream fabric router

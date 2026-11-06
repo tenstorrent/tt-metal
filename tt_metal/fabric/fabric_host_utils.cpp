@@ -48,7 +48,8 @@ void write_yaml_document(std::ostream& out, const YAML::Emitter& emitter) {
 }  // namespace
 
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
+    return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config) ||
+           is_all_to_all_fabric_config(fabric_config);
 }
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy) {
