@@ -219,20 +219,20 @@ tt::tt_metal::ProgramDescriptor SoftmaxBackwardFactory::create_descriptor(
     assign_rows_to_cores(cores_in_order, num_rows, worker_core_ranges, core_row_assignments);
     TT_FATAL(!worker_core_ranges.empty(), "SoftmaxBackward: no cores have work");
     const tt::tt_metal::CoreRangeSet worker_cores(worker_core_ranges);
-    // CreateCircularBuffer merged CB core ranges (kernels keep the unmerged set); merge here to match.
-    const tt::tt_metal::CoreRangeSet cb_cores = worker_cores.merge_ranges();
 
     const uint32_t block_cb_num_tiles = buffering_multiplier * tiles_per_block;
 
     desc.cbs.push_back(
-        make_cb_descriptor(cb_cores, src0_cb_index, input_data_format, input_tile_size, block_cb_num_tiles));
+        make_cb_descriptor(worker_cores, src0_cb_index, input_data_format, input_tile_size, block_cb_num_tiles));
     desc.cbs.push_back(
-        make_cb_descriptor(cb_cores, src1_cb_index, input_data_format, input_tile_size, block_cb_num_tiles));
-    desc.cbs.push_back(make_cb_descriptor(cb_cores, ones_cb_index, intermed_data_format, intermed_tile_size, 1U));
+        make_cb_descriptor(worker_cores, src1_cb_index, input_data_format, input_tile_size, block_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(worker_cores, ones_cb_index, intermed_data_format, intermed_tile_size, 1U));
     desc.cbs.push_back(
-        make_cb_descriptor(cb_cores, out_cb_index, output_data_format, output_tile_size, block_cb_num_tiles));
-    desc.cbs.push_back(make_cb_descriptor(cb_cores, sum_reduce_cb_index, intermed_data_format, intermed_tile_size, 1U));
-    desc.cbs.push_back(make_cb_descriptor(cb_cores, partial_cb_index, intermed_data_format, intermed_tile_size, 1U));
+        make_cb_descriptor(worker_cores, out_cb_index, output_data_format, output_tile_size, block_cb_num_tiles));
+    desc.cbs.push_back(
+        make_cb_descriptor(worker_cores, sum_reduce_cb_index, intermed_data_format, intermed_tile_size, 1U));
+    desc.cbs.push_back(
+        make_cb_descriptor(worker_cores, partial_cb_index, intermed_data_format, intermed_tile_size, 1U));
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index, src1_cb_index, ones_cb_index, width_tiles, tiles_per_block, mask_w};
