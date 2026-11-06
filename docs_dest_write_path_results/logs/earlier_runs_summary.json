@@ -1,0 +1,35 @@
+{
+  "_about": "Steady-state numbers from runs on 2026-11-03 whose raw stamp files were overwritten. Copied from the per-run summaries printed at the time. Cycles are emulator cycles (emu-quasar-1x3), median of the bank-to-bank times after the first two banks.",
+
+  "copy_fp32_nosync_path_a": {
+    "_source": "test_perf_dest_write_path_format_sweep_quasar, Float32 -> Float32, stamp sync off. Drain and SetDatValid gave the same numbers.",
+    "cycles_per_tile": {"1": 99.0, "4": 72.8},
+    "fit": {"per_tile": 64, "per_bank": 35}
+  },
+
+  "copy_fp16in_fp32out_nosync": {
+    "_source": "test_perf_dest_write_path_format_sweep_quasar, Float16_b -> Float32, stamp sync off, 4 tiles per bank.",
+    "cycles_per_tile_4tpb": {"A": 72.8, "B-done": 105.5, "B-drain": 106.8}
+  },
+
+  "copy_fp32_srcs_opts_b_done": {
+    "_source": "test_perf_dest_write_path_srcs_opt_quasar, Float32 -> Float32, B-done, stamp sync off. Cycles per bank at 1 to 4 tiles per bank.",
+    "cycles_per_bank": {
+      "base": [110, 216, 322, 428],
+      "addrmod": [99, 184, 273, 364],
+      "bankunpack": [108, 188, 268, 348],
+      "both": [99, 163, 227, 291]
+    },
+    "b_drain_per_tile_fit": {"base": 107, "addrmod": 90, "bankunpack": 79, "both": 64}
+  },
+
+  "matmul_cycles_per_bank": {
+    "_source": "CT x KT order: 1x1, 1x4, 4x1, 4x4. A and B-original from runs 1-3 (HiFi4; LoFi identical). B-both from test_dest_preload_matmul_quasar -k srcs_opt (LoFi, drain and done hand-offs identical). L1-acc from perf_dest_preload_matmul_quasar (LoFi). All with stamp sync on.",
+    "dims": ["CT=1, KT=1", "CT=1, KT=4", "CT=4, KT=1", "CT=4, KT=4"],
+    "A-drain": [128, 224, 412, 800],
+    "A-hw": [131, 192, 384, 768],
+    "B-drain, original": [127, 132, 434, 576],
+    "B, both options": [124, 128, 316, 512],
+    "L1-acc": [134, 134, 326, 512]
+  }
+}
