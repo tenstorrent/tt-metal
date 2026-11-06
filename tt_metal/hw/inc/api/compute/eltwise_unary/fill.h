@@ -88,6 +88,37 @@ ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
         VectorMode::RC,
         param0));
 }
+// clang-format off
+/**
+ * Fills rows [row_begin, row_end) of the 32x32 tile in DST with the given value and leaves every other row as it is:
+ * a 4-row band that lies inside the range is written with whole-vector stores, a band cut by row_begin or row_end with
+ * a lane-masked store. The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine. Call *fill_tile_init* first.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | row_begin       | The first tile row to fill                                                 | uint32_t | 0 to 31, less than row_end                            | True     |
+ * | row_end         | One past the last tile row to fill                                         | uint32_t | row_begin + 1 to 32                                   | True     |
+ * | value           | Value to fill the rows with                                                | float    |                                                       | True     |
+ */
+// clang-format on
+ALWI void fill_rows_tile(uint32_t idst, uint32_t row_begin, uint32_t row_end, float value) {
+    MATH(LLK_ASSERT(row_begin < row_end && row_end <= 32, "fill_rows_tile: need 0 <= row_begin < row_end <= 32"));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_fill_rows_,
+        (APPROX),
+        idst,
+        VectorMode::None,
+        row_begin,
+        row_end,
+        value));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
