@@ -153,7 +153,7 @@ constexpr float GELU_NEG_HALF_ONE_LN2 = -0.72134752044f;
 // The loop-invariant constants the caller hoists are passed in (sfpi (through 7.89.0) never lifts a literal out of a
 // loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row): exp_21f's c0 and c1 are
 // read from vConstFloatPrgm1/2 (programmed by gelu_init<false, false>); -0.5/ln2 and the two highest CDF
-// coefficients are sfpi::vFloats the caller built once before its loop.
+// coefficients are ttpoly::gelu::vFloats the caller built once before its loop.
 template <typename K, typename C13, typename C11>
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x, K neg_half_one_ln2, C13 cdf13, C11 cdf11) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
@@ -296,8 +296,22 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
     0.0f,
     -6.7350725691e-12f};
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_gelu_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated gelu kernel as one call over the whole tile.
+inline constexpr bool gelu_bf16_whole_tile = true;
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_gelu()) {
+            calculate_gelu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (APPROXIMATION_MODE) {
         calculate_gelu_appx<ITERATIONS>();
     } else if constexpr (is_fp32_dest_acc_en) {
