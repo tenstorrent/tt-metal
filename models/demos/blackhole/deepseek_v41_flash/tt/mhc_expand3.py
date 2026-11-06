@@ -39,7 +39,9 @@ def mhc_expand3(y, x, post, comb, out, y2=None, n_cores=None):
     grp = fast and os.environ.get("DSV41_MHC_EXPAND_GRP", "1") == "1"
     if grp:
         # LANEPAR: up to 130 cores (T = 12 / 16: 120 / 128 cores, 4-5 column tiles each instead of 80-96 cores with 5-8): the per-core piece reads and writes are issue-bound
-        lane_cores = "130" if os.environ.get("DSV41_MHC_LANEPAR", "0") == "1" else "96"
+        lane_cores = (
+            "120" if os.environ.get("DSV41_MHC_LANEPAR", "0") == "1" else "96"
+        )  # was 130: T=16 (4 groups) ran 128 cores and rows 12..15 of the stream were wrong (B=16 k=3 layer harness, PCC 0.86 vs the pure op chain); T=12 is 120 cores
         cmax = int(os.environ.get("DSV41_MHC_EXPAND_CORES", lane_cores))
         csl = max(c for c in range(1, nt + 1) if nt % c == 0 and G * c <= cmax)  # column slices per token group
         cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)][: G * csl]
