@@ -25,7 +25,7 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
 
 // The fabric manifest's model. The router pass fills in what the router builders know. The topology pass resolves each
@@ -459,7 +459,7 @@ struct RunInfo {
     std::string host_name;
     // When the manifest was written, in UTC, as ISO 8601.
     std::string written_at;
-    BuildIdentity build;
+    visualizer::BuildIdentity build;
 };
 
 // The settings fabric was set up with: SetFabricConfig's arguments.
