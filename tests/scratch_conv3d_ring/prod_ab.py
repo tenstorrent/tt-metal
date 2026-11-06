@@ -199,7 +199,12 @@ for i, e in enumerate(entries()):
         sentinel()
     e["kernel"], e["blocking"], e["dims"] = list(e["kernel"]), list(e["blocking"]), list(e["dims"])
     ran.append(e)
-    print(f"[{i + 1}] {e['name']} -> {e['status']}", file=sys.stderr, flush=True)
+    per_call = (
+        f" wall_us_per_call={e['wall_s'] * 1e6 / (WARMUP + N_TIMED):.1f} checksum={e.get('checksum')}"
+        if e["status"] == "ok"
+        else ""
+    )
+    print(f"[{i + 1}] {e['name']} -> {e['status']}{per_call}", file=sys.stderr, flush=True)
     with open(out_prefix + ".meta.json", "w") as f:
         json.dump({"warmup": WARMUP, "n_timed": N_TIMED, "grid": grid, "entries": ran}, f, indent=1)
 ttnn.close_device(device)

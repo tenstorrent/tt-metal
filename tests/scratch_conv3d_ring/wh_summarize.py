@@ -25,4 +25,34 @@ for base in names:
         )
         rec.setdefault(arm, []).append(round(e["wall_s"] * 1e6 / k, 2))  # host wall us per call, warmup included
         rec["meta"].setdefault("checksum", {})[arm] = e.get("checksum")
-print(json.dumps({"grid": grid, "method": "host wall-clock per call, warmup included", "entries": res}, sort_keys=True))
+# One short line per entry (long lines do not survive the CI log), then a totals line.
+for name, rec in sorted(res.items()):
+    print(
+        "RING_ENTRY "
+        + json.dumps(
+            {
+                "name": name,
+                **{k: v for k, v in rec.items() if k != "meta"},
+                "meta": {
+                    kk: rec["meta"].get(kk)
+                    for kk in (
+                        "src",
+                        "dtype",
+                        "C_in",
+                        "C_out",
+                        "kernel",
+                        "blocking",
+                        "dims",
+                        "synthetic",
+                        "ring",
+                        "bytes_per_tile",
+                        "inner_burst",
+                        "note",
+                        "checksum",
+                    )
+                },
+            },
+            sort_keys=True,
+        )
+    )
+print("RING_TOTALS " + json.dumps({"grid": grid, "method": "host wall-clock per call, warmup included", "n": len(res)}))
