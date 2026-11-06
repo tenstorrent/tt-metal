@@ -587,7 +587,12 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
         [device_input, output],
         ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs),
     )
-    actual = _meaningful_output(case, ttnn.to_torch(result))
+    physical_output = ttnn.to_torch(result)
+    # The packer zero-fills everything outside the reduced row/column/scalar.
+    padding = physical_output.clone()
+    _meaningful_output(case, padding).fill_(0)
+    assert torch.all(padding == 0).item(), f"{case.name}: incorrect reduction output padding"
+    actual = _meaningful_output(case, physical_output)
     return actual, _golden(case, logical_chunks)
 
 
