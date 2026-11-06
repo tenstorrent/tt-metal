@@ -145,9 +145,11 @@ struct RingAttentionDenseReturn {
     // n_banks + u % n_banks; the receive buffer holds side * n_units + u.
     tt::tt_metal::Buffer* staging = nullptr;  // this device's partials
     tt::tt_metal::Buffer* recv = nullptr;     // the neighbours'
-    uint32_t ready_plus_addr = 0;             // per SDPA core: 4 bits per owner, set once its units are staged
+    // Per SDPA core, running counts: units staged for the + / - neighbour, units arrived from the - / + neighbour.
+    uint32_t ready_plus_addr = 0;
     uint32_t ready_minus_addr = 0;
-    uint32_t arrival_addr = 0;  // per SDPA core: 4 bits per owner, one increment per arriving neighbour
+    uint32_t arrival_minus_addr = 0;
+    uint32_t arrival_plus_addr = 0;
     uint32_t n_cores = 0;
     uint32_t cores_per_head = 0;
     uint32_t n_dense_blocks = 0;

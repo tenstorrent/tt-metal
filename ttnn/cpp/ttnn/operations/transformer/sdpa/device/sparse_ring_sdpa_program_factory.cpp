@@ -245,13 +245,15 @@ namespace ttnn::prim {
 namespace {
 
 // dense_blocks split across devices (sparse_dense_units.hpp): the hop staging and receive buffers and the ready /
-// arrival semaphores, made once per cached workload (not with dense_partials_debug).
+// arrival semaphores (per SDPA core, running counts of units staged for the + / - neighbour and arrived from the - / +
+// neighbour), made once per cached workload (not with dense_partials_debug).
 struct DenseResources {
     std::shared_ptr<Tensor> staging;
     std::shared_ptr<Tensor> recv;
     GlobalSemaphore ready_plus;
     GlobalSemaphore ready_minus;
-    GlobalSemaphore arrival;
+    GlobalSemaphore arrival_minus;
+    GlobalSemaphore arrival_plus;
 };
 
 // Dense units of the op: one plan per owner shard (a shard with a Q block in a range), in shard order. Units are
@@ -1669,7 +1671,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t ready_plus_addr = dense_res != nullptr ? static_cast<uint32_t>(dense_res->ready_plus.address()) : 0;
     const uint32_t ready_minus_addr =
         dense_res != nullptr ? static_cast<uint32_t>(dense_res->ready_minus.address()) : 0;
-    const uint32_t arrival_addr = dense_res != nullptr ? static_cast<uint32_t>(dense_res->arrival.address()) : 0;
+    const uint32_t arrival_minus_addr =
+        dense_res != nullptr ? static_cast<uint32_t>(dense_res->arrival_minus.address()) : 0;
+    const uint32_t arrival_plus_addr =
+        dense_res != nullptr ? static_cast<uint32_t>(dense_res->arrival_plus.address()) : 0;
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -1773,12 +1778,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             reader_args.push_back(end);
         }
         if (dense_h) {
-            // [first unit, end unit, arrival semaphore, dense-Q buffer, receive buffer], the owner records.
+            // [first unit, end unit, arrivals from -, dense-Q buffer, receive buffer, arrivals from +], the owner
+            // records.
             reader_args.push_back(du_start);
             reader_args.push_back(du_end);
-            reader_args.push_back(arrival_addr);
+            reader_args.push_back(arrival_minus_addr);
             reader_args.push_back(dense_q_buf);
             reader_args.push_back(dense_recv_buf);
+            reader_args.push_back(arrival_plus_addr);
             reader_args.append(dense_records);
         }
         for (const auto& [start, count] : group_members) {
@@ -1898,7 +1905,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         dr.recv = dense_res->recv->buffer();
         dr.ready_plus_addr = ready_plus_addr;
         dr.ready_minus_addr = ready_minus_addr;
-        dr.arrival_addr = arrival_addr;
+        dr.arrival_minus_addr = arrival_minus_addr;
+        dr.arrival_plus_addr = arrival_plus_addr;
         dr.n_cores = NH * dense_cores_per_head;  // the cores holding dense units, in flat order
         dr.cores_per_head = dense_cores_per_head;
         dr.n_dense_blocks = n_dense_blocks;
@@ -2003,12 +2011,14 @@ tt::tt_metal::WorkloadDescriptor SparseRingSDPAProgramFactory::create_workload_d
         const auto make_sem = [&] {
             return ttnn::global_semaphore::create_global_semaphore(mesh, sdpa_cores, 0, BufferType::L1);
         };
-        dense_res = DenseResources{make_buffer(pages), make_buffer(2 * pages), make_sem(), make_sem(), make_sem()};
+        dense_res =
+            DenseResources{make_buffer(pages), make_buffer(2 * pages), make_sem(), make_sem(), make_sem(), make_sem()};
         tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
         for (const auto& t : {dense_res->staging, dense_res->recv}) {
             wd.buffers.push_back({t, t->buffer()});
         }
-        for (const auto* sem : {&dense_res->ready_plus, &dense_res->ready_minus, &dense_res->arrival}) {
+        for (const auto* sem :
+             {&dense_res->ready_plus, &dense_res->ready_minus, &dense_res->arrival_minus, &dense_res->arrival_plus}) {
             wd.semaphores.push_back(*sem);
         }
     }

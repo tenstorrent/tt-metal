@@ -1513,9 +1513,9 @@ void sdpa_ring_resident(
 // per-column sums, the row max; bf16). Every helper enters and leaves with the unpacker in the intermediate format and
 // the packer in cb_qkt_im's (the step's exit state; cb_recip_scratch has the same format).
 
-// Merges the partial at cb_dense_in's front into slot i: M = max(slot max, in max), slot = exp((slot max - M) *
-// scale) * slot + exp((in max - M) * scale) * in, slot max = M. The step's 2^-28 exp scale is the same on every
-// device, so it cancels.
+// Merges the partial at cb_dense_in's front into slot i, whose out and sum rows are at the slot CBs' front and max at
+// row i: M = max(slot max, in max), slot = exp((slot max - M) * scale) * slot + exp((in max - M) * scale) * in, slot
+// max = M. The step's 2^-28 exp scale is the same on every device, so it cancels.
 template <
     uint32_t Sq_chunk_t,
     uint32_t vDHt,
@@ -1562,7 +1562,7 @@ static __attribute__((noinline, noclone)) void res_merge_slot(const uint32_t i) 
     for (uint32_t side = 0; side < 2; ++side) {
         const uint32_t max_cb = side == 0 ? cb_max_in : cb_dense_in;
         const uint32_t max_idx0 = side == 0 ? row0 : in_max;
-        const uint32_t page0 = side == 0 ? row0 : 0;
+        const uint32_t page0 = 0;  // the slot's out / sum rows are at the slot CBs' front (see res_dense_finish)
         CircularBuffer(cb_exp_max_diff).reserve_back(kStatsCap);
         exp_packthread_tile_init<EXP_APPROX_MODE>();
         tile_regs_acquire();
@@ -1595,9 +1595,9 @@ static __attribute__((noinline, noclone)) void res_merge_slot(const uint32_t i) 
             cb_exp_max_diff,
             cb_prev_out,
             cb_sum_in,
-            side == 0 ? i : 0,
-            side == 0 ? i : vDHt,
-            i);
+            0,
+            side == 0 ? 0 : vDHt,
+            0);
         PACK((llk_pack_reconfig_l1_acc(0)));
         if (side == 0) {
             sdpa_maybe_reconfig_data_format<cb_prev_out, cb_qkt_im, cb_exp_max_diff, cb_qkt_im>();
@@ -1693,8 +1693,10 @@ template <
 void res_dense_finish(const uint32_t n_res, const uint32_t n_merge, const bool emit) {
     constexpr uint32_t kStatsCap = resident_slots * Sq_chunk_t;
     constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
-    for (uint32_t m = 0; m < n_merge; ++m) {
-        for (uint32_t i = 0; i < n_res; ++i) {
+    // Unit by unit, so each leaves (emitted or normalized) as soon as its arriving partials are merged: slot i's out
+    // and sum rows are at the slot CBs' front by then (slots 0 .. i - 1 consumed), its max at row i.
+    for (uint32_t i = 0; i < n_res; ++i) {
+        for (uint32_t m = 0; m < n_merge; ++m) {
             res_merge_slot<
                 Sq_chunk_t,
                 vDHt,
@@ -1708,8 +1710,6 @@ void res_dense_finish(const uint32_t n_res, const uint32_t n_merge, const bool e
                 cb_exp_max_diff,
                 cb_dense_in>(i);
         }
-    }
-    for (uint32_t i = 0; i < n_res; ++i) {
         if (emit) {
             res_emit_slot<Sq_chunk_t, vDHt, cb_qkt_im, cb_max_in, cb_sum_in, cb_prev_out, cb_out>(i);
         } else {

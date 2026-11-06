@@ -179,8 +179,8 @@ void kernel_main() {
     }
 
     // Dense units (see the reader): per batch, the owner writes its normalized dense rows to the output; every other
-    // device writes the raw partials to the partials buffer, and after an owner's last batch (not in dense_debug)
-    // counts it in its ready word for the gather writer that forwards it (4 bits per owner record).
+    // device writes the raw partials to the partials buffer and (not in dense_debug) counts each unit, once written, in
+    // its direction's ready word (a running count) for the gather writer that forwards it.
     if constexpr (dense_owners > 0) {
         constexpr bool dense_debug = get_named_compile_time_arg_val("dense_debug") == 1;
         constexpr uint32_t kPartialTiles = sparse_dense::partial_tiles<Sq_chunk_t, vDHt>();
@@ -194,7 +194,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("dense_blocks_total"),
             get_named_compile_time_arg_val("resident_slots"),
             [](uint32_t a) { return get_arg_val<uint32_t>(a); },
-            [&](uint32_t k, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool, bool last) {
+            [&](uint32_t, const sparse_dense::Owner& o, uint32_t u0, uint32_t u1, bool, bool) {
                 const bool emit = dense_debug || o.role != sparse_dense::kRoleOwner;
                 for (uint32_t u = u0; u < u1; ++u) {
                     if (!emit) {
@@ -222,16 +222,15 @@ void kernel_main() {
                         noc.async_writes_flushed();
                         cb.pop_front(1);
                     }
-                }
-                noc.async_write_barrier();
-                if constexpr (!dense_debug) {
-                    if (emit && last) {
+                    if constexpr (!dense_debug) {
+                        noc.async_write_barrier();
                         const uint32_t ready_addr =
                             get_arg_val<uint32_t>(dense_base + (o.role == sparse_dense::kRoleEmitPlus ? 3 : 4));
-                        noc_semaphore_inc(get_noc_addr(my_x[noc_index], my_y[noc_index], ready_addr), 1u << (4 * k));
+                        noc_semaphore_inc(get_noc_addr(my_x[noc_index], my_y[noc_index], ready_addr), 1);
                         noc_async_atomic_barrier();
                     }
                 }
+                noc.async_write_barrier();
             });
     }
 }
