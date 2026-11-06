@@ -67,9 +67,13 @@ spec only ties the binding to it. In the example, the reader reads tensor parame
      - ``get_arg(args::<name>)[i]``
    * - A tensor
      - A ``TensorParameter`` and a ``TensorBinding``, the tensor in ``ProgramRunArgs.tensor_args``
-     - ``TensorAccessor(tensor::<accessor_name>)``
+     - ``TensorAccessor(tensor::<accessor_name>)``, or ``LocalTensorAccessor<T>(tensor::<accessor_name>)`` for the
+       core's own shard in L1
    * - A buffer between two kernels
      - A ``DataflowBufferSpec``, with a producer and a consumer binding
+     - ``DataflowBuffer(dfb::<accessor_name>)``
+   * - A buffer on a sharded tensor's memory
+     - A ``DataflowBufferSpec`` whose ``borrowed_from`` names the ``TensorParameter``
      - ``DataflowBuffer(dfb::<accessor_name>)``
    * - A semaphore
      - A ``SemaphoreSpec`` and a ``SemaphoreBinding``
