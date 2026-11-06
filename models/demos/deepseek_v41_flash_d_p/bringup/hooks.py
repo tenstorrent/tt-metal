@@ -48,6 +48,17 @@ def device_params(spec):
     return harness.device_params(_WeightedPayloadSpec(spec, FABRIC_PAYLOAD))
 
 
+def weight_cache_patterns(spec):
+    """F261 (core/weight_cache.py): the files of the run's tt_cache its shared master (paths.tt_cache_shared) holds,
+    pulled at run start and pushed after a build: the routed experts' bank-major files and completion markers of the
+    run's EXPERTS_IMPL (tt/experts.py expert_cache_prefix: <rows>x<cols>/L<layer>.<impl>.<hash>...). Never the old
+    .tensorbin layout (convert it: tools/convert_expert_cache.py), nor another impl's (an A/B's) cache."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    impl = settings.get("EXPERTS_IMPL")
+    return [f"L??.{impl}.*.bm.bin", f"L??.{impl}.*.done.json"]
+
+
 def _config(spec):
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import Config

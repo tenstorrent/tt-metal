@@ -2279,6 +2279,7 @@ class Orchestrator:
                 return STOPPED
         if satisfied(self.led.status(tid)):  # F260: a new golden (or a drift file) reaches the mirror before a test
             self.sync_goldens(always=task.get("step") == "goldens")
+            self.sync_weight_cache(pull=False)  # F261: a cache the task built goes to the master (background)
         if self.needs_human(task):
             return self._human(task, self.needs_human(task))
         return self._after(task) if satisfied(self.led.status(tid)) else STOPPED
@@ -2303,6 +2304,26 @@ class Orchestrator:
             )
         except Exception as e:  # noqa: BLE001 -- the mirror is an optimisation; the shared copy is always there
             self.echo(f"goldens mirror: sync failed ({type(e).__name__}: {e}); tests read the shared copy")
+
+    def sync_weight_cache(self, pull: bool = True) -> None:
+        """F261: the weight cache's node-local mirror (core/weight_cache.py). pull: copy what the shared master has
+        that the local cache lacks, now (run / resume start, before any device task: a pull beats a rebuild). Then,
+        when the local cache holds files the master lacks (a task built them), start a push in the background (one
+        a box; log in the run dir). Never stops the run: a failure is one line, the tests build what is missing."""
+        if self.spec.tt_cache_shared() is None:
+            return
+        try:
+            from models.demos.common.bringup.core import weight_cache as WC
+
+            if pull:
+                self.echo(f"weight cache: {WC.pull(self.spec, echo=self.echo)}")
+            pid = WC.spawn_push(self.spec, self.run_dir / "weight_cache_push.log")
+            if pid:
+                self.echo(
+                    f"weight cache: pushing new files to {self.spec.tt_cache_shared()} in the background (pid {pid})"
+                )
+        except Exception as e:  # noqa: BLE001 -- the master is an optimisation; the local cache is what runs read
+            self.echo(f"weight cache: sync failed ({type(e).__name__}: {e})")
 
     def ran_final(self) -> bool:
         """F188: the final measurement (a perf task without a role) has passed, so it will not run the quick-accepted
@@ -2770,8 +2791,9 @@ def main(argv=None) -> int:
     TL.record(orch.run_dir, "start", command=a.command)
     rc = None
     try:
-        if a.command in ("run", "resume"):  # F260: before any device task, the goldens on node-local disk
+        if a.command in ("run", "resume"):  # F260 / F261: before any device task, goldens and weights node-local
             orch.sync_goldens()
+            orch.sync_weight_cache()
         rc = orch.run(until=a.until, only=a.only)
         return rc
     finally:

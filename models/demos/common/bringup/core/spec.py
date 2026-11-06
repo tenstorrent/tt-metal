@@ -18,6 +18,9 @@ Paths:
     paths.golden_local  F260: the node-local mirror of paths.golden that tests read (reference/golden.py read_dir);
                     default: when paths.golden is outside art (e.g. NFS), art / <the shared path after the model's
                     own dir name> (/data/u/bringup/<model>/golden_full/box -> <art>/golden_full/box), else no mirror
+    paths.tt_cache_shared  F261: the shared master of the weight cache (tt_cache/ is then its node-local mirror; the
+                    same <mesh>/<version> below both; core/weight_cache.py: pull at run start, push after a build);
+                    default: none (the local cache is the only copy)
 
 Prior bring-up: ``prior: models/demos/<slug>`` names an earlier bring-up of the same checkpoint (another mesh or
 configuration). This spec then shares its checkpoint download and goldens (hf/ and golden/ resolve to the prior's
@@ -342,12 +345,24 @@ class Spec:
     def profiles_dir(self) -> Path:
         return self._art_sub("profiles", "profiles")
 
-    def tt_cache(self, variant: str = "") -> Path:
-        """Weight cache dir. The .tensorbin name only holds name/dtype/layout, so the path carries mesh and version."""
-        base = self._art_sub("tt_cache", "tt_cache")
+    def _cache_sub(self, variant: str = "") -> Path:
         mesh = "x".join(str(x) for x in self.mesh) + ("-scaled" if self.scaled else "")
         version = str(self.get("cache_version", "v1"))
-        return base / mesh / (f"{version}-{variant}" if variant else version)
+        return Path(mesh) / (f"{version}-{variant}" if variant else version)
+
+    def tt_cache(self, variant: str = "") -> Path:
+        """Weight cache dir. The .tensorbin name only holds name/dtype/layout, so the path carries mesh and version.
+        F261: with paths.tt_cache_shared, the node-local mirror of tt_cache_shared(variant) (core/weight_cache.py)."""
+        return self._art_sub("tt_cache", "tt_cache") / self._cache_sub(variant)
+
+    def tt_cache_shared(self, variant: str = "") -> Path | None:
+        """F261 (owner 2026-11-06): the shared master of tt_cache(variant) (paths.tt_cache_shared, e.g. on NFS and
+        readable by other users; the same <mesh>/<version> below it), or None: the local cache is the only copy.
+        core/weight_cache.py pulls what the master has into the local cache at run start and pushes what a run built."""
+        if not self.get("paths.tt_cache_shared"):
+            return None
+        shared = self._art_sub("tt_cache_shared", "") / self._cache_sub(variant)
+        return None if os.path.abspath(shared) == os.path.abspath(self.tt_cache(variant)) else shared
 
     def run_dir(self, run: str) -> Path:
         return self.art / "runs" / (f"{self.ledger_name}/{run}" if self.ledger_name else run)
