@@ -1,0 +1,18 @@
+{
+  "stage_check": {
+    "exit_code": 2,
+    "log": "../setup/stage-check.log",
+    "status": "critical_incomplete",
+    "explanation": "Original runner status failed at required roofline readiness; all latency work and reporting are below7200s. Checker generic wording mentions budget/one hour, but this is not a measured timeout."
+  },
+  "context_check": {
+    "exit_code": 0,
+    "status": "pass",
+    "log": "../setup/context-final.log"
+  },
+  "partial_latency_and_identity": {
+    "status": "pass",
+    "evidence": "partial_validation.json"
+  },
+  "accuracy_verdict": null
+}

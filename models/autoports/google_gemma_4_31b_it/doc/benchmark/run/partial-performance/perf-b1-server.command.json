@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_server.py",
+    "--max-num-seqs",
+    "1",
+    "--base-url",
+    "http://127.0.0.1:8000",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1-server.json"
+  ],
+  "started_monotonic": 878136.254261542,
+  "remaining_seconds_at_launch": 6243.813478148077,
+  "client_plugins_disabled": false,
+  "exit_code": 0,
+  "finished_monotonic": 878324.611931173,
+  "elapsed_seconds": 188.35766963101923
+}

@@ -1,0 +1,42 @@
+{
+  "pid": 218248,
+  "start_ticks": "87814431",
+  "ppid": 218243,
+  "command": [
+    "bash",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+    "--stages",
+    "serve",
+    "--max-num-seqs",
+    "1",
+    "--enable-prefix-caching",
+    "--port",
+    "8000",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1",
+    "--additional-server-args",
+    "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it --max-num-seqs 1 /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+  ],
+  "max_num_seqs": 1,
+  "base_url": "http://127.0.0.1:8000",
+  "server_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1",
+  "phase_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/phase-b1.jsonl",
+  "launch_command": [
+    "bash",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+    "--stages",
+    "serve",
+    "--max-num-seqs",
+    "1",
+    "--enable-prefix-caching",
+    "--port",
+    "8000",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1",
+    "--additional-server-args",
+    "--revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --override-generation-config '{\"top_k\":32}' --served-model-name google/gemma-4-31B-it --max-num-seqs 1 /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+  ],
+  "started_unix": 1793934421.9303737,
+  "startup_seconds": 180.22456280200277,
+  "bounded_seconds": 7200
+}

@@ -1,0 +1,10 @@
+{
+  "status": "unavailable",
+  "action": "check",
+  "concurrency": 32,
+  "server_pid": 216694,
+  "reason": "Pinned stock plugin has no lossless request/step completion export after host sampling and final token handling. Adapter return/enqueue timings cannot satisfy full_phase_wall_time.",
+  "diagnosis": "../setup/AUTODEBUG.md",
+  "plugin_runtime_change_authorized": false,
+  "device_profiler_enabled": false
+}

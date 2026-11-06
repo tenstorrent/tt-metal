@@ -1,0 +1,48 @@
+{
+  "model": "google/gemma-4-31B-it",
+  "base_url": "http://127.0.0.1:8000",
+  "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/manifest.json",
+  "tasks": [
+    "gpqa_diamond_cot_zeroshot"
+  ],
+  "concurrencies": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "budget_seconds": 7200,
+  "output_tokens": 128,
+  "vllm_cli": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/benchmark-perf-client/bin/vllm",
+  "performance_server_command": [
+    "python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_server.py"
+  ],
+  "roofline_command": [
+    "python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/collect_benchmark_roofline.py"
+  ],
+  "generation": {
+    "gpqa_diamond_cot_zeroshot": {
+      "max_gen_toks": 126976,
+      "temperature": 1.0,
+      "top_k": 20,
+      "top_p": 0.95,
+      "do_sample": true,
+      "until": [],
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      }
+    }
+  },
+  "references": {
+    "gpqa_diamond_cot_zeroshot": {
+      "exact_match,strict-match": {
+        "score": 84.3,
+        "source_url": "https://ai.google.dev/gemma/docs/core/model_card_4",
+        "protocol_notes": "Published thinking score; upstream zero-shot CoT scorer and frozen128/198 subset differ from release r1_gpqa_diamond; no accuracy measured."
+      }
+    }
+  },
+  "source_manifest": "/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/profiles/ci-v1-reasoning.json"
+}

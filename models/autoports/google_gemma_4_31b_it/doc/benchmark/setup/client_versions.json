@@ -1,0 +1,11 @@
+{
+  "performance_client_source_commit": "568afb3a13806beb53bb2e6bd518269357b237c0",
+  "performance_client_tag": "v0.26.0",
+  "performance_client_target": "empty",
+  "accuracy_harness": "lm-eval0.4.13",
+  "accuracy_transformers": "4.57.6",
+  "server_vllm_version": "0.31.0+empty",
+  "server_source_commit": null,
+  "server_source_commit_reason": "Installed wheel has no direct_url.json or VCS revision; Stage9 stack records tag v0.31.0 only.",
+  "setup_hardware_probe": "No hardware probe before invocation; /proc device nodes0-3 unowned, Stage10 health evidence reused."
+}

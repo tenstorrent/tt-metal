@@ -1,0 +1,32 @@
+Using Python 3.10.19 environment at: bringup/artifacts/benchmark-perf-client
+  × Failed to build `vllm @
+  │ file:///home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/vllm-benchmark-client-src`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `setuptools.build_meta.prepare_metadata_for_build_wheel` failed
+      (exit status: 1)
+
+      [stderr]
+      Traceback (most recent call last):
+        File "<string>", line 14, in <module>
+        File
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/setuptools/build_meta.py",
+      line 378, in prepare_metadata_for_build_wheel
+          self.run_setup()
+        File
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/setuptools/build_meta.py",
+      line 317, in run_setup
+          exec(code, locals())
+        File "<string>", line 21, in <module>
+      ModuleNotFoundError: No module named 'setuptools_rust'
+
+      hint: This error likely indicates that `vllm` depends on
+      `setuptools_rust`, but doesn't declare it as a build dependency. If
+      `vllm` is a first-party package, consider adding `setuptools_rust`
+      to its `build-system.requires`. Otherwise, either add it to your
+      `pyproject.toml` under:
+
+      [tool.uv.extra-build-dependencies]
+      vllm = ["setuptools_rust"]
+
+      or `uv pip install setuptools_rust` into the environment and re-run with
+      `--no-build-isolation`.

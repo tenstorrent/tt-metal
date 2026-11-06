@@ -1,0 +1,31 @@
+Using Python 3.10.19 environment at: bringup/artifacts/benchmark-client
+  × Failed to build `vllm @
+  │ file:///home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/vllm-benchmark-client-src`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `setuptools.build_meta.prepare_metadata_for_build_wheel` failed
+      (exit status: 1)
+
+      [stderr]
+      Traceback (most recent call last):
+        File "<string>", line 14, in <module>
+        File
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/benchmark-client/lib/python3.10/site-packages/setuptools/build_meta.py",
+      line 380, in prepare_metadata_for_build_wheel
+          self.run_setup()
+        File
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/benchmark-client/lib/python3.10/site-packages/setuptools/build_meta.py",
+      line 317, in run_setup
+          exec(code, locals())  # noqa: S102 # exec is intentional here
+        File "<string>", line 17, in <module>
+      ModuleNotFoundError: No module named 'torch'
+
+      hint: This error likely indicates that `vllm` depends on `torch`, but
+      doesn't declare it as a build dependency. If `vllm` is a first-party
+      package, consider adding `torch` to its `build-system.requires`.
+      Otherwise, either add it to your `pyproject.toml` under:
+
+      [tool.uv.extra-build-dependencies]
+      vllm = ["torch"]
+
+      or `uv pip install torch` into the environment and re-run with
+      `--no-build-isolation`.

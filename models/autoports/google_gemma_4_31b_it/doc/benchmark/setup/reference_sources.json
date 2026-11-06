@@ -1,0 +1,26 @@
+{
+  "commit": "411057222c2dc5a4268e693b0bd57bc0e2571f38",
+  "files": [
+    {
+      "file": "bringup/artifacts/benchmark-reference-source/release_model_spec.json",
+      "sha256": "b7cd93530ec1364e7bded1b780b1a7a3318f3ad382faba50460c4a1f25417221"
+    },
+    {
+      "file": "bringup/artifacts/benchmark-reference-source/release_spec.b64",
+      "sha256": "e1f974b5b858e0004739079d814462f48bdaf8e79ef1f23db60dd3edd5777ccc"
+    },
+    {
+      "file": "bringup/artifacts/benchmark-reference-source/eval_config.py",
+      "sha256": "9fb330107e6eca6a2c6b3c5a91f38416de9e3b3b1cb6c05314e33a03f9e773e6"
+    },
+    {
+      "file": "bringup/artifacts/benchmark-reference-source/harbor.py",
+      "sha256": "857ffc10a5d24806af7531aa7df3c1cf1aafa6546f3486776ba49399ef663ed4"
+    },
+    {
+      "file": "bringup/artifacts/benchmark-reference-source/agentic_eval_tests.py",
+      "sha256": "ee2fbb21bbde3fd3092c297fa146e60de45c4c14f2a140857648ccd5043b7d10"
+    }
+  ],
+  "note": "External harness references live outside autoport so unrelated model capacities are not interpreted as this model configuration."
+}

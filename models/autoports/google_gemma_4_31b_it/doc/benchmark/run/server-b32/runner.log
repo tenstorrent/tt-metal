@@ -1,0 +1,44 @@
+Launching vLLM server for /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475 on P300x2
+  cmd: /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m vllm.entrypoints.openai.api_server --model /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475 --block_size 32 --max_num_seqs 32 --port 8000 --max_model_len 262144 --enable-prefix-caching --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 134217728, "fabric_config": "FABRIC_1D_RING"}}' --revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --tokenizer-revision 842da3794eaa0b77d5f08bae87a17459d91ff475 --language-model-only --async-scheduling --override-generation-config '{"top_k":32}' --served-model-name google/gemma-4-31B-it --max-num-seqs 32 /home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475
+  log: /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b32/server.log
+Waiting up to 1800s for server to become ready...
+  Server ready after ~230s
+
+Server ready at http://localhost:8000
+Server is running. Press Ctrl-C (or send SIGTERM) to stop.
+
+Shutting down server (PID 216694)...
+  Terminated cleanly.
+
+=== Server log tail (/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b32/server.log, last 30 lines) ===
+{"event": "sampling_mode", "phase": "decode", "mode": "device", "device_token_rows_checked_before_step": 18368, "reload_inputs": true, "reload_page_table": false, "active_rows": 4}
+{"event": "sampling_mode", "phase": "decode", "mode": "device", "device_token_rows_checked_before_step": 18400, "reload_inputs": true, "reload_page_table": false, "active_rows": 3}
+{"event": "sampling_mode", "phase": "decode", "mode": "device", "device_token_rows_checked_before_step": 18432, "reload_inputs": true, "reload_page_table": false, "active_rows": 2}
+{"event": "sampling_mode", "phase": "decode", "mode": "device", "device_token_rows_checked_before_step": 18464, "reload_inputs": true, "reload_page_table": false, "active_rows": 1}
+INFO:     127.0.0.1:46134 - "GET /metrics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46150 - "GET /metrics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57928 - "GET /metrics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57938 - "GET /metrics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57954 - "GET /metrics HTTP/1.1" 200 OK
+(APIServer pid=216694) INFO 11-06 02:57:53 [loggers.py:320] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 321.6 tokens/s, Running: 0 reqs, Waiting: 0 reqs, TT KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=216694) INFO 11-06 02:57:56 [launcher.py:128] [shutdown] API server: shutdown triggered
+(APIServer pid=216694) INFO 11-06 02:57:56 [launcher.py:144] [shutdown] API server: stopping engine client mode=abort timeout=0s
+(APIServer pid=216694) INFO 11-06 02:57:56 [core_client.py:762] [shutdown] MPClient: start timeout=0s
+(APIServer pid=216694) INFO 11-06 02:57:56 [core_client.py:764] [shutdown] MPClient: stopping engine manager
+(APIServer pid=216694) INFO 11-06 02:57:56 [utils.py:638] [shutdown] Process manager: send sigterm to process EngineCore
+(APIServer pid=216694) WARNING 11-06 02:57:56 [utils.py:658] [shutdown] Process manager: force killing remaining processes count=1
+(APIServer pid=216694) WARNING 11-06 02:57:56 [utils.py:663] [shutdown] Process manager: force killing remaining process EngineCore pid 216746
+(EngineCore pid=216746) INFO 11-06 02:57:56 [core.py:1409] [shutdown] EngineCore: trigger received signal=SIGTERM
+(EngineCore pid=216746) INFO 11-06 02:57:56 [core.py:1558] [shutdown] EngineCore: start mode=abort timeout=0s
+(EngineCore pid=216746) INFO 11-06 02:57:56 [core.py:1589] [shutdown] EngineCore: request processing complete; starting resource teardown
+(EngineCore pid=216746) INFO 11-06 02:57:56 [core.py:1422] [shutdown] EngineCore: exiting busy loop
+(APIServer pid=216694) INFO 11-06 02:57:56 [core_client.py:766] [shutdown] MPClient: engine manager stopped
+(APIServer pid=216694) INFO 11-06 02:57:56 [core_client.py:767] [shutdown] MPClient: cleaning up background resources
+(APIServer pid=216694) INFO 11-06 02:57:56 [core_client.py:769] [shutdown] MPClient: complete
+(APIServer pid=216694) INFO 11-06 02:57:56 [launcher.py:153] [shutdown] API server: engine client stopped
+(APIServer pid=216694) INFO 11-06 02:57:56 [launcher.py:156] [shutdown] API server: signalling HTTP server shutdown
+(APIServer pid=216694) INFO 11-06 02:57:56 [launcher.py:178] [shutdown] API server: shutting down FastAPI HTTP server
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+Run summary: /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b32/vllm_run_summary.json

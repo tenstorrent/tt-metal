@@ -1,0 +1,7 @@
+Using Python 3.10.19 environment at: bringup/artifacts/benchmark-perf-client
+Resolved 1 package in 1.48s
+   Building vllm @ file:///home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/vllm-benchmark-client-src
+      Built vllm @ file:///home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/vllm-benchmark-client-src
+Prepared 1 package in 2.17s
+Installed 1 package in 43ms
+ + vllm==0.26.0+empty (from file:///home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/vllm-benchmark-client-src)

@@ -1,0 +1,12 @@
+benchmark_stage /home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/__init__.py
+Traceback (most recent call last):
+  File "<stdin>", line 8, in <module>
+  File "/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/run.py", line 117, in run
+    baseline_server = select_server(accuracy_concurrency)
+  File "/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/run.py", line 114, in select_server
+    phase_accounting(capacity, 'check')
+  File "/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/run.py", line 101, in phase_accounting
+    command([*roofline_command, '--run-dir', str(output), '--concurrency', str(capacity),
+  File "/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/runtime/benchmark_stage/run.py", line 54, in command
+    raise RuntimeError(f'command exited {code}; inspect {log}')
+RuntimeError: command exited 1; inspect /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/roofline-b32-check.log

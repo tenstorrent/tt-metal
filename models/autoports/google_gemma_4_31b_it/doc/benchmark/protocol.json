@@ -1,0 +1,58 @@
+{
+  "requested_evals": [
+    "r1_gpqa_diamond",
+    "swe_bench_verified",
+    "terminal_bench_2_1"
+  ],
+  "selection_source": "goal12 defaults; inputs.json sets no evals",
+  "covered_evals": [],
+  "coverage": [
+    {
+      "eval": "r1_gpqa_diamond",
+      "upstream_variant": "gpqa_diamond_cot_zeroshot",
+      "intended_samples": 128,
+      "completed_samples": 0,
+      "dataset_samples": 198,
+      "status": "not_run",
+      "reason": "Gated Idavidrein/gpqa dataset download requires unavailable HF authentication; roofline readiness also fails before accuracy.",
+      "manifest_sha256": "3dd6b5fe3878c8138817180626bf5f551ae6a966d11777d3eac935db695fcc38",
+      "num_fewshot": 0,
+      "scorer": "upstream lm-eval0.4.13 GPQA zero-shot CoT exact-match filters; not release r1 extractor",
+      "published_percent": 84.3,
+      "reference": "https://ai.google.dev/gemma/docs/core/model_card_4"
+    },
+    {
+      "eval": "swe_bench_verified",
+      "completed_samples": 0,
+      "dataset_samples": 500,
+      "status": "not_covered",
+      "reason": "Tool-use suite requires goal12 harness, not lm-eval."
+    },
+    {
+      "eval": "terminal_bench_2_1",
+      "completed_samples": 0,
+      "dataset_samples": 89,
+      "status": "not_covered",
+      "reason": "Terminal/tool-use suite requires goal12 harness, not lm-eval. Release model entry inspected names terminal_bench_2, not2.1; no substitution."
+    }
+  ],
+  "generation_intended": {
+    "native_hf_template_applications": 1,
+    "enable_thinking": true,
+    "max_gen_toks": 126976,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "until": [],
+    "do_sample": true
+  },
+  "release_source": "tt-inference-server411057222c2dc5a4268e693b0bd57bc0e2571f38:reference_config/evals/eval_config.py:11949",
+  "release_gpqa_limits": {
+    "request_timeout_seconds": 14400,
+    "max_length": 131072,
+    "max_gen_toks": 126976
+  },
+  "client_request_timeout_seconds": 3600,
+  "protocol_gap": "Packaged benchmark client hardcodes3600s request timeout, below release14400s. No request executed; cannot claim release parity. Release recipe r1_gpqa_diamond differs from available upstream zero-shot CoT.",
+  "context_contract_sha256": "e6d2ccde61c5dec0f84d3810e8e9d813cce76c8ad18589622391ebc07aa1c6c7"
+}

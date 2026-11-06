@@ -1,0 +1,54 @@
+["/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/benchmark-perf-client/bin/vllm", "bench", "serve", "--backend", "vllm", "--model", "google/gemma-4-31B-it", "--base-url", "http://127.0.0.1:8000", "--endpoint", "/v1/completions", "--dataset-name", "random", "--random-input-len", "4096", "--random-output-len", "128", "--random-range-ratio", "0.0", "--num-prompts", "48", "--max-concurrency", "16", "--request-rate", "inf", "--ignore-eos", "--temperature", "0", "--seed", "4116", "--percentile-metrics", "ttft,tpot,itl,e2el", "--metric-percentiles", "50,95,99", "--save-result", "--save-detailed", "--result-dir", "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance", "--result-filename", "perf-b16.json", "--tokenizer", "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"]
+INFO 11-06 03:01:43 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 11-06 03:01:43 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 11-06 03:01:46 [importing.py:53] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 11-06 03:01:46 [importing.py:88] Triton not installed or not compatible; certain GPU-related functions will not be available.
+INFO 11-06 03:01:47 [main.py:69] Unspecified platform detected, switching to CPU Platform instead.
+WARNING 11-06 03:01:47 [cpu.py:440] Failed to import from vllm._C: ModuleNotFoundError("No module named 'vllm._C'")
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7de5ec8a43a0>, trust_remote_code=False, seed=4116, num_prompts=48, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, custom_ensure_client_side_data=False, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, timed_trace_chunk_hash_size=16, timed_trace_sec_multiplier=1, timed_trace_label_timestamp='timestamp', timed_trace_label_input_length='input_length', timed_trace_label_output_length='output_length', timed_trace_label_hash_ids='hash_ids', blazedit_min_distance=0.0, blazedit_max_distance=1.0, asr_max_audio_len_sec=inf, asr_min_audio_len_sec=0.0, random_input_len=4096, random_output_len=128, random_range_ratio='0.0', random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, bfcl_categories=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, speed_bench_dataset_subset='qualitative', speed_bench_output_len=4096, speed_bench_category=None, label=None, backend='vllm', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=16, model='google/gemma-4-31B-it', input_len=None, output_len=None, tokenizer='/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475', tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir='/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance', result_filename='perf-b16.json', ignore_eos=True, self_timed=None, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='50,95,99', goodput=None, request_id_prefix='bench-b6abb6ca-', top_p=None, top_k=None, min_p=None, temperature=0.0, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, lora_assignment='random', ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, chat_template_kwargs=None, extra_body=None, skip_tokenizer_init=False, insecure=False, plot_timeline=False, timeline_itl_thresholds='25,50', plot_dataset_stats=False)
+INFO 11-06 03:01:50 [utils.py:90] Sampling input_len from [4096, 4096] and output_len from [128, 128]
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 16
+  0%|          | 0/48 [00:00<?, ?it/s]  2%|▏         | 1/48 [00:17<13:49, 17.65s/it]  6%|▋         | 3/48 [00:18<03:33,  4.75s/it]  8%|▊         | 4/48 [00:18<02:29,  3.40s/it] 10%|█         | 5/48 [00:19<01:49,  2.55s/it] 12%|█▎        | 6/48 [00:20<01:24,  2.00s/it] 15%|█▍        | 7/48 [00:21<01:07,  1.64s/it] 17%|█▋        | 8/48 [00:22<00:55,  1.39s/it] 19%|█▉        | 9/48 [00:23<00:47,  1.22s/it] 21%|██        | 10/48 [00:23<00:41,  1.10s/it] 23%|██▎       | 11/48 [00:24<00:37,  1.02s/it] 25%|██▌       | 12/48 [00:25<00:34,  1.03it/s] 27%|██▋       | 13/48 [00:26<00:32,  1.07it/s] 29%|██▉       | 14/48 [00:27<00:30,  1.10it/s] 31%|███▏      | 15/48 [00:28<00:29,  1.13it/s] 33%|███▎      | 16/48 [00:29<00:27,  1.15it/s] 35%|███▌      | 17/48 [00:35<01:17,  2.50s/it] 40%|███▉      | 19/48 [00:35<00:42,  1.45s/it] 42%|████▏     | 20/48 [00:36<00:36,  1.30s/it] 44%|████▍     | 21/48 [00:37<00:31,  1.18s/it] 46%|████▌     | 22/48 [00:38<00:28,  1.09s/it] 48%|████▊     | 23/48 [00:39<00:25,  1.02s/it] 50%|█████     | 24/48 [00:40<00:23,  1.03it/s] 52%|█████▏    | 25/48 [00:40<00:21,  1.08it/s] 54%|█████▍    | 26/48 [00:41<00:19,  1.10it/s] 56%|█████▋    | 27/48 [00:42<00:18,  1.13it/s] 58%|█████▊    | 28/48 [00:43<00:17,  1.14it/s] 60%|██████    | 29/48 [00:44<00:16,  1.16it/s] 62%|██████▎   | 30/48 [00:45<00:15,  1.16it/s] 65%|██████▍   | 31/48 [00:45<00:14,  1.17it/s] 67%|██████▋   | 32/48 [00:46<00:13,  1.18it/s] 69%|██████▉   | 33/48 [00:53<00:37,  2.48s/it] 73%|███████▎  | 35/48 [00:53<00:17,  1.37s/it] 77%|███████▋  | 37/48 [00:53<00:09,  1.18it/s] 81%|████████▏ | 39/48 [00:53<00:05,  1.78it/s] 85%|████████▌ | 41/48 [00:53<00:02,  2.57it/s] 90%|████████▉ | 43/48 [00:53<00:01,  3.57it/s] 94%|█████████▍| 45/48 [00:53<00:00,  4.79it/s] 98%|█████████▊| 47/48 [00:53<00:00,  6.20it/s]100%|██████████| 48/48 [00:53<00:00,  1.12s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     48
+Failed requests:                         0
+Maximum request concurrency:             16
+Benchmark duration (s):                  53.89
+Total input tokens:                      196608
+Total generated tokens:                  6144
+Request throughput (req/s):              0.89
+Output token throughput (tok/s):         114.00
+Peak output token throughput (tok/s):    448.00
+Peak concurrent requests:                19.00
+Total token throughput (tok/s):          3762.07
+---------------Time to First Token----------------
+Mean TTFT (ms):                          3719.95
+Median TTFT (ms):                        2120.24
+P50 TTFT (ms):                           2120.24
+P95 TTFT (ms):                           11440.89
+P99 TTFT (ms):                           13044.30
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          111.10
+Median TPOT (ms):                        122.71
+P50 TPOT (ms):                           122.71
+P95 TPOT (ms):                           130.15
+P99 TPOT (ms):                           132.33
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           111.10
+Median ITL (ms):                         39.30
+P50 ITL (ms):                            39.30
+P95 ITL (ms):                            839.15
+P99 ITL (ms):                            848.00
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          17830.23
+Median E2EL (ms):                        17701.64
+P50 E2EL (ms):                           17701.64
+P95 E2EL (ms):                           27076.95
+P99 E2EL (ms):                           28655.57
+==================================================

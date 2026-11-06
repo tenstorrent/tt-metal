@@ -1,0 +1,19 @@
+{
+  "budget_seconds": 7200,
+  "timer": "stage_timing.json",
+  "initial_launch_seconds": 226.28,
+  "b32_warmup_seconds": 38.28070675802883,
+  "b32_measured_prediction_seconds": 114.84212027408648,
+  "basis": "32-request4K/128 warmup;96 measured requests,3 waves; observed host TTFT/TPOT include overlap and long-prefill interference. No device intervals available under profiler prohibition.",
+  "remaining_profile_order": [
+    16,
+    8,
+    1
+  ],
+  "remaining_launch_estimate_seconds_each": 226.28,
+  "estimate_scope": "rough same-implementation startup, not guaranteed; reduced batches allocate different caches",
+  "accuracy": "not started: collector readiness and dataset authorization blocked",
+  "reporting_reserve_seconds": 600,
+  "b32_measured_seconds": 109.08990512602031,
+  "b32_prediction_ratio": 0.9499119736353028
+}

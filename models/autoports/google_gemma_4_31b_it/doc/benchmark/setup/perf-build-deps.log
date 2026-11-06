@@ -1,0 +1,12 @@
+Using Python 3.10.19 environment at: bringup/artifacts/benchmark-perf-client
+Resolved 9 packages in 81ms
+Installed 9 packages in 8ms
+ + packaging==26.3
+ + semantic-version==2.10.0
+ + setuptools==84.2.1
+ + setuptools-rust==1.13.0
+ + setuptools-scm==10.3.4
+ + tomli==2.5.0
+ + typing-extensions==4.16.0
+ + vcs-versioning==2.6.0
+ + wheel==0.48.0

@@ -1,0 +1,18 @@
+{
+  "status": "blocked",
+  "items": [
+    {
+      "id": "phase_accounting",
+      "reason": "Stock plugin has no lossless post-sampling full-phase export; runtime/interface modifications require operator exception.",
+      "evidence": "setup/completion_export_review.md",
+      "proposal": "setup/PC-04-completion-observer.md"
+    },
+    {
+      "id": "gpqa_dataset",
+      "reason": "Dataset authentication unavailable. No HF token in configured HF_HOME.",
+      "evidence": "setup/prepare.log"
+    }
+  ],
+  "latency_collection": "continuing within original7200s deadline",
+  "accuracy_verdict": null
+}

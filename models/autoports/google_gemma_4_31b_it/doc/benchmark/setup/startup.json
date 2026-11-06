@@ -1,0 +1,22 @@
+{
+  "source_commit": "6d7f2481460e4f48ec21a4d92ee84fa588936157",
+  "supplied_server": null,
+  "prior_server_cleanup": "../optimized_vllm/cleanup.json",
+  "startup_time_seconds": null,
+  "device_nodes": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "device_owners": [],
+  "configured_batches": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "stage_budget_seconds": 7200,
+  "timed_runner_invoked": true,
+  "source_commit_at_invocation": "9ef69179"
+}

@@ -1,0 +1,156 @@
+[
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1-warmup.json",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1-warmup.json.original.gz",
+    "original_sha256": "0e2d7e70181168ac769b794a8f143595ca1155cdbfe350718d3f1fb13da1523a",
+    "retained_formatted_sha256": "0b0e15b7b21aa76bb3265925e8c557922d8a4f65500fef7a1e1b5b5150fd7682",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1-warmup.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1-warmup.log.original.gz",
+    "original_sha256": "c8a888b164264362077843ab26df77af4a3d5d2a36156b7a4fd5d021ba2fd08d",
+    "retained_formatted_sha256": "505cd4b66eca229bca69643c03effd98314c1001d6a54181b382132057ea7df1",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1.json",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1.json.original.gz",
+    "original_sha256": "e1f42ca76b2b7e363dc110c23a003ee9df9edb95d27318278996cc86938e24a2",
+    "retained_formatted_sha256": "76b2440d8c89fd5ada73877a6f3100d2b0e8cde8086b202f85c9f1748153dd0f",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b1.log.original.gz",
+    "original_sha256": "112e03085f68f92b954509fa309b341fe5cb9e9db85aff7f321f8100af9183a9",
+    "retained_formatted_sha256": "5e0b88c363dc878f73295c910ff091c3730e3adaa576ba936cbc3a823b914c94",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b16-warmup.json",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b16-warmup.json.original.gz",
+    "original_sha256": "91ca39f681dcbef3378c6ecc57b7bc827be52d8e55b1e34bb019454db120a41a",
+    "retained_formatted_sha256": "9665e1019cd6b30890ebfb317a3eaa2a5e3f37252eed14c3d9d0f5c3a059a4bd",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b16-warmup.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b16-warmup.log.original.gz",
+    "original_sha256": "433fbc385df53f598139af7e239318addd5bedfe176441ed008b52159edd63e4",
+    "retained_formatted_sha256": "198fe8c169c09d29a8e2118843e847babd7ade79636987c504176303b4624572",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b16.json",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b16.json.original.gz",
+    "original_sha256": "9e53af64b7c851bc4c57f2c32f870587bf1f42bdaa1083ea3c66672ffb83f329",
+    "retained_formatted_sha256": "75d25006229296d041e6c2e809d96029eb94b55e2155e31fb97deb76f31fcc86",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b16.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b16.log.original.gz",
+    "original_sha256": "64b447b58208f5da009d4bc160c19198a8d1ea812cdaad313477288b9f23ed23",
+    "retained_formatted_sha256": "dcd3d036cdd8d87ba2b82cfa8ec3930ce24ea03d4f4822ba66ea50a19eee1565",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b32-warmup.json",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b32-warmup.json.original.gz",
+    "original_sha256": "d9493b8866a20a99915903239cc9986858b0b3afa7126c80d0debf342e8f958f",
+    "retained_formatted_sha256": "0d2dd06f8bdd0126e605256c686abdeec85240838b695cad39c31b7b0fb7a104",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b32-warmup.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b32-warmup.log.original.gz",
+    "original_sha256": "c6bc8d43d995978867be3a3d05d587bd9d77e4114e026b6fd97cca942ff24db3",
+    "retained_formatted_sha256": "c5f3d1c6caae3fb5f92666c9b188241f72843bb93170fb0adefb27356a9b5e4f",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b32.json",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b32.json.original.gz",
+    "original_sha256": "d28a2c0ecba9c2933a23855f8d98a2150ed92daeec0d8cefd15ab1ddd28a3dcd",
+    "retained_formatted_sha256": "69e3ed9abfc35d606692acd40371fda78745e33250beecd95ee81e557e12eefa",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b32.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b32.log.original.gz",
+    "original_sha256": "77f4de94e988a9f4d5bbdd7a23ad0211d9a8f9df0e4a394478106faa3fe83b7d",
+    "retained_formatted_sha256": "6c5878c54c983fb3239eb6ba2041814011fe583cf3d2acdfb6ea719f07f121b7",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b8-warmup.json",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b8-warmup.json.original.gz",
+    "original_sha256": "94abb8bbc4289ecc332257f517571fb419fd97737a1d2fbf715747e76c244c63",
+    "retained_formatted_sha256": "0b0cafde54f24d65352ebeeed3d30065d164ced7979828cd9e22e78d5e96b7bb",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b8-warmup.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b8-warmup.log.original.gz",
+    "original_sha256": "02c72957d177728b7b8574163329d99b7a6c211adcb604410c80f29d96000826",
+    "retained_formatted_sha256": "dc06d90ba1a863159ab967b760544a96872550b1c3f0b0cb9a1528c11e8a3a38",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b8.json",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b8.json.original.gz",
+    "original_sha256": "bf106312af0ec15f70c6fce9bff03d7fd0d519b0204e143e94085f939f385da7",
+    "retained_formatted_sha256": "0b43214fd405b0b6835a02bdc8c2902a4aad832a93daeed036cddbeb38cf476c",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b8.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/perf-b8.log.original.gz",
+    "original_sha256": "aa4509c5d90ef78ef23f8077bcbd1ca459c92f3a6a78eb425c17f3b342fab0cc",
+    "retained_formatted_sha256": "fbc063749ab55b411c58997dc5f5b5d6ffdea355ca6c3f48d95a536b7dc84f88",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1/server.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1/server.log.original.gz",
+    "original_sha256": "611a9a86fd9861039f12c41a6ccce1dd597cfc334f753b6380bc1a8878ff7b57",
+    "retained_formatted_sha256": "8668e13b2e082272e00b7a0d60377b1cb70885f549ee1ab203425a9f3aae0c4a",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b16/server.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b16/server.log.original.gz",
+    "original_sha256": "c5025f4f02f6ab60a6cc1190ee934bc481615db2568fc7210890c179f88e2f3b",
+    "retained_formatted_sha256": "b24294ccf4c34f53fd1832dca41b1a8af8d9f0fd32150414836274751131f60c",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b8/server.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b8/server.log.original.gz",
+    "original_sha256": "dbc857c317cae0f9f1f2ec8bc6d3185ce658fd44c4d06cb2225209447bb28fb8",
+    "retained_formatted_sha256": "ab5e485fdb3d33fc3e7b94e64c8dc4400fd35200f845a96838b6d38e05c22b34",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/setup/autodebug-launch.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/setup/autodebug-launch.log.original.gz",
+    "original_sha256": "dfeb4d687fd8a7c5efc862fce3b7dfceae6d018023fa0037a29036ba0fb25ae5",
+    "retained_formatted_sha256": "3a1816a2d373d7dc414d996eeaa061bf2d49dabebabf6c272044e7689f416c00",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/setup/perf-client-help.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/setup/perf-client-help.log.original.gz",
+    "original_sha256": "90c463eaa9deb14bf9a7d3e3570b59912d28d606c6e7700c4a51931ffe655416",
+    "retained_formatted_sha256": "72b64ea58b64fa4134d3ee6f76428177b1104a83d347a101891fc21ff66729cd",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  },
+  {
+    "file": "models/autoports/google_gemma_4_31b_it/doc/benchmark/setup/vllm-clone.log",
+    "original_archive": "models/autoports/google_gemma_4_31b_it/doc/benchmark/setup/vllm-clone.log.original.gz",
+    "original_sha256": "24a260cf87653d29eef523a3ee99a56f0c9fc428e50798721ac641d1e59ca94e",
+    "retained_formatted_sha256": "efa70ac45dbbfcf1da2d26abd7fdcd0eba92f85d7ed575b6eb11c6e5aca88aa0",
+    "change": "Repository hooks trim log trailing whitespace / add final JSON newline. Original bytes preserved in gzip."
+  }
+]

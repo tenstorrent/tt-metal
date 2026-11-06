@@ -1,0 +1,19 @@
+{
+  "source_models": [
+    "Qwen/Qwen3-32B"
+  ],
+  "source": "https://github.com/tenstorrent/tt-inference-server/blob/411057222c2dc5a4268e693b0bd57bc0e2571f38/release_model_spec.json",
+  "selection_reason": "Dense32B same P300X2 hardware; preserve supported source rows only; no settings from old Gemma implementation reused.",
+  "rows": [
+    {
+      "input_tokens": 128,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "num_prompts": 8,
+      "estimated_seconds": 28.947387445423374,
+      "actual_seconds": null,
+      "missing_reason": "Release128/128 row not measured in this attempt; goal12 must measure it.",
+      "estimate_basis": "8 serial requests: measured B1 TPOT*127 plus TTFT scaled128/4096; linear prefill approximation omits fixed startup/client overhead and is not a latency claim."
+    }
+  ]
+}

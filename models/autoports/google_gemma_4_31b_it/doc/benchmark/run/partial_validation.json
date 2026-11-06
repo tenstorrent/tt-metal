@@ -1,0 +1,40 @@
+{
+  "status": "pass_latency_and_identity_only",
+  "profiles": [
+    {
+      "batch": 32,
+      "status": "pass",
+      "actual_requests": 96,
+      "actual_input_tokens_each": 4096,
+      "actual_output_tokens_each": 128,
+      "raw_sha256": "69e3ed9abfc35d606692acd40371fda78745e33250beecd95ee81e557e12eefa"
+    },
+    {
+      "batch": 16,
+      "status": "pass",
+      "actual_requests": 48,
+      "actual_input_tokens_each": 4096,
+      "actual_output_tokens_each": 128,
+      "raw_sha256": "75d25006229296d041e6c2e809d96029eb94b55e2155e31fb97deb76f31fcc86"
+    },
+    {
+      "batch": 8,
+      "status": "pass",
+      "actual_requests": 24,
+      "actual_input_tokens_each": 4096,
+      "actual_output_tokens_each": 128,
+      "raw_sha256": "0b43214fd405b0b6835a02bdc8c2902a4aad832a93daeed036cddbeb38cf476c"
+    },
+    {
+      "batch": 1,
+      "status": "pass",
+      "actual_requests": 8,
+      "actual_input_tokens_each": 4096,
+      "actual_output_tokens_each": 128,
+      "raw_sha256": "76b2440d8c89fd5ada73877a6f3100d2b0e8cde8086b202f85c9f1748153dd0f"
+    }
+  ],
+  "roofline": "unavailable",
+  "accuracy": "not_run",
+  "original_bytes": "hook_normalization.json and *.original.gz"
+}

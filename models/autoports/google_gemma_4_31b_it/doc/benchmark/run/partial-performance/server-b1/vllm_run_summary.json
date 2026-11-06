@@ -1,0 +1,51 @@
+{
+  "stages": [
+    "serve"
+  ],
+  "hf_model": "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "server_url": null,
+  "server_command": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "vllm.entrypoints.openai.api_server",
+    "--model",
+    "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "--block_size",
+    "32",
+    "--max_num_seqs",
+    "1",
+    "--port",
+    "8000",
+    "--max_model_len",
+    "262144",
+    "--enable-prefix-caching",
+    "--additional-config",
+    "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 134217728, \"fabric_config\": \"FABRIC_1D_RING\"}}",
+    "--revision",
+    "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "--tokenizer-revision",
+    "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "--language-model-only",
+    "--async-scheduling",
+    "--override-generation-config",
+    "{\"top_k\":32}",
+    "--served-model-name",
+    "google/gemma-4-31B-it",
+    "--max-num-seqs",
+    "1",
+    "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+  ],
+  "mesh_device": "P300x2",
+  "max_num_seqs": 1,
+  "max_model_len": 262144,
+  "block_size": 32,
+  "tt_config": {
+    "sample_on_device_mode": "all",
+    "trace_region_size": 134217728,
+    "fabric_config": "FABRIC_1D_RING"
+  },
+  "enable_prefix_caching": true,
+  "apc_log_enabled": true,
+  "apc_log_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/partial-performance/server-b1/server.log",
+  "outputs": {}
+}

@@ -1,0 +1,94 @@
+--- a/src/vllm_tt_plugin/model_input.py
++++ b/src/vllm_tt_plugin/model_input.py
+@@ -207,6 +207,9 @@
+     # build sets it to the scheduled requests in slot order, with ``live_rows``
+     # naming their slots; ``None`` for a lane prefill build, whose rows are the
+     # persistent slots.
++    # Optional observational correlation, preserved by dataclasses.replace.
++    benchmark_step_id: int | None = None
++
+     row_req_ids: list[str] | None = None
+ 
+     # The block row each ``row_req_ids`` entry sits at. ``None`` means the live
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -3183,6 +3183,15 @@
+             self.propose_after_plain_step(model_input, sampled, req_ids)
+         return output
+ 
++    def _observe_benchmark_event(self, event: str, **payload):
++        # Off by default. The observer copies CPU metadata into a bounded buffer;
++        # it must not retain mutable inputs, synchronize, or perform device IO.
++        if not getattr(self.model, "benchmark_observer_enabled", False):
++            return None
++        return self.model.observe_benchmark_event(
++            event, time.perf_counter_ns(), **payload
++        )
++
+     @torch.no_grad()
+     def execute_model(
+         self,
+@@ -3197,6 +3206,11 @@
+         DP reaches this entrypoint once per rank, each over its own mesh.
+         """
+         TTModelRunner._raise_if_device_grammar_poisoned(self)
++        benchmark_step_id = self._observe_benchmark_event(
++            "scheduler_begin", scheduler_output=scheduler_output
++        )
++        if benchmark_step_id is not None and get_tt_step_plan(scheduler_output) is not None:
++            raise RuntimeError("benchmark observer proposal supports front-packed steps only")
+ 
+         # Single-process lane-DP: the lane scheduler attaches a per-step plan to
+         # the scheduler output. When present, the step runs over the merged lane
+@@ -3220,7 +3234,11 @@
+         # Grammar is applied at sample time, so the forward builds without it.
+         model_input = self.build_model_input(scheduler_output, None)
+         if model_input is None:
++            self._observe_benchmark_event("empty_step", step_id=benchmark_step_id)
+             return EMPTY_MODEL_RUNNER_OUTPUT
++        if benchmark_step_id is not None:
++            model_input = replace(model_input, benchmark_step_id=benchmark_step_id)
++            self._observe_benchmark_event("built_input", model_input=model_input)
+ 
+         is_decode = model_input.prompt_lens is None
+         if model_input.defer_device_sampling:
+@@ -3810,11 +3828,16 @@
+     ) -> ModelRunnerOutput:
+         deferred = bool(fwd is not None and fwd.model_input.defer_device_sampling)
+         try:
+-            return TTModelRunner._finish_front_packed_sync_impl(
++            output = TTModelRunner._finish_front_packed_sync_impl(
+                 self,
+                 grammar_output,
+                 fwd=fwd,
+             )
++            if fwd is not None:
++                self._observe_benchmark_event(
++                    "output_ready", model_input=fwd.model_input, output=output
++                )
++            return output
+         except Exception:
+             if deferred:
+                 self._poison_device_grammar()
+--- a/src/vllm_tt_plugin/async_decode.py
++++ b/src/vllm_tt_plugin/async_decode.py
+@@ -301,6 +301,10 @@
+         )
+         completed.runner_output = runner_output
+         self._controller.enqueue_completed_decode_step(completed)
++        self._controller.runner._observe_benchmark_event(
++            "output_ready", model_input=self._model_input, output=runner_output,
++            context=self._context,
++        )
+         return runner_output
+ 
+ 
+@@ -1174,6 +1178,8 @@
+                 completed.context.req_ids,
+                 skip_req_ids=skipped_state,
+             )
++
++        self.runner._observe_benchmark_event("state_applied", completed=completed)
+ 
+     def submit_async_decode(
+         self,
