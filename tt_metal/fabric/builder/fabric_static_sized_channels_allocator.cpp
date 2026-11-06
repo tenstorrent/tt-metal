@@ -4,8 +4,6 @@
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/indestructible.hpp>
@@ -198,6 +196,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         }
     }
     uint32_t buffer_addr_end = receiver_buffer_addr;
+    this->channel_buffers_end_address = buffer_addr_end;
 
     // set the base addresses for the remote channels
     uint32_t remote_sender_buffer_addr = buffer_region_start;

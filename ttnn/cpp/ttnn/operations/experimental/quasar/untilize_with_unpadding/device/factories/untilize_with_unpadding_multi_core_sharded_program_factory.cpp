@@ -105,7 +105,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                          input_cb_data_format == tt::DataFormat::UInt32 ||
                          input_cb_data_format == tt::DataFormat::Int32;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // ------------------------------------------------------------------------
     // Dataflow buffers.
@@ -226,10 +226,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // Compute: untilize (general) or eltwise_copy (W==16, dtype-convert only).
     // ------------------------------------------------------------------------
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
-        input_cb_data_format == tt::DataFormat::Float32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};

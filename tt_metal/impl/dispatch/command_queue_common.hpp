@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include "device.hpp"
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "impl/context/context_types.hpp"
-#include "sub_device_types.hpp"
 
 namespace tt::tt_metal {
 

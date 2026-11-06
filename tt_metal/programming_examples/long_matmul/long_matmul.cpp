@@ -97,11 +97,17 @@ static constexpr uint32_t kDestTileBudget = 8;
 // while also pairing grids of equal core count but different aspect ratio (3x4 vs 4x3, 6x7 vs
 // 7x6, 8x7 vs 7x8), which is what separates a core-count effect from a NoC-shape one. The full
 // device grid is always the last one: 15 grids on a Wormhole n300 (8x7), 17 on an n150 (8x8),
-// 24 on a Blackhole p100a (11x10).
+// 24 on a Blackhole p100a (11x10). On a device wider than it is tall, the widths past the band
+// (where even x-1 is taller than the device) run at the full height, so a 13x10 grid gets 26
+// grids, ending 11x10, 12x10, 13x10.
 static std::vector<GridCandidate> build_test_grids(uint32_t max_x, uint32_t max_y) {
     std::vector<GridCandidate> result;
 
     for (uint32_t x = kMinGridX; x <= max_x; ++x) {
+        if (x - 1 > max_y) {
+            result.push_back({x, max_y});
+            continue;
+        }
         for (uint32_t y = x - 1; y <= x + 1 && y <= max_y; ++y) {
             result.push_back({x, y});
         }

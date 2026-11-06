@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -10,6 +12,7 @@ from torchvision import datasets, transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.utils.common_demo_utils import report_generation_rate
 from models.demos.vision.classification.mnist.reference.mnist import MnistModel
 from models.demos.vision.classification.mnist.tt import tt_mnist
 
@@ -28,6 +31,7 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator):
         device=device,
     )
     correct = 0
+    inference_elapsed_s = 0.0
     for iters in range(iterations):
         dataloader = DataLoader(test_dataset, batch_size=batch_size)
         x, labels = next(iter(dataloader))
@@ -35,8 +39,10 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator):
         ttnn_predictions = []
         dataset_ttnn_correct = 0
         x = ttnn.from_torch(x, dtype=ttnn.bfloat16, device=device)
+        inference_start = time.perf_counter()
         tt_output = tt_mnist.mnist(device, batch_size, x, parameters)
         tt_output = ttnn.to_torch(tt_output)
+        inference_elapsed_s += time.perf_counter() - inference_start
         predicted_probabilities = torch.nn.functional.softmax(tt_output, dim=1)
         _, predicted_label = torch.max(predicted_probabilities, 1)
         tt_output = tt_output
@@ -55,6 +61,8 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator):
         )
     accuracy = correct / (batch_size * iterations)
     logger.info(f"ImageNet Inference Accuracy for {batch_size}x{iterations} Samples : {accuracy}")
+    # Report-only perf for the CI dashboard (#58596). No-op outside CI.
+    report_generation_rate("mnist-mlp", inference_elapsed_s, batch_size * iterations, batch_size=batch_size)
     assert accuracy >= 0.96875, f"Expected accuracy : {0.96875} Actual accuracy: {accuracy}"
 
 

@@ -165,6 +165,18 @@ def resolve_padded_load_shape(src_shape, target_shape, expected_shape=None, *, n
     )
 
 
+def unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
+    """Reorder axis 0 from HF's per-head ``[first_half, second_half]`` to the interleaved pairs TTML's
+    RoPE expects: ``[0, half, 1, half + 1, ...]``. Other axes are unchanged."""
+    rows = w.shape[0]
+    if rows % n_heads != 0:
+        raise RuntimeError(f"rows {rows} not divisible by n_heads {n_heads}")
+    per_head = rows // n_heads
+    if per_head % 2 != 0:
+        raise RuntimeError(f"rows per head {per_head} must be even")
+    return w.reshape(n_heads, 2, per_head // 2, *w.shape[1:]).swapaxes(1, 2).reshape(w.shape)
+
+
 def initialize_device(yaml_config: dict):
     """Initialize device mesh from configuration.
 
@@ -184,7 +196,9 @@ def create_optimizer(model, yaml_config: dict):
 
     Accepts either a top-level YAML config dict (with training_config.optimizer)
     or the optimizer dict directly (detected by the presence of a "type" key).
-    Passes the dict straight to the C++ optimizer factory.
+    Passes the dict straight to the C++ optimizer factory. With a top-level
+    config, training_config.precision.master_dtype first stores the model's
+    trainable parameters in that dtype, so the optimizer state follows it.
 
     Args:
         model: Model to optimize
@@ -200,7 +214,32 @@ def create_optimizer(model, yaml_config: dict):
         optimizer_cfg = tc.get("optimizer")
         if optimizer_cfg is None:
             raise ValueError("training_config must contain an 'optimizer' section")
+        # Under pipeline parallelism each stage's model holds only its own params (tok_emb only on the first stage,
+        # fc only on the last), so a param group can match nothing on some stages.
+        if _is_pipeline_parallel(yaml_config):
+            optimizer_cfg = {**optimizer_cfg, "allow_empty_param_groups": True}
+        params = model.parameters()
+        ttml.core.apply_precision_config(tc, params)
+        return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
+
+
+def _is_pipeline_parallel(yaml_config: dict) -> bool:
+    """Whether the full config enables pipeline parallelism."""
+    from .config import resolve_multihost_config
+
+    return resolve_multihost_config(yaml_config).pipeline_parallel_config is not None
+
+
+def validate_clip_grad_norm(model) -> None:
+    """clip_grad_norm computes a per-device norm with no cross-mesh reduction, so it is only correct
+    when every parameter is replicated. Reject sharded (FSDP/TP) params up front rather than silently
+    clipping by a wrong per-shard norm."""
+    if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for p in model.parameters().values()):
+        raise ValueError(
+            "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
+            "only a shard, so the per-shard norm is wrong"
+        )
 
 
 def get_loss_over_devices(loss):

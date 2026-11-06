@@ -10,7 +10,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal::tools::mem_bench {
 

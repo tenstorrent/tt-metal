@@ -30,10 +30,6 @@
 /////////////
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
-#define MEM_L1_SIZE (4 * 1024 * 1024)
-// Note: RISC-V LR/SC and AMO atomics don't work with uncached L1 (they hang).
-// Both require the cache coherence system. Only plain loads/stores with fences work uncached.
-#define MEM_L1_UNCACHED_BASE (MEM_L1_BASE + MEM_L1_SIZE)  // upper 4MBs bypass cache
 
 #define MEM_ETH_BASE 0x0
 // Top 64K is reserved for syseng but host reads/writes from that region
@@ -97,7 +93,7 @@
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic sizes must be big enough to hold mailboxes_t.  static_asserts will fire if either is too small.
 // The dispatch engine mailbox is DM-only (8 processors).
-#define MEM_MAILBOX_SIZE 59632
+#define MEM_MAILBOX_SIZE 59904
 #define MEM_DISPATCH_MAILBOX_SIZE 23616
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_DISPATCH_MAILBOX_END (MEM_MAILBOX_BASE + MEM_DISPATCH_MAILBOX_SIZE)

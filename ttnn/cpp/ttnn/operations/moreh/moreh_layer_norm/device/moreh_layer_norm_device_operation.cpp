@@ -23,7 +23,7 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
         "Operands to {} need to be on device! Got: {}",
         op_name,
         tensor.storage_type());
-    TT_FATAL(tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
+    TT_FATAL(tensor.is_allocated(), "Operands to {} need to be allocated in buffers on device!", op_name);
 }
 
 ttnn::Shape canonicalize_shape_for_validation(const ttnn::Shape& shape) {
@@ -104,6 +104,21 @@ void MorehLayerNormOperation::validate_inputs(
             rstd->logical_shape());
     }
 
+    const auto& output = tensor_args.output;
+    if (output.has_value()) {
+        // Every buffer, the output one included, takes the input's format, so the output must match it.
+        TT_FATAL(
+            output->dtype() == input.dtype(),
+            "output dtype {} must match the input dtype {}",
+            output->dtype(),
+            input.dtype());
+        TT_FATAL(output->layout() == Layout::TILE, "output must be tilized");
+        TT_FATAL(
+            output->logical_shape() == input.logical_shape(),
+            "output shape {} must match the input shape {}",
+            output->logical_shape(),
+            input.logical_shape());
+    }
 }
 
 void MorehLayerNormOperation::validate_on_program_cache_miss(

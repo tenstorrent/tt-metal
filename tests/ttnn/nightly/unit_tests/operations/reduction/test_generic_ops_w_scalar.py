@@ -77,13 +77,13 @@ def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
 
     ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
-    ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=dim, scalar=scalar, correction=correction))
+    correction_kwargs = {"correction": correction} if op in ("var", "std") else {}
+    ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=dim, scalar=scalar, **correction_kwargs))
 
     # torch.max/min don't accept a tuple for dim; use amax/amin which do.
     torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
     torch_op = getattr(torch, torch_op_name)
-    # PyTorch supports the correction argument only for var and std.
-    # ttnn supports it for all, but it is ignored for all except var and std.
+    # Both PyTorch and ttnn support the correction argument only for var and std.
     if op in ("var", "std"):
         torch_result = torch_op(scalar * torch_input, dim=dim, correction=correction)
     else:
