@@ -83,6 +83,24 @@ ttnn::Tensor fused_msda(
 // Each level's H_l and W_l must be <= 256: the bilinear corner crosses from the
 // SFPU geometry to the reader as bf16, which represents every integer up to 256
 // exactly and only some beyond it.
+//
+// num_valid_queries, when given, holds one count per batch (each in [0, Q], at
+// least one nonzero): only queries [0, num_valid_queries[b]) of batch b are
+// computed. The output rows past it are left unwritten and hold undefined data,
+// possibly NaN or Inf, so a caller must drop them with a select such as
+// ttnn.where, not by multiplying with a 0/1 mask. Changing the counts between
+// calls reuses the cached program; because they are runtime args, a captured
+// trace replays the counts it was captured with.
+//
+// num_valid_queries_tensor carries the counts as a UINT32 ROW_MAJOR INTERLEAVED
+// tensor on value's device, all B of them in its last dim, so it is one
+// unpadded page; (B,) is the natural shape. The kernels read it on every run,
+// so a captured trace computes whatever the captured tensor holds at replay:
+// write new counts into that tensor (e.g. ttnn.copy_host_to_device_tensor), as
+// the trace keeps its address. Its rules differ from the list's, since a device
+// read cannot fail: a count above Q is treated as Q, and all-zero counts compute
+// nothing. It compiles a program separate from the list form's. Pass at most
+// one of the two.
 ttnn::Tensor fused_msda_from_offsets(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,
@@ -91,11 +109,14 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
     bool align_corners = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt,
+    const std::optional<ttnn::Tensor>& num_valid_queries_tensor = std::nullopt);
 
 // Whether fused_msda_from_offsets can stage value (ROW_MAJOR, interleaved L1)
-// and its bf16 output in L1 alongside its circular buffers. value may still be
-// TILE or in DRAM. Reads the allocator's current state, so call it right before
+// and its bf16 output in L1 alongside its circular buffers. Set
+// device_valid_counts when the op will get num_valid_queries_tensor, which adds
+// circular buffers. value may still be TILE or in DRAM. Reads the allocator's current state, so call it right before
 // the op and do not cache the answer.
 bool can_use_fused_msda_from_offsets_l1_value(
     const ttnn::Tensor& value,
@@ -104,6 +125,7 @@ bool can_use_fused_msda_from_offsets_l1_value(
     const ttnn::Tensor& attention_weights,
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
-    bool align_corners = false);
+    bool align_corners = false,
+    bool device_valid_counts = false);
 
 }  // namespace ttnn::experimental

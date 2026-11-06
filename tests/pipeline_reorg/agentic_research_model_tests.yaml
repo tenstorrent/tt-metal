@@ -8,6 +8,8 @@
     work="$PWD/generated/llama31_8b_qb2"
     results="$PWD/generated/test_reports/llama31_8b_qb2"
     mkdir -p "$work" "$results" generated/test_logs
+    # tt-metal owns ttnn; tt-transformers pins it, so resolve nothing.
+    uv pip install --no-deps -r "$model_dir/requirements.txt"
     export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
     export TT_METAL_CACHE="$work/tt-cache"
     export LLAMA_MODEL_PATH
@@ -254,6 +256,18 @@
   team: models
   budget_type: agentic_research
 
+- name: Gemma4 26B A4B QB2 GPQA subset and serving
+  cmd: bash models/demos/gemma4_26b_a4b_qb2/tests/run_ci.sh
+  model: gemma4-26b-a4b-qb2
+  model_family: Gemma
+  skus:
+    bh_quietbox_2:
+      timeout: 35
+      tier: 3
+  owner_id: U08BGTAMU1W # Marina Vasiljevic
+  team: models
+  budget_type: agentic_research
+
 - name: Qwen3.8 27B QB2 model, GPQA subset and serving
   cmd: bash models/demos/qwen38_27b_qb2/tests/run_ci.sh
   model: qwen38-27b-qb2
@@ -342,5 +356,18 @@
       timeout: 30
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  budget_type: agentic_research
+
+- name: Granite 4.2 30B QB2 cache, GPQA subset and serving
+  cmd: bash models/demos/granite42_30b_qb2/tests/run_ci.sh
+  model: granite42-30b-qb2
+  model_family: Granite
+  skus:
+    bh_quietbox_2:
+      # Includes startup and thinking GPQA, with headroom above the 35-minute run.
+      timeout: 45
+      tier: 3
+  owner_id: U08BGTAMU1W # Marina Vasiljevic
   team: models
   budget_type: agentic_research

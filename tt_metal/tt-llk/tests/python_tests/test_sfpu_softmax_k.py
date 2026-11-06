@@ -56,6 +56,7 @@ compile-and-structure check on two different kernels rather than as a numeric on
 import pytest
 import torch
 from conftest import skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -69,7 +70,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import SOFTMAX_K, TILE_COUNT
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
@@ -113,8 +114,7 @@ def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]
     k=ALL_K,
 )
 def test_sfpu_softmax_k(formats, dest_acc, k):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     if dest_acc == DestAccumulation.Yes and k < FACE_DIM:
         # The padding predication only works on a 16-bit DEST -- see module docstring.
@@ -161,7 +161,7 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tile = untilize_block(
         res_tensor, formats.output_format, [TILE_DIM, TILE_DIM]
     ).reshape(TILE_DIM, TILE_DIM)
