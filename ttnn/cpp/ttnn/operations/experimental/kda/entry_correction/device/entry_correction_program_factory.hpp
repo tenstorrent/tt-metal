@@ -3,15 +3,16 @@
 
 #pragma once
 
-#include "reduce_affine_transforms_device_operation_types.hpp"
+#include "entry_correction_device_operation_types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct ReduceAffineTransformsProgramFactory {
+struct EntryCorrectionProgramFactory {
+    // One program per SP rank: the chronology depends on it.
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
-        const ReduceAffineTransformsParams&,
-        const ReduceAffineTransformsInputs&,
+        const EntryCorrectionParams&,
+        const EntryCorrectionInputs&,
         std::vector<Tensor>&,
         const ttnn::MeshCoordinateRangeSet&);
 };

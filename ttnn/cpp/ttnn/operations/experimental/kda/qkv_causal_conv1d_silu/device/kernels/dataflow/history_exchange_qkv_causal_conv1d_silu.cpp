@@ -8,6 +8,9 @@
 // rows preceding the next physical rank's segment, which its convolution cores staged, to that rank, and releases its
 // convolution cores once its own predecessor's rows have landed. The owner of the interval's final segment assembles
 // the replacement carry and multicasts it to every other rank; every rank writes it to final_history.
+//
+// A 2D multicast leaves every hop in one ETH direction, so on a 2D fabric whose SP axis turns the barrier and the
+// carry go to each other rank as a 2D unicast instead (unicast_peers).
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/qkv_conv_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
@@ -23,6 +26,7 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
 using namespace qkv_conv;
@@ -51,7 +55,8 @@ template <
     uint32_t local_rows,
     uint32_t has_actual_end,
     uint32_t token_paged,
-    uint32_t page_channels>
+    uint32_t page_channels,
+    uint32_t unicast_peers>
 TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore, uint32_t carry_semaphore) {
     constexpr uint32_t row_bytes = channel_tiles * tile_row_bytes;
     static_assert(max_payload % read_alignment == 0, "row chunks must stay aligned in DRAM");
@@ -113,8 +118,9 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         assemble_carry();
     } else {
         // The host computes the connection arguments without this kernel's semaphore ids; bind them before opening.
-        const uint32_t teardown[] = {sem::teardown0.id, sem::teardown1.id};
-        const uint32_t buffer_index[] = {sem::buffer_index0.id, sem::buffer_index1.id};
+        const uint32_t teardown[] = {sem::teardown0.id, sem::teardown1.id, sem::teardown2.id, sem::teardown3.id};
+        const uint32_t buffer_index[] = {
+            sem::buffer_index0.id, sem::buffer_index1.id, sem::buffer_index2.id, sem::buffer_index3.id};
         auto* connection_arg_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(named_runtime_args));
         for (uint32_t c = 0; c < num_connections; ++c) {
             connection_arg_words[c * connection_args + teardown_arg] = teardown[c];
@@ -124,20 +130,44 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         tt::tt_fabric::RoutingPlaneConnectionManager connections;
         open_connections(connections, num_connections, arg_index);
         const size_t convolution_core_args = arg_index;
+        // With unicast_peers: per other rank, its connection, fabric chip and mesh.
+        const size_t peer_args = convolution_core_args + 2 * num_convolution_cores;
+        constexpr size_t args_per_peer = 3;
         auto* header = PacketHeaderPool::allocate_header();
 
         const auto semaphore_noc_address = [](uint32_t address) {
             return safe_get_noc_addr(my_x[0], my_y[0], address, 0);
         };
-        uint8_t ranges[2] = {0, 0};
+        // Connections past the two SP neighbors only carry unicasts (unicast_peers).
+        uint8_t ranges[max_fabric_connections] = {};
         if constexpr (forward_connection != no_fabric_connection) {
             ranges[forward_connection] = forward_range;
         }
         if constexpr (backward_connection != no_fabric_connection) {
             ranges[backward_connection] = backward_range;
         }
+        // Point the header at another rank: unicast_peers only.
+        const auto route_to_peer = [&](uint32_t peer) -> auto& {
+            const size_t args = peer_args + peer * args_per_peer;
+#if defined(FABRIC_2D)
+            fabric_set_unicast_route(header, get_arg_val<uint32_t>(args + 1), get_arg_val<uint32_t>(args + 2));
+#endif
+            return connections.get(get_arg_val<uint32_t>(args)).sender;
+        };
         // Bump `semaphore` on every other rank.
         const auto multicast_increment = [&](uint32_t semaphore) {
+            if constexpr (unicast_peers) {
+                for (uint32_t peer = 0; peer + 1 < sp_size; ++peer) {
+                    auto& sender = route_to_peer(peer);
+                    fabric_unicast_noc_unicast_atomic_inc(
+                        &sender,
+                        header,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_address(semaphore), 1, true},
+                        1);
+                    noc_async_writes_flushed();
+                }
+                return;
+            }
             for (uint32_t c = 0; c < num_connections; ++c) {
                 if (ranges[c] == 0) {
                     continue;
@@ -154,6 +184,26 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         };
         // Write three rows from `source` to exchange pages [first_page, +3) on every other rank, then bump `semaphore`.
         const auto multicast_rows = [&](uint32_t source, uint32_t first_page, uint32_t semaphore) {
+            if constexpr (unicast_peers) {
+                for (uint32_t peer = 0; peer + 1 < sp_size; ++peer) {
+                    for (uint32_t row = 0; row < history_rows; ++row) {
+                        for (uint32_t offset = 0; offset < row_bytes; offset += max_payload) {
+                            auto& sender = route_to_peer(peer);
+                            fabric_unicast_noc_unicast_write(
+                                &sender,
+                                header,
+                                source + row * row_bytes + offset,
+                                row_bytes - offset < max_payload ? row_bytes - offset : max_payload,
+                                tt::tt_fabric::NocUnicastCommandHeader{
+                                    addrgen_detail::get_noc_address(exchange_buffer, first_page + row, offset)},
+                                1);
+                            noc_async_writes_flushed();
+                        }
+                    }
+                }
+                multicast_increment(semaphore);
+                return;
+            }
             for (uint32_t c = 0; c < num_connections; ++c) {
                 if (ranges[c] == 0) {
                     continue;
@@ -206,22 +256,13 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
                 successor_hops);
             noc_async_writes_flushed();
         };
-        // Wait for one arrival on a persistent semaphore, then rearm it. Only this core waits on it, and no rank sends
-        // the next call's arrival before every rank has passed the next call's entry barrier.
-        const auto wait_for_arrival = [](uint32_t semaphore) {
-            auto* value = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore);
-            noc_semaphore_wait_min(value, 1);
-            noc_semaphore_set(value, 0);
-        };
+        const auto wait_for_arrival = [](uint32_t semaphore) { kda_counter::wait_and_consume(semaphore, 1); };
 
-        // Entry barrier. A peer may already be bumping the next call's arrival, so consume this call's arrivals with an
-        // atomic decrement rather than a reset.
+        // Entry barrier: every other rank's arrival.
         multicast_increment(entry_semaphore);
         staged.wait_min(num_convolution_cores);
         read_rows(outgoing_page, outgoing);
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(entry_semaphore), sp_size - 1);
-        noc_semaphore_inc(get_noc_addr(entry_semaphore), static_cast<uint32_t>(-static_cast<int32_t>(sp_size - 1)));
-        noc_async_atomic_barrier();
+        kda_counter::wait_and_consume(entry_semaphore, sp_size - 1);
         noc.async_read_barrier();
 
         unicast_rows(outgoing, predecessor_page, predecessor_semaphore);
