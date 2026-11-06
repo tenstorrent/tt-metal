@@ -11,6 +11,12 @@
 // / l, TRISC0 unpacks it transposed, TRISC1 moves it into Dst half 0 as two tiles of [8 d slices][32 queries][16 d] and
 // TRISC2 packs that to the item's O staging, which the I/O kernel writes out.
 //
+// Folds (wh_sdpa_core.h, whp_sdpa_fold_blocks): at key block j = F, 2F, ... TRISC2 moves O^T and l out into running
+// sums (O^T's in W 4 and 5 by turns, the state in W 6). From the second fold on TRISC0 unpacks the state chunk and the
+// running sum after QK(j + 1)'s operands and TRISC1 moves them into O^T's rows after QK(j + 1), each once TRISC2 posts
+// sem_p (O^T, then the state, packed out); PV(j) then starts O^T from zero. At the item's end the same once more, then
+// the total back into O^T for the division by l.
+//
 // The kernel owns the Tensix while it runs; it saves the configuration space and every thread's GPRs at entry and puts
 // them back, with SFPU LReg 11 (-1.0 by tt-metal convention), before it returns.
 
@@ -65,6 +71,14 @@ inline void poll_pause() {
 
 uint32_t unpack0() { return op.scratch + WHS_UNPACK0; }
 
+constexpr uint32_t fold = whp_sdpa_fold_blocks;
+// The running O^T sums' W groups, by turns: the first fold writes sums[0], each later one the other.
+constexpr uint32_t sums[2] = {WHS_W_OT, WHS_W_SUM1};
+
+bool folds() { return op.blocks > fold; }
+
+bool later_fold(uint32_t j) { return j > fold && j % fold == 0u; }
+
 #if TT_TRISC_INDEX == 0
 
 void setup() { setup_unpack<whp_sdpa_head128>(unpack0(), op.scratch + WHS_KV); }
@@ -91,6 +105,7 @@ void run() {
     const uint32_t skew = op.group_index * 2400u / op.group_cores;
     uint32_t g = 0, item = 0, mark = 0;
     for (uint32_t r = 0; r < op.rounds; ++r) {
+        uint32_t sum = 0;
         if (idle_round(r)) {
             for (uint32_t j = 0; j < blocks; ++j, ++g) {
                 wait_block(g);
@@ -111,9 +126,23 @@ void run() {
                 wait_block_skewed(g + 1u, skew);
                 unpack_qk<whp_sdpa_head128>((g + 1u) % bufs);
             }
+            if (later_fold(j)) {
+                unpack_chunks(WHS_W_STATE, 1u);
+                unpack_chunks(sums[sum], 8u);
+                sum ^= 1u;
+            }
             unpack_pv<whp_sdpa_head128>(j % 2u, g % bufs);
             drain(wh_wait_unpack0 | wh_wait_unpack1, ++mark);
             sync_word(WHS_S_UNPACKED) = g + 1u;
+        }
+        if (folds()) {
+            wh_push(TT_OP_SEMWAIT(wh_block_sync | wh_block_unpack, sem_packed, wh_sem_on_zero));
+            wh_push(TT_OP_SEMGET(sem_packed));
+            unpack_chunks(WHS_W_STATE, 1u);
+            unpack_chunks(sums[sum], 8u);
+            wh_push(TT_OP_SEMWAIT(wh_block_sync | wh_block_unpack, sem_packed, wh_sem_on_zero));
+            wh_push(TT_OP_SEMGET(sem_packed));
+            unpack_chunks(sums[sum ^ 1u], 8u);
         }
         wh_push(TT_OP_SEMWAIT(wh_block_sync | wh_block_unpack, sem_packed, wh_sem_on_zero));
         wh_push(TT_OP_SEMGET(sem_packed));
@@ -134,6 +163,20 @@ constexpr uint32_t q_row(uint32_t k, uint32_t i) { return 64u * k + 8u * i; }
 
 constexpr uint32_t o_row(uint32_t k, uint32_t i) { return 256u * (i / 4u) + 32u * k + 8u * (i % 4u); }
 
+void take(uint32_t sem) {
+    wh_push(TT_OP_SEMWAIT(wh_block_sync | wh_block_math, sem, wh_sem_on_zero));
+    wh_push(TT_OP_SEMGET(sem));
+}
+
+// A fold's moves into O^T's rows, chunk k to rows 64 k on as packed: the state chunk once TRISC2 has packed O^T out,
+// the running sum once it has packed the state.
+void fold_moves() {
+    take(sem_p);
+    move_chunks<q_row>(o_base(0u), 1u);
+    take(sem_p);
+    move_chunks<q_row>(o_base(0u), 8u);
+}
+
 void run() {
     const uint32_t blocks = op.blocks, phases = 2u;
     bool first = true;
@@ -148,11 +191,18 @@ void run() {
             if (j + 1u < blocks) {
                 qk<whp_sdpa_head128>((j + 1u) % 2u, true, false, phases);
             }
-            pv<whp_sdpa_head128>(phases, j == 0u);
+            if (later_fold(j)) {
+                fold_moves();
+            }
+            pv<whp_sdpa_head128>(phases, j % fold == 0u);
         }
         // The last block's softmax post, which no QK takes.
         wh_push(TT_OP_SEMWAIT(wh_block_sync | wh_block_math, sem_softmax, wh_sem_on_zero));
         wh_push(TT_OP_SEMGET(sem_softmax));
+        if (folds()) {
+            fold_moves();
+            move_chunks<q_row>(o_base(0u), 8u);  // the total
+        }
         move_chunks<o_row>(o_base(0u), 8u);
     }
 }
@@ -166,6 +216,7 @@ void setup() { setup_softmax(); }
 void run() {
     const uint32_t blocks = op.blocks;
     const uint32_t p_base = unpack0() + WHS_W_P * WHS_W_BYTES;
+    const uint32_t state = unpack0() + WHS_W_STATE * WHS_W_BYTES;
     uint32_t item = 0, mark = 0;
     for (uint32_t r = 0; r < op.rounds; ++r) {
         if (idle_round(r)) {
@@ -176,16 +227,20 @@ void run() {
         push(TT_OP_SEMPOST(sem_softmax));
         pack_format(true);
         reset_records();
+        uint32_t sum = 0;
         for (uint32_t j = 0; j < blocks; ++j) {
             const uint32_t valid = j == op.partial_block ? op.valid_last : WHS_ROWS;
             const uint32_t p = p_base + j % 2u * WH_SDPA_REGION_BYTES;
+            const uint32_t fold_kind = j == fold ? 1u : later_fold(j) ? 2u : 0u;
+            const uint32_t target = unpack0() + sums[fold_kind == 2u ? sum ^ 1u : sum] * WHS_W_BYTES;
             if (j % 2u) {
-                block<whp_sdpa_head128, 1u>(p, true, valid, false, true);
+                block<whp_sdpa_head128, 1u>(p, true, valid, false, true, fold_kind, target, state);
             } else {
-                block<whp_sdpa_head128, 0u>(p, j != 0u, valid, false, true);
+                block<whp_sdpa_head128, 0u>(p, j != 0u, valid, false, true, fold_kind, target, state);
             }
+            sum ^= fold_kind == 2u ? 1u : 0u;
         }
-        finish<whp_sdpa_head128>(blocks);
+        finish<whp_sdpa_head128>(blocks, folds(), unpack0() + sums[sum ^ 1u] * WHS_W_BYTES);
         push(TT_OP_STALLWAIT(wh_block_pack | wh_block_sync | wh_block_cfg | wh_block_thcon, wh_wait_sfpu));
         pack_format(false);
 #pragma GCC unroll 16

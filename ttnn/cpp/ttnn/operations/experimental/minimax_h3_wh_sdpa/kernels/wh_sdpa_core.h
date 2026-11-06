@@ -705,14 +705,17 @@ template <const WhSdpaHead& head>
     }
 }
 
-// O^T / l: a Newton reciprocal of l (3 steps from the bit-pattern seed) per parity.
+// O^T / l: a Newton reciprocal of l (3 steps from the bit-pattern seed) per parity; l from the records, or with `wide`
+// the records hold l alone in FP32 (fold_state's end).
 template <const WhSdpaHead& head>
-[[gnu::always_inline]] static inline void normalize() {
+[[gnu::always_inline]] static inline void normalize(bool wide = false) {
     scale_begin();
 #pragma GCC unroll 16
     for (uint32_t p = 0; p < 2u; ++p) {
         mov(6u + p, 1u);
-        shift(1u, 16);
+        if (!wide) {
+            shift(1u, 16);
+        }
         load_constant(2u, whp_sdpa_recip_seed);
         mov(1u, 3u);
         push(TT_OP_SFPIADD(0u, 2u, 3u, 6u));  // seed - l
@@ -833,13 +836,160 @@ template <const WhSdpaHead& head, uint32_t buffer>
     exp_block<head, buffer>();
 }
 
+// The folds (whp_sdpa_fold_blocks). Dst regions packed to L1 `addr` (region h at + h x WH_SDPA_REGION_BYTES) as BF16,
+// added into what is there (`acc`, the packers' L1 accumulation) or over it, once the SFPU is done with them; the
+// packers go back to P's raw format after.
+[[gnu::noinline]] static void pack_dst(uint32_t addr, uint32_t regions, bool acc) {
+    push(TT_OP_STALLWAIT(wh_block_sync | wh_block_pack | wh_block_cfg | wh_block_thcon, wh_wait_sfpu | wh_wait_pack));
+    pack_format(false);
+    if (acc) {
+        wh_set_packer_cfg(gpr_cfg, 2u, THCON_SEC0_REG1_Pack_L1_Acc_MASK, 0u);
+    }
+    for (uint32_t h = 0; h < regions; ++h) {
+        wh_pack_region(gpr_out, addr + h * WH_SDPA_REGION_BYTES, WH_SDPA_FACE_BYTES, o_base(h) / 16u);
+    }
+    push(TT_OP_STALLWAIT(wh_block_sync | wh_block_cfg | wh_block_thcon | wh_block_sfpu, wh_wait_pack));
+    if (acc) {
+        wh_set_packer_cfg(gpr_cfg, 2u, 0u, 0u);
+    }
+    pack_format(true);
+}
+
+// The folds' state, per query: m_R, the m the running sums are scaled to (BF16, the records' m at the last fold), and
+// L, l's running sum (FP32 in the SFPU, a hi/lo pair of BF16 in Dst and L1: store_pair). It sits in Dst rows 0-63
+// (O^T's, Dst offset 0) while the SFPU works on it, region 0's first chunk in L1 between folds; vectors of compact
+// values, by parity.
+static constexpr uint32_t state_m(uint32_t p) { return s_vector(0u, 0u, p); }
+static constexpr uint32_t state_l(uint32_t p) { return s_vector(1u, 0u, p); }
+static constexpr uint32_t state_l_low(uint32_t p) { return s_vector(2u, 0u, p); }
+static constexpr uint32_t state_g0 = s_vector(3u, 0u, 0u);
+
+// The state goes through the packers and MOVA2D, which read and write the 16-bit Dst as BF16 in its own layout, so the
+// SFPU stores and loads it as BF16 (raw 16-bit halves come back altered where they fall in the exponent field as 0 or
+// 255). L as two BF16 values: hi, L with its low half cleared, and lo = L - hi (exact), rounded to BF16; about 16 bits
+// of L. Through LRegs a, b.
+[[gnu::always_inline]] static inline void store_pair(
+    uint32_t lreg, uint32_t a, uint32_t b, uint32_t high, uint32_t low) {
+    mov(lreg, a);
+    load_high_mask(b);
+    and_into(b, a);
+    load_constant(b, 0xBF800000u);
+    mad(a, b, lreg, b);
+    nop();
+    store(a, high);
+    store(b, low);
+}
+
+// m_R from record `record` (its high half, exact in BF16) to the state, through LRegs a (the high mask after) and b.
+[[gnu::always_inline]] static inline void store_m(uint32_t record, uint32_t a, uint32_t b, uint32_t address) {
+    load_high_mask(a);
+    mov(record, b);
+    and_into(a, b);
+    store(b, address);
+}
+
+// The first fold's state, at block j: m_R = m, L = l alpha (l covers blocks 0 to j - 1, in block j - 1's m; alpha of
+// block j in LReg 4), l restarting from 0.
+[[gnu::always_inline]] static inline void fold_state_first() {
+    set_dst_offset(o_base(0u));
+#pragma GCC unroll 2
+    for (uint32_t p = 0; p < 2u; ++p) {
+        unpack_alpha(p, 0u, 1u);
+        mov(6u + p, 2u);
+        shift(2u, 16);
+        mad(2u, 0u, lreg_zero, 3u);
+        nop();
+        store_pair(3u, 1u, 5u, state_l(p), state_l_low(p));
+        store_m(6u + p, 2u, 1u, state_m(p));
+        and_into(2u, 6u + p);
+    }
+}
+
+// A later fold's state, at block j, from the state in Dst rows 0-63: g = exp(m_R - m) (alpha's routine), L = L g + l
+// alpha (l in block j - 1's m, alpha of block j in LReg 4), m_R = m, l restarting from 0; g of both parities to LReg 4
+// for rescale_o (packed as alphas leaves alpha: alpha's only reader, the next update_l, now multiplies l = 0). At the
+// item's `end` l is already in the last block's m (last_sums), and the records take L g + l alone, in FP32, for
+// normalize.
+template <const WhSdpaHead& head>
+[[gnu::always_inline]] static inline void fold_state(bool end) {
+    set_dst_offset(o_base(0u));
+#pragma GCC unroll 2
+    for (uint32_t p = 0; p < 2u; ++p) {
+        load(2u, state_m(p));
+        nop();
+        alpha<head>(p, 5u);
+        load(1u, state_l(p));
+        load(3u, state_l_low(p));
+        mov(6u + p, 2u);
+        shift(2u, 16);
+        nop();
+        nop();
+        mad(3u, lreg_one, 1u, 1u);  // L = hi + lo
+        if (!end) {
+            unpack_alpha(p, 0u, 3u);
+            mad(2u, 0u, lreg_zero, 2u);
+        }
+        nop();
+        mad(1u, 5u, 2u, 1u);
+        nop();
+        if (end) {
+            mov(1u, 6u + p);
+        } else {
+            store_m(6u + p, 2u, 3u, state_m(p));
+            store_pair(1u, 0u, 3u, state_l(p), state_l_low(p));
+            and_into(2u, 6u + p);
+        }
+        if (p == 0u) {
+            push(TT_OP_SFPSTORE(5u, high16_only, 0u, state_g0));
+        }
+    }
+    push(TT_OP_SFPLOAD(4u, high16, 0u, state_g0));
+    shift(5u, -16);
+    or_into(5u, 4u);
+}
+
+// The first fold, at block j once O^T (blocks 0 to j - 1) is scaled to block j's m: O^T to the running sum at `sum`,
+// the state to `state`.
+template <const WhSdpaHead& head>
+[[gnu::noinline]] static void fold_first(uint32_t sum, uint32_t state) {
+    pack_dst(sum, 2u, false);
+    fold_state_first();
+    pack_dst(state, 1u, false);
+}
+
+// A later fold: O^T (the blocks since the last fold, scaled to block j's m) to `next`; thread 1 moves the state in
+// (thread 0 unpacks it, then the running sum, ahead of PV(j)'s operands); fold_state, the state back to `state`; thread
+// 1 moves the running sum in, scaled by g and added into `next`, which becomes the running sum. PV(j) then starts O^T
+// from zero.
+template <const WhSdpaHead& head>
+[[gnu::noinline]] static void fold_later(uint32_t next, uint32_t state) {
+    pack_dst(next, 2u, false);
+    push(TT_OP_SEMPOST(sem_p));
+    wait_and_take(sem_moved);
+    fold_state<head>(false);
+    pack_dst(state, 1u, false);
+    push(TT_OP_SEMPOST(sem_p));
+    wait_and_take(sem_moved);
+    rescale_o<head>();
+    pack_dst(next, 2u, true);
+}
+
 // Block j (in `buffer`, j % 2): its softmax once QK(j) is done, then P(j) packed to L1 at `p` (buffer j % 2) and, once
 // PV(j - 1) is done, O^T scaled by alpha (block 1 on, unless `rescale` is off); `causal` as softmax. QK(j + 1) waits
 // for the pack: a pack under its first MVMULs loses some of their writes to query face 0
 // (notes/minimax-h3-wh-compute.md). The packers and the maxima pass are set up under QK(j), so only the PACR waits
-// for the softmax, and alpha of j runs under the pack.
+// for the softmax, and alpha of j runs under the pack. `fold` (1 the first, 2 a later one) folds before PV(j):
+// fold_first into `sum` or fold_later into `sum` as the next running sum, the state at `state`.
 template <const WhSdpaHead& head, uint32_t buffer>
-[[gnu::noinline]] static void block(uint32_t p, bool later, uint32_t valid, bool causal, bool rescale) {
+[[gnu::noinline]] static void block(
+    uint32_t p,
+    bool later,
+    uint32_t valid,
+    bool causal,
+    bool rescale,
+    uint32_t fold = 0u,
+    uint32_t sum = 0u,
+    uint32_t state = 0u) {
     wh_pack_prepare(gpr_out, p, WH_SDPA_REGION_BYTES / 4u, s_base(buffer) / 16u);
     pairs_setup(buffer, 1u - buffer);
     wait_and_take(sem_qk);
@@ -856,6 +1006,11 @@ template <const WhSdpaHead& head, uint32_t buffer>
     if (later && rescale) {
         rescale_o<head>();
     }
+    if (fold == 1u) {
+        fold_first<head>(sum, state);
+    } else if (fold == 2u) {
+        fold_later<head>(sum, state);
+    }
     post_when_done(sem_p);
 }
 
@@ -867,16 +1022,32 @@ template <uint32_t buffer>
     sums_to_l(scratch_base(buffer));
 }
 
-// The last block's row sums and l (`blocks` blocks), then O^T / l once PV of the last block is done.
+// The last block's row sums and l (`blocks` blocks), then O^T / l once PV of the last block is done. After folds
+// (`folded`) the last fold's work first, at the end: O^T to `next`, thread 0 unpacks the state and the running sum,
+// thread 1 moves the state in, fold_state(end), thread 1 moves the running sum in, scaled by g and added into `next`;
+// thread 0 unpacks that total and thread 1 moves it into O^T, which normalize divides by the records' FP32 l.
 template <const WhSdpaHead& head>
-static void finish(uint32_t blocks) {
+static void finish(uint32_t blocks, bool folded = false, uint32_t next = 0u) {
     if (blocks % 2u) {
         last_sums<0u>();
     } else {
         last_sums<1u>();
     }
     wait_and_take(sem_pv);
-    normalize<head>();
+    if (folded) {
+        pack_dst(next, 2u, false);
+        push(TT_OP_SEMPOST(sem_packed));
+        push(TT_OP_SEMPOST(sem_p));
+        wait_and_take(sem_moved);
+        fold_state<head>(true);
+        post_when_done(sem_p);
+        wait_and_take(sem_moved);
+        rescale_o<head>();
+        pack_dst(next, 2u, true);
+        push(TT_OP_SEMPOST(sem_packed));
+        wait_and_take(sem_moved);
+    }
+    normalize<head>(folded);
 }
 
 #endif

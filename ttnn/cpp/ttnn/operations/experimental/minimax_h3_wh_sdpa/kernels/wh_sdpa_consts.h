@@ -32,6 +32,13 @@ constexpr uint32_t whp_sdpa_block_chunks(const WhSdpaHead& head) { return head.s
 // clamp at t = 0.
 constexpr uint32_t whp_sdpa_exp_c = 0x47408497u;
 constexpr uint32_t whp_sdpa_m_init = 0xFF7F0000u;  // the lowest finite BF16
+// O^T accumulates in the 16-bit Dst, rounded to BF16 every 16-key MVMUL, and l in a BF16 record: over a whole row (1700
+// key blocks at 109k keys) each block falls under half an ulp of the sums and the output drifts (13% RMSE a layer on
+// MiniMax-H3, 25% on layer 0). Every whp_sdpa_fold_blocks key blocks the core loop folds both into running sums kept
+// outside: O^T into L1 (BF16, the packers' L1 accumulation) and l into a state in L1 (about 16 bits) with the m it is
+// scaled to, O^T and l starting again from zero. m keeps rising lazily as before, so a fold first scales the running
+// sums by exp(m at the last fold - m now) (wh_sdpa_core.h, fold_later).
+constexpr uint32_t whp_sdpa_fold_blocks = 32u;
 constexpr uint32_t whp_sdpa_x_min = 0xC2FE0000u;   // -127: alpha's log2 floor
 constexpr uint32_t whp_sdpa_magic = 0x4B40007Fu;   // 1.5 2^23 + 127: rounds alpha's log2 and biases its exponent
 constexpr uint32_t whp_sdpa_poly[3] = {0x3F317AFDu, 0x3E7805FFu, 0x3D6150AEu};  // 2^f on [-0.5, 0.5]

@@ -30,16 +30,19 @@
 
 // Scratch map (offsets from the scratch base, the same on every core). Unpacker 0's region is chunks W x 8 + Z of
 // WHS_FACE bytes: W 0 Q^T, W 1 P^T's two buffers, W 2 and 3 the Q staging of even and odd items ([d slice][64
-// queries][16 d]), W 4 O^T / l as the packers leave it.
+// queries][16 d]), W 4 O^T / l as the packers leave it, W 4 and 5 also the running O^T sums of the folds (one the
+// sum, the other the next), W 6 chunk 0 the folds' state (m and l, wh_sdpa_core.h fold_state).
 #define WHS_SYNC 0u
 #define WHS_UNPACK0 4096u
 #define WHS_W_QT 0u
 #define WHS_W_P 1u
 #define WHS_W_Q 2u
 #define WHS_W_OT 4u
+#define WHS_W_SUM1 5u
+#define WHS_W_STATE 6u
 #define WHS_W_BYTES (8u * WHS_FACE)
 // O staging of even and odd items: [2 query tiles][8 d slices][32 queries][16 d].
-#define WHS_O_STAGE (WHS_UNPACK0 + 5u * WHS_W_BYTES)
+#define WHS_O_STAGE (WHS_UNPACK0 + 7u * WHS_W_BYTES)
 #define WHS_O_STAGE_BYTES (2u * 8u * 1024u)
 #define WHS_KV (WHS_O_STAGE + 2u * WHS_O_STAGE_BYTES)
 #define WHS_SCRATCH_BYTES(bufs) (WHS_KV + (bufs) * WHS_BLOCK)
