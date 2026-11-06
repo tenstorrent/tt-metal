@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""K3's layout bridge, runtime bounds and persistent carries on a synthetic KDA layer."""
+"""K3's layout bridge, runtime bounds and persistent carries on a synthetic KDA layer.
+
+A start-0 case is a new request: it must run from a zero carry whatever the slot holds, and nothing
+clears the slot between cases.
+"""
 
 import pytest
 import torch
@@ -20,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
     to_sp_input,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import run_kda_chunk, zero_state_like
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     KdaStates,
@@ -27,7 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     deallocate_state,
     device_scalar,
 )
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import TtK3KdaAttention
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = run_for_blackhole()
@@ -71,7 +76,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
 
     input_tt = upload(hidden)
     start_tt, end_tt = device_scalar(mesh_device, 0), device_scalar(mesh_device, capacity)
-    ctx = K3AttnContext(kda_scalars=(slot_tt, start_tt, end_tt), kda_states=slabs)
+    metadata = (slot_tt, start_tt, end_tt)
     # Nonzero carried state before the short intervals, including ends just past
     # the head or a device boundary and a one-tile separated tail on SP ranks.
     cases = [(0, capacity), (32, 32), (96, 64), (32, 96), (32, 224), (0, min(capacity, 288))]
@@ -100,11 +105,12 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
         for traced in (False, True):
             if traced:
                 for _ in range(2):
-                    ttnn.deallocate(attention.forward(input_tt, ctx))
+                    ttnn.deallocate(run_kda_chunk(attention, input_tt, slabs, metadata))
                 trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                traced_output = attention.forward(input_tt, ctx)
+                traced_output = run_kda_chunk(attention, input_tt, slabs, metadata)
                 ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
-            slabs.zero_slot(0)
+            # Nothing clears the slot: the eager pass starts on the uninitialized slab, the traced one on
+            # what warm-up and capture left.
             for case_index, (start, length) in enumerate(cases):
                 permutation = mla_row_permutation(start, sp, local_rows)
                 # Keep nonzero padded data: neither K3 nor the caller must need
@@ -113,8 +119,9 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                 ttnn.copy(source, input_tt)
                 ttnn.deallocate(source)
                 # Grade each transition from its actual incoming carry, retaining
-                # the existing error gates without accumulating prior BF16 error.
-                incoming = committed_carry()
+                # the existing error gates without accumulating prior BF16 error. A
+                # request head's incoming carry is zero, whatever the slot holds.
+                incoming = committed_carry() if start else zero_state_like(scratch)
                 history = reconstruct_convolution_at_sp_rank(
                     incoming.convolution,
                     mesh_device,
@@ -157,7 +164,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
                     output = traced_output
                 else:
-                    output = attention.forward(input_tt, ctx)
+                    output = run_kda_chunk(attention, input_tt, slabs, metadata)
                 committed = committed_carry()
                 assert_matches_reference(
                     output_tt=output,
