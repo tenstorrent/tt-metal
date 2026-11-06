@@ -1048,11 +1048,6 @@ PrefetcherPipeSpace CreatePrefetcherPipeSpace(
     return std::move(spaces.front());
 }
 
-PrefetcherPipeSpace CreatePrefetcherPipeSpace(
-    distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config) {
-    return CreatePrefetcherPipeSpace(device.mesh_command_queue(), config);
-}
-
 std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
     distributed::MeshCommandQueue& mesh_cq, std::span<const PrefetcherPipeSpaceConfig> configs) {
     TT_FATAL(!configs.empty(), "CreatePrefetcherPipeSpaces requires at least one config");
@@ -1094,11 +1089,6 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
         spaces.emplace_back(std::move(impl));
     }
     return spaces;
-}
-
-std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
-    distributed::MeshDevice& device, std::span<const PrefetcherPipeSpaceConfig> configs) {
-    return CreatePrefetcherPipeSpaces(device.mesh_command_queue(), configs);
 }
 
 void set_dram_sender_cores(PrefetcherPipeSpace& space, std::span<const CoreCoord> dram_senders) {

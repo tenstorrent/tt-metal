@@ -139,11 +139,6 @@ TEST_F(ExplicitCqTest, PrefetcherPipeSpaceWritesConfigPagesOnItsQueue) {
         EXPECT_TRUE(std::ranges::any_of(page, [](uint32_t word) { return word != 0; }))
             << "config page of core " << core.str() << " is still the zeroed template";
     }
-
-    // The overload without a queue uses mesh_command_queue(), cq 0 here.
-    auto default_space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device, allocator_pipe_space_config(CoreCoord(2, 0), CoreRangeSet(CoreRange(CoreCoord(3, 0)))));
-    EXPECT_EQ(&default_space.impl().command_queue(), &mesh_device->mesh_command_queue(0));
 }
 
 TEST_F(ExplicitCqTest, PrefetcherPipeSpacesCreatedTogetherKeepTheirQueue) {

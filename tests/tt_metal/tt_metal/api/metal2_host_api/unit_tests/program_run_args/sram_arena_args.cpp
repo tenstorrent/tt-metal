@@ -393,7 +393,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadLeavesNodesOpenForPersiste
     distributed::MeshDevice& fixture_device = *mesh_device_;
     Program program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
     const PrefetcherPipeSpaceConfig space_config = MakePrefetcherPipeSpaceConfigOnFirstScratchpadNodeForTest();
-    EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device, space_config); });
+    EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device.mesh_command_queue(0), space_config); });
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSharedScratchpadLeavesNodesOpenForPersistentL1) {
@@ -401,7 +401,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSharedScratchpadLeavesNodesOpenForPe
     distributed::MeshDevice& fixture_device = *mesh_device_;
     Program program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec(/*shared=*/true));
     const PrefetcherPipeSpaceConfig space_config = MakePrefetcherPipeSpaceConfigOnFirstScratchpadNodeForTest();
-    EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device, space_config); });
+    EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device.mesh_command_queue(0), space_config); });
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadRangeArenaForLockstepDeclaration) {
