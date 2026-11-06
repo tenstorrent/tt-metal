@@ -3056,13 +3056,13 @@ class MTPSpecEngine:
 
     def _stage_gdn_windows(self, gdn_windows, start0, active):
         """Stage one step's GDN state windows (QWEN36_MAMBA_SPEC). ``gdn_windows`` = ([G] int64 [B, 1 + K] block windows,
-        int64 [B] state_accepted_counts[, moves]), runner slots; ``start0`` / ``active`` in engine rows. Rows the step
-        does not compute are held (ctrl page HOLD). ``moves`` (supports_mamba_chained_state_moves, a chained step):
-        ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K][, [G] block copies [B, 1 + K, 2] or None]) per
-        accepted count of the pending verify, for the chained rows (state_accepted_counts -1)."""
+        int64 [B] mamba_state.accepted_counts[, moves]), runner slots; ``start0`` / ``active`` in engine rows. Rows the
+        step does not compute are held (ctrl page HOLD). ``moves`` (a chained step, from the chain of the mamba_state
+        groups): ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K][, [G] block copies [B, 1 + K, 2] or None])
+        per accepted count of the pending verify, for the chained rows (accepted count -1)."""
         paged = self._paged_state()
         if gdn_windows is None:
-            raise ValueError("QWEN36_MAMBA_SPEC: decode_forward needs gdn_windows (state_block_windows_per_layer)")
+            raise ValueError("QWEN36_MAMBA_SPEC: decode_forward needs gdn_windows (from mamba_state)")
         blocks, counts, *rest = gdn_windows
         moves = rest[0] if rest else None
         if len(blocks) != paged.G:
@@ -3079,7 +3079,7 @@ class MTPSpecEngine:
         # if the step falls back to the host, verify() starts it at its materialized count - 1
         self._paged_unknown = [u for u, n in zip(live, c.tolist()) if n == -1] if bool((c == -1).any()) else []
         if bool(((c != -1) & ((c < 1) | (c > self.T))).any()):
-            raise ValueError(f"state_accepted_counts {counts.tolist()} out of [1, {self.T}] on live rows {live}")
+            raise ValueError(f"mamba_state.accepted_counts {counts.tolist()} out of [1, {self.T}] on live rows {live}")
         for g, b in enumerate(blocks):
             if bool((b[act] <= 0).any()):
                 null = [u for u in live if bool((b[u] <= 0).any())]
@@ -4682,7 +4682,7 @@ class MTPSpecEngine:
         See _decode_forward_deferred. ``finishing_slots`` (runner slots, QWEN36 plugin contract): requests left out of this step
         only because the step in flight ends them at max_tokens; freed without parking (see _apply_finishing).
         ``gdn_windows`` (QWEN36_MAMBA_SPEC, runner slots): ([G] int64 [B, 1 + K] state block windows, int64 [B]
-        state_accepted_counts) of the step (see _stage_gdn_windows)."""
+        mamba_state.accepted_counts) of the step (see _stage_gdn_windows)."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         if self._split_pending is not None and not self._split_begin:

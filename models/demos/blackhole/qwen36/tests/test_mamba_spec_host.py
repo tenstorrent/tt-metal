@@ -5,7 +5,9 @@
 A real TTScheduler (vllm-tt-plugin) over a real KVCacheManager schedules requests with 3 drafts per step. The KV cache
 groups come from the model's own specs (tt/kv_cache_spec.qwen36_kv_cache_spec, num_speculative_blocks = 3). Each step
 the plugin's MambaCacheGroups gives the copies before the forward (begin_step), each row's 1 + K window and start count
-(step_inputs), and the copies after acceptance (after_acceptance), the calls TTModelRunner makes.
+(step_inputs), and the copies after acceptance (after_acceptance), the calls TTModelRunner makes. The model's
+mamba_state keyword built from them goes through Qwen36MTPContractForCausalLM's conversion (qwen36_vllm), which maps
+the groups to the bound groups by layer name.
 
 The model is played at page level: tt/spec_block_state.SpecBlockBook builds the ctrl pages and ring_page_idx rows,
 MTPSpecEngine._stage_gdn_windows scatters the plugin's rows to engine rows, and a fake device runs gdn_spec_step's page
@@ -59,9 +61,18 @@ from vllm_tt_plugin.spec_admission import MODEL_OWNED_DRAFT_METHOD, MODEL_OWNED_
 from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, DRAFTER_STATE_INTERNAL, SpecPlan  # noqa: E402
 
 from models.demos.blackhole.qwen36.tests.test_kv_cache_spec_host import TEXT_CONFIG  # noqa: E402
+from models.demos.blackhole.qwen36.tests.test_mamba_align_host import (  # noqa: E402
+    mamba_state,
+    plugin_checkpoints,
+    plugin_windows,
+)
 from models.demos.blackhole.qwen36.tt import spec_block_state as sbs  # noqa: E402
 from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words  # noqa: E402
-from models.demos.blackhole.qwen36.tt.kv_cache_spec import qwen36_kv_cache_spec  # noqa: E402
+from models.demos.blackhole.qwen36.tt.kv_cache_spec import gdn_layer_name, qwen36_kv_cache_spec  # noqa: E402
+from models.demos.blackhole.qwen36.tt.qwen36_vllm import (  # noqa: E402
+    Qwen36MTPContractForCausalLM,
+    _spec_prefill_blocks,
+)
 from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine, _CheckpointSnapRun  # noqa: E402
 
 K = 3
@@ -404,6 +415,10 @@ class _Harness:
         self.max_model_len = max_model_len
         lay = _layout(tp, block, n_banks, layout, num_blocks)
         self.book = _BookAsState(lay, len(self.mamba), B, T, mode, block if mode == "align" else 0)
+        layer_of = {gdn_layer_name(i): i for i in range(len(specs))}
+        self.book.layer_groups = {
+            layer_of[name]: k for k, g in enumerate(self.mamba) for name in self.kv.kv_cache_groups[g].layer_names
+        }
         self.dev = _FakeDevice(lay, len(self.mamba))
         self.book.dev = self.dev
         self.prefill_steps = {}  # request id -> prefill steps of its prompt
@@ -517,12 +532,12 @@ class _Harness:
                 ids = self.req_states[r].block_ids[g]
                 t[row, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
             tables.append(t)
-        inputs = self.groups.step_inputs(
+        windows, counts = plugin_windows(
+            self.groups,
             tables,
             req_ids,
             positions if new_api else self.req_states,
             out.num_scheduled_tokens,
-            list(range(len(tables))),
             len(req_ids),
         )
         rows_prefill, rows_verify = [], []
@@ -535,18 +550,20 @@ class _Harness:
         verified = {}
         # ---- prefill rows (prefill_forward: one request at a time, gdn_req = its row in the step's state blocks)
         if rows_prefill:
-            self.book.set_prefill_blocks(
-                [inputs.state_block_ids_per_layer[g][[row for row, _ in rows_prefill], 0] for g in self.mamba]
-            )
             # TTModelRunner's prefill checkpoint inputs: the rows of this prefill step, in its order
-            ckpt_ids, ckpt_pos = self.groups.checkpoint_inputs(
+            ckpts = plugin_checkpoints(
+                self.groups,
                 get_tt_mamba_checkpoints(out),
                 [r for _, r in rows_prefill],
                 self.req_states,
-                list(range(len(self.kv.kv_cache_groups))),
                 len(rows_prefill),
             )
-            self.book.set_prefill_checkpoints([ckpt_ids[g] for g in self.mamba], ckpt_pos)
+            state = mamba_state(
+                self.groups, self.kv.kv_cache_groups, windows, [row for row, _ in rows_prefill], checkpoints=ckpts
+            )
+            ids, ckpt = _spec_prefill_blocks(state, self.book)
+            self.book.set_prefill_blocks(ids)
+            self.book.set_prefill_checkpoints(ckpt, state.checkpoint_positions)
             for i, (row, r) in enumerate(rows_prefill):
                 req = sched.requests[r]
                 nc, ns = self.req_states[r].num_computed_tokens, out.num_scheduled_tokens[r]
@@ -584,14 +601,10 @@ class _Harness:
                     sampled[r] = []
         # ---- the verify (decode_forward): every live row not in this step is held
         if rows_verify:
-            n = len(rows_verify)
-            blocks = []
-            for g in self.mamba:
-                w = torch.zeros(B, T, dtype=torch.int64)
-                w[:n] = inputs.state_block_windows_per_layer[g][[row for row, _ in rows_verify]].to(torch.int64)
-                blocks.append(w)
-            counts = torch.ones(B, dtype=torch.int64)
-            counts[:n] = inputs.state_accepted_counts[[row for row, _ in rows_verify]].to(torch.int64)
+            state = mamba_state(
+                self.groups, self.kv.kv_cache_groups, windows, [row for row, _ in rows_verify], counts=counts
+            )
+            gdn_windows = Qwen36MTPContractForCausalLM._gdn_windows(state, self.book, B)
             start0 = torch.zeros(B, dtype=torch.int64)
             active = torch.zeros(B, dtype=torch.bool)
             for slot, (row, r) in enumerate(rows_verify):
@@ -605,7 +618,7 @@ class _Harness:
             phys = [p if p is not None else rest.pop(0) for p in phys]
             self.eng._set_slot_map(phys)
             (start_rows, active_rows) = self.eng._to_rows(start0, active)
-            self.eng._stage_gdn_windows((blocks, counts), start_rows, active_rows)
+            self.eng._stage_gdn_windows(gdn_windows, start_rows, active_rows)
             live = self.eng._paged_step_rows
             self.held += sum(1 for u in self.row_of.values() if u not in live)
             mi = [0] * B
@@ -1193,8 +1206,8 @@ def test_spec_state_device_writes_land_where_the_verify_reads(monkeypatch, geo):
 
 
 # ------------------------------------------------------------------------------------- chained state moves
-# Chained state moves (supports_mamba_chained_state_moves): on a chained step the plugin sends, per accepted count c
-# of the pending verify, each row's start block and state window. The chain body gathers both tables
+# Chained state moves: on a chained verify in mode align the plugin sends (the chain of each mamba_state group), per
+# accepted count c of the pending verify, each row's start block and state window. The chain body gathers both tables
 # (SpecBlockBook.pages_cat / windows_cat) at column c - 1; the host adopts the window of the actual count once it has
 # the count.
 
@@ -1304,33 +1317,33 @@ def test_chain_boundary_conv_write_targets_the_count_that_starts_there():
     assert book.take_pending() == [(1, 0, 0, int(wins[0][1, 1, 0])), (1, 0, 1, int(wins[1][1, 1, 0]))]
 
 
-def test_chain_moves_keywords_are_grouped_with_their_copies(monkeypatch):
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCausalLM
+def test_chain_moves_are_grouped_with_their_copies():
+    groups = sbs.gdn_groups_by_slot(_per_layer_specs(), lambda e: isinstance(e[0], tuple))
+    blocks = SimpleNamespace(layer_groups=groups, G=3)
 
-    specs = _per_layer_specs()
-    groups = sbs.gdn_groups_by_slot(specs, lambda e: isinstance(e[0], tuple))
-    blocks = SimpleNamespace(group_windows=lambda w: sbs.group_windows(w, groups, 3))
-    me = SimpleNamespace(model=[SimpleNamespace(_spec_blocks=blocks)])
-    me._pop_state_kwargs = Qwen36MTPContractForCausalLM._pop_state_kwargs
+    def state(copy_src=0):
+        def group(g):
+            return SimpleNamespace(
+                layer_names=tuple(gdn_layer_name(i) for i, h in groups.items() if h == g),
+                windows=torch.full((2, T), 10 + g),
+                checkpoint_blocks=None,
+                chain=SimpleNamespace(
+                    copies=torch.full((2, T, 2), 0).index_fill_(2, torch.tensor([0]), copy_src),
+                    start_blocks=torch.full((2, T), 20 + g),
+                    windows=torch.full((2, T, T), 30 + g),
+                ),
+            )
 
-    def kwargs(copy_src=0):
-        per = lambda make: [None if i % 4 == 3 else make(groups[i]) for i in range(64)]
-        return dict(
-            state_block_windows_per_layer=per(lambda g: torch.full((2, T), 10 + g)),
-            state_accepted_counts=torch.tensor([-1, -1]),
-            state_chain_copies_per_layer=per(
-                lambda g: torch.full((2, T, 2), 0).index_fill_(2, torch.tensor([0]), copy_src)
-            ),
-            state_chain_start_blocks_per_layer=per(lambda g: torch.full((2, T), 20 + g)),
-            state_chain_windows_per_layer=per(lambda g: torch.full((2, T, T), 30 + g)),
+        return SimpleNamespace(
+            groups=tuple(group(g) for g in range(3)), accepted_counts=torch.tensor([-1, -1]), checkpoint_positions=None
         )
 
-    out, counts, moves = Qwen36MTPContractForCausalLM._gdn_windows(me, kwargs(), 4)
+    out, counts, moves = Qwen36MTPContractForCausalLM._gdn_windows(state(), blocks, 4)
     assert [int(w[0, 0]) for w in out] == [10, 11, 12] and counts.tolist() == [-1, -1, 1, 1]
     assert [int(s[1, 3]) for s in moves[0]] == [20, 21, 22] and [int(s[3, 0]) for s in moves[0]] == [0, 0, 0]
     assert [tuple(w.shape) for w in moves[1]] == [(4, T, T)] * 3 and int(moves[1][2][0, 1, 2]) == 32
     assert moves[2] is None  # every pair (0, 0): nothing to copy
-    _, _, moves = Qwen36MTPContractForCausalLM._gdn_windows(me, kwargs(copy_src=7), 4)
+    _, _, moves = Qwen36MTPContractForCausalLM._gdn_windows(state(copy_src=7), blocks, 4)
     assert [tuple(c.shape) for c in moves[2]] == [(4, T, 2)] * 3
     assert int(moves[2][1][1, 2, 0]) == 7 and int(moves[2][1][3, 0, 0]) == 0  # padding rows: (0, 0)
 
@@ -1402,7 +1415,7 @@ def _chain_copy_state(monkeypatch):
 @pytest.mark.parametrize("count", [1, 2, 4])
 @pytest.mark.parametrize("on_device", [False, True])
 def test_chained_copy_runs_for_the_counts_that_select_it(monkeypatch, count, on_device):
-    """state_chain_copies_per_layer on a chained step: the copy of the pending verify's window column runs only when the
+    """The chain copies of a chained step (mamba_state): the copy of the pending verify's window column runs only when the
     row's accepted count selects it, from the host count (fallback) or the device count (result buffer row RES_COUNTS;
     an unselected copy writes into the null block 0 instead), and carries that column's conv rows."""
     from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs

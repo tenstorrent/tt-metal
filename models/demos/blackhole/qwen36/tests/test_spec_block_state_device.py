@@ -266,7 +266,7 @@ def test_zero_blocks_zeroes_only_the_listed_blocks(device, block):
 
 @pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
 def test_chained_copies_select_dst_by_the_device_count(device, geo_block_layout):
-    """run_chain_copies with the counts on the device (a chained step's state_chain_copies_per_layer): a row whose
+    """run_chain_copies with the counts on the device (the chain copies of a chained step's mamba_state): a row whose
     count selects its copy gets the source's state and the pending verify's conv rows of that column at dst; a row
     whose count does not keeps dst as it was (the copy lands in the null block 0)."""
     from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS

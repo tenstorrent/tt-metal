@@ -2617,7 +2617,9 @@ class Qwen36Model:
             blocks = getattr(self, "_spec_blocks", None)
             if blocks is None:
                 segs.append(spec_ctrl_page(mi_prev, self._vfy_B, self._vfy_Nv, parity=parity).reshape(-1))
-            else:  # QWEN36_MAMBA_SPEC: start pages of each group's window column state_accepted_counts - 1; held rows
+            else:
+                # QWEN36_MAMBA_SPEC: the start pages of each group's window column mamba_state.accepted_counts - 1,
+                # HOLD on held rows
                 if hold is None:
                     hold = getattr(self, "_spec_hold", None)  # None (warmup, capture): every row is held
                 rows = blocks.ctrl_rows(

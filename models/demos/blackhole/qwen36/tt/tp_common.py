@@ -75,9 +75,9 @@ def mamba_spec_enabled():
     """QWEN36_MAMBA_SPEC (default "0"): the vLLM classes declare their KV cache layout to vLLM (get_kv_cache_spec): one
     FullAttentionSpec per attention layer and one MambaSpec per GDN layer, instead of the plugin's single
     FullAttentionSpec. Off keeps the plugin's fallback. On, the spec class also declares prefill checkpoints in mode
-    align (get_kv_cache_spec) and chained state moves (supports_mamba_chained_state_moves), the prefill traces carry
-    the in-replay GDN snapshots (prefill_intrace_snap_enabled), and the GDN block writes and copies replay captured
-    traces (SpecGdnBlockState._prepare_block_traces)."""
+    align (get_kv_cache_spec) and applies the chained state moves of a chained verify (the chain of the mamba_state
+    groups), the prefill traces carry the in-replay GDN snapshots (prefill_intrace_snap_enabled), and the GDN block
+    writes and copies replay captured traces (SpecGdnBlockState._prepare_block_traces)."""
     return os.environ.get("QWEN36_MAMBA_SPEC", "0") == "1"
 
 

@@ -16,10 +16,10 @@ rest go to V, the conv history follows them in V (block 1024 BF8 at TP=8 on 8 ba
 the conv history at the start of V's block (block 2048 BF8 at TP=8).
 
 A verify (gdn_spec_step with ring_page_idx) reads the start state of row u from its window column
-state_accepted_counts[u] - 1 and writes the state after token t into window column t. The conv window of the decode
-stays in the layer's private ping-pong pair (TPGatedDeltaNet._verify_win_pair): no verify reads a block's conv history,
-and the window holds the conv rows of every column of a row's latest verify. They are written into a block only where
-vLLM can read the block as something other than the same row's next verify (``materialize``): the source of a
+mamba_state.accepted_counts[u] - 1 and writes the state after token t into window column t. The conv window of the
+decode stays in the layer's private ping-pong pair (TPGatedDeltaNet._verify_win_pair): no verify reads a block's conv
+history, and the window holds the conv rows of every column of a row's latest verify. They are written into a block only
+where vLLM can read the block as something other than the same row's next verify (``materialize``): the source of a
 copy_kv_cache_blocks pair, and in mode "align" a column-0 block whose state ends exactly on a block boundary (vLLM keeps
 that state for prefix-cache hits without a copy when the step had no drafts).
 """
@@ -193,8 +193,8 @@ def kv_block_bytes_per_bank(shape, dtype_name, n_banks):
 def gdn_groups_by_slot(per_layer_specs, is_mamba_entry):
     """{GDN layer index: group rank}. vLLM's uniform-page grouping splits the layers of one spec type into groups of
     equal size in layer order, and KV cache tensor j is shared by layer j of every group, so a GDN layer's group is its
-    rank among the GDN layers of its layer slot. Checked against the block windows at the first step
-    (SpecGdnBlockState.check_groups)."""
+    rank among the GDN layers of its layer slot. Checked against the layer names of every step's mamba_state groups
+    (qwen36_vllm._spec_mamba_groups)."""
     seen = {}
     out = {}
     for i, e in enumerate(per_layer_specs):
@@ -207,7 +207,7 @@ def gdn_groups_by_slot(per_layer_specs, is_mamba_entry):
 
 class StepWindows:
     """Host view of one step's GDN windows in ENGINE rows: per group g an int64 [B, 1 + K] block table (0 = null) and
-    the int64 [B] start column (state_accepted_counts - 1)."""
+    the int64 [B] start column (mamba_state.accepted_counts - 1)."""
 
     def __init__(self, blocks, start_col):
         self.blocks = blocks  # list over groups of [B, T]
@@ -284,8 +284,8 @@ class SpecBlockBook:
 
     def set_step(self, blocks, start_col, live_rows, boundary=()):
         """Stage one verify. ``blocks``: [G] int64 [B, T] in ENGINE rows (0 = the null block on rows no request holds);
-        ``start_col``: int64 [B] (state_accepted_counts - 1); ``live_rows``: the engine rows the verify computes (the
-        others are held). ``boundary``: (row, column) pairs whose conv rows take_pending returns after the verify.
+        ``start_col``: int64 [B] (mamba_state.accepted_counts - 1); ``live_rows``: the engine rows the verify computes
+        (the others are held). ``boundary``: (row, column) pairs whose conv rows take_pending returns after the verify.
         Returns the groups whose ring_page_idx rows changed (the device copy to make). Runs every decode step, so the
         head pages of a group and the window map are rebuilt only when its blocks, the live rows or a copy changed
         them."""
@@ -540,7 +540,7 @@ class SpecBlockBook:
         if u == WARMUP_REQ:
             return 0
         if self.prefill_blocks is None:
-            raise ValueError("QWEN36_MAMBA_SPEC prefill without state_block_ids_per_layer")
+            raise ValueError("QWEN36_MAMBA_SPEC prefill without mamba_state")
         b = int(self.prefill_blocks[g][u])
         if b <= 0:
             raise ValueError(f"prefilled request {u}: group {g} state block is the null block {b}")
@@ -558,7 +558,7 @@ class SpecBlockBook:
         if not bool((pos > 0).any()):
             return
         if per_group is None or len(per_group) != self.G:
-            raise ValueError(f"state_checkpoint_positions needs [{self.G}] groups of checkpoint blocks")
+            raise ValueError(f"mamba_state.checkpoint_positions needs checkpoint_blocks in each of [{self.G}] groups")
         ids = [torch.as_tensor(t).reshape(pos.shape[0], -1) for t in per_group]
         for u, j in (pos > 0).nonzero().tolist():
             blocks = [int(t[u, j]) for t in ids]
@@ -587,24 +587,6 @@ class CheckpointPoints(list):
             self._write(self._blocks[int(n)])
         else:
             self._write_snap(self._blocks[int(n)], snap)
-
-
-def group_windows(windows_per_layer, layer_groups, G):
-    """[G] int64 tensors from the plugin's per-layer list (one tensor per GDN layer, None for attention layers). Raises
-    unless every layer of a group got the same window: the layer-slot grouping (gdn_groups_by_slot) must match vLLM's
-    KV cache groups."""
-    by_group = {}
-    for i, g in layer_groups.items():
-        w = windows_per_layer[i]
-        if w is None:
-            raise ValueError(f"GDN layer {i} has no state block window")
-        prev = by_group.setdefault(g, w)
-        if prev is not w and not torch.equal(torch.as_tensor(prev), torch.as_tensor(w)):
-            raise RuntimeError(
-                f"GDN layer {i}: its state block window differs from the other layers of inferred group {g}; the "
-                "layer-slot grouping (gdn_groups_by_slot) does not match vLLM's KV cache groups"
-            )
-    return [torch.as_tensor(by_group[g]).to(torch.int64) for g in range(G)]
 
 
 class SpecGdnBlockState:
@@ -736,9 +718,6 @@ class SpecGdnBlockState:
     mamba_block_size = property(lambda self: self.book.mamba_block_size)
 
     # ---------------------------------------------------------------- steps
-    def group_windows(self, windows_per_layer):
-        return group_windows(windows_per_layer, self.layer_groups, self.G)
-
     def set_step(self, blocks, start_col, live_rows, boundary=()):
         self.resolve_moves()
         changed = self.book.set_step(blocks, start_col, live_rows, boundary)
@@ -804,10 +783,11 @@ class SpecGdnBlockState:
             self.moves_counts = None
 
     def capture_chain_copies(self, copies, rows):
-        """A chained step's boundary copies (state_chain_copies_per_layer), before set_step maps this step's windows:
-        ``copies`` [G] int64 [B, T, 2] in engine rows, entry [u, c - 1] = (src, dst) when the pending verify accepts c
-        tokens of row u; ``rows`` = the chained rows. Records each distinct pair with the counts that select it and the
-        pending verify's window column whose conv rows src stands for (src's block holds only its recurrent state)."""
+        """A chained step's boundary copies (the copies of the mamba_state groups' chain), before set_step maps this
+        step's windows: ``copies`` [G] int64 [B, T, 2] in engine rows, entry [u, c - 1] = (src, dst) when the pending
+        verify accepts c tokens of row u; ``rows`` = the chained rows. Records each distinct pair with the counts that
+        select it and the pending verify's window column whose conv rows src stands for (src's block holds only its
+        recurrent state)."""
         try:
             self.resolve_moves()
             found = self._chain_copy_entries(copies, rows)
@@ -977,17 +957,8 @@ class SpecGdnBlockState:
         self.book.forget_row(u)
 
     # ---------------------------------------------------------------- prefill
-    def set_prefill_blocks(self, state_block_ids_per_layer):
-        ids = self.group_windows(state_block_ids_per_layer)
-        self.book.set_prefill_blocks([t.reshape(t.shape[0], -1)[:, 0] for t in ids])
-
-    def set_prefill_checkpoints(self, ids_per_layer, positions):
-        """The plugin's state_checkpoint_ids_per_layer / state_checkpoint_positions (see
-        SpecBlockBook.set_prefill_checkpoints)."""
-        has = positions is not None and bool((torch.as_tensor(positions) > 0).any())
-        if has and ids_per_layer is None:
-            raise ValueError("state_checkpoint_positions without state_checkpoint_ids_per_layer")
-        self.book.set_prefill_checkpoints(self.group_windows(ids_per_layer) if has else None, positions)
+    def set_prefill_checkpoints(self, per_group, positions):
+        self.book.set_prefill_checkpoints(per_group, positions)
 
     def prefill_checkpoints(self, u):
         return self.book.prefill_checkpoints(u)

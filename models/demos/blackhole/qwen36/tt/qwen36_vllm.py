@@ -27,6 +27,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
+from models.demos.blackhole.qwen36.tt.kv_cache_spec import gdn_layer_name
 from models.demos.blackhole.qwen36.tt.model import paged_block_size, serve_device_decode_env_enabled
 from models.demos.blackhole.qwen36.tt.spec_engine import rows_to_engine, slot_map_after_remap, slot_map_inverse
 from models.demos.blackhole.qwen36.tt.tp_common import (
@@ -202,6 +203,72 @@ def _build_model_capabilities():
     if router is not None:
         caps["fabric_config"] = {"router_config": router}
     return caps
+
+
+# QWEN36_MAMBA_SPEC: the plugin passes the GDN state inputs of a step as one keyword, ``mamba_state``, read here by
+# attribute. ``mamba_state.groups`` has one entry per MambaSpec KV cache group, in KV cache group order: ``layer_names``
+# (the names get_kv_cache_spec gives the group's layers), ``windows`` int32 [R, 1 + K] (the step writes the state after
+# query token t into the block in column t; column 0 holds the running state), ``checkpoint_blocks`` int32 [R, W] or
+# None and ``chain`` None or (``copies`` [R, 1 + K, 2], ``start_blocks`` [R, 1 + K], ``windows`` [R, 1 + K, 1 + K]),
+# indexed by the pending verify's accepted count - 1. ``mamba_state.accepted_counts`` int32 [R] (-1 on a chained row)
+# and ``mamba_state.checkpoint_positions`` int32 [R, W] are None where they do not apply. The functions below turn it
+# into the per-group inputs of GdnBlockState and SpecGdnBlockState.
+def _mamba_groups(mamba_state, gdn_layers):
+    """{GDN layer index: index of its group in mamba_state.groups}, from the groups' layer_names. Raises unless each
+    layer of ``gdn_layers`` is in exactly one group and every name is one of theirs."""
+    index = {gdn_layer_name(i): i for i in gdn_layers}
+    group_of, unknown, twice = {}, [], []
+    for k, group in enumerate(mamba_state.groups):
+        for name in group.layer_names:
+            i = index.get(name)
+            if i is None:
+                unknown.append((k, name))
+            elif i in group_of:
+                twice.append((name, group_of[i], k))
+            else:
+                group_of[i] = k
+    missing = [gdn_layer_name(i) for i in gdn_layers if i not in group_of]
+    if unknown or twice or missing:
+        raise ValueError(
+            "mamba_state groups must hold every GDN layer once: (group, name) of names that are no GDN layer "
+            f"{unknown}, (name, group, group) of layers in two groups {twice}, layers in no group {missing}"
+        )
+    return group_of
+
+
+def _gdn_step_blocks(mamba_state, gdn_layers):
+    """GdnBlockState's inputs of a step: (window column 0 of each mamba_state group, int [R]: the block of row i's
+    running state; {GDN layer index: its group's index in that list})."""
+    group_of = _mamba_groups(mamba_state, gdn_layers)
+    return [group.windows[:, 0] for group in mamba_state.groups], group_of
+
+
+def _spec_mamba_groups(mamba_state, blocks):
+    """mamba_state.groups in the group order of ``blocks`` (SpecGdnBlockState: its group g holds the GDN layers that
+    ``blocks.layer_groups`` maps to g, from their layer slots at allocation). Raises unless both partition the GDN
+    layers the same way."""
+    group_of = _mamba_groups(mamba_state, blocks.layer_groups)
+    pairs = {(g, group_of[i]) for i, g in blocks.layer_groups.items()}
+    if len(mamba_state.groups) != blocks.G or len(pairs) != blocks.G or len({k for _, k in pairs}) != blocks.G:
+        bound = {g: sorted(i for i, h in blocks.layer_groups.items() if h == g) for g in range(blocks.G)}
+        given = {k: sorted(i for i, h in group_of.items() if h == k) for k in range(len(mamba_state.groups))}
+        raise ValueError(
+            f"mamba_state groups (GDN layer indices) {given} differ from the groups bound by layer slot {bound}"
+        )
+    k_of = dict(pairs)
+    return [mamba_state.groups[k_of[g]] for g in range(blocks.G)]
+
+
+def _spec_prefill_blocks(mamba_state, blocks):
+    """SpecGdnBlockState's inputs of a prefill step, in its group order: ([G] window column 0 int [R], [G] checkpoint
+    blocks int [R, W] or None)."""
+    groups = _spec_mamba_groups(mamba_state, blocks)
+    ckpt = [group.checkpoint_blocks for group in groups]
+    if len({c is None for c in ckpt}) > 1:
+        raise ValueError(
+            f"mamba_state: checkpoint_blocks in groups {[c is not None for c in ckpt]}, not in all or none"
+        )
+    return [group.windows[:, 0] for group in groups], (None if ckpt[0] is None else ckpt)
 
 
 _PREFILL_WARMUP_CHUNK = 2048
@@ -577,11 +644,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # the next decode must be a commanded reload (_decode_forward_resident refuses a steady step).
         self._decode_bucket_last = None
         model = self.model[0]
+        mamba_state = kwargs.pop("mamba_state", None)
         state_block_ids = None
         if getattr(self, "_gdn_blocks", None) is not None:
-            state_block_ids = kwargs.pop("state_block_ids_per_layer", None)
-            if state_block_ids is None:
-                raise ValueError("QWEN36_MAMBA_SPEC prefill needs state_block_ids_per_layer from the plugin")
+            if mamba_state is None:
+                raise ValueError("QWEN36_MAMBA_SPEC prefill needs mamba_state from the plugin")
+            state_block_ids = _gdn_step_blocks(mamba_state, [i for i, _ in self._gdn_blocks.layers])
             kwargs.pop("page_tables_per_layer", None)  # page_table is the attention group's table
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             # Batched prefill into decode slots; multimodal users get their vision tokens lazily, per user.
@@ -684,9 +752,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                      still the FULL prompt / page-table row). Resumed from the model's GDN snapshots when available.
         visual_kwargs: the vLLM kwargs carrying per-request pixel_values[u] / image_grid_thw[u] (and the *_videos
                      variants); a user with real visual data is prefilled multimodally (prefix cache bypassed).
-        state_block_ids: QWEN36_MAMBA_SPEC: the plugin's state_block_ids_per_layer; a user with start_pos > 0 resumes
-                     from its block, and each user's GDN state is copied from its decode row into its block after the
-                     prefill.
+        state_block_ids: QWEN36_MAMBA_SPEC: (the block of user u in each KV cache group, {GDN layer: its group}) from
+                     the plugin's mamba_state (_gdn_step_blocks); a user with start_pos > 0 resumes from its block, and
+                     each user's GDN state is copied from its decode row into its block after the prefill.
         Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — the M-RoPE delta is kept model-side per slot).
         """
         N = tokens.shape[0]
@@ -713,7 +781,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 vision_list = vl
         gdn_resume = None
         if state_block_ids is not None:
-            self._gdn_blocks.set_prefill_blocks(state_block_ids)
+            self._gdn_blocks.set_prefill_blocks(*state_block_ids)
             gdn_resume = self._gdn_blocks
         host_logits = model.prefill_paged_slots(
             token_ids_list,
@@ -725,7 +793,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             gdn_resume=gdn_resume,
         )
         if state_block_ids is not None:
-            self._gdn_blocks.write_prefill_rows(state_block_ids, empty_slots)
+            self._gdn_blocks.write_prefill_rows(*state_block_ids, empty_slots)
         if ns_commit is not None:
             self._ns_phys, self._ns_owned = ns_commit
         logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)  # [N, 1, vocab]
@@ -884,9 +952,11 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if tokens is None:
             raise TypeError("decode_forward requires tokens")
         start_pos = kwargs.get("start_pos")
+        mamba_state = kwargs.pop("mamba_state", None)  # None in warmup: rows keep block 0
         state_block_ids = None
         if getattr(self, "_gdn_blocks", None) is not None:
-            state_block_ids = kwargs.pop("state_block_ids_per_layer", None)  # None in warmup: rows keep block 0
+            if mamba_state is not None:
+                state_block_ids = _gdn_step_blocks(mamba_state, [i for i, _ in self._gdn_blocks.layers])
             kwargs.pop("page_tables_per_layer", None)
         ns_phys = None
         if _ns_slotmap_enabled():
@@ -936,7 +1006,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
         model = self.model[0]
         if state_block_ids is not None:
-            self._gdn_blocks.set_decode_blocks(state_block_ids, row_of=ns_phys)
+            self._gdn_blocks.set_decode_blocks(*state_block_ids, row_of=ns_phys)
         # Batched fused GDN decode: make the conv state of this width class valid FIRST (in-place sync when the width
         # class changed since the last call; no-op otherwise / when the fused path is off). After this the conv tag is
         # the single needed format, so the remap below gathers only that one (both ops are row-wise: order-free).
@@ -1346,12 +1416,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_prefill_over_pending_spec": bool(
             spec_chain_enabled() and spec_fused_enabled() and spec_prefill_overlap_enabled()
         ),
-        # QWEN36_MAMBA_SPEC=1: a chained verify in mode align gets state_chain_start_blocks_per_layer and
-        # state_chain_windows_per_layer (one entry per accepted count of the pending verify) and the chain body selects
-        # them on the device; state_chain_copies_per_layer runs as block copies whose count the device selects
-        "supports_mamba_chained_state_moves": bool(
-            spec_chain_enabled() and spec_fused_enabled() and mamba_spec_enabled()
-        ),
         # decode_forward(finishing_slots=[runner slots]): requests left out of a step only because the step in flight ends them at
         # max_tokens. The engine frees their rows without parking (spec_engine._apply_finishing). Only meaningful with spec.
         "supports_finishing_slots": True,
@@ -1469,30 +1533,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         blocks.copy_blocks([(int(a), int(b)) for a, b in copies])
 
     @staticmethod
-    def _pop_state_kwargs(kwargs):
-        """Pop the plugin's MambaSpec inputs (QWEN36_MAMBA_SPEC): (ids, windows, counts); page_table is the attention
-        group's table."""
-        kwargs.pop("page_tables_per_layer", None)
-        return (
-            kwargs.pop("state_block_ids_per_layer", None),
-            kwargs.pop("state_block_windows_per_layer", None),
-            kwargs.pop("state_accepted_counts", None),
-        )
-
-    def _gdn_windows(self, kwargs, B):
-        """The engine's gdn_windows for a decode step (runner slots), or None without MambaSpec groups: ([G] block
-        windows [B, 1 + K], state_accepted_counts [B], moves). ``moves`` is None, or, on a chained step with
-        supports_mamba_chained_state_moves, ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K], [G] block
-        copies [B, 1 + K, 2] or None when every entry is (0, 0)) indexed by the pending verify's accepted count - 1."""
-        blocks = getattr(self.model[0], "_spec_blocks", None)
-        copies = kwargs.pop("state_chain_copies_per_layer", None)
-        starts = kwargs.pop("state_chain_start_blocks_per_layer", None)
-        wins = kwargs.pop("state_chain_windows_per_layer", None)
-        if blocks is None:
-            return None
-        _, windows, counts = self._pop_state_kwargs(kwargs)
-        if windows is None or counts is None:
-            raise ValueError("QWEN36_MAMBA_SPEC decode needs state_block_windows_per_layer and state_accepted_counts")
+    def _gdn_windows(mamba_state, blocks, B):
+        """The engine's gdn_windows for a decode step (runner slots) from the plugin's mamba_state, in the group order
+        of ``blocks`` (SpecGdnBlockState): ([G] block windows [B, 1 + K], accepted counts [B], moves). ``moves`` is
+        None, or, on a chained step (the groups carry ``chain``), ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K,
+        1 + K], [G] block copies [B, 1 + K, 2] or None when every entry is (0, 0)) indexed by the pending verify's
+        accepted count - 1."""
+        if mamba_state is None or mamba_state.accepted_counts is None:
+            raise ValueError("QWEN36_MAMBA_SPEC decode needs mamba_state with accepted_counts")
+        groups = _spec_mamba_groups(mamba_state, blocks)
 
         def pad_rows(w):
             out = torch.zeros((B,) + tuple(w.shape[1:]), dtype=torch.int64)
@@ -1500,24 +1549,19 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             out[:n] = w[:n]
             return out
 
-        out = [pad_rows(w) for w in blocks.group_windows(windows)]
+        out = [pad_rows(group.windows) for group in groups]
         c = torch.ones(B, dtype=torch.int64)
-        cc = torch.as_tensor(counts).to(torch.int64).reshape(-1)
+        cc = torch.as_tensor(mamba_state.accepted_counts).to(torch.int64).reshape(-1)
         c[: min(B, cc.numel())] = cc[:B]
+        chains = [group.chain for group in groups]
+        if len({ch is None for ch in chains}) > 1:
+            raise ValueError(f"mamba_state: chain in groups {[ch is not None for ch in chains]}, not in all or none")
         moves = None
-        if starts is not None or wins is not None or copies is not None:
-            if starts is None or wins is None:
-                raise ValueError("chained state moves need state_chain_start_blocks_per_layer and _windows_per_layer")
-            cps = None
-            if copies is not None:  # (0, 0) everywhere at prefix_cache_retention_interval 0
-                cps = [pad_rows(e) for e in blocks.group_windows(copies)]
-                if not any(bool((e[..., 0] != e[..., 1]).any()) for e in cps):
-                    cps = None
-            moves = (
-                [pad_rows(s) for s in blocks.group_windows(starts)],
-                [pad_rows(w) for w in blocks.group_windows(wins)],
-                cps,
-            )
+        if chains[0] is not None:
+            cps = [pad_rows(ch.copies) for ch in chains]
+            if not any(bool((e[..., 0] != e[..., 1]).any()) for e in cps):  # (0, 0) everywhere at retention interval 0
+                cps = None
+            moves = ([pad_rows(ch.start_blocks) for ch in chains], [pad_rows(ch.windows) for ch in chains], cps)
         return out, c, moves
 
     @classmethod
@@ -1705,14 +1749,14 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         eng = self._ensure_ready(kv_cache)
         model = self.model[0]
         gdn = getattr(model, "_spec_blocks", None)
+        mamba_state = kwargs.pop("mamba_state", None)
         if gdn is not None:
-            ids, _, _ = self._pop_state_kwargs(kwargs)
-            if ids is None:
-                raise ValueError("QWEN36_MAMBA_SPEC prefill needs state_block_ids_per_layer from the plugin")
-            gdn.set_prefill_blocks(ids)
-            gdn.set_prefill_checkpoints(
-                kwargs.pop("state_checkpoint_ids_per_layer", None), kwargs.pop("state_checkpoint_positions", None)
-            )
+            if mamba_state is None:
+                raise ValueError("QWEN36_MAMBA_SPEC prefill needs mamba_state from the plugin")
+            kwargs.pop("page_tables_per_layer", None)  # page_table is the attention group's table
+            ids, ckpt = _spec_prefill_blocks(mamba_state, gdn)
+            gdn.prefill_blocks = ids
+            gdn.set_prefill_checkpoints(ckpt, mamba_state.checkpoint_positions)
         greq = (lambda i: {}) if gdn is None else (lambda i: {"gdn_req": i})
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
         table = self._table(page_table[:N])
@@ -1826,8 +1870,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         gdn_kw = {}
         models = getattr(self, "model", None)  # absent on the adapter tests' fakes
         blocks = getattr(models[0], "_spec_blocks", None) if models else None
+        mamba_state = kwargs.pop("mamba_state", None)
         if blocks is not None:
-            gdn_kw["gdn_windows"] = self._gdn_windows(kwargs, int(tokens.shape[0]))
+            kwargs.pop("page_tables_per_layer", None)  # page_table is the attention group's table
+            gdn_kw["gdn_windows"] = self._gdn_windows(mamba_state, blocks, int(tokens.shape[0]))
         if narrow:
             return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap, **gdn_kw)
         num_valid_drafts = kwargs.pop("num_valid_drafts")

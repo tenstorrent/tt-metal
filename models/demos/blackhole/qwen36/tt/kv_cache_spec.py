@@ -25,6 +25,12 @@ def bf8_bytes(values):
     return values // 16 * BF8_BYTES_PER_16
 
 
+def gdn_layer_name(i):
+    """vLLM's name of GDN layer i (its Qwen3.5 model's module name): the key of its MambaSpec and its entry in the
+    layer_names of its group in the plugin's mamba_state."""
+    return f"model.layers.{i}.linear_attn"
+
+
 def qwen36_layer_names(text_config):
     """(attention layer names, GDN layer names) in layer order, named as vLLM's Qwen3.5 model names them."""
     n = int(_cfg(text_config, "num_hidden_layers"))
@@ -34,7 +40,7 @@ def qwen36_layer_names(text_config):
         if types[i % len(types)] == "full_attention":
             attn.append(f"model.layers.{i}.self_attn")
         else:
-            gdn.append(f"model.layers.{i}.linear_attn")
+            gdn.append(gdn_layer_name(i))
     return attn, gdn
 
 
