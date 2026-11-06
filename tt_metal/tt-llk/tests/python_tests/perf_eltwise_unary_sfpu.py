@@ -388,10 +388,7 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
 def test_perf_eltwise_unary_sfpu_quick_gelu(
     perf_report, formats, mathop, dest_acc, input_dimensions
 ):
-    # quick_gelu; Blackhole has the only kernel.
-    _extra_slice_config(formats, mathop, dest_acc, False, input_dimensions).run(
-        perf_report
-    )
+    _extra_slice_run(perf_report, formats, mathop, dest_acc, False, input_dimensions)
 
 
 @pytest.mark.perf

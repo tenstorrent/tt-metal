@@ -1722,7 +1722,7 @@ QUICK_GELU_SWEEP = dict(
 @skip_for_wormhole
 @parametrize(**QUICK_GELU_SWEEP)
 def test_eltwise_unary_sfpu_quick_gelu(formats, dest_acc, mathop):
-    # quick_gelu, both signs past the hold; Blackhole has the only kernel.
+    # Both signs past the hold.
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -1760,6 +1760,7 @@ def test_eltwise_unary_sfpu_quick_gelu_every_bf16_input(dest_acc):
         FastMode.No,
         [256, 256],
         spec_A=sweep_spec(DataFormat.Float16_b),
+        return_golden=True,
     )
     values = (torch.arange(65536, dtype=torch.int32) << 16).view(torch.float32)
     values = torch.sort(values[torch.isfinite(values)]).values
