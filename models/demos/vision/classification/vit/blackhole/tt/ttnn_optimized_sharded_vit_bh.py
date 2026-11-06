@@ -548,22 +548,6 @@ def vit(
     return classifier_output
 
 
-def preprocess_inputs(
-    input_ids,
-    token_type_ids,
-    device,
-):
-    batch_size, _ = input_ids.shape
-
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    token_type_ids = ttnn.from_torch(
-        token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-
-    return input_ids, token_type_ids
-
-
 def fuse_query_key_value(attention):
     """One linear for q, k and v, laid out head by head as split_query_key_value_and_split_heads expects."""
     num_heads = attention.num_attention_heads
