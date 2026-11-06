@@ -11,8 +11,8 @@
 
 namespace ttnn {
 
-// Used when compute_kernel_config is not given: HiFi4, math_approx_mode=false, fp32_dest_acc_en=true (most accurate).
-// On Quasar: math_approx_mode=true, fp32_dest_acc_en=false.
+// The rms_norm default compute config: HiFi4, math_approx_mode=false, fp32_dest_acc_en=true (most accurate).
+// rms_norm uses bf16 accumulation on Quasar, with a ROW_MAJOR weight or bias, and with subblock_w > 4.
 DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch);
 
 Tensor rms_norm(

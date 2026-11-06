@@ -10,11 +10,11 @@ slice): exact at 3 of HiFi4's 4 passes. For bf16-origin weights the skipped term
 ttnn's default for a bf16 output accumulates in a bf16 DEST (1.4-2% error on the K=6144 projections); fp32 DEST and
 fp32 L1 partials remove that.
 
-RMSNorm: the default (bf16 DEST) sums x^2 in bf16, a 1-2% (up to 12%) per-token scale error at deep layers.
+RMSNorm: bf16 DEST sums x^2 in bf16, a 1-2% (up to 12%) per-token scale error at deep layers.
 fp32 DEST keeps the statistics fp32; exact rsqrt.
 
 Each switch defaults to the model variant (on for MiniMax-M3.1, off for MiniMax-M3) and is overridden by its env
-var (0 or 1). Off is ttnn's default config (None):
+var (0 or 1). Off is ttnn's default config (None) for matmuls and bf16 statistics for norms:
   * M3_PRECISE_MATMULS: the matmul config above, plus a bf16 o_proj input instead of a bf8 cast;
   * M3_PRECISE_NORMS: fp32 RMSNorm statistics.
 """
@@ -96,5 +96,5 @@ def rms_norm_compute_config(device):
 
 
 def bf16_stats_rms_norm_compute_config(device):
-    """bf16 statistics and approximate rsqrt: with fp32 statistics the row-major gain overflows L1."""
+    """bf16 statistics and approximate rsqrt: the RMSNorm config when precise norms are off."""
     return _bf16_stats_rms_norm_config(device.arch())
