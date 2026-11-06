@@ -561,3 +561,23 @@ def test_create_width_shard_by_head(
             n_local_kv_heads,
             head_dim,
         )
+
+
+@skip_for_blackhole("Requires eth connected devices to run, see #12349")
+@pytest.mark.parametrize("offset_dtype", (ttnn.bfloat16, ttnn.float32))
+def test_create_heads_with_slice_rejects_float_batch_offset(device, offset_dtype, expect_error):
+    batch, n_local_heads, n_local_kv_heads, head_dim, slice_size = 32, 8, 1, 128, 8
+    batch_offset_tt = ttnn.from_torch(
+        torch.tensor([8], dtype=torch.float32), dtype=offset_dtype, device=device, layout=ttnn.TILE_LAYOUT
+    )
+    with expect_error(RuntimeError, "batch_offset must be INT32 or UINT32"):
+        run_test_create_min_width_shard(
+            device=device,
+            batch=batch,
+            n_local_heads=n_local_heads,
+            n_local_kv_heads=n_local_kv_heads,
+            head_dim=head_dim,
+            overlap_coregrid=True,
+            batch_offset=batch_offset_tt,
+            slice_size=slice_size,
+        )
