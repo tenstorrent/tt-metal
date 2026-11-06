@@ -70,7 +70,7 @@ protected:
                                              ::testing::UnitTest::GetInstance()->current_test_info()->name());
         fs::remove_all(root_);
         fs::create_directories(root_);
-        // The thresholds the README recommends.
+        // The thresholds from the README example.
         config_.start_below_free_pct = 25.0;
         config_.stop_at_free_pct = 40.0;
         config_.min_idle_seconds = std::chrono::seconds(kSecondsPerHour);

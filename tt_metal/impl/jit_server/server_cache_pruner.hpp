@@ -53,9 +53,8 @@ inline constexpr const char* kCacheCheckIntervalEnv = "TT_METAL_JIT_SERVER_CACHE
 inline constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 inline constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
 // When kCacheTargetFreePctEnv is unset, a run stops this many percentage points above the start
-// threshold. Each run then frees about 15% of the disk: on a 1.8 TB disk that is ~260 GB, roughly a
-// day of growth for a busy server (bgdepyc04 added ~300 GB/day in Nov 2026), so a full scan runs
-// about once a day instead of every few hours.
+// threshold. The gap is how much of the disk each run frees, so it sets how often the cache is
+// scanned: a wider gap means fewer, larger runs.
 inline constexpr double kDefaultPruneTargetGapPct = 15.0;
 // After a run that frees nothing, checks back off exponentially up to this.
 inline constexpr std::chrono::seconds kMaxPruneBackoffSeconds{3600};
