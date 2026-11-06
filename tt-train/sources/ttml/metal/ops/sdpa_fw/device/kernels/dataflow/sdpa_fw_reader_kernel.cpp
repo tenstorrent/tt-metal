@@ -123,12 +123,18 @@ void kernel_main() {
         read_row(light_global_row);
     }
 #else
+    // Query rows to compute and the key rows they attend to, in tiles of each (batch, head) sequence.
+    const uint32_t q_begin = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t q_count = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t k_begin = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t k_count = get_arg_val<uint32_t>(runtime_args_counter++);
+
     // Standard mode: process rows sequentially.
     // Reads K, V and (USE_ATTN_MASK) mask in Sk_chunk_t-tile chunks. Causal K-count is
-    // rounded UP to the next Sk_chunk_t boundary; the program factory guarantees Ht is a
-    // multiple of Sk_chunk_t so the round-up never reads past the sequence end.
+    // rounded UP to the next Sk_chunk_t boundary; the program factory guarantees the K range length
+    // (St without a range) is a multiple of Sk_chunk_t so the round-up never reads past its end.
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        const uint32_t global_row_idx = start_row + i;
+        const uint32_t global_row_idx = ranged_row(start_row + i, Ht, q_begin, q_count);
         const uint32_t q_start_idx = global_row_idx * qWt;
         read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
 
@@ -151,7 +157,7 @@ void kernel_main() {
         // For causal: round up to next Sk_chunk_t boundary so the diagonal chunk is fully read.
         const uint32_t num_kv_tiles_to_read = round_up(q_row_tile + 1U, Sk_chunk_t);
 #else
-        const uint32_t num_kv_tiles_to_read = Ht;
+        const uint32_t num_kv_tiles_to_read = k_count;
 #endif
         const uint32_t num_kv_chunks = num_kv_tiles_to_read / Sk_chunk_t;
 
@@ -161,7 +167,7 @@ void kernel_main() {
 #endif
 
         for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
-            const uint32_t h_start = k_chunk * Sk_chunk_t;
+            const uint32_t h_start = k_begin + k_chunk * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
             // Lay K col-major in cb_key (see balanced path above for rationale).
             read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);

@@ -318,11 +318,17 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_u_scaler,
     const std::optional<ttnn::Tensor>& gate,
-    const std::optional<ttnn::Tensor>& preallocated_grad_gate) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_gate,
+    const std::optional<ttml::metal::SeqTileRange>& q_range,
+    const std::optional<ttml::metal::SeqTileRange>& k_range) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .mask_type = mask_type, .dropout_probability = dropout_probability, .has_gate = gate.has_value()};
+        .mask_type = mask_type,
+        .dropout_probability = dropout_probability,
+        .has_gate = gate.has_value(),
+        .q_range = q_range,
+        .k_range = k_range};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

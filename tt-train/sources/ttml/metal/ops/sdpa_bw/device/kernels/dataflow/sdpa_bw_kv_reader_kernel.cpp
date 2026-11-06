@@ -133,9 +133,15 @@ void kernel_main() {
         read_row(light_global_row);
     }
 #else
+    // Key rows to compute and the query rows that attend to them, in tiles of each (batch, head) sequence.
+    const uint32_t k_begin = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t k_count = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t q_begin = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t q_count = get_arg_val<uint32_t>(runtime_args_counter++);
+
     // process rows of K and V assigned to this core
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        const uint32_t global_row_idx = start_row + i;
+        const uint32_t global_row_idx = ranged_row(start_row + i, Ht, k_begin, k_count);
         const uint32_t k_start_idx = global_row_idx * kWt;
         const uint32_t v_start_idx = global_row_idx * vWt;
 
@@ -155,8 +161,8 @@ void kernel_main() {
         const uint32_t q_start_tile = k_row_tile;
         const uint32_t num_q_tiles_to_read = Ht - k_row_tile;
 #else
-        const uint32_t q_start_tile = 0;
-        const uint32_t num_q_tiles_to_read = Ht;
+        const uint32_t q_start_tile = q_begin;
+        const uint32_t num_q_tiles_to_read = q_count;
 #endif
 
 #ifdef USE_ATTN_MASK

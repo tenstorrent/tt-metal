@@ -76,8 +76,13 @@ void kernel_main() {
         write_row(light_global_row);
     }
 #else
+    // Key rows written by this launch, in tiles of each (batch, head) sequence.
+    const uint32_t k_begin = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t k_count = get_arg_val<uint32_t>(runtime_args_counter++);
+
     const uint32_t end_row = start_row + num_rows_to_process;
-    for (uint32_t r = start_row; r < end_row; r++) {
+    for (uint32_t unit = start_row; unit < end_row; unit++) {
+        const uint32_t r = ranged_row(unit, Ht, k_begin, k_count);
         // Convert global row index to tensor coordinates
         const uint32_t batch_idx = r / (num_of_groups * Ht);
         const uint32_t s_tile_idx = r % Ht;  // position in sequence (tile idx)
