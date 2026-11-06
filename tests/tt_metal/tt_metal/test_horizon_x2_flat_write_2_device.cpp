@@ -45,8 +45,10 @@ std::shared_ptr<distributed::MeshBuffer> flat_write_2dev_l1_buffer(distributed::
 }
 
 bool flat_write_2dev_two_chips() {
-    return std::getenv("TT_METAL_SIMULATOR") != nullptr &&
-           MetalContext::instance().get_cluster().number_of_devices() >= 2;
+    const auto& cluster = MetalContext::instance().get_cluster();
+    bool is_horizon = cluster.arch() == tt::ARCH::QUASAR &&
+                      cluster.get_soc_desc(0).get_arch_descriptor().get_ip_variant() == tt::IpVariant::HORIZON;
+    return is_horizon && std::getenv("TT_METAL_SIMULATOR") != nullptr && cluster.number_of_devices() >= 2;
 }
 
 // Opens chip 0 and chip 1 as separate unit MeshDevices.

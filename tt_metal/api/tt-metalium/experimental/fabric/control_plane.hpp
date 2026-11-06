@@ -601,6 +601,8 @@ private:
 
     using Routing2DActionVectors = std::array<std::uint8_t, Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES>;
 
+    void write_routing_tables_for_fabric_over_noc_() const;
+    void write_routing_tables_for_fabric_ethernet_() const;
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_routing_info_to_devices(
         MeshId mesh_id,

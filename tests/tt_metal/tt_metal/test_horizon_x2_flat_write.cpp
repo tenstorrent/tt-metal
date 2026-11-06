@@ -133,8 +133,10 @@ void expect_flat_write_lands(
 }
 
 bool flat_write_two_chips() {
-    return std::getenv("TT_METAL_SIMULATOR") != nullptr &&
-           MetalContext::instance().get_cluster().number_of_devices() >= 2;
+    const auto& cluster = MetalContext::instance().get_cluster();
+    bool is_horizon = cluster.arch() == tt::ARCH::QUASAR &&
+                      cluster.get_soc_desc(0).get_arch_descriptor().get_ip_variant() == tt::IpVariant::HORIZON;
+    return is_horizon && std::getenv("TT_METAL_SIMULATOR") != nullptr && cluster.number_of_devices() >= 2;
 }
 
 // Opens chip 1 instead of chip 0, for the reverse direction.

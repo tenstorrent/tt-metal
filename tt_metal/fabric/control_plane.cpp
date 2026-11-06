@@ -1642,6 +1642,14 @@ bool ControlPlane::is_fabric_over_noc() const {
 void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
     this->fabric_over_noc_routing_tables_.clear();
 
+    // Horizon x2 supports exactly one physical mesh (AXI crossbar, not Ethernet links).
+    // flat_addr is indexed by routing plane [0] — assert this assumption holds.
+    TT_FATAL(
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size() <= tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH,
+        "configure_routing_tables_for_fabric_over_noc: expected at most {} devices in one mesh, got {}",
+        tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH,
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size());
+
     for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         tt::tt_fabric::fabric_over_noc_routing_l1_info_t info = {};
         info.my_mesh_id = *src_node.mesh_id;
@@ -1679,14 +1687,11 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
                 }
                 continue;
             }
-            if (dst_chip >= tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH) {
-                log_warning(
-                    tt::LogFabric,
-                    "Fabric-over-NoC routing table: dst chip {} >= MAX_HORIZON_DEVS_PER_MESH ({}), skipping",
-                    dst_chip,
-                    tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
-                continue;
-            }
+            TT_FATAL(
+                dst_chip < tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH,
+                "Fabric-over-NoC routing table: dst chip {} >= MAX_HORIZON_DEVS_PER_MESH ({})",
+                dst_chip,
+                tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
 
             auto* dst_device = this->cluster_.get().get_driver()->get_tt_device(dst_phys);
             if (!dst_device) {
@@ -1735,6 +1740,9 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
                 dst_phys,
                 access_points.size());
 
+            // Assumption: the flat address to reach core (x, y) on a destination chip is the same
+            // regardless of which source chip is computing it (symmetric AXI address space).
+            // This holds for Horizon x2 where both devices share the same NOC2AXI ATT configuration.
             for (const auto& core :
                  this->cluster_.get().get_soc_desc(dst_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
                 if (core.x >= tt::tt_fabric::MAX_HORIZON_NOC_X || core.y >= tt::tt_fabric::MAX_HORIZON_NOC_Y) {
@@ -3115,26 +3123,22 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     this->cluster_.get().l1_barrier(physical_chip_id);
 }
 
-void ControlPlane::write_routing_tables_to_all_chips() const {
-    if (this->is_fabric_over_noc()) {
-        // Fabric-over-NoC: write pre-built flat-address routing tables (populated during discovery phase).
-        for (const auto& [phys_chip_id, info] : this->fabric_over_noc_routing_tables_) {
-            write_to_all_cores(
-                *this,
-                this->cluster_,
-                this->hal_,
-                &info,
-                sizeof(info),
-                tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
-                phys_chip_id,
-                tt::tt_metal::HalProgrammableCoreType::TENSIX);
-            this->cluster_.get().l1_barrier(phys_chip_id);
-        }
-        return;
+void ControlPlane::write_routing_tables_for_fabric_over_noc_() const {
+    for (const auto& [phys_chip_id, info] : this->fabric_over_noc_routing_tables_) {
+        write_to_all_cores(
+            *this,
+            this->cluster_,
+            this->hal_,
+            &info,
+            sizeof(info),
+            tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
+            phys_chip_id,
+            tt::tt_metal::HalProgrammableCoreType::TENSIX);
+        this->cluster_.get().l1_barrier(phys_chip_id);
     }
+}
 
-    // WH/BH/Quasar: Ethernet-based direction routing tables.
-    // Configure the routing tables on the chips
+void ControlPlane::write_routing_tables_for_fabric_ethernet_() const {
     TT_ASSERT(
         this->intra_mesh_routing_tables_.size() == this->inter_mesh_routing_tables_.size(),
         "Intra mesh routing tables size mismatch with inter mesh routing tables");
@@ -3170,6 +3174,14 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
             this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
             this->write_fabric_telemetry_to_all_chips(fabric_node_id);
         }
+    }
+}
+
+void ControlPlane::write_routing_tables_to_all_chips() const {
+    if (this->is_fabric_over_noc()) {
+        this->write_routing_tables_for_fabric_over_noc_();
+    } else {
+        this->write_routing_tables_for_fabric_ethernet_();
     }
 }
 

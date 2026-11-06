@@ -208,16 +208,10 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
         num_devices_ += num_pcie_devices;
     }
 
-    const auto arch = fabric_context.get_hal().get_arch();
-    const auto ip_variant =
-        cluster.get_soc_desc(*cluster.all_chip_ids().begin()).get_arch_descriptor().get_ip_variant();
-
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
 
-    if (arch == tt::ARCH::QUASAR && ip_variant == tt::IpVariant::HORIZON) {
-        // Horizon has no ERISC cores -- skip EDM config and stream assignments entirely.
-    } else {
+    if (!fabric_context.get_control_plane().is_fabric_over_noc()) {
         router_config_ = create_edm_config();
         for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
             router_with_mux_config_[direction] =
