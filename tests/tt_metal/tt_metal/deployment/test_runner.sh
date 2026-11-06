@@ -113,10 +113,11 @@ mkdir -p "$LOGDIR"
 RUN_LOG="$LOGDIR/deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 : > "$RUN_LOG"
 
+WORKDIR="$(mktemp -d)"
 # Carries a command's exit status out of the tee pipeline
-RCFILE="$(mktemp)"
-trap 'rm -f "$RCFILE"' EXIT
-trap 'rm -f "$RCFILE"; exit 130' HUP INT TERM
+RCFILE="$WORKDIR/rc"
+trap 'rm -rf "$WORKDIR"' EXIT
+trap 'rm -rf "$WORKDIR"; exit 130' HUP INT TERM
 
 RULE_HEAVY='=============================================================================='
 RULE_LIGHT='------------------------------------------------------------------------------'
@@ -191,6 +192,53 @@ run_logged() {
 	rc="$(cat "$RCFILE")"
 }
 
+# run_gtest <command...>: run a gtest binary, failing if any selected test was skipped or none ran.
+run_gtest() {
+	results="$WORKDIR/gtest.json"
+	rm -f "$results"
+	"$@" --gtest_output=json:"$results" || return $?
+	$PYTHON - "$results" << 'PY'
+import json, sys
+
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (OSError, ValueError) as e:
+    sys.exit(f"Could not read gtest results: {e}")
+
+cases = [c for s in data.get("testsuites", []) for c in s.get("testsuite", [])]
+bad = [f"{c.get('classname')}.{c.get('name')} ({c.get('result', c.get('status'))})"
+       for c in cases if c.get("result") == "SKIPPED" or c.get("status") == "NOTRUN"]
+if not cases:
+    sys.exit("No tests were run")
+if bad:
+    sys.exit("Tests did not run: " + ", ".join(bad))
+PY
+}
+
+# run_benchmark <command...>: run a google benchmark binary, failing if any benchmark errored, was skipped, or none ran.
+run_benchmark() {
+	results="$WORKDIR/benchmark.json"
+	rm -f "$results"
+	"$@" --benchmark_out="$results" --benchmark_out_format=json || return $?
+	$PYTHON - "$results" << 'PY'
+import json, sys
+
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (OSError, ValueError) as e:
+    sys.exit(f"Could not read benchmark results: {e}")
+
+benches = data.get("benchmarks", [])
+bad = [b.get("name") for b in benches if b.get("error_occurred") or b.get("skipped")]
+if not benches:
+    sys.exit("No benchmarks were run")
+if bad:
+    sys.exit("Benchmarks errored or were skipped: " + ", ".join(bad))
+PY
+}
+
 # run_reset <message>: reset the boards and return its exit status.
 run_reset() {
 	emit_section "$1"
@@ -233,15 +281,15 @@ run_tests() {
 	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
 		last_dram_ok=1 || last_dram_ok=0
 
-	run_test 'PCIe read test' ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0 &&
+	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_read_ok=1 || last_pcie_read_ok=0
 
-	run_test 'PCIe write test' ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0 &&
+	run_test 'PCIe write test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_write_ok=1 || last_pcie_write_ok=0
 
 	# Runs last: it can leave chips wedged and open (exit code 2), which only a board reset recovers.
 	# Active Ethernet cores only accept kernels in slow dispatch.
-	if run_test 'NOC tests' env TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtest_filter='*DeploymentNoc*'
+	if run_test 'NOC tests' run_gtest env TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtest_filter='*DeploymentNoc*'
 	then
 		last_noc_ok=1
 	else
@@ -343,6 +391,7 @@ then
 	emit_status "DIDT tests:" failed
 	didt_ok=0
 else
+	sleep 5
 	run_test 'DIDT tests' sh tests/tt_metal/tt_metal/deployment/didt/test_runner.sh --output "$LOGDIR/didt" --mgd "$MGD" &&
 		didt_ok=1 || didt_ok=0
 fi
