@@ -110,6 +110,20 @@ def _infer_board_type_from_arch(arch_str):
     return None
 
 
+def _infer_board_type_from_series(series):
+    """Map a tt-smi board series (e.g. ``"n150"``, ``"p150b"``) to a board type.
+
+    Current tt-smi snapshots carry no ``arch`` key, so when pyluwen is not importable
+    the series is the only arch signal left.
+    """
+    lower = (series or "").lower()
+    if lower.startswith(("n150", "n300")) or lower.endswith("-wh"):
+        return "Wormhole"
+    if lower.startswith(("p100", "p150", "p300")) or lower.endswith("-bh"):
+        return "Blackhole"
+    return None
+
+
 def _get_tt_smi_snapshot_json():
     """Return parsed ``tt-smi -s --snapshot_no_tty`` JSON, or ``None``."""
     try:
@@ -223,6 +237,8 @@ def get_machine_info(tt_smi_snapshot=None):
             if series_counts:
                 board_series_raw, card_count = series_counts.most_common(1)[0]
                 device_series = board_series_raw.rstrip(" LR").strip()
+                if board_type is None:
+                    board_type = _infer_board_type_from_series(device_series)
 
                 machine_info = {
                     "board_type": board_type,

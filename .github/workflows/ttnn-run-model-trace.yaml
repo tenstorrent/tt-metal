@@ -7,30 +7,41 @@ on:
         description: >-
           JSON array of models to trace (GitHub collapses multiline input, so use inline JSON).
           Example: [{"test_path":"models/tt_transformers/demo/simple_text_demo.py::test_demo_text","HF_MODEL":"meta-llama/Llama-3.2-1B-Instruct"},{"test_path":"models/demos/audio/whisper/demo/demo.py"}]
-          Keys: test_path (required), HF_MODEL (optional), extra_args (optional).
+          Keys: test_path (required), HF_MODEL (optional), extra_args (optional),
+          env (optional mapping of extra environment variables, e.g. {"MESH_DEVICE":"P150"}).
           All models share runner-label and are homogenized into one trace_run_id.
         required: true
         type: string
       runner-label:
-        description: "CI runner / hardware target (shared by every model in the batch)"
+        description: >-
+          Hardware to trace on, shared by every model in the batch: a SKU from .github/sku_config.yaml
+          (e.g. wh_n150, wh_llmbox_perf, bh_p150, bh_p150_perf, bh_quietbox_2) or one of the aliases
+          N150, N300, n300-llmbox, topology-6u, P100a, P150b, BH-LoudBox.
         required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - P100a
-          - P150b
-          - n300-llmbox
-          - topology-6u
-          - BH-LoudBox
+        type: string
         default: "N150"
       load-to-db:
-        description: "Homogenize, load into DB, and open a single manifest PR"
+        description: "Homogenize and load into the Snowflake trace DB (SELF_SERVE.TTNN_OPS_V6)"
+        required: false
+        type: boolean
+        default: false
+      open-manifest-pr:
+        description: "After a load, open a PR adding the new trace_run_id to trace_selection_registry.yaml (requires load-to-db)"
+        required: false
+        type: boolean
+        default: false
+      db-check-only:
+        description: "Only check that the CI Snowflake credentials can load (read-only, no tracing). Ignores the other inputs."
         required: false
         type: boolean
         default: false
       run-validation:
         description: "Run the sweep validation pipeline against the newly uploaded trace (requires load-to-db)"
+        required: false
+        type: boolean
+        default: false
+      replay:
+        description: "Generate sweep vectors from each leg's model op report and replay them on the same runner type (no DB)"
         required: false
         type: boolean
         default: false
@@ -45,17 +56,22 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner-label }}
   cancel-in-progress: true
 
 jobs:
   validate-inputs:
     name: Validate inputs & derive arch
+    if: ${{ !inputs.db-check-only }}
     runs-on: ubuntu-latest
     outputs:
       arch: ${{ steps.derive.outputs.arch }}
       platform: ${{ steps.derive.outputs.platform }}
-      ci-version: ${{ steps.derive.outputs.ci_version }}
+      sku: ${{ steps.derive.outputs.sku }}
+      runs-on: ${{ steps.derive.outputs.runs_on }}
+      weights-cache-mode: ${{ steps.derive.outputs.weights_cache_mode }}
+      hf-mount: ${{ steps.derive.outputs.hf_mount }}
+      hf-offline: ${{ steps.derive.outputs.hf_offline }}
       matrix: ${{ steps.parse.outputs.matrix }}
       model-count: ${{ steps.parse.outputs.model_count }}
     steps:
@@ -105,8 +121,26 @@ jobs:
               sys.exit(1)
 
           if not isinstance(entries, list) or not entries:
-              print("::error::models must be a non-empty YAML/JSON list of {test_path, HF_MODEL?, extra_args?} entries")
+              print("::error::models must be a non-empty YAML/JSON list of {test_path, HF_MODEL?, extra_args?, env?} entries")
               sys.exit(1)
+
+          # The job itself depends on these, so a model entry may not override them. HF_HOME stays
+          # overridable because model tests pin their own checkpoint root (e.g. /mnt/MLPerf/huggingface).
+          RESERVED_ENV = {"PATH", "HOME", "PYTHONPATH", "TT_METAL_HOME", "HF_MODEL", "TEST_PATH", "EXTRA_ARGS"}
+          RESERVED_ENV_PREFIXES = ("LD_", "PYTHON", "GITHUB_", "RUNNER_", "TTNN_OPERATION_TRACE")
+
+          def env_errors(idx, env):
+              if not isinstance(env, dict):
+                  return [f"entry #{idx}: 'env' must be a mapping, got {type(env).__name__}"]
+              errs = []
+              for name, value in env.items():
+                  if not isinstance(name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+                      errs.append(f"entry #{idx}: env name {name!r} must match [A-Z][A-Z0-9_]*")
+                  elif name in RESERVED_ENV or name.startswith(RESERVED_ENV_PREFIXES):
+                      errs.append(f"entry #{idx}: env name {name} is reserved")
+                  if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+                      errs.append(f"entry #{idx}: env value for {name!r} must be a string or number")
+              return errs
 
           def make_slug(test_path):
               # Basename without extension, replace '::' with '_', keep only safe chars.
@@ -132,6 +166,12 @@ jobs:
                   errors.append(f"entry #{idx}: test_path file not found: {test_file}")
                   continue
 
+              env = entry.get("env") or {}
+              bad_env = env_errors(idx, env)
+              if bad_env:
+                  errors.extend(bad_env)
+                  continue
+
               base_slug = make_slug(test_path)
               n = slug_counts.get(base_slug, 0)
               slug_counts[base_slug] = n + 1
@@ -144,6 +184,7 @@ jobs:
                       "test_path": test_path,
                       "hf_model": entry.get("HF_MODEL", "") or "",
                       "extra_args": entry.get("extra_args", "") or "",
+                      "env_json": json.dumps({k: str(v) for k, v in env.items()}),
                   }
               )
 
@@ -164,35 +205,12 @@ jobs:
               print(f"  - {item['slug']}: {item['test_path']}{tag}")
           PY
 
-      - name: Derive arch from runner label
+      - name: Resolve runner pool and weights cache
         id: derive
         env:
           RUNNER_LABEL: ${{ inputs.runner-label }}
-        run: |
-          RUNNER="$RUNNER_LABEL"
-          case "$RUNNER" in
-            P100a|P150b|BH-LoudBox)
-              ARCH="blackhole"
-              ;;
-            *)
-              ARCH="wormhole_b0"
-              ;;
-          esac
-          # CIv2 pool (tt-ubuntu-2204-<label>-viommu-stable) resolves HF weights
-          # via the in-cluster large file cache. Bare-metal labels run on CIv1
-          # with /mnt/MLPerf (Weka) instead.
-          case "$RUNNER" in
-            N150|N300|P100a|P150b)
-              CI_VERSION="civ2"
-              ;;
-            *)
-              CI_VERSION="civ1"
-              ;;
-          esac
-          echo "arch=$ARCH" >> $GITHUB_OUTPUT
-          echo "platform=Ubuntu 22.04" >> $GITHUB_OUTPUT
-          echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
-          echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
+          MATRIX: ${{ steps.parse.outputs.matrix }}
+        run: python3 model_tracer/resolve_trace_runner.py --runner-label "$RUNNER_LABEL" --matrix "$MATRIX"
 
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
@@ -211,6 +229,8 @@ jobs:
       build-type: Release
       build-inplace-wheel: true
       platform: ${{ needs.validate-inputs.outputs.platform }}
+      # Replay measures device time, which needs the device profiler (tracy build).
+      tracy: ${{ inputs.replay }}
 
   trace-model:
     name: "Trace: ${{ matrix.slug }}"
@@ -230,28 +250,22 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
-        # CIv1 points HF at the Weka-backed cache; CIv2 resolves through TT_GH_CI_INFRA
-        # + LFC so HF_HOME is left unset (falls back to the container default).
-        HF_HOME: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
+        HF_HOME: /mnt/MLPerf/huggingface
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        # Shared read-only caches must stay offline: HF writes metadata on every lookup.
+        HF_HUB_OFFLINE: ${{ needs.validate-inputs.outputs.hf-offline }}
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: >-
-        --device /dev/tenstorrent
-        --device /dev/ipmi0
-        --privileged
-        ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && '-e TT_GH_CI_INFRA=1' || '' }}
+        - ${{ needs.validate-inputs.outputs.hf-mount }}
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
         working-directory: /work
     timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
+    runs-on: ${{ fromJSON(needs.validate-inputs.outputs.runs-on) }}
     steps:
       - name: Checkout repository
         uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
@@ -273,7 +287,8 @@ jobs:
           SLUG: ${{ matrix.slug }}
           RUNNER_LABEL: ${{ inputs.runner-label }}
           ARCH: ${{ needs.validate-inputs.outputs.arch }}
-          CI_VERSION: ${{ needs.validate-inputs.outputs.ci-version }}
+          SKU: ${{ needs.validate-inputs.outputs.sku }}
+          WEIGHTS_MODE: ${{ needs.validate-inputs.outputs.weights-cache-mode }}
           HF_MODEL: ${{ matrix.hf_model }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
           LOAD_DB: ${{ inputs.load-to-db }}
@@ -281,11 +296,6 @@ jobs:
           TIMEOUT: ${{ inputs.timeout-minutes }}
           TT_METAL_SHA: ${{ github.sha }}
         run: |
-          if [[ "$CI_VERSION" == "civ2" ]]; then
-            HF_SOURCE="LFC via TT_GH_CI_INFRA=1"
-          else
-            HF_SOURCE="/mnt/MLPerf (HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home)"
-          fi
           echo "::group::Trace Configuration (leg: $SLUG)"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                    Model Trace Configuration                │"
@@ -294,9 +304,9 @@ jobs:
           echo "│ Test Path:            $TEST_PATH"
           echo "│ Runner:               $RUNNER_LABEL"
           echo "│ Architecture:         $ARCH"
-          echo "│ CI version:           $CI_VERSION"
+          echo "│ SKU:                  $SKU"
           echo "│ HF_MODEL:             ${HF_MODEL:-(not set)}"
-          echo "│ HF weights source:    $HF_SOURCE"
+          echo "│ Weights cache:        $WEIGHTS_MODE (HF_HUB_CACHE=$HF_HUB_CACHE, offline=$HF_HUB_OFFLINE)"
           echo "│ Load to DB:           $LOAD_DB"
           echo "│ Run Validation:       $RUN_VALIDATION"
           echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
@@ -305,39 +315,28 @@ jobs:
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
-      - name: Probe LFC for HF_MODEL (CIv2)
-        if: ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && matrix.hf_model != '' }}
+      - name: Check HF_MODEL weights
+        if: ${{ matrix.hf_model != '' }}
         env:
           INPUT_HF_MODEL: ${{ matrix.hf_model }}
+          SKU: ${{ needs.validate-inputs.outputs.sku }}
         run: |
-          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
-          URL="${LFC_BASE}/${INPUT_HF_MODEL}/config.json"
-          echo "Probing LFC: $URL"
-          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo "000")
-          echo "HTTP status: $STATUS"
-          if [[ "$STATUS" != "200" ]]; then
-            echo "::error::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS at $URL)."
-            echo "::error::Upload the weights to /mldata/model_checkpoints/pytorch/huggingface/${INPUT_HF_MODEL}/,"
-            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LoudBox)"
-            echo "::error::where /mnt/MLPerf provides the weights."
-            exit 1
-          fi
-          echo "LFC has ${INPUT_HF_MODEL}"
-
-      - name: Verify CIv1 weights (MLPerf)
-        if: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && matrix.hf_model != '' }}
-        env:
-          INPUT_HF_MODEL: ${{ matrix.hf_model }}
-        run: |
-          if ! mountpoint -q /mnt/MLPerf; then
-            echo "::error::/mnt/MLPerf is not mounted on this CIv1 runner."
-            exit 1
-          fi
-          EXPECTED="/mnt/MLPerf/tt_dnn-models/${INPUT_HF_MODEL}"
-          if [[ -d "$EXPECTED" ]]; then
-            echo "Found CIv1 weights at $EXPECTED"
+          if [[ "$INPUT_HF_MODEL" == /* ]]; then
+            EXPECTED="$INPUT_HF_MODEL"
           else
-            echo "::warning::No CIv1 weights under $EXPECTED; HF loader will try HF_HOME cache and may fail if unpopulated."
+            EXPECTED="$HF_HUB_CACHE/models--${INPUT_HF_MODEL//\//--}"
+          fi
+          if [[ "$HF_HUB_OFFLINE" == "0" && "$INPUT_HF_MODEL" != /* ]]; then
+            # Model code passes local_files_only=True whenever CI=true, so it never downloads
+            # by itself; fill the per-runner cache before the test runs.
+            echo "Syncing $INPUT_HF_MODEL into the per-runner cache ($HF_HUB_CACHE)"
+            python3 -c 'import os, huggingface_hub as h; print(h.snapshot_download(os.environ["INPUT_HF_MODEL"]))'
+          elif [[ -d "$EXPECTED" ]]; then
+            echo "Found weights for $INPUT_HF_MODEL at $EXPECTED"
+          else
+            echo "::error::$INPUT_HF_MODEL is not in the $SKU weights cache ($EXPECTED) and this cache is offline."
+            echo "::error::Pick a SKU whose CI tests use this model, or one whose weights cache downloads from HF."
+            exit 1
           fi
 
       - name: Run model trace
@@ -347,8 +346,19 @@ jobs:
           HF_MODEL: ${{ matrix.hf_model }}
           TEST_PATH: ${{ matrix.test_path }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
+          MODEL_ENV_JSON: ${{ matrix.env_json }}
         run: |
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
+
+          # Names were validated when the matrix was built; values are exported verbatim.
+          if [[ -n "$MODEL_ENV_JSON" ]]; then
+            while IFS= read -r -d '' kv; do
+              export "$kv"
+              echo "env: ${kv%%=*}=${kv#*=}"
+            done < <(
+              python3 -c 'import json, os, sys; [sys.stdout.write(f"{k}={v}\0") for k, v in json.loads(os.environ["MODEL_ENV_JSON"]).items()]'
+            )
+          fi
 
           # Reject extra_args that override output directory
           if [[ "$EXTRA_ARGS" =~ (^|[[:space:]])(--output-dir|-o)(=|[[:space:]]|$) ]]; then
@@ -580,6 +590,40 @@ jobs:
               f.write(summary)
           PY
 
+      - name: Build model op report
+        id: report
+        if: always() && steps.trace.outcome == 'success'
+        env:
+          MASTER_JSON: ${{ steps.trace.outputs.master_json_path }}
+          SLUG: ${{ matrix.slug }}
+          TEST_PATH: ${{ matrix.test_path }}
+          HF_MODEL: ${{ matrix.hf_model }}
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          ARCH: ${{ needs.validate-inputs.outputs.arch }}
+          TT_METAL_SHA: ${{ github.sha }}
+          TT_METAL_REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 model_tracer/model_op_report.py "$MASTER_JSON" \
+            --output-dir /work/model-op-report \
+            --title "$SLUG" \
+            --test-path "$TEST_PATH" \
+            --hf-model "$HF_MODEL" \
+            --runner-label "$RUNNER_LABEL" \
+            --arch "$ARCH" \
+            --commit "$TT_METAL_SHA" \
+            --ref "$TT_METAL_REF" \
+            --run-url "$RUN_URL" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload model op report
+        if: always() && steps.report.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-op-report-${{ matrix.slug }}
+          path: /work/model-op-report/
+          retention-days: 14
+
       - name: Upload leg master JSON
         if: always() && steps.trace.outcome == 'success'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -596,17 +640,266 @@ jobs:
           path: /work/leg-status/${{ matrix.slug }}.json
           retention-days: 1
 
+  replay-report:
+    name: "Replay: ${{ matrix.slug }}"
+    needs: [check-harbor, validate-inputs, build-artifact, trace-model]
+    if: ${{ inputs.replay && always() && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.validate-inputs.outputs.matrix).include }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ needs.validate-inputs.outputs.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+    runs-on: ${{ fromJSON(needs.validate-inputs.outputs.runs-on) }}
+    env:
+      REPORT_JSON: /work/model-op-report/model_op_report.json
+      VECTOR_TAG: model-op-report
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Download model op report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: model-op-report-${{ matrix.slug }}
+          path: /work/model-op-report
+
+      - name: Generate sweep vectors from report
+        id: vectors
+        env:
+          SLUG: ${{ matrix.slug }}
+        run: |
+          EXPORT_DIR="tests/sweep_framework/vectors_export"
+          rm -rf "$EXPORT_DIR"
+          python3 tests/sweep_framework/sweeps_parameter_generator.py \
+            --model-traced all \
+            --suite-name model_traced \
+            --group-by hw \
+            --master-trace "$REPORT_JSON" \
+            --tag "$VECTOR_TAG"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          export_dir = Path("tests/sweep_framework/vectors_export")
+          per_module = {}
+          for f in sorted(export_dir.glob("*.json")):
+              if f.name == "generation_manifest.json":
+                  continue
+              data = json.loads(f.read_text())
+              n = sum(len(v) for v in data.values() if isinstance(v, dict))
+              per_module[f.stem] = per_module.get(f.stem, 0) + n
+          total = sum(per_module.values())
+          report = json.loads(Path(os.environ["REPORT_JSON"]).read_text())
+          configs = report.get("metadata", {}).get("report", {}).get("totals", {}).get("configurations", "?")
+
+          lines = [
+              f"## Replay vectors — `{os.environ['SLUG']}`",
+              "",
+              f"Generated **{total}** vectors in {len(per_module)} files from `model_op_report.json` ({configs} traced configurations).",
+              "",
+              "| Vector file | Vectors |",
+              "|---|---:|",
+          ]
+          lines += [f"| `{name}` | {n} |" for name, n in sorted(per_module.items(), key=lambda kv: -kv[1])]
+          text = "\n".join(lines) + "\n"
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(text)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"vector_count={total}\n")
+          if total == 0:
+              print("::error::No sweep vectors were generated from the model op report")
+              raise SystemExit(1)
+          PY
+
+      - name: Replay vectors
+        id: replay
+        continue-on-error: true
+        env:
+          TTNN_MASTER_JSON_PATH: ${{ env.REPORT_JSON }}
+        run: |
+          # The runner turns the device profiler off when MESH_DEVICE_SHAPE is unset and the
+          # fabric is on, so run once per traced mesh with the shape pinned.
+          meshes=$(ls tests/sweep_framework/vectors_export/*.json | grep -oE 'mesh_[0-9]+x[0-9]+' | sed 's/^mesh_//' | sort -u)
+          rc=0
+          for mesh in $meshes; do
+            echo "::group::Replay mesh $mesh"
+            MESH_DEVICE_SHAPE="$mesh" python3 tests/sweep_framework/sweeps_runner.py \
+              --suite-name model_traced \
+              --vector-source vectors_export \
+              --result-dest results_export \
+              --tag "$VECTOR_TAG" \
+              --device-perf \
+              --main-proc-verbose || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
+
+      - name: Summarize replay results
+        if: always() && steps.vectors.outcome == 'success'
+        env:
+          SLUG: ${{ matrix.slug }}
+          REPLAY_OUTCOME: ${{ steps.replay.outcome }}
+          VECTOR_COUNT: ${{ steps.vectors.outputs.vector_count }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from collections import Counter
+          from pathlib import Path
+
+          statuses = Counter()
+          for f in Path("tests/sweep_framework/results_export").glob("*.json"):
+              try:
+                  data = json.loads(f.read_text())
+              except Exception:
+                  continue
+              for rec in data if isinstance(data, list) else []:
+                  if isinstance(rec, dict):
+                      statuses[str(rec.get("status", "unknown"))] += 1
+          lines = [
+              f"## Replay results — `{os.environ['SLUG']}`",
+              "",
+              f"Runner exit: **{os.environ['REPLAY_OUTCOME']}**; vectors generated: {os.environ.get('VECTOR_COUNT', '?')}; "
+              f"results recorded: {sum(statuses.values())}",
+              "",
+              "| Status | Count |",
+              "|---|---:|",
+          ]
+          lines += [f"| {k} | {v} |" for k, v in statuses.most_common()] or ["| (no results) | 0 |"]
+          text = "\n".join(lines) + "\n"
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(text)
+          PY
+
+      - name: Build timed model op report
+        id: timed
+        if: always() && steps.vectors.outcome == 'success'
+        env:
+          SLUG: ${{ matrix.slug }}
+          TEST_PATH: ${{ matrix.test_path }}
+          HF_MODEL: ${{ matrix.hf_model }}
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          ARCH: ${{ needs.validate-inputs.outputs.arch }}
+          TT_METAL_SHA: ${{ github.sha }}
+          TT_METAL_REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 model_tracer/model_op_report.py "$REPORT_JSON" \
+            --output-dir /work/model-op-report-timed \
+            --replay-results tests/sweep_framework/results_export \
+            --title "$SLUG (timed)" \
+            --test-path "$TEST_PATH" \
+            --hf-model "$HF_MODEL" \
+            --runner-label "$RUNNER_LABEL" \
+            --arch "$ARCH" \
+            --commit "$TT_METAL_SHA" \
+            --ref "$TT_METAL_REF" \
+            --run-url "$RUN_URL" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload timed model op report
+        if: always() && steps.timed.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-op-report-timed-${{ matrix.slug }}
+          path: /work/model-op-report-timed/
+          retention-days: 14
+
+      - name: Upload replay vectors and results
+        if: always() && steps.vectors.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-op-replay-${{ matrix.slug }}
+          path: |
+            /work/tests/sweep_framework/vectors_export/
+            /work/tests/sweep_framework/results_export/
+          retention-days: 14
+
+  db-preflight:
+    name: Snowflake write preflight
+    if: ${{ inputs.load-to-db || inputs.db-check-only }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
+      SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
+      SNOWFLAKE_ROLE: SELF_SERVE_OWNER_TTNN_OPS_V6
+      SNOWFLAKE_WAREHOUSE: PUBLIC
+      SNOWFLAKE_DATABASE: SELF_SERVE
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install pyyaml tqdm snowflake-connector-python cryptography
+
+      # The key is scoped to this step, not to the dependency install above.
+      - name: Check load privileges (EXPLAIN only, no writes)
+        env:
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
+        run: python3 model_tracer/snowflake_write_preflight.py
+
   homogenize-and-load:
     name: Homogenize & load
-    needs: [validate-inputs, trace-model]
-    if: ${{ inputs.load-to-db && always() && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
+    needs: [validate-inputs, trace-model, db-preflight]
+    if: ${{ inputs.load-to-db && always() && needs.db-preflight.result == 'success' && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
     runs-on: ubuntu-latest
     continue-on-error: true
+    # Snowflake enforces no UNIQUE keys and the loader does lookup-then-insert, so two
+    # loads at once can duplicate rows.
+    concurrency:
+      group: ttnn-ops-v6-trace-load
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
     env:
       PYTHONPATH: ${{ github.workspace }}
+      SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
+      SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
+      SNOWFLAKE_ROLE: SELF_SERVE_OWNER_TTNN_OPS_V6
+      SNOWFLAKE_WAREHOUSE: PUBLIC
+      SNOWFLAKE_DATABASE: SELF_SERVE
     outputs:
       trace-run-id: ${{ steps.load.outputs.trace_run_id }}
       trace-uid: ${{ steps.homogenize.outputs.trace_uid }}
@@ -623,7 +916,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install psycopg2-binary pyyaml tqdm
+        run: pip install pyyaml tqdm snowflake-connector-python cryptography
 
       - name: Download leg master JSONs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -699,7 +992,7 @@ jobs:
         id: load
         if: steps.homogenize.outcome == 'success'
         env:
-          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
           TT_METAL_SHA: ${{ github.sha }}
         run: |
           python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
@@ -724,7 +1017,7 @@ jobs:
           merge-multiple: true
 
       - name: Create manifest PR
-        if: steps.load.outcome == 'success' && steps.load.outputs.trace_run_id != ''
+        if: inputs.open-manifest-pr && steps.load.outcome == 'success' && steps.load.outputs.trace_run_id != ''
         env:
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           TRACE_UID: ${{ steps.homogenize.outputs.trace_uid }}
