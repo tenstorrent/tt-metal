@@ -46,7 +46,7 @@ def test_permute(device):
 
     # Permute the tensor dimensions
     permuted_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
-    logger.info("Permuted Tensor Shape:", permuted_tensor.shape)  # Permuted Tensor Shape: Shape([1, 1, 32, 64])
+    logger.info(f"Permuted Tensor Shape: {permuted_tensor.shape}")  # Shape([1, 1, 32, 64])
 
 
 def test_reshape(device):
