@@ -113,6 +113,7 @@ DEFAULTS = {
     },
 }
 PIPELINE_KEYS = ("dense_steps", "dense_layers", "dense_backend")  # applied by the pipeline, not per call
+FA_KEYS = ("rung",)  # the only config keys fa takes: "ladder" / "min" runs it at the VSA / cube padded geometry
 
 
 # ----------------------------------------------------------------------------- inputs
@@ -397,6 +398,8 @@ class Bench:
         """One backend on one input: eager call for accuracy, then traced timing. Returns (times, fields, extra)."""
         if backend in TOPK_BACKENDS:
             return self._topk(backend, cfg, q, k, v, logical_n, meta, exact)
+        if backend == "fa" and cfg.get("rung"):
+            return self._fa_at_rung(cfg, q, k, v, logical_n, meta)
         rt, S = self.rt, self.S
         rows = q.shape[2] // S
         sparse = backend != "fa"
@@ -411,25 +414,7 @@ class Bench:
         fields, extra = {"kept_fraction": 1.0}, {"rows_per_device": rows, "k_chunk": k_chunk if sparse else None}
         try:
             if backend == "fa":
-                fn = lambda hold: call_sdpa(  # noqa: E731
-                    tq,
-                    tk,
-                    tv,
-                    logical_n,
-                    False,
-                    False,
-                    case.buf_k,
-                    case.buf_v,
-                    case.dense_config,
-                    rt.compute_kernel_config,
-                    rt.ccl_semaphore_handles,
-                    rt.num_links,
-                    rt.sp_axis,
-                    self.mesh,
-                    rt.topology,
-                    rt.worker_sub_device_id,
-                    rt.ccl_column,
-                )
+                fn = lambda hold: self._fa_call(case, tq, tk, tv)  # noqa: E731
                 extra["dense_chunks"] = list(geo.dense_chunks)
                 eager = fn([])
                 ttnn.synchronize_device(self.mesh)
@@ -445,6 +430,59 @@ class Bench:
             for t in device_inputs + [case.buf_k, case.buf_v]:
                 ttnn.deallocate(t)
         extra["max_abs_diff_traced_vs_eager"] = float((traced_heads - eager_heads).abs().max())
+        return times, fields, extra
+
+    def _fa_call(self, case, tq, tk, tv):
+        rt = self.rt
+        return call_sdpa(
+            tq,
+            tk,
+            tv,
+            case.geo.logical_n,
+            False,
+            False,
+            case.buf_k,
+            case.buf_v,
+            case.dense_config,
+            rt.compute_kernel_config,
+            rt.ccl_semaphore_handles,
+            rt.num_links,
+            rt.sp_axis,
+            self.mesh,
+            rt.topology,
+            rt.worker_sub_device_id,
+            rt.ccl_column,
+        )
+
+    def _fa_at_rung(self, cfg, q, k, v, logical_n, meta):
+        """The dense op on the VSA / cube padded geometry: Q / K / V in the same tile layout at the same rung, with
+        logical_n = the rung as VSA / cube get it, so it does the same padded work. It then attends the pad rows too,
+        so its output is not the real tokens' attention: the accuracy fields are null."""
+        lay = vsa_layout(meta, logical_n, {"rung": cfg["rung"], "shuffle": True})
+        rows = lay.rows_per_shard
+        geo = Geometry(rows, lay.padded_len, 256, dense_chunks=DENSE_CHUNKS.get(rows, (256, 512)))
+        case = Case(self.rt, geo)
+        packed = [lay.pack_rows(x[0, :, :logical_n], dim=1).unsqueeze(0) for x in (q, k, v)]
+        tq, tk, tv = (case._upload(x, case.seq_dims, dtype=ttnn.bfloat16) for x in packed)
+        del packed
+        try:
+            fn = lambda hold: self._fa_call(case, tq, tk, tv)  # noqa: E731
+            eager = fn([])
+            ttnn.synchronize_device(self.mesh)
+            eager_heads = self.output_heads(eager)
+            ttnn.deallocate(eager)
+            times, traced_heads = traced(self.mesh, fn, self.args.reps, self.args.warmup, self.output_heads)
+        finally:
+            for t in (tq, tk, tv, case.buf_k, case.buf_v):
+                ttnn.deallocate(t)
+        fields = {"kept_fraction": 1.0, "rel_l2_vs_dense": None, "pcc_vs_dense": None, "scale_vs_dense": None}
+        extra = {
+            "rows_per_device": rows,
+            "rung": lay.padded_len,
+            "dense_chunks": list(geo.dense_chunks),
+            "accuracy": "null: logical_n = rung, so the pad rows are attended (timing baseline only)",
+            "max_abs_diff_traced_vs_eager": float((traced_heads - eager_heads).abs().max()),
+        }
         return times, fields, extra
 
     def _sparse_call(self, case, q, k, v, mask, pk, pv, counts=None):
@@ -730,12 +768,14 @@ def main():
             logger.info(f"{name}: T={T}, {rows} rows per device, exact reference {time.perf_counter() - t0:.0f} s")
             seconds = args.seconds if args.seconds is not None else meta.get("seconds")
             for backend in backends:
-                cfg = {**DEFAULTS[backend], **(user_cfg if backend != "fa" else {})}
+                fa_cfg = {key: val for key, val in user_cfg.items() if key in FA_KEYS}
+                cfg = {**DEFAULTS[backend], **(user_cfg if backend != "fa" else fa_cfg)}
                 times, fields, extra = bench.run(backend, cfg, q, k, v, T, meta, exact)
                 med, p10, p90 = quantiles(times)
                 ignored = [key for key in cfg if key in PIPELINE_KEYS]
                 if ignored:
                     extra["pipeline_keys_not_applied"] = ignored
+                extra["padded_tokens"] = extra["rows_per_device"] * MESH_CONFIG.sp_size
                 dtype = "bf16"
                 if backend != "fa":
                     dtype = ("bf16" if args.kv_dtype == "bf16" else "q bf16, kv bf8") + (" lofi" if args.lofi else "")
@@ -765,10 +805,17 @@ def main():
                     "reps": args.reps,
                     "extra": {**fields, **extra},
                 }
+                acc = ", ".join(
+                    f"{label} {'-' if rec[key] is None else format(rec[key], fmt)}"
+                    for label, key, fmt in (
+                        ("rel L2", "rel_l2_vs_dense", ".4f"),
+                        ("pcc", "pcc_vs_dense", ".5f"),
+                        ("scale", "scale_vs_dense", ".4f"),
+                    )
+                )
                 logger.info(
                     f"{name} {backend}: {med:.3f} ms (p10 {p10:.3f}, p90 {p90:.3f}), kept {rec['kept_fraction']:.3f}, "
-                    f"rel L2 {rec['rel_l2_vs_dense']:.4f}, pcc {rec['pcc_vs_dense']:.5f}, "
-                    f"scale {rec['scale_vs_dense']:.4f}; {rec['extra']}"
+                    f"{acc}; {rec['extra']}"
                 )
                 with open(args.output, "a") as f:
                     f.write(json.dumps(rec) + "\n")

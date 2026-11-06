@@ -47,6 +47,12 @@ block-sparse result it is meant to compute, using the same mask (for the tile la
 that layout). This is a kernel-correctness check, separate from the sparsity error.
 `extra.max_abs_diff_traced_vs_eager` should be 0.
 
+At the pipeline rung, VSA and cube process more rows than the dense layout: 45,312 / 82,688 / 120,320 against
+37,749 / 73,425 / 109,101 real tokens (+20 % / +13 % / +10 %; ragged 4x4x4 cubes and the ladder's rounding). Their
+times include that padding. `merge_results.py` therefore compares each record with the `fa` record of the same
+`extra.rows_per_device` (the `fa` run with `{"rung": "ladder"}` for VSA / cube), falling back to the default `fa`
+record, and shows each record's padded tokens and rows per device.
+
 ## Backends
 
 `--attention-backend` takes SGLang's backend names (a comma-separated list runs several on each input):
@@ -75,6 +81,9 @@ that layout). This is a kernel-correctness check, separate from the sparsity err
   rows and every shard's work are spread evenly over the ring. false: the tiles fill shard 0, then shard 1, ...
   (the layout before the balancing), for comparison.
 - `rung` (`"ladder"`): the pipeline's 4x8 bucket ladder rung; `"min"`: the fewest whole blocks that hold the tiles.
+- `fa` takes only `rung` from the config (none by default): `"ladder"` / `"min"` runs the dense op on the same tile
+  layout and rung as VSA / cube, with `logical_n` = the rung as they get it, so it does the same padded work. It
+  then attends the pad rows too, so its accuracy fields are null (a timing baseline only).
 - `dense_steps`, `dense_layers`, `dense_backend` are pipeline settings: they choose which calls go to the dense
   backend. They are recorded and listed in `extra.pipeline_keys_not_applied`. To estimate a full generation, weight
   the per-call times by the share of sparse calls.
@@ -225,16 +234,16 @@ power limits differ between systems.
 
 ### Full matrix
 
-`run_matrix.sh` runs every case worth comparing, at 5, 10 and 15 s (14 runs per length, appended to
+`run_matrix.sh` runs every case worth comparing, at 5, 10 and 15 s (17 runs per length, appended to
 `results_tt.jsonl`, then one table):
 
 | Backend | Settings | dtypes |
 |---|---|---|
-| `fa` | dense baseline | bf16 |
+| `fa` | dense baseline, at the working point and at the VSA / cube rung (`{"rung": "ladder"}`) | bf16 |
 | `sol_attn` | `tau` 1.0, 1.5, 2.0 (higher keeps fewer blocks) | bf16, and LoFi with bf8 K/V |
 | `sol_attn` | `tau` 1.0 with `dense_prefix_queries` and `sink_tokens` = `"prefix"` (prefix rows and keys dense, as VSA) | bf16 |
 | `video_sparse_attn` | `VSA_sparsity` 0.9 (base H3) and 0.8 (distilled), exempt prefix, balanced layout | bf16; 0.9 also LoFi with bf8 K/V |
-| `cube_sparse_attn` | `topk_ratio` 0.5 and 0.7, balanced layout | bf16; 0.5 also LoFi with bf8 K/V |
+| `cube_sparse_attn` | `topk_ratio` 0.5, 0.6, 0.7, 0.8 (the ratios of SGLang's example schedule [1.0, 1.0, 0.8, 0.7, 0.6, 0.5, 0.5]; 1.0 steps are dense, i.e. `fa`), balanced layout | bf16; 0.5 also LoFi with bf8 K/V |
 
 ```bash
 ./$B/run_matrix.sh                       # all lengths, synthetic inputs (over an hour; 15 s dominates)
