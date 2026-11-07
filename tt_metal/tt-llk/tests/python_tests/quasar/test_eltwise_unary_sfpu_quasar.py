@@ -57,6 +57,7 @@ from helpers.stimuli_generator import (
     format_elem_max,
     generate_stimuli,
 )
+from helpers.target_config import TestTargetConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DATA_COPY_TYPE,
@@ -855,9 +856,13 @@ _UINT16_TO_FP32_SEEDS = (0, 1, 32767, 32768, 65535)
 # Int8 -> UInt8 clamps, same as float -> UInt8. These four come back as 0, not their magnitude.
 # UInt8 -> Int8 saturates to sign-magnitude Int8: 128, 200 and 255 -> 127, and 127 stays 127.
 # Int32/Int16 -> Int8 plants values the narrow convert must saturate.
+# Int16 -> UInt8 and Int32 -> UInt16 plant negatives. The random band for an unsigned
+# endpoint starts at 0, so the clamp would otherwise never see a negative.
 _INT8_TO_UINT8_SEEDS = (-1, -2, -64, -127)
 _UINT8_TO_INT8_SEEDS = (128, 200, 255, 127)
 _SIGNED_TO_INT8_SEEDS = (128, -128, 200, -200, 32767, -32767)
+_INT16_TO_UINT8_SEEDS = (-1, -2, -64, -127)
+_INT32_TO_UINT16_SEEDS = (-1, -2, -64, -32768)
 
 
 def _quasar_typecast_integer(value, dst_format: DataFormat):
@@ -865,6 +870,8 @@ def _quasar_typecast_integer(value, dst_format: DataFormat):
     v = int(value)
     if dst_format == DataFormat.UInt8:
         return min(max(v, 0), 255)
+    if dst_format == DataFormat.UInt16:
+        return min(max(v, 0), 65535)
     if dst_format == DataFormat.Int8:
         return max(-127, min(v, 127))
     return v
@@ -939,6 +946,10 @@ def _prepare_typecast_input(
             DataFormat.Int16,
         ):
             int8_uint8_seeds = _SIGNED_TO_INT8_SEEDS
+        elif src_format == DataFormat.Int16 and dst_format == DataFormat.UInt8:
+            int8_uint8_seeds = _INT16_TO_UINT8_SEEDS
+        elif src_format == DataFormat.Int32 and dst_format == DataFormat.UInt16:
+            int8_uint8_seeds = _INT32_TO_UINT16_SEEDS
         if int8_uint8_seeds is not None:
             flat = result.flatten()
             for i, seed in enumerate(int8_uint8_seeds):
@@ -1005,6 +1016,25 @@ _TTSIM_DROPOUT_CFG_REASON = (
 def _skip_ttsim_dropout(request, mathop):
     if mathop == MathOperation.Dropout and request.config.getoption("--run-simulator"):
         pytest.skip(_TTSIM_DROPOUT_CFG_REASON)
+
+
+# int32_to_int8 is SFP_STOCH_RND mode 13. ttsim reports that mode as unimplemented.
+# Float sources use the direct sign-magnitude convert and stay enabled.
+_TTSIM_INT32_TO_INT8_SOURCES = (DataFormat.Int16, DataFormat.UInt8, DataFormat.Int32)
+_TTSIM_INT32_TO_INT8_REASON = (
+    "Quasar ttsim does not implement tensix_sfp_stoch_rnd instr_mod1=13 "
+    "(int32_to_int8). Int16, UInt8, and Int32 to Int8 stay covered on silicon."
+)
+
+
+def _skip_ttsim_int32_to_int8(mathop, formats):
+    if (
+        mathop == MathOperation.Typecast
+        and formats.output_format == DataFormat.Int8
+        and formats.input_format in _TTSIM_INT32_TO_INT8_SOURCES
+        and TestTargetConfig().runs_on_ttsim()
+    ):
+        pytest.skip(_TTSIM_INT32_TO_INT8_REASON)
 
 
 OP_CONFIGS = [
@@ -1215,6 +1245,7 @@ def run_eltwise_unary_sfpu_quasar(
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
     is_typecast = mathop == MathOperation.Typecast
+    _skip_ttsim_int32_to_int8(mathop, formats)
 
     cfg = OP_CONFIG_BY_MATHOP.get(mathop)
     spec = (
