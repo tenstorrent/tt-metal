@@ -31,6 +31,10 @@ struct RouterConnectionRecord {
     chan_id_t dest_eth_chan = -1;
     uint32_t dest_vc = -1;
     uint32_t dest_sender_channel = -1;
+    // dest_sender_channel's index within dest_vc.
+    uint32_t dest_vc_sender_channel = -1;
+    // Whether the connection ends at the destination router's tensix mux rather than its ERISC.
+    bool dest_is_tensix = false;
 };
 
 /**

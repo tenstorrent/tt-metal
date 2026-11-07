@@ -37,6 +37,11 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_static_sized_channels_allocator.cpp
     fabric_router/test_fabric_slot_and_trid_allocators.cpp
     disaggregation/test_kv_chunk_address_table_protobuf.cpp
+    fabric_manifest/test_fabric_manifest.cpp
+    fabric_manifest/test_fabric_manifest_docs.cpp
+    fabric_manifest/test_fabric_manifest_kernel_inputs.cpp
+    fabric_manifest/test_fabric_manifest_writer.cpp
+    fabric_manifest/test_fabric_manifest_type_registry.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
     fabric_data_movement/test_mesh_multicast_source_inject.cpp

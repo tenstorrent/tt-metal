@@ -17,7 +17,9 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/injection_policy.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -807,7 +809,9 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
                     .dest_direction = downstream_router.location_.direction,
                     .dest_eth_chan = downstream_router.location_.eth_chan,
                     .dest_vc = vc,
-                    .dest_sender_channel = absolute_channel_id};
+                    .dest_sender_channel = absolute_channel_id,
+                    .dest_vc_sender_channel = vc_relative_channel_id,
+                    .dest_is_tensix = downstream_builder != downstream_router.erisc_builder_.get()};
                 connection_registry_->record_connection(record);
             }
 
@@ -961,6 +965,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         }
 
         auto opt_level = erisc_builder_->get_kernel_opt_level();
+        const auto noc = erisc_builder_->config.risc_configs[risc_id].get_configured_noc();
 
         // Create the kernel
         auto kernel = tt::tt_metal::CreateKernel(
@@ -968,7 +973,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             eth_logical_core,
             tt::tt_metal::EthernetConfig{
-                .noc = erisc_builder_->config.risc_configs[risc_id].get_configured_noc(),
+                .noc = noc,
                 .processor = proc,
                 .compile_args = ct_args,
                 .defines = defines,
@@ -976,6 +981,15 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 .opt_level = opt_level});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);
+
+        kernel_inputs_by_erisc_.push_back({
+            .processor = proc,
+            .noc = noc,
+            .compile_args = ct_args,
+            .named_compile_args = named_ct_args,
+            .defines = program.impl().get_kernel(kernel)->defines(),
+            .runtime_args = rt_args,
+        });
     }
 
     log_debug(
@@ -984,6 +998,34 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         eth_chan,
         get_eth_direction(),
         eth_chan == ctx.master_router_chan);
+}
+
+manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRoutingFacts& chip_facts) const {
+    TT_FATAL(
+        connection_registry_ != nullptr,
+        "Fabric manifest: router on channel {} recorded no connections; FabricBuilder records them when the manifest "
+        "is on",
+        location_.eth_chan);
+    // The registry holds every connection on the chip.
+    std::vector<RouterConnectionRecord> connections;
+    for (const auto& connection : connection_registry_->get_all_connections()) {
+        if (connection.source_eth_chan == location_.eth_chan) {
+            connections.push_back(connection);
+        }
+    }
+    const manifest::RouterArgs args(kernel_inputs_by_erisc_);
+    const PacketHeaderConfig packet_header = fabric_context_.get_packet_header_config();
+    ManifestRouterInputs inputs{
+        .erisc_builder = *erisc_builder_,
+        .vc_shape = vc_shape_,
+        .location = location_,
+        .chip_facts = chip_facts,
+        .connections = connections,
+        .args = args,
+        .packet_header = packet_header,
+        .hal = fabric_context_.get_hal(),
+    };
+    return tt::tt_fabric::collect_manifest_router(inputs);
 }
 
 FabricDatamoverBuilderBase* ComputeMeshRouterBuilder::get_builder_for_vc_channel(

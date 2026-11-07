@@ -85,12 +85,14 @@ target_link_libraries(
         metal_common_libs
         enchantum::enchantum
         fmt::fmt-header-only
+        nlohmann_json::nlohmann_json
         yaml-cpp::yaml-cpp
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
         cadical::cadical
+        fabric_visualizer_build_identity
 )
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)
@@ -119,3 +121,4 @@ install(
 )
 
 add_subdirectory(experimental/x280)
+add_subdirectory(debug/visualizer/common)
