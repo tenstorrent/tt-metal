@@ -168,10 +168,11 @@ def _stage_params(
     """(hf_config, PrefillRunParams) for PP4 rank `stage`, with the K3 manifest's knobs, as the runner sets them.
     `full_last_layer`: the last rank builds its last layer whole, plus the final norm, instead of kv-only, so
     the model produces its final hidden state (the runner's last rank produces none). The depth ladder
-    (`test_transformer_depth.py`) builds the stage's first `num_layers` layers, eager, at a short `max_seq_len`."""
+    (`test_transformer_depth.py`) builds the stage's first `num_layers` layers, eager, at a short `max_seq_len`;
+    fewer layers than the stage holds is a single-rank stack (last rank), as no PP4 rank ends there."""
     first_layer_idx, stage_layers = STAGES[stage]
     num_layers = stage_layers if num_layers is None else num_layers
-    is_last_rank = stage == NUM_STAGES - 1
+    is_last_rank = stage == NUM_STAGES - 1 or num_layers < stage_layers
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = max_seq_len
     params = PrefillRunParams(
