@@ -25,7 +25,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 35;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 36;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -66,7 +66,9 @@ struct ReaderCtArgs {
     uint32_t final_sem_addr;
     // The routed expert's split between its two passes; decides the order experts are walked in.
     uint32_t expert_threshold;
-    // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
+    // Whether an expert id table was passed. Without one the ring's experts are contiguous.
+    uint32_t has_expert_table;
+    // This ring's first row of the expert id table: one row per chip of the ring follows it.
     uint32_t expert_table_page_base;
     // Pages in the dispatched buffer. Runs are clamped to it, as dispatch dropped every token past it.
     uint32_t dispatch_capacity;
@@ -122,6 +124,7 @@ struct ReaderCtArgs {
         unt_freed_slot(untilizers.my_freed_slot),
         final_sem_addr(plan.final_arrived_addr),
         expert_threshold(args.hybrid_token_threshold),
+        has_expert_table(tensor_args.global_expert_idx_table.has_value() ? 1u : 0u),
         expert_table_page_base(plan.expert_table_page_base),
         dispatch_capacity(op::dispatch_capacity(tensor_args)),
         vc_pages(plan.vc_pages),
@@ -144,11 +147,9 @@ struct ReaderCtArgs {
             blocks_.push_back(w.split_count);
             blocks_.push_back(op::vc_for_own(w.distance, op::ring_extent(args)));
         }
-        // Chunk descriptors for our own region of the forwarding buffer, in arrival order — which is the
-        // order the upstream sender emits them, because both sides derive it from the same generator. They
-        // are what lets the reader compute every chunk's length, and so its page range, with nothing
-        // exchanged between the two chips. One set serves every local expert: the reader walks them again
-        // per expert, which is the order the upstream sender emits them in too.
+        // Chunk descriptors for our own region of the forwarding buffer, in the order the upstream sender
+        // emits them, because both sides derive it from the same generator. One set serves every local
+        // expert.
         const auto forwarding =
             op::forwarding_chunks(plan.stream, op::my_dg_index(args, coord), op::ring_extent(args), args.num_links);
         num_vcs = static_cast<uint32_t>(forwarding.size());
@@ -203,6 +204,7 @@ struct ReaderCtArgs {
             unt_freed_slot,
             final_sem_addr,
             expert_threshold,
+            has_expert_table,
             expert_table_page_base,
             dispatch_capacity,
             vc_pages,
@@ -243,17 +245,16 @@ struct ReaderCtArgs {
         unt_freed_slot(get_compile_time_arg_val(26)),
         final_sem_addr(get_compile_time_arg_val(27)),
         expert_threshold(get_compile_time_arg_val(28)),
-        expert_table_page_base(get_compile_time_arg_val(29)),
-        dispatch_capacity(get_compile_time_arg_val(30)),
-        vc_pages(get_compile_time_arg_val(31)),
-        credit_outbox_noc_x(get_compile_time_arg_val(32)),
-        credit_outbox_noc_y(get_compile_time_arg_val(33)),
-        credit_done_addr(get_compile_time_arg_val(34)) {}
+        has_expert_table(get_compile_time_arg_val(29)),
+        expert_table_page_base(get_compile_time_arg_val(30)),
+        dispatch_capacity(get_compile_time_arg_val(31)),
+        vc_pages(get_compile_time_arg_val(32)),
+        credit_outbox_noc_x(get_compile_time_arg_val(33)),
+        credit_outbox_noc_y(get_compile_time_arg_val(34)),
+        credit_done_addr(get_compile_time_arg_val(35)) {}
 
-    // The overlapped build gets program semaphores, because the routed expert's arena occupies the L1 the
-    // standalone op places its ring counters in. The framework re-initialises those every launch; the
-    // hand-placed set is this op's to zero.
-#ifdef CMBF2D_OVERLAPPED
+    // The ring and untilizer handshake counters never leave this chip, so they are program semaphores, named
+    // by id: the framework re-initialises those every launch, so nothing here zeroes them.
     volatile tt_l1_ptr uint32_t* filled_ptr() const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_slot));
     }
@@ -262,18 +263,6 @@ struct ReaderCtArgs {
     }
     uint32_t unt_produced_word(uint32_t peer_word) const { return get_semaphore(peer_word); }
     uint32_t unt_freed_addr_value() const { return get_semaphore(unt_freed_slot); }
-    void reset_produced_counter(volatile tt_l1_ptr uint32_t*) const {}
-#else
-    volatile tt_l1_ptr uint32_t* filled_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_slot);
-    }
-    volatile tt_l1_ptr uint32_t* freed_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_slot);
-    }
-    uint32_t unt_produced_word(uint32_t peer_word) const { return peer_word; }
-    uint32_t unt_freed_addr_value() const { return unt_freed_slot; }
-    void reset_produced_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
-#endif
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(12);  // schedule_len
@@ -299,10 +288,10 @@ struct ReaderCtArgs {
     static constexpr auto dram_region_args = TensorAccessorArgs<dram_counts_args.next_compile_time_args_offset()>();
     static constexpr auto dram_expert_offsets_args =
         TensorAccessorArgs<dram_region_args.next_compile_time_args_offset()>();
-#ifdef CMBF2D_OVERLAPPED
-    static constexpr auto dram_expert_table_args =
-        TensorAccessorArgs<dram_expert_offsets_args.next_compile_time_args_offset()>();
-#endif
+    // Without a table nothing reads through this, so it names expert_offsets' args rather than ones past the end.
+    static constexpr auto dram_expert_table_args = TensorAccessorArgs<
+        get_compile_time_arg_val(29) != 0 ? dram_expert_offsets_args.next_compile_time_args_offset()
+                                          : dram_region_args.next_compile_time_args_offset()>();
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }

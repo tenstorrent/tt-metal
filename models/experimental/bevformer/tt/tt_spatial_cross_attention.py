@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import NamedTuple, Optional
 
 
-from .tt_common import signpost
+from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
 from .tt_ms_deformable_attention import TTMSDeformableAttention
 from ..model_config import DeformableAttentionConfig
 
@@ -57,54 +57,64 @@ class SCARebatchPlan:
     Attributes:
         rebatch_len: Tile-aligned number of query rows processed per camera.
         query_index: Gather indices for query rows.
-        reference_points_batched: Rebatched camera reference points with shape
+        reference_points_batched: Row-major rebatched camera reference points with shape
             ``[batch_size * num_cams, rebatch_len, num_depth_levels, 2]``.
-        row_mask: Per-camera-row validity with shape ``[batch_size * num_cams, rebatch_len, 1]``.
         inverse_index: One gather index per contribution slot, each selecting the camera row that
-            feeds a query. Slots a query does not fill point at a padded row.
+            feeds a query. Slots a query does not fill point at a camera's last row, which is always
+            padding.
         count: Camera-contributor count with shape ``[batch_size, num_queries, 1]``.
-        num_valid_queries: Valid row count of each camera row block, in ``row_mask`` order. MSDA computes
-            only these rows; the padding past them is masked by ``row_mask``.
+        num_valid_queries: ``(batch_size * num_cams,)`` uint32 device tensor, the valid row count of
+            each camera row block, batch-major. MSDA computes only these rows, reading the counts on
+            device, and leaves the padding past them unwritten.
         is_empty: Whether the visibility mask contains no valid query-camera pairs.
     """
 
     rebatch_len: int
     query_index: Optional[ttnn.Tensor]
     reference_points_batched: Optional[ttnn.Tensor]
-    row_mask: Optional[ttnn.Tensor]
     inverse_index: tuple[ttnn.Tensor, ...]
     count: Optional[ttnn.Tensor]
-    num_valid_queries: tuple[int, ...] = ()
+    num_valid_queries: Optional[ttnn.Tensor] = None
     is_empty: bool = False
 
 
 class SCAVisibility(NamedTuple):
-    """One frame's camera visibility on device, its counts on their way to the host.
+    """One frame's camera visibility on device, and once read, its counts on their way to the host.
 
     Attributes:
         seen_by: ``[num_cams, batch_size, num_queries, 1]``, 1 where the camera sees the query.
         visible: Float32 ``[1, 1, num_cams, num_queries]``, the first sample's ``seen_by``.
         visible_count: Float32 ``[1, 1, num_cams, 1]``, the queries each camera sees.
-        host_counts: ``visible_count`` and the most cameras seeing one query, read back without
-            blocking; valid once ``counts_ready`` completes.
+        max_cameras: Float32 scalar, the most cameras seeing one query.
+        host_counts: ``visible_count`` and ``max_cameras`` read back without blocking, valid once
+            ``counts_ready`` completes; None until :meth:`SCARebatchPlanner.read_counts`.
         counts_ready: Event recorded after the readback.
     """
 
     seen_by: ttnn.Tensor
     visible: ttnn.Tensor
     visible_count: ttnn.Tensor
-    host_counts: tuple
-    counts_ready: object
+    max_cameras: ttnn.Tensor
+    host_counts: Optional[tuple] = None
+    counts_ready: object = None
 
 
 class SCARebatchPlanner:
     """Builds each frame's :class:`SCARebatchPlan` on device, at a capacity that only grows.
 
+    A frame takes four steps, so a traced caller can keep the host's readback and sizing out of its
+    traces:
+    :meth:`count_visible` and :meth:`build` only queue device work; :meth:`read_counts` queues the
+    counts' readback and :meth:`size` waits for it. :meth:`visibility` and :meth:`__call__` chain
+    them for an eager caller. While :attr:`generation` holds, :meth:`build` queues the same ops on
+    the same constant tensors and on tensors of the same shapes.
+
     The visibility mask stays on device: a cumulative sum places each camera's visible queries in
     its row block and a scatter compacts their IDs there. The host reads back only the per-camera
-    visible counts and the most cameras any query is seen by: they size the plan and give MSDA its
-    exact row counts. Capacity is the largest count seen so far times ``headroom``, rounded up, so a
-    frame that sees a few more queries than the last keeps the plan's shapes.
+    visible counts and the most cameras any query is seen by, and only to size the plan. MSDA takes its
+    exact row counts from a device tensor, so a captured trace follows them from frame to frame.
+    Capacity is the largest count seen so far times ``headroom``, rounded up, so a frame that sees a
+    few more queries than the last keeps the plan's shapes.
 
     Attributes:
         capacity: Visible queries per camera the plan holds; each camera's block has
@@ -113,6 +123,9 @@ class SCARebatchPlanner:
             like capacity, so the plan's number of tensors and ops stays fixed as well.
         reallocations: How many times a frame outgrew capacity or slots after the first frame; each
             changes the plan's shapes or its number of ops.
+        generation: Changes whenever :meth:`build` would record different ops, shapes or constant
+            tensors: on every growth and every rebuild of the constants. A trace of :meth:`build` is
+            valid while it holds.
     """
 
     def __init__(self, device, headroom: float = REBATCH_HEADROOM):
@@ -122,20 +135,35 @@ class SCARebatchPlanner:
         self.capacity = 0
         self.num_slots = 0
         self.reallocations = 0
+        self.generation = 0
         self._constants_key = None
         self._constants = None
 
+    def reserve(self, capacity: int, num_slots: int):
+        """Grow, as a frame needing them would, to at least ``capacity`` visible queries per camera and
+        ``num_slots`` slots; a frame of the plan's shapes must have been sized. A caller that knows
+        the counts it will see sizes the plan once instead of growing it frame by frame."""
+        assert self._constants_key is not None, "size() a frame before reserve()"
+        self._resize(max(self.capacity, capacity), max(self.num_slots, num_slots))
+        num_cams, bs, num_queries, _ = self._constants_key
+        self._constants_for(num_cams, bs, num_queries, _rebatch_len(self.capacity))
+
     def _grow(self, max_len: int, max_cameras: int):
-        grows = max_len > self.capacity or max_cameras > self.num_slots
-        if grows and self.capacity:
-            self.reallocations += 1
+        if self.capacity and (max_len > self.capacity or max_cameras > self.num_slots):
             logger.info(
                 f"SCA rebatch plan grows: {max_len} visible queries for capacity {self.capacity}, "
                 f"{max_cameras} cameras sharing a query for {self.num_slots} slots"
             )
-        if max_len > self.capacity:
-            self.capacity = math.ceil(max_len * self.headroom)
-        self.num_slots = max(self.num_slots, max_cameras)
+        capacity = math.ceil(max_len * self.headroom) if max_len > self.capacity else self.capacity
+        self._resize(capacity, max(self.num_slots, max_cameras))
+
+    def _resize(self, capacity: int, num_slots: int):
+        if (capacity, num_slots) == (self.capacity, self.num_slots):
+            return
+        if self.capacity:
+            self.reallocations += 1
+        self.generation += 1
+        self.capacity, self.num_slots = capacity, num_slots
 
     def _constants_for(self, num_cams: int, bs: int, num_queries: int, rebatch_len: int):
         """Device constants of one plan shape, rebuilt only when the shape changes."""
@@ -147,6 +175,8 @@ class SCARebatchPlanner:
 
             cams = torch.arange(num_cams, dtype=torch.float32).view(1, 1, num_cams, 1)
             samples = torch.arange(bs, dtype=torch.float32).view(bs, 1, 1, 1)
+            queries = torch.arange(num_queries, dtype=torch.float32).view(1, 1, 1, num_queries)
+            padding_of_query = (queries % num_cams) * rebatch_len + rebatch_len - 1
             self._constants = dict(
                 # Scatter source and destination: query IDs, and padding that gathers the last query.
                 query_ids=upload(
@@ -165,20 +195,35 @@ class SCARebatchPlanner:
                 point_offset=upload((cams * bs + samples) * num_queries, ttnn.float32, ttnn.TILE_LAYOUT),
                 camera_block=upload(cams * rebatch_len, ttnn.float32, ttnn.TILE_LAYOUT),
                 sample_block=upload(samples * num_cams * rebatch_len, ttnn.float32, ttnn.TILE_LAYOUT),
-                rows=upload(
-                    torch.arange(rebatch_len, dtype=torch.float32).view(1, rebatch_len, 1),
-                    ttnn.float32,
-                    ttnn.TILE_LAYOUT,
+                # The padding row an unfilled slot of query q reads, camera q % num_cams's last, so
+                # those gathers spread over num_cams pages instead of all landing on one: within the
+                # sample's blocks, and as the sample's row.
+                padding_of_query=upload(padding_of_query, ttnn.float32, ttnn.TILE_LAYOUT),
+                unfilled_row=upload(
+                    samples * num_cams * rebatch_len + padding_of_query, ttnn.float32, ttnn.TILE_LAYOUT
                 ),
             )
             self._constants_key = key
+            self.generation += 1
         return self._constants
 
     def visibility(self, bev_mask) -> "SCAVisibility":
-        """Count the cameras' visible queries on device and queue the counts' readback.
+        """:meth:`count_visible` and :meth:`read_counts`.
 
         Nothing here waits for the device, so the work queued after it, such as the backbone, runs
         while the counts come back.
+        """
+        return self.read_counts(self.count_visible(bev_mask))
+
+    def read_counts(self, visibility: "SCAVisibility") -> "SCAVisibility":
+        """``visibility`` with its counts' readback queued, without waiting for it."""
+        return visibility._replace(
+            host_counts=(visibility.visible_count.cpu(blocking=False), visibility.max_cameras.cpu(blocking=False)),
+            counts_ready=ttnn.record_event(self.device, 0),
+        )
+
+    def count_visible(self, bev_mask) -> "SCAVisibility":
+        """Count the cameras' visible queries, on device only.
 
         Args:
             bev_mask: Bfloat16 device tensor with shape
@@ -195,16 +240,10 @@ class SCARebatchPlanner:
         visible = ttnn.reshape(visible, (1, 1, num_cams, num_queries))
         visible_count = ttnn.sum(visible, dim=-1, keepdim=True)
         max_cameras = ttnn.max(ttnn.sum(visible, dim=-2, keepdim=True))
-        return SCAVisibility(
-            seen_by=seen_by,
-            visible=visible,
-            visible_count=visible_count,
-            host_counts=(visible_count.cpu(blocking=False), max_cameras.cpu(blocking=False)),
-            counts_ready=ttnn.record_event(self.device, 0),
-        )
+        return SCAVisibility(seen_by=seen_by, visible=visible, visible_count=visible_count, max_cameras=max_cameras)
 
     def __call__(self, reference_points_cam, visibility: "SCAVisibility") -> SCARebatchPlan:
-        """Build a rebatch plan for one frame's camera projections.
+        """Build a rebatch plan for one frame's camera projections: :meth:`size`, then :meth:`build`.
 
         Args:
             reference_points_cam: Bfloat16 device tensor with shape
@@ -215,10 +254,25 @@ class SCARebatchPlanner:
             A plan owned by these frame inputs. If no query-camera pair is valid, ``is_empty`` is true,
             ``rebatch_len`` is zero, and the plan carries no tensors.
         """
-        num_cams, bs, num_queries, num_depth_levels = tuple(reference_points_cam.shape)[:4]
-        seen_by, visible, visible_count = visibility.seen_by, visibility.visible, visibility.visible_count
+        if not self.size(visibility):
+            return SCARebatchPlan(
+                rebatch_len=0,
+                query_index=None,
+                reference_points_batched=None,
+                inverse_index=(),
+                count=None,
+                is_empty=True,
+            )
+        return self.build(reference_points_cam, visibility)
 
-        # The only readback: these size the plan's tensors and MSDA's computed rows.
+    def size(self, visibility: "SCAVisibility") -> bool:
+        """Wait for :meth:`read_counts`' counts and grow the plan's capacity and slots to fit them.
+
+        This is the plan's only readback. Growing uploads the constants of the new shapes here, so
+        :meth:`build` queues device work only. Returns whether any camera sees a query.
+        """
+        # The only readback: these size the plan's tensors. MSDA reads its row counts on device.
+        assert visibility.counts_ready is not None, "read_counts() before size()"
         ttnn.event_synchronize(visibility.counts_ready)
         host_count, host_max_cameras = visibility.host_counts
         num_visible = ttnn.to_torch(host_count).flatten().round().to(torch.int64)
@@ -226,21 +280,37 @@ class SCARebatchPlanner:
         if ENABLE_LOGGING:
             logger.info(f"SCA Valid Queries: {num_visible.tolist()}")
         if max_len == 0:
-            return SCARebatchPlan(
-                rebatch_len=0,
-                query_index=None,
-                reference_points_batched=None,
-                row_mask=None,
-                inverse_index=(),
-                count=None,
-                is_empty=True,
-            )
+            return False
         self._grow(max_len, int(ttnn.to_torch(host_max_cameras).round().item()))
+        num_cams, bs, num_queries, _ = tuple(visibility.seen_by.shape)
         rebatch_len = _rebatch_len(self.capacity)
-        padding_row = rebatch_len - 1
         if max(num_cams * bs * num_queries, bs * num_cams * rebatch_len) > 2**24:
             raise ValueError("SCA rebatch row IDs are computed in float32, exact only up to 2**24")
-        constants = self._constants_for(num_cams, bs, num_queries, rebatch_len)
+        self._constants_for(num_cams, bs, num_queries, rebatch_len)
+        return True
+
+    def build(self, reference_points_cam, visibility: "SCAVisibility") -> SCARebatchPlan:
+        """The plan at the current capacity and slots, as device work only.
+
+        :meth:`size` must have seen this frame's counts: a camera seeing more queries than the
+        capacity would scatter its compacted IDs past its row block.
+
+        Args:
+            reference_points_cam: Bfloat16 device tensor with shape
+                ``[num_cams, batch_size, num_queries, num_depth_levels, 2]``.
+            visibility: The frame's :meth:`count_visible`.
+        """
+        num_cams, bs, num_queries, num_depth_levels = tuple(reference_points_cam.shape)[:4]
+        seen_by, visible, visible_count = visibility.seen_by, visibility.visible, visibility.visible_count
+        rebatch_len = _rebatch_len(self.capacity)
+        padding_row = rebatch_len - 1
+        assert self.capacity > 0 and self._constants_key == (
+            num_cams,
+            bs,
+            num_queries,
+            rebatch_len,
+        ), "size() a frame of these shapes before build()"
+        constants = self._constants
 
         # Compact each camera to the queries it sees, so MSDA runs on its valid rows, not all of
         # them. A visible query's row in its camera's block is the number of visible queries before
@@ -266,37 +336,35 @@ class SCARebatchPlanner:
         )
         ref_index = _row_index(ttnn.add(compact_ids, constants["point_offset"]))
         # Split the gathered row back into MSDA's [.., rebatch_len, num_depth_levels, 2], the last
-        # dim being each depth level's (x, y) camera coordinate. Changing the row width from
-        # num_depth_levels * 2 to 2 requires a data-moving reshape before conversion to TILE layout.
-        # TODO: profile whether tilizing first is cheaper.
-        reference_points_batched = ttnn.to_layout(
-            ttnn.reshape(
-                ttnn.embedding(ref_index, ref_rows),
-                (bs * num_cams, rebatch_len, num_depth_levels, 2),
-            ),
-            ttnn.TILE_LAYOUT,
+        # dim being each depth level's (x, y) camera coordinate. It stays row-major, the layout fused
+        # MSDA reads: in TILE the [num_depth_levels, 2] tail pads to a full tile per query, and every
+        # layer sharing this plan would untilize it again.
+        reference_points_batched = ttnn.reshape(
+            ttnn.embedding(ref_index, ref_rows),
+            (bs * num_cams, rebatch_len, num_depth_levels, 2),
         )
 
         # Invert the compaction: for every query, the rows of queries_output that contribute to it.
         # Row (j, i, p) of the compacted output is flat row (j * num_cams + i) * rebatch_len + p. A
         # query's slot in camera i is the number of cameras before i that see it, so each slot takes
-        # at most one camera's row; unfilled slots read the last row of the sample's first camera,
-        # which is always padding. Rows are offset by -padding_row so that the sum over cameras plus
-        # padding_row is the filling camera's row, or padding_row where no camera fills the slot.
+        # at most one camera's row; an unfilled slot reads a camera's last row, which is always
+        # padding and which the attention zeroes (constants["unfilled_row"]). Rows are offset by
+        # the query's padding row so that the sum over cameras plus unfilled_row is the filling
+        # camera's row, or the padding row where no camera fills the slot.
         slot = ttnn.sub(ttnn.cumsum(visible, dim=-2), visible)
-        contribution = ttnn.sub(ttnn.add(position, constants["camera_block"]), float(padding_row))
+        contribution = ttnn.sub(ttnn.add(position, constants["camera_block"]), constants["padding_of_query"])
         inverse_index = []
         for s in range(self.num_slots):
             fills = ttnn.logical_and(visible, ttnn.eq(slot, float(s)))
             rows = ttnn.sum(ttnn.where(fills, contribution, 0.0), dim=-2, keepdim=True)
-            rows = ttnn.add(ttnn.add(rows, float(padding_row)), constants["sample_block"])
-            inverse_index.append(_row_index(rows))
+            inverse_index.append(_row_index(ttnn.add(rows, constants["unfilled_row"])))
 
         num_valid = ttnn.reshape(visible_count, (1, num_cams, 1, 1))
         if bs > 1:
             num_valid = ttnn.repeat(num_valid, ttnn.Shape((bs, 1, 1, 1)))
-        row_mask = ttnn.lt(constants["rows"], ttnn.reshape(num_valid, (bs * num_cams, 1, 1)))
-        row_mask = ttnn.typecast(row_mask, ttnn.bfloat16)
+        # Sums of 0/1 in float32, so exact; MSDA reads them as one uint32 row-major page.
+        num_valid_queries = ttnn.typecast(ttnn.reshape(num_valid, (1, bs * num_cams)), ttnn.uint32)
+        num_valid_queries = ttnn.reshape(ttnn.to_layout(num_valid_queries, ttnn.ROW_MAJOR_LAYOUT), (bs * num_cams,))
 
         count = ttnn.clamp(ttnn.sum(seen_by, dim=0, keepdim=True), min=1.0)
         count = ttnn.reshape(count, (bs, num_queries, 1))
@@ -305,10 +373,9 @@ class SCARebatchPlanner:
             rebatch_len=rebatch_len,
             query_index=query_index,
             reference_points_batched=reference_points_batched,
-            row_mask=row_mask,
             inverse_index=tuple(inverse_index),
             count=count,
-            num_valid_queries=tuple(num_visible.tolist()) * bs,
+            num_valid_queries=num_valid_queries,
         )
 
 
@@ -339,6 +406,8 @@ class TTSpatialCrossAttention:
         batch_first (bool): Whether the first dimension of input is batch_size.
         deformable_attention (dict): Config for MSDeformableAttention.
         spatial_shapes: Multi-scale feature shapes [num_levels, 2]
+        residual (bool): Add the residual to the output; the encoder layer adds it inside the
+            LayerNorm that follows instead.
         **kwargs: Additional arguments.
     """
 
@@ -352,10 +421,12 @@ class TTSpatialCrossAttention:
         deformable_attention: Optional[dict] = None,
         *,
         spatial_shapes,
+        residual: bool = True,
         **kwargs,
     ):
         self.device = device
         self.params = params
+        self.residual = residual
         self.embed_dims = embed_dims
         self.num_cams = num_cams
         self.batch_first = batch_first
@@ -376,6 +447,10 @@ class TTSpatialCrossAttention:
         # projection in forward. Sharing a namespace applies the SCA's matrix twice.
         self.deformable_attention = TTMSDeformableAttention(
             deform_config, device, params.deformable_attention, spatial_shapes=spatial_shapes, residual=False
+        )
+        self.linear_kwargs = grid_linear_kwargs(device)
+        self.zero_rows = ttnn.from_torch(
+            torch.zeros(1, num_cams, 1, embed_dims), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
 
     def forward(
@@ -403,7 +478,8 @@ class TTSpatialCrossAttention:
                 attention never scores query against one. Two Linears on query predict where to
                 sample and with what weight, replacing Q*K^T, so ``value`` is the only feature
                 tensor the device path needs.
-            residual: Residual connection input.
+            residual: Residual connection input; must be None when the module was built with
+                ``residual=False``, whose output is the attention alone (zeros for an empty plan).
             query_pos: Query positional encoding.
             key_padding_mask: Key padding mask.
             rebatch_plan: Prebuilt :class:`SCARebatchPlan`. Shared by every encoder layer; built here if absent.
@@ -417,7 +493,10 @@ class TTSpatialCrossAttention:
         assert value is not None, "value is required"
 
         # Handle input defaults
-        if residual is None:
+        assert self.residual or residual is None, "built with residual=False, so the residual would be dropped"
+        if not self.residual:
+            inp_residual = None
+        elif residual is None:
             inp_residual = ttnn.clone(query)
         else:
             inp_residual = residual
@@ -451,8 +530,13 @@ class TTSpatialCrossAttention:
 
         if rebatch_plan.is_empty:
             if ENABLE_LOGGING:
-                logger.warning("No valid points found in SCA, returning residual")
-            return inp_residual
+                logger.warning("No valid points found in SCA, returning the residual or zeros plus the bias")
+            # As the reference: the output projection of all-zero slots, which is its bias. A traced
+            # frame runs the full plan, all padding, and gets the same.
+            output_proj = getattr(self.params, "output_proj", None)
+            bias = None if output_proj is None else output_proj.bias
+            base = inp_residual if self.residual else ttnn.zeros_like(query)
+            return base if bias is None else ttnn.add(base, bias)
 
         rebatch_len = rebatch_plan.rebatch_len
 
@@ -463,13 +547,21 @@ class TTSpatialCrossAttention:
 
         # Fold batch and camera into row IDs to gather all valid queries in one embedding call.
         # Reference points come from the plan — they do not depend on query.
+        # The gathered queries go to L1 when they fit, which nothing holds before the fused op
+        # stages its value there. The TILE query is untilized into a DRAM copy of its own, freed
+        # once the gather has read it: in L1, above the gathered queries, it would leave a hole
+        # that pushes the sampling Linears' outputs down into the circular buffers.
+        assert query.layout == ttnn.TILE_LAYOUT, f"SCA takes a TILE query, got {query.layout}"
+        rows_memory = l1_if_fits(self.device, bs * self.num_cams * rebatch_len * self.embed_dims * query.element_size())
         query_rows = ttnn.reshape(
-            ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT), (1, 1, bs * num_queries, self.embed_dims)
+            ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            (1, 1, bs * num_queries, self.embed_dims),
         )
         queries_batched = ttnn.reshape(
-            ttnn.embedding(rebatch_plan.query_index, query_rows, layout=ttnn.TILE_LAYOUT),
+            ttnn.embedding(rebatch_plan.query_index, query_rows, layout=ttnn.TILE_LAYOUT, memory_config=rows_memory),
             (bs * self.num_cams, rebatch_len, self.embed_dims),
         )
+        ttnn.deallocate(query_rows)
         reference_points_batched = rebatch_plan.reference_points_batched
 
         if ENABLE_LOGGING:
@@ -487,9 +579,10 @@ class TTSpatialCrossAttention:
             logger.info("SCA Calling Deformable Attention")
         queries_output = self.deformable_attention(
             query=queries_batched,
+            consume_query=True,
             value=value_reshaped,
             reference_points=reference_points_batched,
-            num_valid_queries=rebatch_plan.num_valid_queries,
+            num_valid_queries_tensor=rebatch_plan.num_valid_queries,
             **kwargs,
         )
 
@@ -509,41 +602,69 @@ class TTSpatialCrossAttention:
         # last dimension and transposes all three operands to get there.
         #
         # MSDA leaves the padded rows unwritten, so they can hold any bit pattern, NaN included.
-        # Selecting zero makes them neutral; multiplying by row_mask would not.
+        # Every slot a query does not fill reads a camera's last row, which is always padding
+        # (build_rebatch_plan); zeroing those rows makes the slots neutral.
         # Each contribution is already BF16. Adding those tensors rounds after every camera, so a
         # 1 sitting next to 256 disappears before the cancelling term arrives (256 + 1 + -256
-        # comes back as 2). The running sum stays in FP32 and is rounded once, after the last camera.
-        contribution_rows = ttnn.reshape(
-            ttnn.to_layout(ttnn.where(rebatch_plan.row_mask, queries_output, 0.0), ttnn.ROW_MAJOR_LAYOUT),
-            (1, 1, bs * self.num_cams * rebatch_len, self.embed_dims),
-        )
-        slots = None
-        for index in rebatch_plan.inverse_index:
-            gathered = ttnn.typecast(
-                ttnn.to_layout(
-                    ttnn.reshape(ttnn.embedding(index, contribution_rows), (bs, num_queries, self.embed_dims)),
-                    ttnn.TILE_LAYOUT,
-                ),
-                ttnn.float32,
+        # comes back as 2). The running sum stays in FP32 and is rounded once, by the last add.
+        camera_rows = ttnn.reshape(queries_output, (1, bs * self.num_cams, rebatch_len, self.embed_dims))
+        for j in range(bs):
+            ttnn.experimental.slice_write(
+                self.zero_rows,
+                camera_rows,
+                [0, j * self.num_cams, rebatch_len - 1, 0],
+                [1, (j + 1) * self.num_cams, rebatch_len, self.embed_dims],
+                [1, 1, 1, 1],
             )
-            slots = gathered if slots is None else ttnn.add(slots, gathered)
-        slots = ttnn.typecast(slots, ttnn.bfloat16)
+        contribution_rows = ttnn.reshape(camera_rows, (1, 1, bs * self.num_cams * rebatch_len, self.embed_dims))
+        # The gather emits tiles directly when the index count fills whole tile rows.
+        gather_layout = ttnn.TILE_LAYOUT if (bs * num_queries) % ttnn.TILE_SIZE == 0 else ttnn.ROW_MAJOR_LAYOUT
+        gathered = [
+            ttnn.to_layout(
+                ttnn.reshape(
+                    ttnn.embedding(index, contribution_rows, layout=gather_layout), (bs, num_queries, self.embed_dims)
+                ),
+                ttnn.TILE_LAYOUT,
+            )
+            for index in rebatch_plan.inverse_index
+        ]
+        # With the fused op's output freed, L1 holds nothing large: the sum (fp32), the division
+        # and the projection run there when they fit. Before that, the free L1 below the fused
+        # op's output reaches down to where programs place their circular buffers.
+        ttnn.deallocate(queries_output)
+        # Bytes per element: the fp32 running sum, the bf16 mean and the bf16 projection.
+        memory = l1_if_fits(self.device, bs * num_queries * self.embed_dims * (4 + 2 + 2))
+        slots = gathered[0]
+        for slot in range(1, len(gathered)):
+            dtype = ttnn.bfloat16 if slot == len(gathered) - 1 else ttnn.float32
+            summed = ttnn.add(slots, gathered[slot], dtype=dtype, memory_config=memory)
+            ttnn.deallocate(slots)
+            ttnn.deallocate(gathered[slot])
+            slots = summed
+        averaged = ttnn.divide(slots, rebatch_plan.count, dtype=ttnn.bfloat16, memory_config=memory)
+        ttnn.deallocate(slots)
+        slots = averaged
 
         if ENABLE_LOGGING:
             logger.info("SCA Feature Aggregation Complete")
 
-        slots = ttnn.div(slots, rebatch_plan.count)
-
         # Output projection
         if hasattr(self.params, "output_proj") and self.params.output_proj is not None:
-            slots = ttnn.to_layout(slots, ttnn.TILE_LAYOUT)
-            slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
+            projected = ttnn.linear(
+                slots,
+                self.params.output_proj.weight,
+                bias=self.params.output_proj.bias,
+                memory_config=memory,
+                **self.linear_kwargs,
+            )
+            ttnn.deallocate(slots)
+            slots = projected
 
         if ENABLE_LOGGING:
             logger.info("SCA Adding Residual")
 
         # Residual connection
-        output = ttnn.add(slots, inp_residual)
+        output = ttnn.add(slots, inp_residual) if self.residual else slots
 
         signpost(header="TTNN SCA Forward End")
 

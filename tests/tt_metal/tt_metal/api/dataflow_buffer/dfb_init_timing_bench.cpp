@@ -1175,8 +1175,8 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
 // Single DFB via CreateDataflowBuffer: DM4 (STRIDED producer) → Neo0 (ALL consumer),
 // 1-to-1 remapper, num_entries=1, entry_size=2048, copy_tile drain.
 // Producer uses explicit reserve_back/push_back (implicit_sync=false), matching
-// DMTensixTest1xDFB1Sx1S. With implicit_sync=true the DM kernel hangs in finish()
-// at handle_final_credits WTP1 waiting for ISR-posted producer TC credits.
+// DMTensixTest1xDFB1Sx1S. With implicit_sync=true the DM kernel used to hang in the
+// per-object finish waiting for ISR-posted producer TC credits.
 // Pass/fail here isolates ALL+remapper consumer TC init from multi-DFB TC pressure.
 void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     IDevice* device = ctx.device;

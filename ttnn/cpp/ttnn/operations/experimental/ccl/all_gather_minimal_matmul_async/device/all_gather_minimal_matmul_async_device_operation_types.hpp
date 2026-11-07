@@ -55,6 +55,12 @@ struct AllGatherMinimalMatmulAsyncParams {
     // fused_activation / ternary.
     bool fuse_swiglu = false;
 
+    // Core-grid orientation: nullopt keeps the legacy `force_transpose || M > N` rule, a value pins it
+    // so the program (and its cache entry) does not depend on M. Neither this nor force_transpose is in
+    // attribute_values(): the program hash keys on the resolved orientation (resolve_transpose_core_grid),
+    // so a pinned and an unpinned call that resolve alike share one program.
+    std::optional<bool> transpose_core_grid;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -80,7 +86,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool using_persistent_weight_buffer,
         ttnn::ccl::Topology fsdp_topology,
         bool fuse_swiglu = false,
-        std::vector<uint32_t> chunk_sizes = {}) :
+        std::vector<uint32_t> chunk_sizes = {},
+        std::optional<bool> transpose_core_grid = std::nullopt) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -105,7 +112,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_semaphore(std::move(fsdp_semaphore)),
         using_persistent_weight_buffer(using_persistent_weight_buffer),
         fsdp_topology(fsdp_topology),
-        fuse_swiglu(fuse_swiglu) {}
+        fuse_swiglu(fuse_swiglu),
+        transpose_core_grid(transpose_core_grid) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -114,7 +122,6 @@ struct AllGatherMinimalMatmulAsyncParams {
         "output_mem_config",
         "topology",
         "cluster_axis",
-        "force_transpose",
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
@@ -137,7 +144,6 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->output_mem_config,
             this->topology,
             this->cluster_axis,
-            this->force_transpose,
             this->num_workers_per_link,
             this->num_buffers_per_channel,
             this->config,
@@ -157,8 +163,9 @@ struct AllGatherMinimalMatmulAsyncParams {
 // attribute_names and attribute_values() are hand-synced: same fields, same order. This assert
 // guards arity ONLY (equal element count) — the most common drift, adding/removing a field on one
 // side. Field order and the name-to-value correspondence stay a hand-maintained invariant it cannot
-// check. Runtime-only members (semaphores, fused_ternary_scalar) and the input tensors are out of
-// the key by design (the tensors are keyed separately by the framework). fsdp_topology is a
+// check. Runtime-only members (semaphores, fused_ternary_scalar) and the tensors are out of this list
+// by design: compute_program_hash keys the tensors, the resolved transpose_core_grid and whether
+// fused_ternary_scalar is set alongside these attributes. fsdp_topology is a
 // program-structural CT arg that is NOT in the key; it is safe today only because validate TT_FATALs
 // it to Linear whenever FSDP fusion is active, so it cannot vary — relaxing that check would require
 // keying it here.
@@ -166,6 +173,11 @@ static_assert(
     std::tuple_size_v<decltype(AllGatherMinimalMatmulAsyncParams::attribute_names)> ==
         std::tuple_size_v<decltype(std::declval<const AllGatherMinimalMatmulAsyncParams>().attribute_values())>,
     "AGMM attribute_names and attribute_values() must stay in lockstep");
+
+// The orientation the program is built with. M and N are the matmul's padded row count and weight width.
+inline bool resolve_transpose_core_grid(const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N) {
+    return params.transpose_core_grid.value_or(params.force_transpose || M > N);
+}
 
 // Per-chunk widths (elements): explicit `chunk_sizes`, else the uniform N/chunks split.
 inline std::vector<uint32_t> resolve_chunk_sizes(const AllGatherMinimalMatmulAsyncParams& params, uint32_t N) {
