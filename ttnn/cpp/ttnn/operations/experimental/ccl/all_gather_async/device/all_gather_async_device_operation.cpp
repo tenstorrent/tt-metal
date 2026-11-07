@@ -82,14 +82,14 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& layout = input_tensor.layout();
     const auto& dtype = input_tensor.dtype();
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
     TT_FATAL(
         (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
             !args.use_all_gather_async_llama_sharded,
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
+    TT_FATAL(page_size % input_tensor.mesh_buffer().alignment() == 0, "All Gather currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
@@ -401,10 +401,10 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     // Roofline assumes all device compute cores drive DRAM concurrently
     // (hardware max parallelism). DRAM bandwidth and its read/write fill-drain
     // latency are two more floors; all of these overlap, so all feed the final max().
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
 
     // Hardware ceiling: total compute cores available to drive DRAM
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;

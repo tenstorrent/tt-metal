@@ -293,7 +293,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // The writer's output ring: 32 token ids, each in its own slot of at least 32 B and at least one aligned output
     // page, since the writer sends whole aligned pages (64 B in Blackhole DRAM). The writer gets this size as a
     // compile-time arg and checks it against its output accessor's page.
-    const uint32_t output_slot_bytes = std::max(32U, static_cast<uint32_t>(output.buffer()->aligned_page_size()));
+    const uint32_t output_slot_bytes = std::max(32U, static_cast<uint32_t>(output.mesh_buffer().aligned_page_size()));
     desc.cbs.push_back(make_cb_descriptor_bytes(
         layout.all_cores,
         kOutputStagingCbIndex,
@@ -309,7 +309,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // spans at most (n - 1) / Wt + 2 entries. Sizing by num_entries instead would scale the L1 and
     // read footprint with the global batch rather than a core's share of it.
     if (layout.position_aware) {
-        const uint32_t slot_bytes = static_cast<uint32_t>(tensor_args.positions->buffer()->aligned_page_size());
+        const uint32_t slot_bytes = static_cast<uint32_t>(tensor_args.positions->mesh_buffer().aligned_page_size());
         const uint32_t max_local_entries =
             std::min(layout.num_entries, (layout.tiles_per_core_group_1 - 1U) / layout.Wt + 2U);
         for (auto cb_index : {kReaderPositionsCbIndex, kWriterPositionsCbIndex}) {
@@ -484,12 +484,12 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const WorkSplit split = compute_work_split(
         logits.device()->compute_with_storage_grid_size(), count_split_tiles(logits.padded_shape(), position_aware));
 
-    const uint32_t logits_address = logits.buffer()->address();
+    const uint32_t logits_address = logits.mesh_buffer().address();
     const uint32_t mask_address =
-        tensor_args.logits_mask.has_value() ? tensor_args.logits_mask->buffer()->address() : 0U;
+        tensor_args.logits_mask.has_value() ? tensor_args.logits_mask->mesh_buffer().address() : 0U;
     // Zero when absent: the slot exists in both modes so the patch is unconditional.
-    const uint32_t positions_address = position_aware ? tensor_args.positions->buffer()->address() : 0U;
-    const uint32_t output_address = tensor_return_value.buffer()->address();
+    const uint32_t positions_address = position_aware ? tensor_args.positions->mesh_buffer().address() : 0U;
+    const uint32_t output_address = tensor_return_value.mesh_buffer().address();
 
     // seed, the temperature value, the mask batch stride and (in position mode) the token dim are
     // excluded from the program hash and must be re-applied on every hit, from the SAME derivation
