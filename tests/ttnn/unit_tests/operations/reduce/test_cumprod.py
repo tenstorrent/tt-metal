@@ -9,23 +9,8 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc
 
 TEST_PADDING_VALUE = -42
-
-
-def get_backward_tensors(output_grad_shape, input_grad_shape, device):
-    torch.manual_seed(2023)
-    npu_dtype = ttnn.bfloat16
-    cpu_dtype = torch.bfloat16
-    npu_layout = ttnn.TILE_LAYOUT
-    torch_output_grad = torch.randint(-2, 3, output_grad_shape, dtype=cpu_dtype, requires_grad=True)
-    torch_input_grad = torch.randint(-2, 3, input_grad_shape, dtype=cpu_dtype)
-
-    tt_output_grad = ttnn.Tensor(torch_output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    tt_input_grad = ttnn.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-
-    return tt_output_grad, tt_input_grad, torch_output_grad
 
 
 @pytest.mark.parametrize("dim", [0, 2, -1])
@@ -89,7 +74,6 @@ def test_cumprod_normal(dim, shape, dtypes, device):
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 
 
-# low pcc issue.https://github.com/tenstorrent/tt-metal/issues/40878
 @pytest.mark.parametrize("dim", [0, 2, -1])
 @pytest.mark.parametrize(
     "shape",
@@ -110,27 +94,17 @@ def test_cumprod_normal(dim, shape, dtypes, device):
 def test_cumprod_backward(dim, shape, dtypes, device):
     torch.manual_seed(0)
     if dim < len(shape) and -len(shape) <= dim:
-        (torch_dtype, ttnn_dtype) = dtypes
+        _, ttnn_dtype = dtypes
 
-        # Generate integer input on [-2; 2];
-        # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
-        # which are not handled yet
-        torch_input_tensor = torch.randint(-2, 3, size=shape, dtype=torch_dtype, requires_grad=True)
+        torch_input = torch.tensor([-2.0, -1.0, 1.0, 2.0], dtype=torch.bfloat16)[torch.randint(0, 4, shape)]
+        torch_output = torch.flip(torch.cumprod(torch.flip(torch_input.float(), [dim]), dim), [dim])
 
-        (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(shape, shape, device)
+        tt_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+        tt_input = ttnn.fill_implicit_tile_padding(tt_input, float("nan"))
+        tt_output_cpu = ttnn.to_torch(ttnn.cumprod(tt_input, dim, dtype=ttnn_dtype, reverse_order=True)).float()
 
-        torch_output = torch.cumprod(torch_input_tensor, dim)
-        torch_output.backward(torch_output_grad)
-
-        tt_input_grad_cpu = ttnn.to_torch(
-            ttnn.cumprod(tt_output_grad, dim, dtype=ttnn_dtype, reverse_order=True, out=tt_input_grad)
-        )
-
-        assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
-
-        # test for equivalance
-        rtol = atol = 0.1
-        assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
+        assert tt_output_cpu.shape == torch_output.shape
+        assert torch.equal(tt_output_cpu, torch_output)
 
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
