@@ -7,11 +7,10 @@
 // with one read, a unit of them per transaction id, one or two units in flight. Larger groups land whole in a staging
 // ring (c_2), one read each, one or two in flight, and go into their pages from local L1, each codes part with the
 // group's scale rows. The scale rows are converted once, in the first page (prepare_scales), and the block is copied to
-// the other pages (Q2_K: by the writer of this core while this kernel moves the next record). Codebook formats
-// then fill in the pages' grid levels (lookup_grid): this kernel the first half of each page's index words, the writer
-// of this core the second (gguf_matmul_writer.cpp), on a request per record. Compile args: format id, c_0 pages,
-// one-page groups per unit, staging slots, the lookup request, answer and page address semaphores, reads in flight,
-// then the weight's TensorAccessorArgs.
+// the other pages. Codebook formats then fill in the pages' grid levels (lookup_grid): this kernel the first half of
+// each page's index words, the writer of this core the second (gguf_matmul_writer.cpp), on a request per record.
+// Compile args: format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page
+// address semaphores, reads in flight, then the weight's TensorAccessorArgs.
 // Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group.
 
 #include <cstdint>
@@ -105,15 +104,6 @@ void kernel_main() {
         static_assert(slots > in_flight);
         constexpr uint32_t local = slots + 1;  // transaction id of the copies within L1
         constexpr bool shared_scales = L.fp16_rows > 0;
-        // Two fp16 scale rows (Q2_K): the writer of this core converts them and copies them to the other pages
-        // (gguf_matmul_writer.cpp) while this kernel moves the next record into its pages; with one, the handoff
-        // costs more than the conversion.
-        constexpr bool prep_on_writer = L.fp16_rows > 1 && !is_codebook<FMT>();
-        uint32_t pushed = 0;  // records pushed to c_0
-        // The c_0 offset of the record `ahead` records past the write pointer, in the ring of c_0's pages.
-        auto ring_offset = [&](uint32_t ahead) {
-            return (((pushed + ahead) * P % ring) - (pushed * P % ring)) * page;
-        };
         CircularBuffer stage(tt::CBIndex::c_2);
         stage.reserve_back(1);  // private: never pushed
         const uint32_t stage_addr = stage.get_write_ptr();
@@ -157,31 +147,17 @@ void kernel_main() {
                 read_record(i + in_flight);  // its slot held record i - 1, whose copies are done
             }
             noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1 + i % slots});
-            const uint32_t ahead = i - pushed;  // 1: the record before is still with the writer
-            pages.reserve_back(P * (ahead + 1));
-            const uint32_t at = ring_offset(ahead);
+            pages.reserve_back(P);
             const uint32_t from = stage_addr + (i % slots) * record;
             for (uint32_t p = 0; p < P; p++) {
-                copy(from + scale_bytes + p * L.code_bytes, L.code_bytes, at + p * page + L.code_offset);
+                copy(from + scale_bytes + p * L.code_bytes, L.code_bytes, p * page + L.code_offset);
                 if (p == 0 || !shared_scales) {
-                    copy(from, scale_bytes, at + p * page + L.scale_offset);
+                    copy(from, scale_bytes, p * page + L.scale_offset);
                 }
             }
             noc.async_read_barrier<NocOptions::TXN_ID>({.trid = local});
             invalidate_l1_cache();
-            const uint32_t first = pages.get_write_ptr() + at;
-            if constexpr (prep_on_writer) {
-                // The record before first (the writer reads the address of one request at a time).
-                if (ahead > 0) {
-                    answers.wait_min(pushed + 1);
-                    pages.push_back(P);
-                    pushed++;
-                }
-                address.set(first);
-                asm volatile("fence" ::: "memory");  // the address is in L1 before the request
-                requests.set(++asked);
-                continue;
-            }
+            const uint32_t first = pages.get_write_ptr();
             if constexpr (shared_scales) {
                 prepare_scales<FMT>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(first + L.scale_offset));
                 asm volatile("fence" ::: "memory");
@@ -206,12 +182,6 @@ void kernel_main() {
                 answers.wait_min(asked);
             }
             pages.push_back(P);
-            pushed++;
-        }
-        while (pushed < total) {
-            answers.wait_min(pushed + 1);
-            pages.push_back(P);
-            pushed++;
         }
     }
     noc_async_read_set_trid(0, noc.get_noc_id());
