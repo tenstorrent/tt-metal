@@ -169,3 +169,34 @@ def test_binary_ng_bcast_bf16_in_fp32_out_matrix(device, op_name, bcast_input, w
     assert torch.equal(
         out, ref
     ), f"{op_name} COL_{bcast_input.upper()} W={w_tiles}: max abs diff = {(out - ref).abs().max()}"
+
+
+# ─── ROW bcast with a 16-bit/block-float input and an fp32 output ──────────
+# The LLK row broadcast (MOVB2D) returned garbage on Wormhole when fp32_dest_acc_en is on
+# (bf16/bf8/bf4 inputs with dtype=float32). ROW types now take the software broadcast path.
+
+_ROW_BCAST_SHAPES = [
+    ((2, 3, 64, 96), (1, 1, 1, 96)),
+    ((1, 1, 32, 32), (1, 1, 1, 32)),
+    ((1, 1, 100, 70), (1, 1, 1, 70)),
+    ((1, 1, 1, 96), (2, 3, 64, 96)),
+    ((2, 3, 64, 1), (1, 1, 1, 96)),
+    ((1, 1, 1, 96), (2, 3, 64, 1)),
+    ((2, 3, 64, 96), (1, 1, 1, 1)),
+    ((2, 3, 64, 96), (1, 1, 64, 1)),
+]
+
+
+@pytest.mark.parametrize("a_shape, b_shape", _ROW_BCAST_SHAPES)
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply"])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
+def test_row_bcast_low_precision_inputs_fp32_output(device, in_dtype, op_name, a_shape, b_shape):
+    ttnn_op, torch_op = _OPS[op_name]
+    torch.manual_seed(0)
+    a = ttnn.from_torch(torch.randn(a_shape), dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(b_shape), dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ref = torch_op(ttnn.to_torch(a).double(), ttnn.to_torch(b).double()).float()
+
+    out = ttnn.to_torch(ttnn_op(a, b, dtype=ttnn.float32)).float()
+    assert out.shape == ref.shape
+    assert torch.allclose(out, ref, atol=0.02, rtol=0.02), f"max abs err {(out - ref).abs().max()}"
