@@ -74,15 +74,25 @@ def profile_realtime_program(
         result = run_fn()
         ttnn.synchronize_device(device)
 
+        # On a multi-chip mesh, a chip's records are held on the host until the cross-chip clock sync has solved its
+        # links, which right after a mesh opens takes ~0.25 s longer for the non-root chips than for the root chip, so
+        # a quiet window alone would end the wait with only the root chip's records. Wait for every chip of the mesh
+        # that ran something; a program that runs on fewer chips falls back to the timeout.
+        expected_chips = set(device.get_device_ids()) if hasattr(device, "get_device_ids") else set()
         deadline = time.monotonic() + record_timeout_seconds
         last_count = 0
         last_change = time.monotonic()
+        seen_chips = set()
         while time.monotonic() < deadline:
             count = collector.num_kernel_zones
             if count != last_count:
                 last_count = count
                 last_change = time.monotonic()
-            elif count and (time.monotonic() - last_change) >= record_settle_seconds:
+                if not expected_chips <= seen_chips:
+                    seen_chips = {
+                        int(record.chip_id) for record in collector.records() if record.start_ns >= region_start_ns
+                    }
+            elif count and (time.monotonic() - last_change) >= record_settle_seconds and expected_chips <= seen_chips:
                 break
             time.sleep(0.005)
         records = collector.records()

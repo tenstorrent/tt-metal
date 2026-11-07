@@ -42,7 +42,10 @@
 
 - name: TTNN multi-device CCL, SDPA PERF, and indexer tests (QB2 only)
   cmd: |
-    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest tests/nightly/blackhole/sdpa/ -svv --ignore=tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py
+    # Only the tests that time device programs run under the streaming profiler: its per-kernel instrumentation pushes
+    # some ring-joint accuracy programs past the kernel config buffer, and it adds a bring-up to every mesh open.
+    pytest tests/nightly/blackhole/sdpa/ -svv --ignore=tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py -k "not (perf or split_accumulation_cancellation)"
+    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest tests/nightly/blackhole/sdpa/ -svv --ignore=tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py -k "perf or split_accumulation_cancellation"
     # Split-KV ring MLA: production-dimension accuracy and the comparison-mode golden only; the rest of
     # the file is a local validation suite and its perf check runs on Galaxy (blaze prefill sdpa_perf).
     pytest tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py -k "production_dimensions or comparison_mode" -svv

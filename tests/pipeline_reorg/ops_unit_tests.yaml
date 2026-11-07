@@ -442,7 +442,9 @@
 
 - name: ccl nightly tests
   cmd: |
-    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
+    # Only the perf files time device programs; the streaming profiler adds a bring-up to every mesh open, so the rest of the directory runs without it.
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly --ignore=tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_to_all_async_generic_perf.py --ignore=tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_perf_bh.py
+    TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_to_all_async_generic_perf.py tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_perf_bh.py
     # The box/watcher tests only fail when a device ASSERT can trap, so the watcher has to be
     # enabled before pytest starts. This job runs with enable-watcher off, and with it off ASSERT
     # compiles to a no-op (tt_metal/hw/inc/api/debug/assert.h), so these tests would pass whether
