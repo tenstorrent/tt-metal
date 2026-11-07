@@ -58,7 +58,7 @@ class HostAudioBackend:
     bf16). Construction took 0.1 s on bhg4 with the safetensors files in the page cache.
 
     Latency of ``embed_audio`` on bhg4 (EPYC 9354P, shared host; tests/perf/audio_host_latency.py), 8 threads:
-    5 s 0.35 s, 30 s 1.74 s, 120 s 8.9 s, 300 s 28.4 s, 600 s 62 s; the tokenizer encoder is ~92-96 % of it.
+    5 s 0.35 s, 30 s 1.74 s, 120 s 8.9 s, 300 s 28.4 s, 600 s 62 s; the tokenizer encoder is 90-98 % of it.
     """
 
     def __init__(self, model_path, *, num_threads=8, patch_dtype=torch.bfloat16, fast_attention=True, weights=None):
