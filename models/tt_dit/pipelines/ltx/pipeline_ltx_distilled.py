@@ -99,6 +99,24 @@ def _keyframe_s1_strength(s1_height: int) -> float:
     return KEYFRAME_S1_STRENGTH_COARSE if s1_height < 480 else KEYFRAME_S1_STRENGTH
 
 
+def _s1_pin_strength(
+    lat_idx: int, latent_frames: int, s1s: float, s1_height: int, *, kf_fix: bool, append_token: bool, end_hold: bool
+) -> float:
+    """Stage-1 strength of one in-place image pin. On the aligned-node keyframe path (``kf_fix``) a
+    non-frame-0 in-place pin softens to ``_keyframe_s1_strength``; frame 0 and append-token anchors keep
+    the strength they were asked for.
+
+    ``end_hold`` (LTX_REF_FL_END_HOLD, ref+fl only; task #3075) gives the LAST latent frame frame 0's
+    treatment: it keeps its asked strength, so its denoise mask and its AdaLN timestep agree. The 2-value
+    timestep pair carries frame 0's pinned noise level for every pinned token (``image_cond_strength``),
+    so a softened last frame was told it was clean (timestep 0) while its mask left it 50-75% noise, and
+    stage 1 settled the clip's end off the given frame (end-of-clip colour drift, a motion jump in the
+    last frames). Off, the result is unchanged."""
+    if not kf_fix or lat_idx == 0 or append_token or (end_hold and lat_idx == latent_frames - 1):
+        return s1s
+    return min(s1s, _keyframe_s1_strength(s1_height))
+
+
 def _keyframe_s1_sigmas(latent_frames: int) -> list[float]:
     """Trajectory-aligned S1 nodes for a non-frame-0 keyframe, scaled to the active tier's budget.
 
@@ -2243,6 +2261,8 @@ class LTXDistilledPipeline(LTXPipeline):
             kf_fix = nonzero_kf and len(DISTILLED_SIGMA_VALUES) < len(_DEFAULT_S1_SIGMAS)
             if kf_fix:
                 s1_sigmas = _keyframe_s1_sigmas(latent_frames)
+            # ref+fl end-frame hold (task #3075): only a gen with a reference sheet, read per gen.
+            end_hold = reference_video is not None and _env_on("LTX_REF_FL_END_HOLD")
             # Each image conditions the latent frame owning its pixel time (0 -> first,
             # num_frames-1 -> last, any value -> a keyframe). A later image at the same latent slot
             # wins — one encoded frame owns each slot. Tuple: (path, frame_idx, s1[, s2] strength); a
@@ -2257,8 +2277,10 @@ class LTXDistilledPipeline(LTXPipeline):
                 # HELD anchor — so softening only corrupts the reference itself: the anchor is denoised
                 # by (1 - strength), and at the coarse 720p S1 (0.25) it lands three-quarters noise, so
                 # every frame that converges on it decodes to mush. Anchors stay hard.
-                if kf_fix and lat_idx != 0 and not append_token:
-                    s1s = min(s1s, _keyframe_s1_strength(s1_height))  # soften non-frame-0 pin; s2 re-locks
+                # Soften a non-frame-0 pin; s2 re-locks. The ref+fl end-frame hold keeps the last frame hard.
+                s1s = _s1_pin_strength(
+                    lat_idx, latent_frames, s1s, s1_height, kf_fix=kf_fix, append_token=append_token, end_hold=end_hold
+                )
                 by_slot[lat_idx] = (img[0], s1s, s2s)
             # The conditioning latent depends only on (image, resolution), so encode once and memoize.
             # This skips re-running the eager VAE encoder on later gens (e.g. the traced steady-state
