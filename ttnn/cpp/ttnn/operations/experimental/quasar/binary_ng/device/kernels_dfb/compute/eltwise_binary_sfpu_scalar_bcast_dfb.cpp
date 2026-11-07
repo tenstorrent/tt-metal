@@ -6,9 +6,9 @@
 //
 // Copy of eltwise_binary_scalar_bcast_dfb.cpp (the FPU SCALAR kernel) with the binary-op section swapped
 // to the SFPU path -- the SAME delta eltwise_binary_sfpu_no_bcast_dfb.cpp / eltwise_binary_sfpu_row_bcast_dfb.cpp
-// / eltwise_binary_sfpu_col_bcast_dfb.cpp apply (unary_op_init_common + BINARY_SFPU_INIT + the
-// copy-both-operands-to-DST / BINARY_SFPU_OP body, with the ARCH_QUASAR copy_tile_to_dst_init_short
-// handling). The broadcast pass (unary_bcast<SCALAR> through the intermediate llk_post DFB -- MOVB2D LLK
+// / eltwise_binary_sfpu_col_bcast_dfb.cpp apply (compute_kernel_hw_startup + copy_init + BINARY_SFPU_INIT + the
+// copy-both-operands-to-DST / BINARY_SFPU_OP body, with reconfig_data_format_srca + copy_init before each
+// operand copy). The broadcast pass (unary_bcast<SCALAR> through the intermediate llk_post DFB -- MOVB2D LLK
 // datacopy, same as ROW/COL, keyed by SCALAR's broadcast constants dst_lo=1/bcast0=1/num_rows spanning all
 // faces) with its two pack_reconfig_data_format / pack_init (ARCH_QUASAR gasket) calls, and the
 // freq/tile_start reuse loop (freq = Ht * Wt here, vs COL's Wt), are IDENTICAL to the FPU SCALAR kernel --
@@ -63,14 +63,22 @@
 // Mirrors the CB sfpu scalar-bcast process_tile with the DFB API + the ROW/COL kernels' ARCH_QUASAR
 // gasket / SFPU body.
 // The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
+template <
+    typename DFBBcast,
+    typename DFBLlkPost,
+    typename DFBPreLhs,
+    typename DFBPostLhs,
+    typename DFBPreRhs,
+    typename DFBPostRhs,
+    typename DFBOut>
 ALWI void process_tile(
-    DataflowBuffer& dfb_bcast,
-    DataflowBuffer& dfb_llk_post,
-    DataflowBuffer& dfb_pre_lhs,
-    DataflowBuffer& dfb_post_lhs,
-    DataflowBuffer& dfb_pre_rhs,
-    DataflowBuffer& dfb_post_rhs,
-    DataflowBuffer& dfb_out,
+    DFBBcast& dfb_bcast,
+    DFBLlkPost& dfb_llk_post,
+    DFBPreLhs& dfb_pre_lhs,
+    DFBPostLhs& dfb_post_lhs,
+    DFBPreRhs& dfb_pre_rhs,
+    DFBPostRhs& dfb_post_rhs,
+    DFBOut& dfb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle ISCLOSE_RT_ARG_PARAMS) {
@@ -84,15 +92,15 @@ ALWI void process_tile(
     // BCAST_OP / OTHER_OP (eltwise_utils_common.hpp) resolve to LHS / RHS off BCAST_INPUT; pair the
     // pre/post DFBs the same way so the broadcast operand is preprocessed once and the other streams.
 #if BCAST_INPUT
-    DataflowBuffer& dfb_pre_bcast = dfb_pre_rhs;
-    DataflowBuffer& dfb_post_bcast = dfb_post_rhs;
-    DataflowBuffer& dfb_pre_other = dfb_pre_lhs;
-    DataflowBuffer& dfb_post_other = dfb_post_lhs;
+    auto& dfb_pre_bcast = dfb_pre_rhs;
+    auto& dfb_post_bcast = dfb_post_rhs;
+    auto& dfb_pre_other = dfb_pre_lhs;
+    auto& dfb_post_other = dfb_post_lhs;
 #else
-    DataflowBuffer& dfb_pre_bcast = dfb_pre_lhs;
-    DataflowBuffer& dfb_post_bcast = dfb_post_lhs;
-    DataflowBuffer& dfb_pre_other = dfb_pre_rhs;
-    DataflowBuffer& dfb_post_other = dfb_post_rhs;
+    auto& dfb_pre_bcast = dfb_pre_lhs;
+    auto& dfb_post_bcast = dfb_post_lhs;
+    auto& dfb_pre_other = dfb_pre_rhs;
+    auto& dfb_post_other = dfb_post_rhs;
 #endif
 
     // --- Broadcast pass (ONCE per (N,C) slab): single-element tile -> full tile in llk_post. Identical to
@@ -244,12 +252,12 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(LHS)
     DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
 #else
-    DataflowBuffer& dfb_pre_lhs = dfb_post_lhs;
+    auto& dfb_pre_lhs = dfb_post_lhs;
 #endif
 #if HAS_ACTIVATIONS(RHS)
     DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
 #else
-    DataflowBuffer& dfb_pre_rhs = dfb_post_rhs;
+    auto& dfb_pre_rhs = dfb_post_rhs;
 #endif
 
     // freq/tile_start reuse loop: freq = Ht * Wt tiles per broadcast (the whole (N,C) slab), tile_start is

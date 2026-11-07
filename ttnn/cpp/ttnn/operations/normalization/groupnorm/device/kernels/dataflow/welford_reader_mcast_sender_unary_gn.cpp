@@ -75,11 +75,11 @@ void kernel_main() {
     const bool has_mcast_last_group = get_arg_val<std::uint32_t>(6) == 1;
 
     // mid mcast group
-    const std::uint32_t mcast_dest_noc_start_x = get_arg_val<std::uint32_t>(7);
-    const std::uint32_t mcast_dest_noc_start_y = get_arg_val<std::uint32_t>(8);
-    const std::uint32_t mcast_dest_noc_end_x = get_arg_val<std::uint32_t>(9);
-    const std::uint32_t mcast_dest_noc_end_y = get_arg_val<std::uint32_t>(10);
-    const std::uint32_t num_mcast_cores_mid_group = get_arg_val<std::uint32_t>(11);
+    const auto mcast_dest_noc_start_x = get_arg_val<std::uint32_t>(7);
+    const auto mcast_dest_noc_start_y = get_arg_val<std::uint32_t>(8);
+    const auto mcast_dest_noc_end_x = get_arg_val<std::uint32_t>(9);
+    const auto mcast_dest_noc_end_y = get_arg_val<std::uint32_t>(10);
+    const auto num_mcast_cores_mid_group = get_arg_val<std::uint32_t>(11);
 
     // first mcast group
     std::uint32_t mcast_first_group_dest_noc_start_x = 0;
@@ -141,6 +141,9 @@ void kernel_main() {
 
     noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(noc_arg_base)));
     noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(noc_arg_base + num_mcast_cores)));
+
+    const bool has_mid_receivers = num_mcast_cores_mid_group != 0;
+    const bool has_first_receivers = has_mcast_first_group && num_mcast_cores_first_group != 0;
 
     const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
@@ -392,28 +395,30 @@ void kernel_main() {
             if constexpr (num_mcast_cores > 1) {
                 // mcast to other cores
                 const MulticastEndpoint mcast_dst;
-                noc.async_write_multicast(
-                    CoreLocalMem<std::uint32_t>(global_means_ptr),
-                    mcast_dst,
-                    2 * single_tile_size_bytes,
-                    num_mcast_cores_mid_group,
-                    {},
-                    {.noc_x_start = mcast_dest_noc_start_x,
-                     .noc_y_start = mcast_dest_noc_start_y,
-                     .noc_x_end = mcast_dest_noc_end_x,
-                     .noc_y_end = mcast_dest_noc_end_y,
-                     .addr = global_means_ptr},
-                    true);
-                reduce_sender_sem.set_multicast(
-                    noc,
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y,
-                    num_mcast_cores_mid_group,
-                    false);
+                if (has_mid_receivers) {
+                    noc.async_write_multicast(
+                        CoreLocalMem<std::uint32_t>(global_means_ptr),
+                        mcast_dst,
+                        2 * single_tile_size_bytes,
+                        num_mcast_cores_mid_group,
+                        {},
+                        {.noc_x_start = mcast_dest_noc_start_x,
+                         .noc_y_start = mcast_dest_noc_start_y,
+                         .noc_x_end = mcast_dest_noc_end_x,
+                         .noc_y_end = mcast_dest_noc_end_y,
+                         .addr = global_means_ptr},
+                        true);
+                    reduce_sender_sem.set_multicast(
+                        noc,
+                        mcast_dest_noc_start_x,
+                        mcast_dest_noc_start_y,
+                        mcast_dest_noc_end_x,
+                        mcast_dest_noc_end_y,
+                        num_mcast_cores_mid_group,
+                        false);
+                }
 
-                if (has_mcast_first_group) {
+                if (has_first_receivers) {
                     const MulticastEndpoint mcast_first_group_dst;
                     noc.async_write_multicast(
                         CoreLocalMem<std::uint32_t>(global_means_ptr),

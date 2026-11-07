@@ -24,6 +24,9 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
         g = ttnn.typecast(g, dtype=ttnn.bfloat16)
 
     expert_weights, expert_indices = ttnn.topk(g, k=experts_per_token, dim=-1, sorted=True)
+    # ttnn.scatter needs input and src in one dtype and the weights are bfloat16, so take the zeros from the bfloat16 g.
+    # zeros_like(g, dtype=...) on a bfloat8_b g would fill on host and write to device, which trace capture rejects.
+    dense_zeros = None if use_throughput_experts else ttnn.zeros_like(g)
     if typecast_needed:
         g.deallocate(True)
         g = g_og
@@ -41,7 +44,7 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
     if use_throughput_experts:
         return expert_indices, expert_weights
     else:
-        return expert_indices, ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
+        return expert_indices, ttnn.scatter(dense_zeros, dim=1, index=expert_indices, src=expert_weights)
 
 
 class TopKRouter:

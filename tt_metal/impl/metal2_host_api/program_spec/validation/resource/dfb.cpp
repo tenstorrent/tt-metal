@@ -2,15 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
@@ -21,20 +24,26 @@ namespace {
 
 // Validate borrowed-memory DFBs.
 //
-// A borrowed-memory DFB names a TensorParameter via DataflowBufferSpec::borrowed_from. The
-// backing MeshTensor flows through ProgramRunArgs::tensor_args at execution time.
-// We enforce only the safety-relevant checks:
-//  - the named parameter exists
-//  - the TensorSpec places storage in L1,
-//  - the spec is large enough
-// We don't validate any layout considerations (interleaved vs sharded, page / tile sizes, etc.)
-// That's on the user; this is an advanced feature.
+// DataflowBufferSpec::borrowed_from names a TensorParameter.
+// These checks use the declared properties; they neither allocate memory nor attach a runtime
+// backing object to the DFB.
+//
+// For a TensorParameter, the backing MeshTensor flows through ProgramRunArgs::tensor_args at
+// execution time. We enforce the safety-relevant checks available from its TensorSpec:
+//  - the named parameter exists,
+//  - the TensorSpec places storage in L1 (L1 and L1_SMALL are accepted),
+//  - the tensor is not per-node allocated; each node must use the same backing address,
+//  - its per-bank allocation is large enough for entry_size * num_entries,
+// We don't validate layout considerations (interleaved vs sharded, page / tile sizes, etc.).
+// Those remain the user's responsibility; this is an advanced feature. The attach-time sizing
+// check remains authoritative for the actual backing buffer (see the sizing discussion below).
+//
 void ValidateBorrowedMemory(
     const DataflowBufferSpec& dfb,
     const CollectedSpecData& collected,
     uint32_t l1_alignment,
     const NumBanksFromBufferType& num_banks_from_buffer_type) {
-    if (!dfb.borrowed_from.has_value()) {
+    if (!dfb.borrowed_from) {
         return;
     }
     const TensorParamName& tp_name = *dfb.borrowed_from;
@@ -50,6 +59,12 @@ void ValidateBorrowedMemory(
         tensor_spec.memory_config().is_l1(),
         "DFB '{}' borrows memory from TensorParameter '{}', but its TensorSpec is not L1-resident (L1 is "
         "required). Both L1 and L1_SMALL are accepted.",
+        dfb.unique_id,
+        tp_name);
+    TT_FATAL(
+        !per_core_allocation::is_per_core_allocation(tensor_spec.memory_config()),
+        "DFB '{}' borrows memory from TensorParameter '{}', which is per-node allocated. A borrowed-memory DFB "
+        "needs the backing tensor at the same address on every node.",
         dfb.unique_id,
         tp_name);
     // Spec-time sizing check. A borrowed DFB lives in ONE core's slice of the backing buffer,
@@ -79,6 +94,29 @@ void ValidateBorrowedMemory(
         dfb_bytes,
         tp_name,
         tensor_bytes);
+}
+
+// For an SRAMArenaParameter, ValidateSRAMArenaAllocation checks that:
+//  - the named parameter exists,
+//  - the offset is a multiple of the device's L1 alignment,
+//  - range-lockstep properties cover every node occupied by the DFB; all-bank lockstep needs
+//    no additional coverage check,
+//  - offset + entry_size * num_entries fits within the declared per-bank size, including equality.
+// Occupied nodes are the union of the producer and consumer kernels' placements. Capacity is
+// checked per node against the requested extent, without counting allocator alignment padding;
+// the entry-size product and offset sum use 64-bit arithmetic to avoid 32-bit overflow.
+// SRAM arena parameter properties are validated before resource allocations.
+void ValidateAllocationOverride(
+    const DataflowBufferSpec& dfb, const CollectedSpecData& collected, uint32_t l1_alignment) {
+    if (const auto& allocation = dfb.advanced_options.allocation_override) {
+        ValidateSRAMArenaAllocation(
+            SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset},
+            collected,
+            fmt::format("DFB '{}'", dfb.unique_id),
+            collected.dfb_node_set.at(dfb.unique_id),
+            uint64_t{dfb.entry_size} * dfb.num_entries,
+            l1_alignment);
+    }
 }
 
 }  // namespace
@@ -138,7 +176,19 @@ void ValidateDFBSpec(
         "pipe ring",
         dfb.unique_id);
 
+    TT_FATAL(
+        !dfb.advanced_options.allocation_override || !dfb.borrowed_from,
+        "DFB '{}' sets both borrowed_from and allocation_override; tensor storage and arena allocation "
+        "are mutually exclusive",
+        dfb.unique_id);
+    TT_FATAL(
+        !dfb.advanced_options.allocation_override || dfb.advanced_options.prefetcher_pipe_relays.empty(),
+        "DFB '{}' sets both prefetcher_pipe_relays and allocation_override; a relay DFB's backing memory "
+        "is the pipe ring",
+        dfb.unique_id);
+
     ValidateBorrowedMemory(dfb, collected, l1_alignment, num_banks_from_buffer_type);
+    ValidateAllocationOverride(dfb, collected, l1_alignment);
 }
 
 // DFB bindings: accessor names, self-loop pairs, role aliasing
@@ -282,6 +332,119 @@ void ValidateImplicitSyncAgreement(const CollectedSpecData& collected, tt::ARCH 
     }
 }
 
+// BLOCKED access-pattern rules for one DFB, checked at the spec layer (the single place that
+// knows both kernels of a pairing): block_size must be > 0 iff a binding is BLOCKED, and a
+// BLOCKED endpoint may only pair as BLOCKED->BLOCKED (same block_size, integer thread-count
+// ratio), BLOCKED-producer->ALL-consumer, BLOCKED-producer->STRIDED-consumer (consumer
+// threads divide block_size) or STRIDED-producer->BLOCKED-consumer (producer threads divide
+// block_size).
+void ValidateDFBBlockedBindings(const DataflowBufferSpec& dfb, const CollectedSpecData::DFBEndpointInfo& endpoints) {
+    // block_size is meaningful only for the BLOCKED access pattern: it must be > 0 iff
+    // BLOCKED, and 0 for STRIDED/ALL.
+    auto check_block_size_validity = [&](const auto& records, std::string_view role) {
+        for (const auto& rec : records) {
+            const bool is_blocked = rec.binding->access_pattern == DFBAccessPattern::BLOCKED;
+            TT_FATAL(
+                (rec.binding->block_size > 0) == is_blocked,
+                "DFB '{}' {} binding (kernel '{}'): block_size must be > 0 iff access_pattern == BLOCKED "
+                "(got block_size={}, access_pattern={})",
+                dfb.unique_id,
+                role,
+                rec.kernel->unique_id,
+                rec.binding->block_size,
+                is_blocked ? "BLOCKED" : "STRIDED/ALL");
+        }
+    };
+    check_block_size_validity(endpoints.producers, "PRODUCER");
+    check_block_size_validity(endpoints.consumers, "CONSUMER");
+
+    // Cross-role BLOCKED legality:
+    //   - BLOCKED -> BLOCKED is allowed
+    //   - BLOCKED-producer -> ALL-consumer is allowed
+    //   - BLOCKED-producer -> STRIDED-consumer is allowed
+    //   - STRIDED-producer -> BLOCKED-consumer is allowed
+    //   - An ALL producer feeding a BLOCKED consumer is not allowed.
+    //
+    // BLOCKED -> BLOCKED also requires matching block_size and an integer
+    // producer/consumer thread-count ratio.
+    if (!endpoints.producers.empty() && !endpoints.consumers.empty()) {
+        const auto& prod = endpoints.producers.front();
+        const auto& cons = endpoints.consumers.front();
+        const bool prod_blocked = prod.binding->access_pattern == DFBAccessPattern::BLOCKED;
+        const bool cons_blocked = cons.binding->access_pattern == DFBAccessPattern::BLOCKED;
+        if (prod_blocked || cons_blocked) {
+            // BLOCKED->ALL and BLOCKED->STRIDED are both allowed and reuse the existing
+            // ALL/STRIDED consumer paths.
+            const bool blocked_to_all = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::ALL;
+            const bool blocked_to_strided = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::STRIDED;
+            if (blocked_to_strided) {
+                const uint32_t cons_threads = cons.kernel->num_threads;
+                TT_FATAL(
+                    cons_threads > 0 && prod.binding->block_size % cons_threads == 0,
+                    "DFB '{}': BLOCKED-producer->STRIDED-consumer requires the consumer thread count "
+                    "to divide block_size (producer '{}' block_size = {}, consumer '{}' num_threads = "
+                    "{}); otherwise a block cannot be split evenly across the consumers.",
+                    dfb.unique_id,
+                    prod.kernel->unique_id,
+                    prod.binding->block_size,
+                    cons.kernel->unique_id,
+                    cons_threads);
+            }
+            const bool strided_to_blocked = cons_blocked && prod.binding->access_pattern == DFBAccessPattern::STRIDED;
+            if (strided_to_blocked) {
+                const uint32_t prod_threads = prod.kernel->num_threads;
+                TT_FATAL(
+                    prod_threads > 0 && cons.binding->block_size % prod_threads == 0,
+                    "DFB '{}': STRIDED-producer->BLOCKED-consumer requires the producer thread count "
+                    "to divide block_size (consumer '{}' block_size = {}, producer '{}' num_threads = "
+                    "{}); otherwise a block cannot be filled evenly by the producers.",
+                    dfb.unique_id,
+                    cons.kernel->unique_id,
+                    cons.binding->block_size,
+                    prod.kernel->unique_id,
+                    prod_threads);
+            }
+            if (!blocked_to_all && !blocked_to_strided && !strided_to_blocked) {
+                TT_FATAL(
+                    prod_blocked && cons_blocked,
+                    "DFB '{}': a BLOCKED endpoint must pair as BLOCKED->BLOCKED, "
+                    "BLOCKED-producer->ALL-consumer, BLOCKED-producer->STRIDED-consumer, or "
+                    "STRIDED-producer->BLOCKED-consumer (producer '{}' is "
+                    "{}, consumer '{}' is {}); other mixed-BLOCKED combinations are not yet supported.",
+                    dfb.unique_id,
+                    prod.kernel->unique_id,
+                    prod_blocked ? "BLOCKED" : "non-BLOCKED",
+                    cons.kernel->unique_id,
+                    cons_blocked ? "BLOCKED" : "non-BLOCKED");
+                TT_FATAL(
+                    prod.binding->block_size == cons.binding->block_size,
+                    "DFB '{}': BLOCKED producer and consumer must share the same block_size "
+                    "(producer '{}' = {}, consumer '{}' = {}).",
+                    dfb.unique_id,
+                    prod.kernel->unique_id,
+                    prod.binding->block_size,
+                    cons.kernel->unique_id,
+                    cons.binding->block_size);
+                // BLOCKED->BLOCKED supports asymmetric thread counts (fan-in/out via the tile-counter
+                // round-robin), but only at an INTEGER ratio.
+                const uint32_t pt = prod.kernel->num_threads;
+                const uint32_t ct = cons.kernel->num_threads;
+                const uint32_t hi = std::max(pt, ct);
+                const uint32_t lo = std::min(pt, ct);
+                TT_FATAL(
+                    lo > 0 && hi % lo == 0,
+                    "DFB '{}': BLOCKED producer/consumer thread counts must form an integer ratio "
+                    "(producer '{}' = {}, consumer '{}' = {}); non-integer ratios are not supported.",
+                    dfb.unique_id,
+                    prod.kernel->unique_id,
+                    pt,
+                    cons.kernel->unique_id,
+                    ct);
+            }
+        }
+    }
+}
+
 // Validate local DFB endpoint placement and multi-binding consistency.
 //
 // The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
@@ -331,6 +494,15 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
                 first_kernel,
                 records[i].kernel->unique_id);
             TT_FATAL(
+                records[i].binding->block_size == records[0].binding->block_size,
+                "DFB '{}' has multiple {} bindings with mismatched block_size (kernel '{}' = {} vs kernel '{}' = {})",
+                dfb.unique_id,
+                role,
+                first_kernel,
+                records[0].binding->block_size,
+                records[i].kernel->unique_id,
+                records[i].binding->block_size);
+            TT_FATAL(
                 records[i].kernel->num_threads == first_threads,
                 "DFB '{}' has multiple {} KernelSpecs with mismatched num_threads (kernel '{}' = {} vs kernel '{}' "
                 "= {})",
@@ -358,6 +530,9 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
         check_role_uniformity(endpoints.producers, "PRODUCER");
         check_role_uniformity(endpoints.consumers, "CONSUMER");
     }
+
+    // block_size validity and cross-role BLOCKED legality.
+    ValidateDFBBlockedBindings(dfb, endpoints);
 
     // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
     // every node it is instantiated on must run exactly one producer instance and exactly one
@@ -550,6 +725,8 @@ void ValidateDFBEndpoints(const ValidationContext& ctx, tt::ARCH arch) {
 //  4. Consistent borrowed_from: either no member borrows, or all members borrow from
 //     the same TensorParameter. (Aliased borrows from the same memory object is a
 //     weird-but-valid scenario.)
+//  5. Consistent arena allocations: either no member overrides allocation, or all members
+//     allocate from the same SRAMArenaParameter at the same byte offset.
 // (That every alias_with name resolves, and is not the DFB itself, is checked in
 // ValidateDFBSpec.)
 void ValidateDFBAliasing(const ValidationContext& ctx) {
@@ -615,6 +792,27 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
                 "of an alias group borrows, or all members borrow from the same TensorParameter.",
                 dfb.unique_id,
                 alias_name);
+
+            // Rule 5: consistent arena allocations.
+            const auto& allocation = dfb.advanced_options.allocation_override;
+            const auto& alias_allocation = alias_spec->advanced_options.allocation_override;
+            TT_FATAL(
+                allocation.has_value() == alias_allocation.has_value() &&
+                    (!allocation || allocation->arena == alias_allocation->arena),
+                "Aliased DFBs '{}' and '{}' have inconsistent allocation_override arena parameters. Either no "
+                "member overrides allocation, or all members allocate from the same SRAMArenaParameter.",
+                dfb.unique_id,
+                alias_name);
+            if (allocation) {
+                TT_FATAL(
+                    allocation->offset == alias_allocation->offset,
+                    "Aliased DFBs '{}' and '{}' have different allocation_override offsets "
+                    "({} vs {} bytes). Aliased DFBs must use the same byte offset.",
+                    dfb.unique_id,
+                    alias_name,
+                    allocation->offset,
+                    alias_allocation->offset);
+            }
         }
     }
 }

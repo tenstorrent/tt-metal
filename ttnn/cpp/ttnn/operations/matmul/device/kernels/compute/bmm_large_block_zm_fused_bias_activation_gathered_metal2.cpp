@@ -34,7 +34,8 @@
 
 // Moves in1's front past num_blocks K-blocks without reading them, once they are published. One K-block
 // at a time: in1's ring holds whole K-blocks, so no single pop then runs past its end.
-FORCE_INLINE void step_over_in1_blocks(DataflowBuffer& in1_dfb, uint32_t num_blocks, uint32_t in1_block_num_tiles) {
+template <typename DFB0>
+FORCE_INLINE void step_over_in1_blocks(DFB0& in1_dfb, uint32_t num_blocks, uint32_t in1_block_num_tiles) {
     for (uint32_t block = 0; block < num_blocks; ++block) {
         in1_dfb.wait_front(in1_block_num_tiles);
         in1_dfb.pop_front(in1_block_num_tiles);
@@ -66,6 +67,11 @@ FORCE_INLINE void reload_from_dfb_to_dst(
 }
 
 void kernel_main() {
+    // A core that only fills out the ring's rectangle: in1 relays no pipe there, so it must not construct
+    // the buffer.
+    if (get_arg(args::is_worker_core) == 0) {
+        return;
+    }
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::intermed0);
 
     constexpr auto in0_block_w = get_arg(args::in0_block_w);              // inner block size in tiles

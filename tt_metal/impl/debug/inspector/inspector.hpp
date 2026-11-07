@@ -12,7 +12,6 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include "mesh_coord.hpp"
 
 namespace tt::tt_metal {
 
@@ -65,14 +64,6 @@ public:
     static void global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept;
     static void global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept;
 
-    static void mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
-    static void mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
-    static void mesh_workload_add_program(
-        const distributed::MeshWorkloadImpl* mesh_workload,
-        const distributed::MeshCoordinateRange& device_range,
-        std::size_t program_id) noexcept;
-    static void mesh_workload_set_program_binary_status(
-        const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
     static void emit_debug_entry(
         const distributed::MeshWorkloadImpl* mesh_workload,
         uint64_t runtime_id,

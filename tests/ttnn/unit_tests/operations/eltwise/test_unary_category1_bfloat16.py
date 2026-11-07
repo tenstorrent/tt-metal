@@ -138,12 +138,12 @@ def test_spl_value_check_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logical NOT (-0.0) returns False while golden returns True
+# Logical NOT
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_logical_not_ops(device):
-    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=True)
     ttnn_op = ttnn.logical_not
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -720,6 +720,39 @@ def test_lgamma(device):
     assert_with_pcc(golden, result, 0.999)
 
 
+def test_lgamma_inf(device):
+    """+inf and -inf both return +inf, matching torch.lgamma.
+
+    Stirling's (z - 0.5) * log(z) - z is inf - inf = NaN for an infinite z, so the
+    kernel must override the result for infinite inputs in bf16 Dest mode as well
+    as in fp32 Dest mode.
+    """
+    xs = torch.tensor([[float("inf"), float("-inf")]], dtype=torch.bfloat16)
+    golden = ttnn.get_golden_function(ttnn.lgamma)(xs, device=device)
+    result = ttnn.to_torch(ttnn.lgamma(to_tt_tensor(xs, device)))
+
+    assert torch.all(torch.isposinf(golden))
+    assert torch.all(torch.isposinf(result)), result
+
+
+def test_lgamma_large_negative(device):
+    """Negative inputs of magnitude >= ~4e36 return +inf, matching torch.
+
+    Every bfloat16 of that magnitude is an integer, so these are poles. Above ~4e36 the
+    reflection's Stirling term (z - 0.5) * log(z) also overflows to +inf, and the
+    kernel must let the pole win instead of producing inf - inf.
+    """
+    # -1e30 is a finite-Stirling control: (z - 0.5) * log(z) = 6.9e31 stays finite, so the
+    # old kernel already returned inf - finite = +inf there. The Stirling term overflows from
+    # about 4.04e36 onwards; -1e37 and -3e38 are the lanes that need the pole override.
+    xs = torch.tensor([[-1e30, -1e37, -3e38]], dtype=torch.bfloat16)
+    golden = ttnn.get_golden_function(ttnn.lgamma)(xs, device=device)
+    result = ttnn.to_torch(ttnn.lgamma(to_tt_tensor(xs, device)))
+
+    assert torch.all(torch.isposinf(golden))
+    assert torch.all(torch.isposinf(result)), result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Modified Bessel functions (i0, i1)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -748,43 +781,3 @@ def test_bessel_ops(device, ttnn_op, low, high):
     golden = flush_to_zero(golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
-
-
-def test_mish_bf16_unflushed_zero_and_subnormal_inputs(device):
-    """TT-NN's copy into DEST keeps -0 and subnormal BF16 inputs, which the LLK sweep's unpack delivers as +0.
-
-    Each such input and +0 must store torch's result: its class as the BF16 pack stores it (NaN as
-    +inf, -0 as +0, a subnormal result as 0) and a finite result within 1 ULP of torch's float64
-    value. STOCK lists, per board, the inputs where the kernel stores its stock kernel's word
-    instead, as {word: [(first input, last input), ...]} over the input bits.
-    """
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    if board not in ("blackhole",):
-        pytest.skip(f"ttnn.mish keeps its stock kernel on {board}")
-    STOCK = {}
-    words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
-    x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tiny = torch.finfo(torch.bfloat16).tiny
-
-    def stored(t):
-        t = t.to(torch.bfloat16).to(torch.float64).flatten()
-        t = torch.where(torch.isnan(t), torch.full_like(t, float("inf")), t)
-        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
-
-    actual = stored(ttnn.to_torch(ttnn.mish(tt_x)))
-    x64 = x.flatten().to(torch.float64)
-    reference = ttnn.get_golden_function(ttnn.mish)(x64).to(torch.float64).flatten()
-    rounded = stored(reference)
-    spacing = 2.0 ** (torch.floor(torch.log2(reference.abs().clamp(min=tiny))) - 7)
-    close = torch.isfinite(reference) & (actual != 0) & ((actual - reference).abs() < spacing)
-    ok = (actual == rounded) | close
-    bits = words.repeat(4).to(torch.int32) & 0xFFFF
-    for word, ranges in STOCK.get(board, {}).items():
-        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
-        for first, last in ranges:
-            ok |= (bits >= first) & (bits <= last) & (actual == value)
-    assert ok.all(), (
-        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
-        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
-    )

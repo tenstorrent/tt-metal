@@ -9,7 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
 from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import (
     TTNN_REDUCTION_WRAPPERS,
 )

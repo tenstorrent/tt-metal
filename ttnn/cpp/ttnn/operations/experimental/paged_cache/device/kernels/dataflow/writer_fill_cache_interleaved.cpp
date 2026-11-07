@@ -9,6 +9,7 @@
 #include "api/core_local_mem.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/local_mem/address_access.h"
 #include "experimental/kernel_args.h"
 
 // Define the sentinel value for a page table entry that indicates a skip.
@@ -101,8 +102,7 @@ void kernel_main() {
         // `batch_idx_num_elements` entries; one TensorAccessor stick covers it.
 #ifdef ARCH_QUASAR
         // Quasar: read into the scratchpad (pass the object so the NoC uses the cached L1 address),
-        // then read back through its base address.
-        const uint32_t batch_idx_wr_ptr = batch_idx_scratch.get_base_address();
+        // then read back through its elements.
         noc.async_read(
             batch_idx_gen, batch_idx_scratch, batch_idx_stick_size * batch_idx_num_elements, {.page_id = 0}, {});
 #else
@@ -119,9 +119,13 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
         // Quasar DM: discard the stale L2 line for the just-NoC-read scratchpad before the RISC read-back
         // (invalidate_l1_cache is a no-op here; #48552). See the page_table read below.
-        invalidate_l2_cache_range(batch_idx_wr_ptr, batch_idx_stick_size * batch_idx_num_elements);
-#endif
+        invalidate_l2_cache_range(
+            local_mem::detail::AddressAccess::address(batch_idx_scratch.local_mem()),
+            batch_idx_stick_size * batch_idx_num_elements);
+        batch_idx_arr = &batch_idx_scratch[0];
+#else
         batch_idx_arr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_wr_ptr);
+#endif
     }
 #else
     const uint32_t scalar_batch_idx = get_arg(args::batch_idx_fallback);
@@ -134,7 +138,6 @@ void kernel_main() {
     {
         const auto valid_gen = TensorAccessor(tensor::valid_seq_len);
 #ifdef ARCH_QUASAR
-        const uint32_t valid_wr_ptr = valid_seq_len_scratch.get_base_address();
         noc.async_read(valid_gen, valid_seq_len_scratch, valid_seq_len_stick_size, {.page_id = 0}, {});
 #else
         dfb_valid_seq_len.reserve_back(1);
@@ -145,9 +148,12 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
         // Quasar DM: discard the stale L2 line for the just-NoC-read scratchpad before the RISC read-back
         // (invalidate_l1_cache is a no-op here; #48552). See the page_table read below.
-        invalidate_l2_cache_range(valid_wr_ptr, valid_seq_len_stick_size);
-#endif
+        invalidate_l2_cache_range(
+            local_mem::detail::AddressAccess::address(valid_seq_len_scratch.local_mem()), valid_seq_len_stick_size);
+        const uint32_t valid_seq_len_tokens = *static_cast<volatile tt_l1_ptr uint32_t*>(&valid_seq_len_scratch[0]);
+#else
         const uint32_t valid_seq_len_tokens = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_wr_ptr);
+#endif
         // Round the real length up to a whole tile (TILE_HEIGHT == 32, >> 5) and then
         // up to a whole block_size_t: the surviving ring window [effective_end -
         // capacity_t, effective_end) must be block-aligned so the wrapped page_table
@@ -174,12 +180,12 @@ void kernel_main() {
     const auto page_table_gen = TensorAccessor(tensor::page_table);
 
 #ifdef ARCH_QUASAR
-    const uint32_t page_table_wr_ptr = page_table_scratch.get_base_address();
+    volatile tt_l1_ptr uint32_t* page_table_ptr = &page_table_scratch[0];
 #else
     dfb_page_table.reserve_back(1);
     const uint32_t page_table_wr_ptr = dfb_page_table.get_write_ptr();
-#endif
     volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_wr_ptr);
+#endif
 
     // Cache the last batch for which page_table was loaded. Legacy path loads
     // once on the first row (cache miss) and then hits for all remaining rows;
@@ -255,7 +261,8 @@ void kernel_main() {
             // range so the RISC read-back (page_table_ptr[...] below) sees the fresh page_table. Without this,
             // the 2nd+ fill_cache (after intervening ops) reads a garbage physical_block -> out-of-range
             // physical_tile_id -> DRAM write overrun (tile_wr_bytes). WH/BH read page_table via a DFB, no hazard.
-            invalidate_l2_cache_range(page_table_scratch.get_base_address(), page_table_stick_size);
+            invalidate_l2_cache_range(
+                local_mem::detail::AddressAccess::address(page_table_scratch.local_mem()), page_table_stick_size);
 #endif
             cached_batch = batch_idx;
         }

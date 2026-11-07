@@ -34,7 +34,8 @@ namespace ttnn::transformer {
  *   rank 3, flat token-major: raw (unnormalized, unscaled) per-head concatenations as a projection or
  *     the causal conv emits them; no host relayout — the prep reader addresses each head's chunk out of
  *     the flat grid, maps value heads to key heads and applies the L2 norm and scale in-kernel.
- *     Requires K == V (H = flat q width / V, HV from beta), chunk_size == 32 and T % chunk_size == 0;
+ *     K == V unless num_key_heads is given (then H = num_key_heads and K = flat q width / H, so Dk != Dv
+ *     works; without it H = flat q width / V; HV from beta), chunk_size == 32 and T % chunk_size == 0;
  *     fused and phased paths only.
  *
  * All inputs, including the optional tensors, must be device tensors in TILE layout: the op casts
@@ -66,6 +67,11 @@ namespace ttnn::transformer {
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
  * GDN adapter's return_o_bh) should set this to get [BH,T,V] TILE directly and skip a
  * token<->head permute round-trip on both sides.
+ *
+ * num_key_heads: the number of key heads H of flat (rank-3) q/k. A flat width cannot reveal H and K
+ * separately, so without it the op assumes K == V (H = flat q width / V). With it, H = num_key_heads and
+ * K = flat q width / H (must divide), which lets K != V. For rank-4 q/k it is optional and, if given,
+ * must equal q's head count (it is redundant there).
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -86,6 +92,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye = std::nullopt,
     const std::optional<ttnn::Tensor>& tril = std::nullopt,
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
-    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+    const std::optional<ttnn::Tensor>& masks = std::nullopt,
+    std::optional<uint32_t> num_key_heads = std::nullopt);
 
 }  // namespace ttnn::transformer

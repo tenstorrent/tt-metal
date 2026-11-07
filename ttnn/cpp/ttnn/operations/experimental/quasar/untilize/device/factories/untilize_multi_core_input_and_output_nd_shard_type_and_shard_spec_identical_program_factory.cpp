@@ -57,7 +57,8 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     uint32_t num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
-    const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
+    const auto& distribution_spec =
+        a.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
     const auto& groups = distribution_spec.core_groups();
     uint32_t num_shards_per_core = groups.num_shards_per_core_in_group_1;
 
@@ -110,9 +111,6 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     };
 
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_config);

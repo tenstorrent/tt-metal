@@ -11,7 +11,6 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -90,10 +89,10 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     bool convert_df = input_data_format != output_data_format;
 
     uint32_t num_input_units = num_units_per_shard;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->device_local_config().buffer_type == tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     // ---- Resource names ----
@@ -180,7 +179,8 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "writer_unary_stick_layout_sharded_blocks_interleaved_start_id_metal2.cpp";
         writer.runtime_arg_schema.runtime_arg_names = {
-            "block_height", "block_width_bytes", "padded_block_width_bytes", "input_width_offset_bytes", "start_id"};
+            "block_height", "block_num_units", "block_width_bytes", "padded_block_width_bytes",
+            "input_width_offset_bytes", "start_id"};
     }
 
     Group<KernelSpec> kernels;
@@ -280,6 +280,8 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                     writer_run_args.runtime_arg_values,
                     core,
                     {{"block_height", shard_height},
+                     // The reader pushes the whole shard; the last height shard may write fewer rows.
+                     {"block_num_units", num_units_per_shard},
                      {"block_width_bytes", shard_width},
                      {"padded_block_width_bytes", padded_shard_width},
                      {"input_width_offset_bytes", w0},

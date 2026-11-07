@@ -91,18 +91,11 @@ docker buildx bake -f dockerfile/docker-bake.hcl tools
 
 ### Updating uv
 
-1. Find the new version's SHA256 digest at: https://github.com/astral-sh/uv/pkgs/container/uv/versions
-2. Look for the distroless image (tagged as `X.Y.Z`, `latest`)
-3. Update both `UV_VERSION` and the `FROM ghcr.io/astral-sh/uv@sha256:...` line in Dockerfile
-
-Example:
-```dockerfile
-# Update the version comment
-ARG UV_VERSION=0.9.27
-
-# Update the FROM line with new digest
-FROM ghcr.io/astral-sh/uv@sha256:NEW_DIGEST_HERE AS uv-layer
-```
+1. Find the new version's multi-arch index digest at: https://github.com/astral-sh/uv/pkgs/container/uv/versions (tag `X.Y.Z`)
+2. Update `UV_IMAGE` in `dockerfile/docker-bake.hcl` (single source of truth)
+3. Sync the fallback `ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:...` default in `Dockerfile`, `Dockerfile.python`, `Dockerfile.basic-dev` and `Dockerfile.evaluation`
+4. Update `UV_VERSION` and `UV_INSTALLER_SHA256` in `scripts/install-uv.sh`
+   (`curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sha256sum`)
 
 ### Updating other tools
 

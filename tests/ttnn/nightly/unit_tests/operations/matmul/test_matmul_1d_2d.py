@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 

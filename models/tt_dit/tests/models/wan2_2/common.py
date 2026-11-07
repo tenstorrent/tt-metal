@@ -4,9 +4,126 @@
 
 """Shared helpers for the WAN 2.2 pipeline tests."""
 
+from pathlib import Path
+
 import numpy as np
 import torch
 from loguru import logger
+from PIL import Image
+
+import ttnn
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import center_crop_to_aspect
+
+# A photo from the repo, so CI needs no download. 2048x1365, so the pipeline center-crops it to each
+# output's aspect ratio.
+DEMO_IMAGE_PATH = Path(__file__).resolve().parents[4] / "sample_data" / "demo.jpeg"
+DEMO_PROMPT = (
+    "At sunset on a sandy beach, a yellow Labrador in a harness raises its paw to the hand of a smiling young woman "
+    "in a plaid shirt sitting cross-legged beside it. Small waves roll in behind them under a bright, hazy sky."
+)
+
+
+def demo_image() -> Image.Image:
+    return Image.open(DEMO_IMAGE_PATH).convert("RGB")
+
+
+TIMING_LIMITS = {
+    ("t2v", (2, 2), 480, "bh"): {
+        "encoder": (0.01, 0.16),
+        "denoising": (270.0, 530.0),
+        "vae": (2.0, 4.0),
+        "total": (270.0, 530.0),
+    },
+    ("t2v", (4, 8), 480, "bh"): {
+        "encoder": (0.04, 0.19),
+        "denoising": (27.0, 51.0),
+        "vae": (0.18, 0.40),
+        "total": (27.0, 52.0),
+    },
+    ("t2v", (4, 8), 480, "wh"): {
+        "encoder": (0.037, 0.17),
+        "denoising": (75.0, 150.0),
+        "vae": (0.77, 1.7),
+        "total": (76.0, 150.0),
+    },
+    ("t2v", (4, 8), 720, "bh"): {
+        "encoder": (0.04, 0.19),
+        "denoising": (86.0, 164.0),
+        "vae": (0.37, 0.73),
+        "total": (87.0, 165.0),
+    },
+    ("t2v", (4, 8), 720, "wh"): {
+        "encoder": (0.038, 0.17),
+        "denoising": (240.0, 450.0),
+        "vae": (1.6, 3.4),
+        "total": (240.0, 460.0),
+    },
+    ("t2v", (4, 32), 720, "bh"): {
+        "encoder": (0.058, 0.29),
+        "denoising": (24.0, 59.0),
+        "vae": (0.28, 1.2),
+        "total": (25.0, 60.0),
+    },
+    ("i2v", (4, 32), 720, "bh"): {
+        "encoder": (0.058, 0.29),
+        "denoising": (24.0, 59.0),
+        "vae": (0.28, 1.2),
+        "total": (25.0, 62.0),
+    },
+    ("i2v", (4, 8), 720, "bh"): {
+        "encoder": (0.038, 0.17),
+        "denoising": (44.0, 83.0),
+        "vae": (0.37, 0.73),
+        "total": (45.0, 85.0),
+    },
+    ("t2v", (2, 4), 480, "bh"): {
+        "encoder": (0.0, 0.1),
+        "denoising": (0.0, 240.0),
+        "vae": (0.0, 5.0),
+        "total": (0.0, 255.0),
+    },
+    ("t2v", (2, 4), 480, "wh"): {
+        "encoder": (0.0, 0.1),
+        "denoising": (0.0, 800.0),
+        "vae": (0.0, 9.0),
+        "total": (0.0, 850.0),
+    },
+}
+# BH 4x8 linear topology is expected to be slower than ring; relax the upper limits by this factor.
+BH_4X8_LINEAR_SLACK = 1.10
+
+
+def timing_limits(model_type, mesh_shape, height, topology):
+    """``{metric: (lower, upper)}`` seconds for this config, or None if it has no limits.
+
+    I2V configs without their own entry use the T2V limits.
+    """
+    key = (tuple(mesh_shape), height, "bh" if ttnn.device.is_blackhole() else "wh")
+    limits = TIMING_LIMITS.get((model_type, *key)) or TIMING_LIMITS.get(("t2v", *key))
+    if limits is None:
+        return None
+    slack = BH_4X8_LINEAR_SLACK if tuple(mesh_shape) == (4, 8) and topology == ttnn.Topology.Linear else 1.0
+    return {k: (lower, upper * slack) for k, (lower, upper) in limits.items()}
+
+
+def check_timings(measured, limits, label):
+    """Messages for each measured metric outside its ``(lower, upper)`` limits."""
+    return [
+        f"{label} {k} = {measured[k]:.3f}s outside [{lower:.3f}, {upper:.3f}]s"
+        for k, (lower, upper) in limits.items()
+        if k in measured and not lower <= measured[k] <= upper
+    ]
+
+
+def create_fractal_image(width: int, height: int) -> Image.Image:
+    """Deterministic synthetic conditioning image for the I2V tests (no image file needed in CI)."""
+    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
+    z = np.zeros_like(c)
+    img = np.zeros(c.shape, dtype=np.uint8)
+    for i in range(32):
+        z = z * z + c
+        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
+    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
 def check_output_sanity(frames, *, num_frames, height, width, log=True):
@@ -65,7 +182,8 @@ def check_first_frame_matches_seed(frames, *, seed_image, width, height, pcc_flo
     Args:
         frames: decoded video array/tensor, shape (num_frames, height, width, 3), batch dim removed.
         seed_image: the PIL seed image conditioned into frame 0.
-        width, height: target resolution; the seed is resized to this before comparison.
+        width, height: target resolution; the seed is center-cropped to its aspect ratio and
+            resized to it before comparison, as the pipeline does.
         pcc_floor: minimum Pearson correlation. Provisional floor -- catches a totally-broken
             conditioning path (near-zero correlation); a healthy round-trip correlates well above it.
             Tighten once real values are observed.
@@ -74,7 +192,8 @@ def check_first_frame_matches_seed(frames, *, seed_image, width, height, pcc_flo
     if isinstance(f0, torch.Tensor):
         f0 = f0.cpu().numpy()
     f0 = np.asarray(f0).astype(np.float64)
-    seed = np.asarray(seed_image.convert("RGB").resize((width, height))).astype(np.float64)
+    seed = center_crop_to_aspect(seed_image.convert("RGB"), width, height).resize((width, height))
+    seed = np.asarray(seed).astype(np.float64)
     assert f0.shape == seed.shape, f"frame-0 shape {f0.shape} != seed shape {seed.shape}"
     pcc = float(np.corrcoef(f0.ravel(), seed.ravel())[0, 1])
     logger.info(f"I2V frame-0 vs seed-image correlation (PCC) = {pcc:.4f}")
