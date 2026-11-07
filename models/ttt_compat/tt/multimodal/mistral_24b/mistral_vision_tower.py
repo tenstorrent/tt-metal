@@ -117,7 +117,7 @@ class MistralVisionTower(LightweightModule):
         """
         patch_embeds = self.patch_conv(input_tensor)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
-        height, width = image_sizes[0]
+        height, width = input_tensor.shape[-2], input_tensor.shape[-1]
         patch_embeds = ttnn.reshape(
             patch_embeds,
             [patch_embeds.shape[0], self.width, height // self.patch_size, width // self.patch_size],
@@ -126,10 +126,10 @@ class MistralVisionTower(LightweightModule):
         patch_embeds_list = [
             ttnn.slice(
                 patch_embeds,
-                [0, 0, 0, 0],
-                [1, self.width, size[0] // self.patch_size, size[1] // self.patch_size],
+                [i, 0, 0, 0],
+                [i + 1, self.width, size[0] // self.patch_size, size[1] // self.patch_size],
             )
-            for size in image_sizes
+            for i, size in enumerate(image_sizes)
         ]
 
         reshaped_patches = []
@@ -138,7 +138,7 @@ class MistralVisionTower(LightweightModule):
             p = ttnn.transpose(p, 1, 2)
             reshaped_patches.append(p)
 
-        patch_embeds = ttnn.concat(reshaped_patches, dim=0)
+        patch_embeds = ttnn.concat(reshaped_patches, dim=1)
 
         # ln_pre RMS Norm
         mode = "prefill"

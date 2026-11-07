@@ -27,12 +27,13 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("num_images", [1, 2])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
     indirect=True,
 )
-def test_mistral_vision_tower(mesh_device, reset_seeds):
+def test_mistral_vision_tower(mesh_device, num_images, reset_seeds):
     pcc_required = 0.99
     dtype = ttnn.bfloat16
 
@@ -44,13 +45,14 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
     }
 
-    B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
+    B, C, H, W = num_images, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
+    image_sizes = [(H, W)] * B
     input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
 
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)
-    reference_output = reference_model(input_tensor, image_sizes=[(H, W)])
+    reference_output = reference_model(input_tensor, image_sizes=image_sizes)
 
     reference_output = reference_output.last_hidden_state
     tt_ccl = TT_CCL(mesh_device)
@@ -64,7 +66,7 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
         configuration=model_args,
     )
 
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
+    tt_output = vision_model(input_tensor, image_sizes=image_sizes)
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, :, :, : tt_output.shape[-1]
     ]
