@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import signal
+import sys
 import time
 from dataclasses import dataclass, fields
 from typing import Optional
@@ -70,8 +71,19 @@ def _apply_manifest_env():
         if val is not None:
             os.environ.setdefault(key, str(val))
 
-    for key, val in manifest.get("env", {}).items():
+    manifest_env = manifest.get("env", {})
+    level_from_env = "LOGURU_LEVEL" in os.environ
+    for key, val in manifest_env.items():
         sd(key, val)
+
+    # loguru reads LOGURU_LEVEL once, at its import above, so a level that only the manifest sets has to be
+    # re-applied to the default stderr sink. Leave the logger alone if something already replaced that sink.
+    if not level_from_env and manifest_env.get("LOGURU_LEVEL") is not None:
+        try:
+            logger.remove(0)
+        except ValueError:
+            return
+        logger.add(sys.stderr, level=os.environ["LOGURU_LEVEL"])
 
 
 _apply_manifest_env()
