@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t chunk = get_compile_time_arg_val(2);
     constexpr uint32_t in0_rows = get_compile_time_arg_val(3);
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
-    constexpr bool group_step = fmt == gguf::Q4_K || fmt == gguf::Q5_K || fmt == gguf::Q2_K;
+    constexpr bool group_step = fmt == gguf::Q4_K || fmt == gguf::Q5_K || fmt == gguf::Q3_K || fmt == gguf::Q2_K;
     constexpr auto pack = GgufDecodeThread::Pack;
     constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_part = tt::CBIndex::c_17, cb_remote = tt::CBIndex::c_18, cb_own = tt::CBIndex::c_20;
