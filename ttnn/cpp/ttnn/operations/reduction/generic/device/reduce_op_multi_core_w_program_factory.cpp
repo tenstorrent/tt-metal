@@ -130,6 +130,9 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    // Row-major W partials are kept in Float32 when fp32_dest_acc_en is set.
+    const bool rm_acc_promoted = rm_path && fp32_dest_acc_en && dst_cb_data_format != tt::DataFormat::Float32;
+    const tt::DataFormat rm_acc_data_format = rm_acc_promoted ? tt::DataFormat::Float32 : dst_cb_data_format;
 
     const tt_metal::distributed::MeshDevice& device = a.device();
 
@@ -171,6 +174,21 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         core_group_2 = CoreRangeSet();
         num_rows_per_core_group_1 = shard_Ht;
         num_rows_per_core_group_2 = 0;
+    }
+    // Float32 partials: W chunk width by rows per core x Wt.
+    if (rm_acc_promoted) {
+        const uint32_t rows = num_rows_per_core_group_1;
+        uint32_t chunk = 8;
+        if (plan.Wt > 16) {
+            if ((rows <= 4 && plan.Wt >= 128) || (rows <= 8 && plan.Wt >= 512)) {
+                chunk = 32;
+            } else if (rows <= 8 || (rows < plan.rm_rows_per_tile && plan.Wt >= 256)) {
+                chunk = 16;
+            }
+        }
+        plan.wt_tiles_per_chunk = std::min(plan.Wt, chunk);
+        plan.chunk_row_bytes = plan.wt_tiles_per_chunk * tile_width * plan.src_datum_size;
+        plan.rm_staging_page_size = plan.chunk_row_bytes;
     }
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
@@ -229,9 +247,9 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         // reduce_rm.cpp accumulates partial reductions across W chunks into the accumulator.
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = ACC_DFB,
-            .entry_size = dst_single_tile_size,
+            .entry_size = tt::tile_size(rm_acc_data_format),
             .num_entries = plan.ht_tiles_per_chunk,
-            .data_format_metadata = dst_cb_data_format,
+            .data_format_metadata = rm_acc_data_format,
         });
     }
 
@@ -321,7 +339,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     }
     // Accurate fp32: route Float32 through the SFPU (needs 32-bit DEST)
     const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
-    if (rm_path && dst_cb_data_format != src0_cb_data_format) {
+    if (rm_path && (rm_acc_data_format != src0_cb_data_format || dst_cb_data_format != src0_cb_data_format)) {
         reduce_defines["REDUCE_RM_MIXED_FORMAT"] = "1";
     }
 
@@ -486,6 +504,8 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         if (rm_path) {
             compute_hw.unpack_modes.emplace(ACC_DFB, UnpackMode::UnpackToDest);
         }
+    } else if (rm_acc_promoted) {
+        compute_hw.unpack_modes.emplace(ACC_DFB, UnpackMode::UnpackToDest);
     }
     // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
     // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
@@ -499,7 +519,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     require_explicit_unpack_mode(SCALER_DFB, scaler_cb_data_format);
     if (rm_path) {
         require_explicit_unpack_mode(RM_DFB, src0_cb_data_format);
-        require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
+        require_explicit_unpack_mode(ACC_DFB, rm_acc_data_format);
     } else if (use_fpu_negate) {
         require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
         require_explicit_unpack_mode(INEG_DFB, dst_cb_data_format);
