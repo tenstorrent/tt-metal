@@ -101,7 +101,7 @@ void kernel_main() {
         route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
     }
     {
-        DeviceZoneScopedN("AG_FENCE");  // open + ready out + own ready in
+        AGRMS_ZONE("AG_FENCE");  // open + ready out + own ready in
         conn.open();
         // Fence between calls: this program running here means every earlier command on this chip is done, so the
         // peer may now write into my members' L1: say so. Then send nothing until the peer has said the same.

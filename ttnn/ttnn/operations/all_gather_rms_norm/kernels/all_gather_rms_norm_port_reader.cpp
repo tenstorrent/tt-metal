@@ -153,7 +153,7 @@ void kernel_main() {
     if (has_out) {
         // the own slice is in the members' landing slots once every local member has loaded it
         {
-            DeviceZoneScopedN("AG_LOCAL_WAIT");
+            AGRMS_ZONE("AG_LOCAL_WAIT");
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local_loaded_id)),
                 local_loaded_expected);

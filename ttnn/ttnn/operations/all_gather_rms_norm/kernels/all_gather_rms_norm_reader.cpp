@@ -126,7 +126,7 @@ void kernel_main() {
     const uint32_t own_lo = w_tile_start > s_lo ? w_tile_start : s_lo;
     const uint32_t own_hi = (w_tile_start + core_w) < s_hi ? (w_tile_start + core_w) : s_hi;
     if (own_lo < own_hi) {
-        DeviceZoneScopedN("AG_OWN_LOAD");
+        AGRMS_ZONE("AG_OWN_LOAD");
         for (uint32_t i = 0; i < n_rows; ++i) {
             const uint32_t r = grp + i * n_groups;
             uint32_t dst = landing + (i * w_pitch + (own_lo - w_tile_start)) * page_bytes;
@@ -153,7 +153,7 @@ void kernel_main() {
         const uint32_t rows = (n_rows - i0) < block_row_tiles ? (n_rows - i0) : block_row_tiles;
         // ---- await_landing_block ----
         {
-            DeviceZoneScopedN("AG_LAND_WAIT");  // stall on the transport (occupancy, not cost)
+            AGRMS_ZONE("AG_LAND_WAIT");  // stall on the transport (occupancy, not cost)
             for (uint32_t s = 0; s < num_streams; ++s) {
                 const uint32_t n_s = get_arg_val<uint32_t>(streams_idx + s);
 #ifdef AGRMS_ABLATE_LOCAL

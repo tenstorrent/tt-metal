@@ -7,6 +7,15 @@
 
 #include <cstdint>
 
+// Per-stage device zones (perf breakdown probes only): compiled in only when the host sets AGRMS_PROFILE_ZONES
+// (env AGRMS_PROFILE_ZONES=1). Left on, they fill the profiler DRAM buffers under the eval perf harness (per-block
+// markers on every member core, 500 calls) and add marker cost to the headline device time.
+#ifdef AGRMS_PROFILE_ZONES
+#define AGRMS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define AGRMS_ZONE(name)
+#endif
+
 namespace agrms_cb {
 constexpr uint32_t cb_x_landing = 0;       // resident landing tiles (all blocks of the core); FIRST, on workers + ports
 constexpr uint32_t cb_gamma = 1;           // gamma slice, compact faces-0/1 row-0 pages (row-broadcast by compute)

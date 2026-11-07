@@ -72,6 +72,8 @@ MAX_RUNTIME_ARGS = 341
 # (kernels/*: AGRMS_ABLATE_*). EMPTY: every kernel returns at once (launch floor). LOCAL: no transport (ports idle,
 # members do not wait for landings). TRANSPORT: members only load, signal and wait for their landings.
 PERF_ABLATE = os.environ.get("AGRMS_ABLATE", "")
+# Perf probes only: AGRMS_PROFILE_ZONES=1 compiles the per-stage device zones in (kernels: AGRMS_ZONE).
+PROFILE_ZONES = os.environ.get("AGRMS_PROFILE_ZONES", "") == "1"
 # Test hook only (debug tests pin a split): AGRMS_FORCE_K = k restricts select_split to that candidate.
 FORCE_K = int(os.environ.get("AGRMS_FORCE_K", "0"))
 
@@ -638,6 +640,7 @@ def create_mesh_program_descriptor(
     elem_bytes = datum_bytes(x_dtype)
     defines = [("AGRMS_HAS_GAMMA", "1")] if has_gamma else []
     ablate = [(f"AGRMS_ABLATE_{PERF_ABLATE}", "1")] if PERF_ABLATE else []
+    ablate += [("AGRMS_PROFILE_ZONES", "1")] if PROFILE_ZONES else []
     defines += ablate
 
     ready_sem = ready_semaphore(mesh_device, port_union)
@@ -726,6 +729,7 @@ def create_mesh_program_descriptor(
     hash_key = (
         "all_gather_rms_norm",
         PERF_ABLATE,
+        PROFILE_ZONES,
         FORCE_K,
         K_SYM_MAX,
         RELAY_LAG,
