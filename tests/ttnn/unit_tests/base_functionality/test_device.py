@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
+
 import pytest
 
 import ttnn
@@ -32,6 +34,24 @@ def test_createdevice_matches_open_device_grid_defaults():
             ttnn.close_device(open_device_handle)
         if create_device_handle is not None:
             ttnn.close_device(create_device_handle)
+
+
+def test_closing_a_device_closes_its_open_submeshes():
+    """A submesh shares its parent's chip, so closing the parent closes the submesh too. A submesh left open kept
+    the chip open, then closed it when it was freed, under the next device opened on the chip."""
+    device = ttnn.CreateDevice(device_id=0)
+    submesh = device.create_submesh(ttnn.MeshShape(1, 1))
+    ttnn.close_device(device)
+
+    reopened = ttnn.CreateDevice(device_id=0)
+    try:
+        del device, submesh
+        gc.collect()
+        torch_tensor = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=reopened)
+        assert torch.equal(ttnn.to_torch(tensor), torch_tensor)
+    finally:
+        ttnn.close_device(reopened)
 
 
 def test_dispatch_core_config_defaults_follow_cluster_policy():
