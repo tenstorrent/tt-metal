@@ -964,3 +964,58 @@ def test_proxy_fetches_media_when_enabled():
     status, got = out["cat.png"]
     assert status == 400 and "(loopback); refused" in got["error"]["message"]
     assert sum(snap["served"].values()) == 0
+
+
+def closing_engine(close_first):
+    """A raw HTTP/1.1 engine that reads the first ``close_first`` requests and closes their connections without a
+    reply (an engine closing a pooled keep-alive connection as the proxy writes into it), then answers normally."""
+    seen = {"n": 0}
+
+    async def handle(reader, writer):
+        while True:
+            head = await reader.readuntil(b"\r\n\r\n")
+            length = 0
+            for line in head.decode().split("\r\n"):
+                if line.lower().startswith("content-length:"):
+                    length = int(line.split(":", 1)[1])
+            await reader.readexactly(length)
+            seen["n"] += 1
+            if seen["n"] <= close_first:
+                writer.close()
+                return
+            body = json.dumps({"backend": "R"}).encode()
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % len(body) + body
+            )
+            await writer.drain()
+
+    return handle, seen
+
+
+@pytest.mark.parametrize("close_first, want_status", [(1, 200), (2, 500)])
+def test_proxy_resends_once_after_an_unanswered_disconnect(close_first, want_status):
+    async def run():
+        handle, seen = closing_engine(close_first)
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        router = lb.Router([f"http://127.0.0.1:{port}"])
+        proxy = TestServer(lb.make_app(router), host="127.0.0.1")
+        await proxy.start_server()
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{proxy.port}/v1/chat/completions",
+                    data=chat("short", "q"),
+                    headers={"Content-Type": "application/json"},
+                ) as r:
+                    status = r.status
+            return status, seen["n"], router.snapshot()
+        finally:
+            await proxy.close()
+            server.close()
+            await server.wait_closed()
+
+    status, requests, snap = asyncio.run(run())
+    assert status == want_status
+    assert requests == 2  # one resend, never more
+    assert snap["prefix"]["stale_retried"] == 1
