@@ -205,6 +205,16 @@ inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::u
         gguf::k4_params_regs<TI>();
         gguf::body_macro_q4<true>();
     }
+    else if constexpr (PARAMS && !BODY && gguf::k4_regs<FMT>)
+    {
+        // Phase 1 alone (e.g. a pack-thread decode that waits between the phases): a = 0's S / M stay in L4..L7 for
+        // the body of the next call, so nothing else may run on this SFPU in between.
+        gguf::k4_params_regs<TI>();
+    }
+    else if constexpr (BODY && !PARAMS && gguf::k4_regs<FMT>)
+    {
+        gguf::body_macro_q4<true>();
+    }
     else
     {
         if constexpr (PARAMS)
@@ -259,8 +269,8 @@ inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uin
  * @brief Decode one GGUF weight tile into a Float32 [K][N] tile in DEST, scales applied (ggml's dequantization).
  *
  * @tparam FMT: ckernel::gguf::Format of the page.
- * @tparam PARAMS, BODY: Run phase 1 (the scales) and phase 2 (the codes). A decoded tile needs both; one alone is for
- *                       timing it.
+ * @tparam PARAMS, BODY: Run phase 1 (the scales) and phase 2 (the codes). A decoded tile needs both, in one call or in
+ *                       two (phase 1, then phase 2 with no other SFPU code in between); one alone is for timing it.
  * @param dst_index: DEST tile of the output. The page must be in tile dst_index + 1 (unpacked to DEST as UInt32);
  *                   tile dst_index + 2 is scratch.
  * @param ti: The tile's index in its group of K tiles (page_layout<FMT>().group_tiles).
