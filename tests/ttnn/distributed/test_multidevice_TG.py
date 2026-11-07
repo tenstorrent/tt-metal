@@ -1394,7 +1394,6 @@ def test_line_all_gather_column_major(mesh_device):
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-1, -2))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
     ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, cluster_axis=0)
     tt_outputs = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(ttnn_tensor.cpu())]
     for output in tt_outputs[1:]:
