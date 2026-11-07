@@ -1591,8 +1591,10 @@ TEST_F(SDPABackwardTest, Validation_CompositeRejectsMissingMask) {
 
 // ========== Ring Attention Simulation on Single Device ==========
 // Simulates ring attention forward + backward on a single device by splitting
-// K/V into chunks along the sequence dimension and combining outputs with the
-// logaddexp algorithm (same as ring_attention_sdpa.cpp). This does NOT require
+// K/V into chunks along the sequence dimension and combining outputs with an
+// online-softmax (logaddexp) merge on the host, mathematically equivalent to the
+// device merge in ring_attention_sdpa.cpp (tested on its own in
+// ops/distributed/ring_attention_merge_test.cpp). This does NOT require
 // a multi-device setup — it exercises the merge logic on a single chip.
 //
 // Use this test to verify ring attention changes when a multi-device VM is unavailable.
@@ -1743,7 +1745,7 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
 
             per_device_step_data[d][s] = {chunk_output_cpu, lse_chunk};
 
-            // logaddexp merge (mirrors ring_attention_sdpa.cpp)
+            // logaddexp merge, host form (equivalent to the 4-op device merge in ring_attention_sdpa.cpp)
             xt::xarray<float> m = xt::maximum(global_lse, lse_chunk);
             xt::xarray<float> exp_global = xt::exp(global_lse - m);
             xt::xarray<float> exp_chunk = xt::exp(lse_chunk - m);
