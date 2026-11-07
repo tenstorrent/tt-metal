@@ -144,8 +144,9 @@ sfpi_inline vFloat f16_at(const vUInt w)
 }
 
 // f16_at<0> and f16_at<1> of w (the same operations), the two chains interleaved: no SFPMAD result is read by the next
-// instruction.
-sfpi_inline void f16_both(const vUInt w, vFloat& lo, vFloat& hi)
+// instruction. bias: 112 << 23, by default programmable constant 0 (params_init).
+template <typename Bias = decltype(sfpi::vConstIntPrgm0)>
+sfpi_inline void f16_both(const vUInt w, vFloat& lo, vFloat& hi, const Bias& bias = sfpi::vConstIntPrgm0)
 {
     const vUInt x   = w << 16u;
     vUInt m1        = w >> 16u;
@@ -153,8 +154,8 @@ sfpi_inline void f16_both(const vUInt w, vFloat& lo, vFloat& hi)
     m0              = m0 >> 4u;
     m1              = m1 << 17u;
     m1              = m1 >> 4u;
-    const vFloat b0 = sfpi::as<vFloat>(m0 + sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
-    const vFloat b1 = sfpi::as<vFloat>(m1 + sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
+    const vFloat b0 = sfpi::as<vFloat>(m0 + sfpi::as<vUInt>(bias));
+    const vFloat b1 = sfpi::as<vFloat>(m1 + sfpi::as<vUInt>(bias));
     vFloat a0       = sfpi::addexp(b0, 1);
     vFloat a1       = sfpi::addexp(b1, 1);
     a0              = a0 + -6.103515625e-05f;
