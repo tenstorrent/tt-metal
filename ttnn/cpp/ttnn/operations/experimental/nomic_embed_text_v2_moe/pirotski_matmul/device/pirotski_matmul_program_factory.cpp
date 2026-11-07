@@ -20,8 +20,8 @@ namespace {
 
 const std::string kKernelDirectory =
     "ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/pirotski_matmul/device/kernels/";
-// minimal_matmul's compute kernel, unchanged: its CB indices, argument order and defines are this op's.
-const std::string kComputeKernel = "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp";
+// minimal_matmul's legacy compute kernel with this op's per-core M range (kernels/compute/pirotski_compute.cpp).
+const std::string kComputeKernel = kKernelDirectory + "compute/pirotski_compute.cpp";
 
 // Two slots per input ring: the next block loads while the current one computes.
 constexpr uint32_t kRingSlots = 2;
