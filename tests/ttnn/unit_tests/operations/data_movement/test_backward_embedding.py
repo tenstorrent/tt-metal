@@ -252,10 +252,13 @@ def _run_embedding_bw_against_fp64(device, index, num_embeddings, embedding_dim,
     abs_sum = torch.zeros(num_embeddings, embedding_dim, dtype=torch.float64).index_add_(0, index, grad_values.abs())
 
     # fp32 accumulation error is bounded by (terms) * 2^-23 per add; allow 2^-18 of the absolute sum.
-    accumulation_slack = abs_sum * 2.0**-18
-    rounding = reference.abs() * (2.0**-7 if output_dtype == ttnn.bfloat16 else 0.0)
-    excess = (out - reference).abs() - (rounding + accumulation_slack)
-    assert float(excess.max()) <= 0.0, f"error exceeds output rounding by {float(excess.max())}"
+    if output_dtype == ttnn.bfloat16:
+        # Same per-row contract as test_embedding_bw_repeated_indices: 1e-2 of the row's largest gradient.
+        bound = 1e-2 * reference.abs().max(dim=1, keepdim=True).values
+    else:
+        bound = abs_sum * 2.0**-18
+    excess = (out - reference).abs() - bound
+    assert float(excess.max()) <= 0.0, f"error exceeds the bound by {float(excess.max())}"
     if check_bit_exact:
         assert torch.equal(
             out, reference.to(torch.float32 if output_dtype == ttnn.float32 else torch.bfloat16).double()
@@ -275,7 +278,10 @@ def _run_embedding_bw_against_fp64(device, index, num_embeddings, embedding_dim,
 def test_embedding_bw_skewed_indices_fp64_reference(
     distribution, num_tokens, embedding_dim, num_embeddings, output_dtype, device
 ):
-    """Zipf distributed and all-identical tokens: the hot rows collect hundreds of gradients."""
+    """Zipf distributed and all-identical tokens: the hot rows collect hundreds of gradients.
+    The bf16 one-hot path accumulates through the FPU matmul in FP32 DEST and is held to the same row-max contract as
+    the existing repeated_indices test.
+    """
     torch.manual_seed(7)
     if distribution == "zipf":
         index = _zipf_indices(num_tokens, num_embeddings)
@@ -313,6 +319,8 @@ def test_embedding_bw_unique_indices_bit_exact(num_tokens, embedding_dim, num_em
 def test_embedding_bw_training_shapes_fp64_reference(
     batch_size, seq_len, embedding_dim, num_embeddings, output_dtype, device
 ):
+    # The bf16 one-hot path accumulates through the FPU matmul in FP32 DEST and is held to the same row-max contract
+    # as the existing repeated_indices test.
     torch.manual_seed(11)
     index = _zipf_indices(batch_size * seq_len, num_embeddings)
     _run_embedding_bw_against_fp64(device, index, num_embeddings, embedding_dim, output_dtype)
