@@ -78,8 +78,8 @@ class TtKimiK3Transformer(LightweightModule):
         stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
         if stale:
             logger.warning(
-                f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format KDA weights; rebuild them from "
-                f"the checkpoint (test_transformer_depth does this, rebuilding only the KDA weights)"
+                f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format attention weights (KDA or "
+                f"indexer); rebuild them from the checkpoint (load_layer_state_dict_cached rebuilds only those)"
             )
         return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
 
