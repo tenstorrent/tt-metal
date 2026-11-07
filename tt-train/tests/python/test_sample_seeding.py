@@ -14,7 +14,7 @@ multi-device mesh the noise must MIRROR the logits' data distribution:
     disagree on its single shared token).
 
 `sample_op` takes an optional ``seed_axes`` list naming the mesh axes to seed
-uniquely; the GRPO completers pass ONLY their dp/fsdp axes (never tp). These
+uniquely; the GRPO rollout samplers pass ONLY their dp/fsdp axes (never tp). These
 tests exercise the op directly with that same policy across DDP / FSDP / TP /
 DP+TP / DP+FSDP layouts and assert:
 

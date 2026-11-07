@@ -39,12 +39,21 @@ namespace tt::tt_metal::experimental::test_helpers {
 class PipeSpaceOwner {
 protected:
     // One pipe carved from a space sized exactly for it, with `sender` as its sender node (the
-    // spec does not carry one).
+    // spec does not carry one). `num_credit_lanes` is the receiver kernel's num_threads.
     PrefetcherPipe MakePipeFor(
-        distributed::MeshDevice& device, const PrefetcherPipeParameter& param, const CoreCoord& sender);
+        distributed::MeshDevice& device,
+        const PrefetcherPipeParameter& param,
+        const CoreCoord& sender,
+        uint32_t num_credit_lanes = 1);
     // The test geometry's pipes carved where their sender kernels run.
-    PrefetcherPipe MakeWeightsPipe(distributed::MeshDevice& device);
-    PrefetcherPipe MakeOtherPipe(distributed::MeshDevice& device);
+    PrefetcherPipe MakeWeightsPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes = 1);
+    PrefetcherPipe MakeOtherPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes = 1);
+    // Once the last carved pipe is gone, carve it again from its space: same addresses and geometry,
+    // new identity.
+    PrefetcherPipe RecarveLastPipe(
+        const CoreCoord& sender, const CoreRangeSet& receivers, uint32_t num_credit_lanes = 1) {
+        return spaces_.back().create_pipe(sender, receivers, num_credit_lanes);
+    }
     void ReleasePipeSpaces() { spaces_.clear(); }
 
 private:
@@ -200,7 +209,10 @@ inline KernelSpec& KernelNamed(ProgramSpec& spec, const std::string& name) {
 #define EXPECT_SPEC_VALID(spec) EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, (spec)); })
 
 inline PrefetcherPipe PipeSpaceOwner::MakePipeFor(
-    distributed::MeshDevice& device, const PrefetcherPipeParameter& param, const CoreCoord& sender) {
+    distributed::MeshDevice& device,
+    const PrefetcherPipeParameter& param,
+    const CoreCoord& sender,
+    uint32_t num_credit_lanes) {
     const CoreRangeSet receivers = std::visit(
         [](const auto& nodes) -> CoreRangeSet {
             if constexpr (std::is_same_v<std::decay_t<decltype(nodes)>, CoreRangeSet>) {
@@ -218,14 +230,14 @@ inline PrefetcherPipe PipeSpaceOwner::MakePipeFor(
             .ring_size = param.ring_size,
             .max_receivers_per_pipe = receivers.num_cores(),
         }));
-    return spaces_.back().create_pipe(sender, receivers);
+    return spaces_.back().create_pipe(sender, receivers, num_credit_lanes);
 }
 
-inline PrefetcherPipe PipeSpaceOwner::MakeWeightsPipe(distributed::MeshDevice& device) {
-    return MakePipeFor(device, MakePipeParameter(), pipe_sender_node);
+inline PrefetcherPipe PipeSpaceOwner::MakeWeightsPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes) {
+    return MakePipeFor(device, MakePipeParameter(), pipe_sender_node, num_credit_lanes);
 }
-inline PrefetcherPipe PipeSpaceOwner::MakeOtherPipe(distributed::MeshDevice& device) {
-    return MakePipeFor(device, MakeOtherPipeParameter(), other_sender_node);
+inline PrefetcherPipe PipeSpaceOwner::MakeOtherPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes) {
+    return MakePipeFor(device, MakeOtherPipeParameter(), other_sender_node, num_credit_lanes);
 }
 
 // The participant record for `prefetcher_pipe_id` on `core`, or nullptr when the core has no slot.

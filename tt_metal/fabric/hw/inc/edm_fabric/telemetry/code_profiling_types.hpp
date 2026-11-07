@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <bit>
 /**
  * @brief Enumeration of code profiling timer types as bitfield
  * Each timer type is a unique bit position, allowing multiple timers to be enabled simultaneously

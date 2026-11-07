@@ -60,7 +60,7 @@ One row per run (`--json` writes every metric):
 
 - On held-out silicon replays, batched busy time is within 0.2% and TTFT p50 / p90 / p99 within 1.7%. They ran on bh-glx-120-c05u08, the box the calibration was fitted on, with different slices. Unbatched 8k / 4k were refit on 2026-10-18 for LoFi projections, as a server runs them. On three slice replays on another Galaxy (bh-glx-120-b08u02, about 1% faster than the calibration box) step time reads 2.0-2.5% high, TTFT p50 4-8% high and p90 / p99 1-14% high. On a saturated 8k window that 2% compounds: p50 reads 4.7 s against 3.7 s measured.
 - The calibration is from one Galaxy; another box moved saturated TTFT tails by up to 10%.
-- The model goes stale as prefill gets faster. To check it, replay one slice on silicon (`../demo/agentx_replay.py`, added with the continuous-batching PR) and compare with `agentx_slice.py predict --measured`.
+- The model goes stale as prefill gets faster. To check it, replay one slice on silicon (`agentx_replay.py`, through the demo's batching scheduler) and compare with `agentx_slice.py predict --measured`.
 - Not modelled: loading a cached prefix into the device, and the first decode token.
 
 `--help` on each script lists its options and the other knobs: cache size, resume rounding (chunk, Gemma4's resume granularity, or exact), the extra cost of a chunk that starts mid-chunk, think-time cap, decode rate.
