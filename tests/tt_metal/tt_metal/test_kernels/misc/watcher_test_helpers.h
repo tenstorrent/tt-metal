@@ -28,7 +28,9 @@ FORCE_INLINE void signal_completion_before_hang() {
 #endif
 #else
     const uint32_t go_message_index = *GET_MAILBOX_ADDRESS_DEV(go_message_index);
-    uint64_t dispatch_addr = calculate_dispatch_addr(GET_MAILBOX_ADDRESS_DEV(go_messages[go_message_index]));
+    const uint32_t go_ring_slot = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr) % GO_RING_DEPTH;
+    uint64_t dispatch_addr =
+        calculate_dispatch_addr(GET_MAILBOX_ADDRESS_DEV(go_messages[go_message_index].slot[go_ring_slot]));
     notify_dispatch_core_done(dispatch_addr, noc_index);
 #endif
 }

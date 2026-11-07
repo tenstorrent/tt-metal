@@ -8,6 +8,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -97,7 +98,8 @@ MemoryConfig derive_effective_output_memory_config(
         output_padded_shape,
         output_mem_config.memory_layout(),
         std::nullopt,
-        OutputTiling::Default);
+        OutputTiling::Default,
+        output_mem_config.buffer_type());
     return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
 }
 
@@ -198,7 +200,7 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     const float pad_value = operation_attributes.pad_value;
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to transpose need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to transpose need to be allocated in buffers on device!");
     TT_FATAL(
         !(dim != TransposeOpDim::HC && pad_value != 0.0f),
         "Non-zero padding {} is not supported for any transpose other than HC.",
@@ -236,7 +238,7 @@ tt::tt_metal::TensorSpec TransposeDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             output_mem_config,

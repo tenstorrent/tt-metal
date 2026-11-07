@@ -363,12 +363,18 @@ FORCE_INLINE void dfb_publish_producer_ready(
 
 #ifndef COMPILE_FOR_TRISC
 
-FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
+// Txn ids this launch's implicit-sync DFBs use, by side. DM0 keeps them to finish those DFBs at kernel exit.
+struct DfbImplicitSyncTxnMasks {
+    uint32_t producer = 0;
+    uint32_t consumer = 0;
+};
+
+FORCE_INLINE DfbImplicitSyncTxnMasks setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
     // No DFB config was serialized; host will not read timing slots. Still disarm ISR
     // so a prior launch cannot leak into this one.
     if (num_dfbs == 0) {
         disable_dfb_tile_isr();
-        return;
+        return {};
     }
 
     uint32_t start_time = rdcycle();
@@ -398,7 +404,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
             0,
             0,
             0);
-        return;
+        return {};
     }
 
     // uncached bootstrap of offset/masks, one invalidate over threshold+desc pools, then cached walks (non-volatile
@@ -537,6 +543,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         isr_enable,
         0,  // METRIC_I unused (was hw_reg_writes count)
         subpassB_hw);
+    return {.producer = producer_txn_id_mask, .consumer = consumer_txn_id_mask};
 }
 
 FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
@@ -676,6 +683,7 @@ FORCE_INLINE void dfb_program_intra_tensix_alias(
 FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
     DfbPackerRemapperRange packer_rmp{};
     if (num_dfbs == 0) {
+        g_dfb_config_base_addr = 0;
         return packer_rmp;
     }
 
@@ -717,9 +725,9 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     uint32_t total_tc_slots = 0;
     uint32_t total_sig_write = 0;
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC)
     uint8_t compact_dfb_count = 0;
-    uint8_t pack_tc_slot_count = 0;
+    uint8_t trisc_tc_slot_count = 0;
 #endif
 
     // g: capture time before the loop (3 uncached header reads above + blob-offset load)
@@ -775,15 +783,15 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         WAYPOINT("L1");
 
         // --- Resolve g_dfb_interface slot ---
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-        ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_PACK);
+#if defined(COMPILE_FOR_TRISC)
+        ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_TRISC);
         ASSERT(num_tcs <= dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
-        ASSERT(pack_tc_slot_count + num_tcs <= dfb::MAX_PACK_TC_SLOTS);
+        ASSERT(trisc_tc_slot_count + num_tcs <= dfb::MAX_TRISC_TC_SLOTS);
         const uint8_t compact_id = compact_dfb_count++;
         g_dfb_logical_to_compact[eh.logical_dfb_id] = compact_id;
         LocalDFBInterface& iface = g_dfb_interface[compact_id];
-        iface.tc_slots.slot_base = pack_tc_slot_count;
-        pack_tc_slot_count += static_cast<uint8_t>(num_tcs);
+        iface.tc_slots.slot_base = trisc_tc_slot_count;
+        trisc_tc_slot_count += static_cast<uint8_t>(num_tcs);
 #else
         LocalDFBInterface& iface = g_dfb_interface[eh.logical_dfb_id];
 #endif
@@ -849,21 +857,15 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             const uint8_t ptc = static_cast<uint8_t>((t < 4u ? ptc_w0 : ptc_w1) >> ((t & 3u) * 8u));
             iface.tc_slots[t].packed_tile_counter = ptc;
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC)  // pack and unpack
             iface.tc_slots[t].base_addr = base;
             // ring_size is uint32 L1 units (full Quasar L1). Cursor byte-offset is derived
-            // from wr_entry_idx (not stored).
+            // from cursor_entry_idx (not stored).
             iface.tc_slots[t].ring_size = limit - base;
             iface.tc_slots[t].base_entry_idx =
                 static_cast<uint16_t>((base - iface.tc_slots[0].base_addr) / iface.entry_size);
-            iface.tc_slots[t].wr_entry_idx = iface.tc_slots[t].base_entry_idx;
-#elif defined(COMPILE_FOR_TRISC)  // unpack
-            iface.tc_slots[t].base_addr = base;
-            iface.tc_slots[t].ring_size = limit - base;
-            iface.tc_slots[t].base_entry_idx =
-                static_cast<uint16_t>((base - iface.tc_slots[0].base_addr) / iface.entry_size);
-            iface.tc_slots[t].rd_entry_idx = iface.tc_slots[t].base_entry_idx;
-#else                             // DM
+            iface.tc_slots[t].cursor_entry_idx = iface.tc_slots[t].base_entry_idx;
+#else  // DM
             iface.tc_slots[t].base_addr = base;
             iface.tc_slots[t].limit = limit;
             iface.tc_slots[t].ptr = base;

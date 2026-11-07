@@ -4,6 +4,7 @@
 
 // Edge-case coverage: counter-wrap, ring-pressure, decoy, long-run (Metal 2.0).
 
+#include "data_format/bfloat16_utils.hpp"
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
@@ -506,9 +507,9 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     const m2::KernelSpecName CONSUMER{"consumer"};
     const m2::TensorParamName IN_TENSOR{"in_tensor"};
     const m2::TensorParamName OUT_TENSOR{"out_tensor"};
-    // Two single-writer semaphores form a producer<->consumer rendezvous so that
-    // neither DM kernel enters its data loop until BOTH the producer's posted and
-    // the consumer's acked counters have been preloaded (occupancy provably 0).
+    // Two single-writer semaphores form a producer<->consumer rendezvous: the producer
+    // preloads both hardware counters from one hart, and neither DM kernel enters its
+    // data loop before the other has finished its setup.
     const m2::SemaphoreSpecName SEM_PROD_READY{"sem_prod_ready"};
     const m2::SemaphoreSpecName SEM_CONS_READY{"sem_cons_ready"};
 

@@ -112,7 +112,7 @@ tt::tt_metal::ProgramDescriptor build_llama_sharded_program_descriptor(
     log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
@@ -315,14 +315,14 @@ tt::tt_metal::ProgramDescriptor build_llama_sharded_program_descriptor(
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
         }
         writer_rt_args.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_arg_list;

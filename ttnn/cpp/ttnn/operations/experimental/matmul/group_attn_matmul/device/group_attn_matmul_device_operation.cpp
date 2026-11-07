@@ -29,14 +29,14 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
         "Operands to matmul need to be on device!");
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
     const auto& ashape = input_tensor_a.padded_shape();
     const auto& bshape = input_tensor_b.padded_shape();
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
-    TT_FATAL((ashape[1] % bshape[1] == 0), "Number of q_heads must be divisible by kv_heads!");
+    TT_FATAL(bshape[1] > 0 && ashape[1] % bshape[1] == 0, "Number of q_heads must be divisible by kv_heads!");
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
     TT_FATAL((bshape[0] == 32), "Only batch 32 is supported for group attention matmul!");
 

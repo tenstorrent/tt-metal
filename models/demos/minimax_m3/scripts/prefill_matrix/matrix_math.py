@@ -2,46 +2,58 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Measurement arithmetic of the prefill-matrix producer, kept free of ttnn/torch so it is unit-testable on any host
-(models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py): reading the ranks' per-chunk timing CSVs, the
+(models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py): chunk completion from the runner's layer acks, the
 steady-state window that excludes pipeline fill/drain, and the per-request TTFT-under-load statistics."""
 
-import csv
 import math
-import os
 import statistics
-import time
+import threading
+from collections import deque
 
 
-def read_rank_csv(timing_dir: str, rank: int) -> dict:
-    """{c: (compute_start_epoch_s, compute_ms)} for one rank; re-opened every call (NFS close-to-open).
-    The file is appended from another host while we read it: only newline-terminated lines are accepted, so a
-    torn last line ("450.1" of "450.123") is never taken as a finished chunk."""
-    out = {}
-    path = os.path.join(timing_dir, f"rank{rank}.csv")
-    try:
-        with open(path) as fh:
-            data = fh.read()
-    except FileNotFoundError:
-        return out
-    lines = data.split("\n")
-    if not data.endswith("\n"):
-        lines.pop()  # partial write in flight
-    for row in csv.reader(lines):
-        if len(row) == 4:
-            out[int(row[1])] = (float(row[2]), float(row[3]))
-    return out
+class AckLedger:
+    """Per-chunk first and last layer-ack times on the producer's clock, keyed by the producer's chunk index.
 
+    The runner acks (slot, pos_start, pos_end, layer span), and the matrix pushes the same positions again while
+    earlier copies are still in flight. Each rank acks its layers in push order, so an ack belongs to the oldest
+    in-flight copy of its key that has not seen that layer span yet. A chunk is done once its spans cover
+    ``chunk_layers`` layers."""
 
-def wait_for_chunk(timing_dir: str, rank: int, c: int, timeout_s: float, poll_s: float = 0.2) -> tuple:
-    """Poll rank ``rank``'s CSV until chunk ``c`` has a row; returns (compute_start, compute_ms)."""
-    t0 = time.perf_counter()
-    while True:
-        rows = read_rank_csv(timing_dir, rank)
-        if c in rows:
-            return rows[c]
-        if time.perf_counter() - t0 > timeout_s:
-            raise TimeoutError(f"rank {rank} chunk c={c} not done after {timeout_s:.0f} s (have {len(rows)} rows)")
-        time.sleep(poll_s)
+    def __init__(self, chunk_layers: int):
+        self._chunk_layers = chunk_layers
+        self._open = {}  # key -> deque of [c, span starts seen, layers covered]
+        self._cond = threading.Condition()
+        self.first = {}
+        self.ends = {}
+        self.stray = 0
+
+    def push(self, c: int, key: tuple) -> None:
+        with self._cond:
+            self._open.setdefault(key, deque()).append([c, set(), 0])
+
+    def ack(self, key: tuple, layer_start: int, layer_end: int, ts: float) -> None:
+        with self._cond:
+            entry = next((e for e in self._open.get(key, ()) if layer_start not in e[1]), None)
+            if entry is None:
+                self.stray += 1
+                return
+            c, seen, _ = entry
+            seen.add(layer_start)
+            entry[2] += layer_end - layer_start
+            self.first.setdefault(c, ts)
+            if entry[2] >= self._chunk_layers:
+                self.ends[c] = ts
+                self._open[key].remove(entry)
+                self._cond.notify_all()
+
+    def wait(self, c: int, timeout_s: float) -> float:
+        """Last-ack time of chunk ``c``."""
+        with self._cond:
+            if not self._cond.wait_for(lambda: c in self.ends, timeout=timeout_s):
+                raise TimeoutError(
+                    f"chunk c={c} not fully acked after {timeout_s:.0f} s ({len(self.ends)} chunks done)"
+                )
+            return self.ends[c]
 
 
 def steady_state(ends: dict, c0: int, c_end: int, stages: int, new_tokens: dict, chunk: int):
@@ -68,7 +80,7 @@ def steady_state(ends: dict, c0: int, c_end: int, stages: int, new_tokens: dict,
 
 
 def ttft_stats(req: dict, ends: dict, c_full: int = 0) -> dict:
-    """Per-request TTFT under load (ms): push of the request's first chunk -> last-rank end of its last chunk.
+    """Per-request TTFT under load (ms): push of the request's first chunk -> last layer ack of its last chunk.
     Every request must have its last chunk in ``ends`` (the caller asserted the stream is complete). Requests
     whose first chunk index is below ``c_full`` entered a still-filling pipeline and are excluded (all requests
     are used if that leaves none). p90 is the nearest-rank percentile."""

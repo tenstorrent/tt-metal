@@ -5,31 +5,32 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     Noc noc;
 
-    constexpr uint32_t q_shard_ht = get_compile_time_arg_val(0);  // number of Q heads in the group, n
-    constexpr uint32_t q_shard_wt = get_compile_time_arg_val(1);  // number of K heads in the group, expecting 1
-    constexpr uint32_t k_shard_ht = get_compile_time_arg_val(2);  // number of V heads in the group, expecting 1
-    constexpr uint32_t k_shard_wt = get_compile_time_arg_val(3);  // size of a Q head in bytes
-    constexpr uint32_t q_num_heads_per_core = get_compile_time_arg_val(4);
-    constexpr uint32_t k_num_heads_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t tiles_per_head = get_compile_time_arg_val(6);  // size of a K head `` ``
+    constexpr uint32_t q_shard_ht = get_arg(args::q_shard_ht);  // number of Q heads in the group, n
+    constexpr uint32_t q_shard_wt = get_arg(args::q_shard_wt);  // number of K heads in the group, expecting 1
+    constexpr uint32_t k_shard_ht = get_arg(args::k_shard_ht);  // number of V heads in the group, expecting 1
+    constexpr uint32_t k_shard_wt = get_arg(args::k_shard_wt);  // size of a Q head in bytes
+    constexpr uint32_t q_num_heads_per_core = get_arg(args::q_num_heads_per_core);
+    constexpr uint32_t k_num_heads_per_core = get_arg(args::k_num_heads_per_core);
+    constexpr uint32_t tiles_per_head = get_arg(args::tiles_per_head);  // size of a K head `` ``
 
-    constexpr uint32_t cb_inq = tt::CBIndex::c_0;
-    constexpr uint32_t cb_inkv = tt::CBIndex::c_1;
+    constexpr auto dfb_inq = dfb::in_q;
+    constexpr auto dfb_inkv = dfb::in_kv;
 
-    constexpr uint32_t cb_outq = tt::CBIndex::c_16;
+    constexpr auto dfb_outq = dfb::out_q;
 #ifdef TRANSPOSE_K_HEADS
-    constexpr uint32_t cb_outk = tt::CBIndex::c_24;
+    constexpr auto dfb_outk = dfb::k_pre_transpose;
 #else
-    constexpr uint32_t cb_outk = tt::CBIndex::c_17;
+    constexpr auto dfb_outk = dfb::out_k;
 #endif
-    constexpr uint32_t cb_outv = tt::CBIndex::c_18;
+    constexpr auto dfb_outv = dfb::out_v;
 
     // copy one entire head_dim tile, then go to next sequence tile and do another head_dim.
     // after that, go to next head (head_dim > sequence * batch > head)
@@ -38,24 +39,24 @@ void kernel_main() {
 
     constexpr uint32_t v_shard_ht = k_shard_ht;
 
-    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_inq);
+    constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_inq);
 
     /**
      * Iterate over number of heads in each group (n Q, 1 K, 1 V) where total number of groups = total number of KV
      * heads block_ht is the number of tiles along the batch * seq_len dimension shard
      */
 
-    CircularBuffer cb_inq_obj(cb_inq);
-    CircularBuffer cb_inkv_obj(cb_inkv);
-    CircularBuffer cb_outq_obj(cb_outq);
-    CircularBuffer cb_outk_obj(cb_outk);
-    CircularBuffer cb_outv_obj(cb_outv);
+    DataflowBuffer dfb_inq_obj(dfb_inq);
+    DataflowBuffer dfb_inkv_obj(dfb_inkv);
+    DataflowBuffer dfb_outq_obj(dfb_outq);
+    DataflowBuffer dfb_outk_obj(dfb_outk);
+    DataflowBuffer dfb_outv_obj(dfb_outv);
 
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
     const uint32_t my_noc_y = my_y[noc_id];
-    const uint32_t q_src_l1_addr = cb_inq_obj.get_read_ptr();
-    uint32_t q_write_addr = cb_outq_obj.get_write_ptr();
+    const uint32_t q_src_l1_addr = dfb_inq_obj.get_read_ptr();
+    uint32_t q_write_addr = dfb_outq_obj.get_write_ptr();
     UnicastEndpoint src_ep;
 
     // re-order q
@@ -63,7 +64,7 @@ void kernel_main() {
     constexpr uint32_t q_shard_wt_size_bytes = q_shard_wt * single_tile_size_bytes;  // tiles until next sequence
     constexpr uint32_t q_head_size_bytes = tiles_per_head * single_tile_size_bytes;
 
-    cb_outq_obj.reserve_back(q_num_tiles);
+    dfb_outq_obj.reserve_back(q_num_tiles);
     uint32_t head_offset = 0;
     for (uint32_t k = 0; k < q_num_heads_per_core; k++) {  // number of kv heads inside the shard
         uint32_t seq_tile_offset = 0;
@@ -81,17 +82,17 @@ void kernel_main() {
         head_offset += q_head_size_bytes;
     }
     noc.async_read_barrier();
-    cb_outq_obj.push_back(q_num_tiles);
+    dfb_outq_obj.push_back(q_num_tiles);
 
     // re-order k
-    const uint32_t kv_src_l1_addr = cb_inkv_obj.get_read_ptr();
+    const uint32_t kv_src_l1_addr = dfb_inkv_obj.get_read_ptr();
     constexpr uint32_t k_num_tiles = k_shard_ht * k_shard_wt;
     constexpr uint32_t kv_shard_wt_size_bytes = k_shard_wt * single_tile_size_bytes * 2;
     constexpr uint32_t k_head_size_bytes = tiles_per_head * single_tile_size_bytes;
     constexpr uint32_t kv_group_size_bytes = k_head_size_bytes * 2;
 
-    cb_outk_obj.reserve_back(k_num_tiles);
-    uint32_t k_write_addr = cb_outk_obj.get_write_ptr();
+    dfb_outk_obj.reserve_back(k_num_tiles);
+    uint32_t k_write_addr = dfb_outk_obj.get_write_ptr();
     head_offset = 0;
     for (uint32_t k = 0; k < k_num_heads_per_core; k++) {  // number of k heads inside the shard
 #ifdef TRANSPOSE_K_HEADS
@@ -127,14 +128,14 @@ void kernel_main() {
         head_offset += kv_group_size_bytes;
     }
     noc.async_read_barrier();
-    cb_outk_obj.push_back(k_num_tiles);
+    dfb_outk_obj.push_back(k_num_tiles);
 
     // re-order v
     constexpr uint32_t v_num_tiles = k_num_tiles;
     constexpr uint32_t v_head_size_bytes = k_head_size_bytes;
     constexpr uint32_t v_num_heads_per_core = k_num_heads_per_core;
-    cb_outv_obj.reserve_back(v_num_tiles);
-    uint32_t v_write_addr = cb_outv_obj.get_write_ptr();
+    dfb_outv_obj.reserve_back(v_num_tiles);
+    uint32_t v_write_addr = dfb_outv_obj.get_write_ptr();
     head_offset = k_head_size_bytes;                       // v1 is after one k head
     for (uint32_t k = 0; k < v_num_heads_per_core; k++) {  // number of kv heads inside the shard
         uint32_t seq_tile_offset = 0;
@@ -152,5 +153,5 @@ void kernel_main() {
         head_offset += kv_group_size_bytes;
     }
     noc.async_read_barrier();
-    cb_outv_obj.push_back(v_num_tiles);
+    dfb_outv_obj.push_back(v_num_tiles);
 }

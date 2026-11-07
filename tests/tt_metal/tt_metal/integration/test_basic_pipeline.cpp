@@ -36,7 +36,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
@@ -61,7 +61,7 @@ void create_and_run_row_pipeline(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const PipelineRowConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     distributed::MeshWorkload mesh_workload;
 
     uint32_t num_cores = (uint32_t)test_config.num_cores;

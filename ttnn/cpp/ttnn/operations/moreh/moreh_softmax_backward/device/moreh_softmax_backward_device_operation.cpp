@@ -71,8 +71,8 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
     const auto& output_grad_tensor = tensor_args.output_grad_tensor;
     TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-    TT_FATAL(output_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
-    TT_FATAL(output_grad_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL(output_tensor.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL(output_grad_tensor.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((output_tensor.layout() == Layout::TILE), "Output to softmax must be tilized");
     TT_FATAL((output_grad_tensor.layout() == Layout::TILE), "Output_grad to softmax must be tilized");
     TT_FATAL(
@@ -85,6 +85,25 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
     const auto rank = output_tensor.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
+    TT_FATAL(
+        output_tensor.logical_volume() > 0,
+        "Output to softmax backward must be non-empty, got shape {}",
+        output_tensor.logical_shape());
+    if (tensor_args.input_grad_tensor.has_value()) {
+        // The factories take every buffer format from input_grad, so it must match the incoming gradient.
+        const auto& input_grad = tensor_args.input_grad_tensor.value();
+        TT_FATAL(
+            input_grad.dtype() == output_grad_tensor.dtype(),
+            "input_grad dtype {} must match the output_grad dtype {}",
+            input_grad.dtype(),
+            output_grad_tensor.dtype());
+        TT_FATAL(input_grad.layout() == Layout::TILE, "input_grad must be tilized");
+        TT_FATAL(
+            input_grad.logical_shape() == output_tensor.logical_shape(),
+            "input_grad shape {} must match the output shape {}",
+            input_grad.logical_shape(),
+            output_tensor.logical_shape());
+    }
 }
 
 void MorehSoftmaxBackwardOperation::validate_on_program_cache_miss(

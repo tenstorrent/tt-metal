@@ -105,7 +105,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program;
+    Program program = CreateProgram(*mesh_device);
 
     CreateKernel(
         program,
@@ -146,7 +146,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program;
+    Program program = CreateProgram(*mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_writer.cpp",
@@ -209,7 +209,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program;
+    Program program = CreateProgram(*mesh_device);
 
     CreateKernel(
         program,
@@ -263,7 +263,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program;
+    Program program = CreateProgram(*mesh_device);
 
     ReaderDataMovementConfig writer_config;
     writer_config.defines["CHECK_BACK"] = "1";

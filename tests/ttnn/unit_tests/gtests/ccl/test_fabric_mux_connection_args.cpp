@@ -27,11 +27,12 @@ protected:
 
     tt::tt_fabric::FabricMuxConfig make_mux_config() const {
         return {
+            *mesh_device_,
             /*num_full_size_channels=*/1,
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/2,
             /*num_buffers_header_only_channel=*/0,
-            tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+            tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device_),
             mesh_device_->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1)};
     }
 };
