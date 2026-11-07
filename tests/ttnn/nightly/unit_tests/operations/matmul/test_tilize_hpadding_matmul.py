@@ -7,7 +7,6 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul
 from loguru import logger
 from tt_lib.utils import (
-    tilize_to_list,
     tilize,
     untilize,
     _nearest_32,
@@ -27,22 +26,10 @@ def run_tilize_matmul_test(M, K, N, device):
     A_padded = pad_activation(A)
     B = torch.randn(b_shape) - 0.95
 
-    a = ttnn.Tensor(
-        A.flatten().tolist(),
-        a_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(A.reshape(a_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     a_t = ttnn.tilize_with_zero_padding(a)
     print("Shape of A_t - " + str(a_t.padded_shape))
-    b_t = ttnn.Tensor(
-        tilize_to_list(B),
-        b_shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b_t = ttnn.from_torch(B, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     print("Shape of B_t - " + str(b_t.padded_shape))
     t2 = ttnn_matmul(a_t, b_t)
     assert list(t2.padded_shape) == output_shape
