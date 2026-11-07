@@ -30,7 +30,7 @@ Category 4: composite binary math
 | 2  | ttnn.logaddexp / logaddexp_   | log(exp(a) + exp(b))   | ULP ≤ 1 for abs(golden) ≥ 1, else abs ≤ 2^-23  |
 | 3  | ttnn.logaddexp2 / logaddexp2_ | log2(2**a + 2**b)      | ULP ≤ 1 for abs(golden) ≥ 1, else abs ≤ 2^-22  |
 | 4  | ttnn.squared_difference / _   | (a - b)**2             | exact vs torch float32                         |
-| 5  | ttnn.xlogy                    | a * log(b)             | abs ≤ abs(a) * 5e-4 (bfloat16-grade log)       |
+| 5  | ttnn.xlogy                    | a * log(b)             | abs ≤ abs(a) * 2e-6 (log as accurate as log) |
 | 6  | ttnn.hypot                    | sqrt(a**2 + b**2)      | ULP ≤ 1 where neither square under/overflows   |
 | 7  | ttnn.bias_gelu / bias_gelu_   | gelu(a + b)            | x = a + b: ULP ≤ 3 (x ≥ 0), ULP ≤ 5            |
 |    |                               |                        | (-1 < x < 0), abs ≤ 1e-6 (x ≤ -1); and bitwise |
@@ -75,11 +75,13 @@ FLOAT32_TINY = float(torch.finfo(torch.float32).tiny)
 LDEXP_MIN_EXPONENT = -126.0
 LDEXP_MAX_EXPONENT = 127.0
 
-# The xlogy kernel evaluates log(b) with the bfloat16-grade log polynomial for
-# every dtype, not the float32 log ttnn.log uses. Its error is absolute and
-# nearly constant over b: 4.4e-4 at log(1), at most 4.51e-4 measured. It
-# enters the product scaled by abs(a).
-XLOGY_LOG_ATOL = 5e-4
+# xlogy evaluates log(b) with the same implementation ttnn.log uses, so the
+# error is that of the accurate float32 log: a few float32 ULP of log(b), which
+# is up to ~88 in magnitude, plus a 2e-6 absolute floor near log(b) = 0. It
+# enters the product scaled by abs(a). The identity xlogy(x, 1) == 0 is pinned
+# by its own test.
+XLOGY_LOG_ATOL = 2e-6
+XLOGY_LOG_ULPS = 4
 
 HYPOT_MIN_OPERAND = 2.0**-62
 HYPOT_MAX_OPERAND = 2.0**62
@@ -167,17 +169,20 @@ def _assert_logaddexp_bands(golden, result, ulp_threshold, small_atol):
 
 
 def _assert_xlogy_within_log_error(input_a, reference, result, desc):
-    """abs(device - reference) ≤ abs(a) * XLOGY_LOG_ATOL + 2^-126.
+    """abs(device - reference) ≤ abs(a) * (XLOGY_LOG_ATOL + XLOGY_LOG_ULPS * 2^-23 * abs(log(b))) + 2^-126.
 
-    The 2^-126 term is the product's own flush to zero.
+    The 2^-126 term is the product's own flush to zero. The log(b) term scales
+    the bound with the result so it stays at a few ULP for large |log(b)|.
     """
     error = (reference - result.double()).abs()
-    tolerance = XLOGY_LOG_ATOL * input_a.double().abs() + FLOAT32_TINY
+    abs_a = input_a.double().abs()
+    log_scale = (reference.double().abs() / abs_a.clamp_min(FLOAT32_TINY)).clamp_max(100.0)
+    tolerance = abs_a * (XLOGY_LOG_ATOL + XLOGY_LOG_ULPS * 2.0**-23 * log_scale) + FLOAT32_TINY
     failed = error > tolerance
     if failed.any():
         worst = int(torch.argmax(error - tolerance))
         raise AssertionError(
-            f"{desc}: {int(failed.sum())} elements exceed abs(a) * {XLOGY_LOG_ATOL}; worst is "
+            f"{desc}: {int(failed.sum())} elements exceed abs(a) * ({XLOGY_LOG_ATOL} + {XLOGY_LOG_ULPS} ulp of log(b)); worst is "
             f"a={input_a.reshape(-1)[worst].item()}, golden={reference.reshape(-1)[worst].item()}, "
             f"actual={result.reshape(-1)[worst].item()}"
         )
@@ -382,14 +387,14 @@ def test_xlogy(device):
 
     | Case              | float32 behavior                                   | Check                    |
     |-------------------|----------------------------------------------------|--------------------------|
-    | all b > 0         | log(b) carries ~4.5e-4 absolute error at every b   | abs ≤ abs(a) * 5e-4      |
-    | b = 1             | log(1) = 4.4e-4: xlogy(6.73e29, 1) = 2.97e26       | same bound               |
-    | b far from 1      | up to 2.5e-4 relative (3789 ULP) for b ∉ [0.25, 4] | same bound               |
+    | all b > 0         | log(b) carries ~2e-6 absolute error at every b     | abs ≤ abs(a) * 2e-6      |
+    | b = 1             | log(1) is exactly 0: xlogy(x, 1) = 0               | same bound               |
+    | b far from 1      | up to a few ULP relative for b ∉ [0.25, 4]        | same bound               |
     | product < 2^-126  | flushed to 0                                       | + 2^-126 in the bound    |
 
-    The kernel calls the bfloat16 log body for float32 too, so xlogy does not
-    get the 1-ULP float32 log that ttnn.log has. This pins the current
-    behavior; it is not a float32-grade contract.
+    The kernel uses the same log implementation ttnn.log uses, so xlogy gets
+    the float32 log accuracy. The exact identity at y = 1 and the relative
+    agreement with multiply(x, log(y)) are each pinned by their own test.
     """
     input_a, input_b = pairwise_from_values(
         binary_grid_values(-1e30, 1e30, dtype=torch.float32),
@@ -429,6 +434,64 @@ def test_xlogy_nonpositive(device):
     assert_equal(torch.full_like(result[pos_a], float("-inf")), result[pos_a])
     assert_equal(torch.full_like(result[neg_a], float("inf")), result[neg_a])
     assert torch.isnan(result[zero_a]).all(), "xlogy(0, +0) is 0 * -inf"
+
+
+def test_xlogy_y_equals_one_is_zero(device):
+    """log(1) must be exactly 0, so xlogy(x, 1) must be exactly 0 for every x.
+
+    The kernel used to evaluate log with its own bfloat16-grade cubic rather
+    than the log implementation ttnn.log uses, so log(1) came back near
+    1.00005e-3 and the product carried that offset out to every magnitude:
+    xlogy(1e38, 1) returned 1.00005e+35. The test pins the identity across
+    the whole exponent range, which is where the old error showed up as a
+    fixed 1.00005e-3 ratio.
+
+    | x       | y | expected            |
+    |---------|---|---------------------|
+    | 1.0     | 1 | 0                   |
+    | 1e20     | 1 | 0                   |
+    | 1e38     | 1 | 0                   |
+    | 1e-38    | 1 | 0                   |
+    | -1e30    | 1 | -0                  |
+    """
+    exponents = [-126, -30, -10, -1, 0, 1, 10, 30, 37]
+    values_x = torch.tensor(
+        [2.0**e if i % 2 == 0 else -(2.0**e) for i, e in enumerate(exponents)], dtype=torch.float32
+    )
+    values_y = torch.ones_like(values_x)
+
+    result = ttnn.to_torch(ttnn.xlogy(to_float32_tt_tensor(values_x, device), to_float32_tt_tensor(values_y, device)))
+
+    assert_equal(torch.zeros_like(result), result)
+
+
+def test_xlogy_matches_log(device):
+    """xlogy(x, y) must agree with multiply(x, log(y)) to float32 tolerance.
+
+    The standalone log op is exact to about 1.3e-07 relative, so the product
+    built from it bounds what xlogy may add on top. y spans [0.05, 8] plus the
+    just-above-1 band, where the old internal log was worst in relative terms:
+    xlogy(x, 1.0001) was out by about 997% because log(1.0001) is near 1e-4.
+
+    | y              | expected relative error                    |
+    |----------------|--------------------------------------------|
+    | [0.05, 8]      | ≤ 4 ULP of multiply(x, log(y))             |
+    | just above 1   | ≤ 4 ULP; the band where the old error grew |
+    """
+    values_y = torch.cat(
+        [
+            torch.logspace(torch.log10(torch.tensor(0.05)), torch.log10(torch.tensor(8.0)), 48),
+            torch.tensor([1.0 + 1e-4, 1.0 + 1e-3, 1.0 + 1e-2, 1.0 + 1e-1], dtype=torch.float32),
+        ]
+    )
+    values_x = torch.full_like(values_y, 3.7)
+
+    result = ttnn.to_torch(ttnn.xlogy(to_float32_tt_tensor(values_x, device), to_float32_tt_tensor(values_y, device)))
+
+    # Reference is the op's own accurate log, computed in float64 for a stable
+    # bound, then rounded to float32.
+    reference = (values_x.double() * torch.log(values_y.double())).to(torch.float32)
+    assert_with_ulp(expected_result=reference, actual_result=result, ulp_threshold=4)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

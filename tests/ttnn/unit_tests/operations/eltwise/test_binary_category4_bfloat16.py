@@ -447,6 +447,32 @@ def test_xlogy_nonpositive(device):
     )
 
 
+def test_xlogy_y_equals_one_is_zero(device):
+    """log(1) must be exactly 0, so xlogy(x, 1) must be exactly 0 for every x.
+
+    The kernel used to evaluate log with its own coarse cubic, so log(1) came
+    back near 1.00005e-3 and the product carried that offset out to every
+    magnitude. Spanning the exponents covers the whole range where that fixed
+    ratio showed up.
+
+    | x       | y | expected   |
+    |---------|---|------------|
+    | 1.0     | 1 | 0          |
+    | 1e30     | 1 | 0         |
+    | 1e-30    | 1 | 0         |
+    | -1e30    | 1 | -0        |
+    """
+    exponents = [-30, -10, -1, 0, 1, 10, 30]
+    values_x = torch.tensor(
+        [2.0**e if i % 2 == 0 else -(2.0**e) for i, e in enumerate(exponents)], dtype=torch.float32
+    )
+    values_y = torch.ones_like(values_x)
+
+    result = ttnn.to_torch(ttnn.xlogy(to_tt_tensor(values_x, device), to_tt_tensor(values_y, device)))
+
+    assert_equal(torch.zeros_like(result), result)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # hypot — SQUARE on both operands, add, then a SQRT post-op
 # ─────────────────────────────────────────────────────────────────────────────
