@@ -1078,3 +1078,11 @@ def test_quasar_reshape_rm_unit_last_dim(device):
     tt_out = ttnn.experimental.quasar.reshape(tt_input, (n, 1))
     ttnn.synchronize_device(device)
     assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))
+
+
+def test_reshape_rejects_overflowing_volume(device, expect_error):
+    x = ttnn.from_torch(
+        torch.randn(1, 1, 32, 32).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Invalid arguments to reshape: the volume of the new shape overflows"):
+        ttnn.reshape(x, [-1, 65536, 65536, 65536, 65536])

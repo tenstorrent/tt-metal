@@ -179,9 +179,9 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     const auto risc_1 = DataMovementProcessor::RISCV_1;
     const auto risc_0 = DataMovementProcessor::RISCV_0;
 
-    const uint32_t in_addr = input.buffer()->address();
+    const uint32_t in_addr = input.mesh_buffer().address();
 
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     const std::string base = "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/";
     const std::string sender_path = base + "mcast_sender.cpp";
@@ -776,8 +776,8 @@ void KSplitGramMatmulProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& sv = cached_program.shared_variables;
 
-    const uint32_t in_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t in_addr = tensor_args.input_tensor.mesh_buffer().address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     // Update in_addr (runtime arg index 0) for all sender kernels
     auto& rr_args = GetRuntimeArgs(program, sv.row_sender_reduce_kid);

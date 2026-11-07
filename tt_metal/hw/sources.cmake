@@ -197,7 +197,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/pack.h
     inc/api/compute/pack_untilize.h
     inc/api/compute/quantization.h
-    inc/api/compute/quick_gelu.h
     inc/api/compute/reconfig_data_format.h
     inc/api/compute/reduce.h
     inc/api/compute/reduce_custom.h
@@ -292,6 +291,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/assert_common.h
     inc/internal/debug/dprint_buffer.h
     inc/internal/debug/fw_debug.h
+    inc/internal/debug/node_range.h
     inc/internal/debug/noc_zero_guard.h
     inc/internal/debug/sanitize.h
     inc/internal/debug/sanitize_multicast_destination.h

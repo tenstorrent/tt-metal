@@ -139,6 +139,7 @@ class MathOperation(Enum):
     # round-half-to-even to integer (decimals = 0).
     Round = OpSpec("round", MathOpType.SFPU_UNARY)
     # Uniform [from, from + scale] generator from the per-lane PRNG; ignores its input.
+    QuickGelu = OpSpec("quick_gelu", MathOpType.SFPU_UNARY)
     Rand = OpSpec("rand", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
@@ -254,8 +255,6 @@ class MathOperation(Enum):
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
     TopKDefuse = OpSpec("topk_defuse", MathOpType.SFPU_UNARY)
-    # Generated from activations/products/quick_gelu.json.
-    QuickGelu = OpSpec("quick_gelu", MathOpType.SFPU_UNARY)
     # =============================================================================
     # SFPU BINARY OPERATIONS
     # =============================================================================
@@ -844,8 +843,7 @@ class PerfRunType(Enum):
     UNPACK_ISOLATE = 2
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
-    L1_CONGESTION = 5
-    SFPU_ISOLATE = 6
+    SFPU_ISOLATE = 5
 
 
 # Single pytest case runs every PerfRunType so the module CSV has one
@@ -857,7 +855,6 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.UNPACK_ISOLATE,
         PerfRunType.MATH_ISOLATE,
         PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
     ],
 ]
 
