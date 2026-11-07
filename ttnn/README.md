@@ -81,7 +81,7 @@ Inspector provides insights into host runtime. It logs necessary data for invest
 We are actively working to make it easy for you to consume TT-NN in your own projects.
 Current best example can be found in the training framework here:
 * Must manually align [3rdparty dependencies via CPM](https://github.com/tenstorrent/tt-metal/tree/main/tt-train/cmake)
-* Must manually align [includepath and other options](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/CMakeLists.txt#L81-L154)
+* Must manually align [includepath and other options](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/CMakeLists.txt)
 
 ### FAQ
 #### Where are the tests for ttnn?
@@ -94,7 +94,7 @@ All tests can be found under tests/ttnn
      * These tests do not block the continuous integration pipeline
      * They are built so that their results can be uniformly reported
      * Can be run with pytest although they follow a strict format when built
- * tests/ttnn/unit_test
+ * tests/ttnn/unit_tests
      * These are traditional unit tests written with pytest
      * Failures on these tests will cause alarms if code is merged into main
 
@@ -135,8 +135,7 @@ In addition, you can add the following environment variable to print currently e
     ```
 
 #### How to launch C++ example code from VSCode
-* Add the Makefile Tools extension
-* Be sure to build with `make tests/tt_eager`
+* Build from the repository root with `./build_metal.sh --build-ttnn-tests` (see [INSTALLING.md](../INSTALLING.md)).
 * Update launch.json to debug the code sample you want to run.  For example if you want to run a test, your update to launch.json might look like:
     ```
             {
@@ -146,8 +145,8 @@ In addition, you can add the following environment variable to print currently e
                 "args": [],
                 "stopAtEntry": false,
                 "externalConsole": false,
-                "cwd": "${workspaceFolder}/build",
-                "program": "${workspaceFolder}/build/test/tt_eager/ops/test_eltwise_binary_op",
+                "cwd": "${workspaceFolder}",
+                "program": "${workspaceFolder}/build/test/ttnn/unit_tests_ttnn",
                 "MIMode": "gdb",
                 "miDebuggerPath": "gdb",
                 "setupCommands": [

@@ -11,8 +11,14 @@ all-reduce), allocation
 
 
 * All Gather
+* All Broadcast
+* All Reduce
+* All-to-All Combine/Dispatch
+* Broadcast
+* Mesh Partition
+* Point-to-Point
 * Reduce Scatter
-* All Reduce (experimental)
+* Reduce-to-Root
 
 ### Configurations
 For the time being, input and output configurations are expected to match
@@ -37,9 +43,5 @@ Future Tologies:
 * Torus (2d, 3d)
 
 # Future Operations
-* All Reduce (Full support)
-* Reduce
 * Scatter
 * Gather Scatter
-* Scatter
-* Point-to-Point Send/Receive
