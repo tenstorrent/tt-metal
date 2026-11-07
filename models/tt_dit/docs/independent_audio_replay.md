@@ -48,7 +48,8 @@ native cap. The adapter verifies a positive TRACE allocator region and checks fo
 remaining contiguous capacity before warmup. These checks do not prove that all
 captures fit. Native trace-size/allocation checks still enforce the bound; any
 capture or execution error propagates, with partial independent audio captures
-released. There is no silent eager fallback and no automatic increase of `B`.
+released, including on cancellation (KeyboardInterrupt, SystemExit or GeneratorExit).
+Cancellation is re-raised after cleanup. There is no silent eager fallback and no automatic increase of `B`.
 
 No defensible numeric `B` is established by CPU mocks. Before admission sulphur
 must select and record a finite cap from actual trace sizes for the exact audio
@@ -107,10 +108,10 @@ real checkpoint construction, numerical kernels or asynchronous device failures.
 ## Admitted-device acceptance plan (not performed by this task)
 
 1. **Resources and owners:** sulphur coordinates an existing broker/tt-device
-   admission on authorized Galaxy blx01 only when other authorized Galaxy
-   resources are unavailable and its actual user/hardware pauses have been
-   cleared by their owners. cs04 supplies the required eight-chip girl-singing
-   real render. g15blx02 remains CPU-only. Preserve locks, STOP, non-disruptive
+   admission on authorized Galaxy blx04 after operational admission and compatible
+   build attestation. cs04 supplies the required eight-chip girl-singing real
+   render. blx06 remains unavailable under user hold11; blx01, blx03 and
+   g15blx02 are prohibited. Preserve locks, STOP, non-disruptive
    access, attested compatible builds and all pause/recovery restrictions.
 2. Bind receipts to the exact candidate commit, native build/loaded-library
    hashes, source slot, audio checkpoint content/config and prepared-weight
@@ -146,3 +147,25 @@ requirements to task9's separately authorized unchanged-source reference path.
 Sulphur owns serving/deployment; this candidate authorizes neither publication to
 `origin/ltx-rt` nor push-queue approval. A later PR remains draft until independent
 review and explicit user approval; no auto-merge is authorized.
+
+## Scope reconciliation — November 6, 2026, 18:09 PST
+
+The retained LTX candidate is based on a103d2ae08a7dbdb2038b180b38aa5b8bf6fda85;
+this is an experimental source identity, not a serving/build attestation. Task387's
+completed audit remains the source for donor applicability; no fusion, packing,
+padding or prepared-weight precision changes are included here.
+
+At this source, MiniMaxH3Pipeline._decode_audio calls audio_decoder(latents)
+without the supported traced argument. H3 replay, including the requested BWE
+and vocoder coverage, is not implemented or accepted by this LTX candidate.
+FastH3/H3 Turbo coverage and canonical descriptor/session-epoch integration remain
+unverified. The separately reviewed leased_yuv_v1 design is also unimplemented;
+none of its eight acceptance cells is claimed complete. Preserve these explicit
+remaining deliverables when splitting the next implementation part.
+
+Before native acceptance of H3 t2va/ref2va, the existing validation owner must bind
+the exact 4x8 Blackhole source/build/checkpoint and executed decoder stages, prove
+first capture and subsequent replay (including BWE/vocoder where applicable),
+and verify target-row exclusion, waveform correctness under a verified checker,
+release/recapture, bounded reservation, and inclusive latency/memory. Eager warmup
+and source inspection are not replay evidence. No device validation ran here.
