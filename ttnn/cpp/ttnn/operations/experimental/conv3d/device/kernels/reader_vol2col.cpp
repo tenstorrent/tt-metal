@@ -291,20 +291,29 @@ void shift_retained_w_columns(
     constexpr uint32_t overlap_w = kW > stride_w ? kW - stride_w : 0;
     constexpr uint32_t shift_bytes = overlap_w * C_in_block_bytes;
     constexpr uint32_t src_off = (W_shard_max - overlap_w) * C_in_block_bytes;
+    static_assert(src_off > 0);
+    // A NOC read between overlapping ranges of one L1 leaves the overlapped bytes unpredictable. When the retained
+    // columns overlap their destination (src_off < shift_bytes, e.g. kW 3, stride 1, one output column per block),
+    // move at most src_off bytes per read, lowest addresses first, each step complete before the next.
+    constexpr uint32_t step_bytes = src_off < shift_bytes ? src_off : shift_bytes;
     UnicastEndpoint self_ep;
     const uint32_t shard_l1_base = shard_cb.get_write_ptr();
-    for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
-        for (uint32_t h_local = 0; h_local < h_rows_gathered; h_local++) {
-            const uint32_t row_base = (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) * C_in_block_bytes;
-            noc.async_read(
-                self_ep,
-                shard_cb,
-                shift_bytes,
-                experimental::local_addr(shard_l1_base + row_base + src_off, noc.get_noc_id()),
-                {.offset_bytes = row_base});
+    for (uint32_t step = 0; step < shift_bytes; step += step_bytes) {
+        const uint32_t size = shift_bytes - step < step_bytes ? shift_bytes - step : step_bytes;
+        for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
+            for (uint32_t h_local = 0; h_local < h_rows_gathered; h_local++) {
+                const uint32_t row_base =
+                    (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) * C_in_block_bytes + step;
+                noc.async_read(
+                    self_ep,
+                    shard_cb,
+                    size,
+                    experimental::local_addr(shard_l1_base + row_base + src_off, noc.get_noc_id()),
+                    {.offset_bytes = row_base});
+            }
         }
+        noc.async_read_barrier();
     }
-    noc.async_read_barrier();
 }
 
 // Gather rows from DRAM into the L1 shard buffer.
