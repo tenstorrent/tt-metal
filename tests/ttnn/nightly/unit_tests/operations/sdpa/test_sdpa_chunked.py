@@ -773,7 +773,7 @@ def _causal_reference(query, key, value, start, query_len, query_heads, kv_heads
     ],
 )
 def test_chunked_sdpa_tensor_start_matches_scalar_start(device, q_chunk_size, k_chunk_size, start, fp32_dest_acc_en):
-    """The device-tensor start must give the same output as the host-scalar start at every legal offset."""
+    """The device-tensor start must give the same output as the host-scalar start at every chunk-aligned offset."""
     query_heads, kv_heads, sequence, head_dim, page_size, query_len = 4, 2, 512, 64, 64, 128
     query, key, value, tt_key, tt_value, tt_page_table = _paged_chunked_inputs(
         device, kv_heads, sequence, head_dim, page_size, query_heads
@@ -812,7 +812,10 @@ def test_chunked_sdpa_tensor_start_matches_scalar_start(device, q_chunk_size, k_
     for name, actual in zip(("scalar_start", "tensor_start"), outputs):
         passed, pcc = comp_pcc(expected, actual, 0.999)
         assert passed, f"{name} at start {start} (q{q_chunk_size}/k{k_chunk_size}) failed PCC: {pcc}"
-    assert torch.equal(outputs[0], outputs[1]), "tensor start differs from scalar start"
+    # The tensor form sizes K for the whole page table, the scalar form for start + Sq, so when q_chunk_size is larger
+    # than k_chunk_size the tensor form runs extra fully masked K chunks. That can change the last bits.
+    passed, pcc = comp_pcc(outputs[0], outputs[1], 0.9999)
+    assert passed, f"tensor start differs from scalar start: {pcc}"
 
 
 @pytest.mark.parametrize(
