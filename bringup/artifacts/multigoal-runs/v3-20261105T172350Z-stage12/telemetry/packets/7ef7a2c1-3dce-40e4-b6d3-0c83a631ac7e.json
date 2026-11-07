@@ -29,9 +29,9 @@
     "decode_device_us": null,
     "prefill_flops_pct": null,
     "decode_dram_pct": null,
-    "ttft_ms": 754.1133353515761,
-    "decode_tps": 35.31515153764353,
-    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/hex-runtime-benchmark/RESULT.json; publication eef534e5cd6bcaf37957647de4d8d4eff4f0e047; full60/B1/C1 eight exact4096/128 serial requests"
+    "ttft_ms": 755.0985858542845,
+    "decode_tps": 35.30414379625733,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/framed-benchmark-dry/RESULT.json; publication f57978407eaacf09587f5793b8ae46ca7af839ea; full60/B1/C1 eight exact4096/128 serial requests"
   },
   "accuracy": [
     {
@@ -80,10 +80,10 @@
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
     "stage12_accuracy": "Banked GPQA40/198; seven capped loops counted as failures. SWE2/500 and Terminal2/89 retain measured stops. Normal80 and C8 comparison running; no frozen dry/release.",
-    "release": "No frozen dry/release yet. Small native CI replies confirmed42302118669; C8/40 exposes damaged large hex record starts. AutoDebug and competing-pipe test reproduce interleaving/filter loss; model-owned bounded-frame candidate under AutoFix, not yet accepted. No-score dry and full-cap transport remain unproven."
+    "release": "Local frozen benchmark arm passed. No combined frozen dry/release: GPQA final cohort still pending; f579 CI transport blocked by two stock EPEL proxy403 image-build failures with zero TT device hours."
   },
   "notes": [
-    "Published runtime eef534 measured with complete idle-drained accounting; no frozen release yet. No vLLM profiling.",
+    "Published runtime f579 measured on frozen local benchmark arm with complete idle-drained accounting; combined dry/release still pending. No vLLM profiling.",
     "C4 same-ten scored pair9/10 each; C4 642.445722s versus C2 938.039050s. Repeated tasks are not additional independent accuracy samples.",
     "Default-off model-owned token retention accepted by exact native paired outputs and583matched decode IDs; no client-emission identity claim.",
     "Local execution checkout remains without remotes; source-only publication uses separate authorized checkouts.",

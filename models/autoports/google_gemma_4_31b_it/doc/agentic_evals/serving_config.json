@@ -410,6 +410,13 @@
       "batch": 1,
       "max_num_seqs": 1,
       "batch_reason": "Frozen B1/C1 benchmark and headline arm"
+    },
+    "ci-native-framed-confirmation-retry": {
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 10248,
+      "batch_reason": "Two original smoke tasks; smallest validated batch>=2, current C4 ceiling unchanged"
     }
   },
   "release_limits": {
@@ -644,48 +651,49 @@
   "output_cap_tokens": 32768,
   "flat_limits_scope": "Common minimum across applicable suite settings for checker interoperability, not a uniform dispatch setting. Exact per-suite release_limits and agent_time_limit/request_time_limit/output_cap maps remain authoritative; GPQA request14400/output126976, no agent timeout.",
   "current_runtime_benchmark": {
-    "evidence": "runs/hex-runtime-benchmark/RESULT.json",
-    "publication": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+    "evidence": "runs/framed-benchmark-dry/RESULT.json",
+    "publication": "f57978407eaacf09587f5793b8ae46ca7af839ea",
     "headline": {
       "source": "vllm",
-      "completed": 8,
-      "failed": 0,
-      "client_seconds": 34.80486502102576,
-      "ttft_ms": 754.1133353515761,
-      "mean_tpot_ms": 28.316457850508403,
-      "decode_tps": 35.31515153764353,
       "input_tokens": 4096,
       "output_tokens": 128,
-      "requests": 8,
+      "batch": 1,
       "concurrency": 1,
+      "completed": 8,
+      "failed": 0,
+      "request_seconds": 34.821908578975126,
+      "ttft_ms": 755.0985858542845,
+      "mean_tpot_ms": 28.325286849358807,
+      "decode_tps": 35.30414379625733,
       "prefill_device_us": null,
       "decode_device_us": null,
       "prefill_flops_pct": null,
-      "decode_dram_pct": null
+      "decode_dram_pct": null,
+      "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-dry-run/headline.json"
     },
     "stage11_matrix": {
       "source": "tti",
-      "completed": 8,
-      "failed": 0,
-      "client_seconds": 27.21482825197745,
-      "ttft_ms": 128.01694698282517,
-      "mean_tpot_ms": 25.77519361110767,
-      "decode_tps": 38.79699276319134,
+      "route": "stock launchers/run_llm_bench.py existing server",
       "nominal_input_tokens": 128,
       "output_tokens": 128,
-      "requests": 8,
       "concurrency": 1,
+      "completed": 8,
+      "failed": 0,
       "actual_adapter_prompt_lengths": [
+        142,
+        143,
+        141,
+        141,
         141,
         141,
         142,
-        141,
-        141,
-        141,
-        141,
-        142
+        141
       ],
-      "evidence": "bringup/artifacts/stage12-hex-runtime-benchmark-retry/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_22-46-56-515182_isl-128_osl-128_maxcon-1_n-8.json"
+      "request_seconds": 27.11071771394927,
+      "ttft_ms": 112.13657664484344,
+      "mean_tpot_ms": 25.797802938756124,
+      "decode_tps": 38.76299087848666,
+      "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-dry-run/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-07_02-03-58-306454_isl-128_osl-128_maxcon-1_n-8.json"
     },
     "logging_debug": false,
     "request_logging": false,

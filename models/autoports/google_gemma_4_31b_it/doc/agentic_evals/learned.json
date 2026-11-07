@@ -624,89 +624,55 @@
       "evidence": "runs/measured-workload-prefill/AUTOFIX.md"
     }
   ],
-  "current_runtime_measurements": [
-    {
-      "runtime": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
-      "source": "runs/retained-runtime-benchmark/RESULT.json",
-      "matrix_seconds": 27.08457288099453,
-      "headline_ttft_ms": 753.31630265282,
-      "headline_decode_tps": 35.31811185868559,
-      "device_hours": 0.09667890765859435,
-      "limitations": {
-        "device_time_and_rooflines": "No profiling of vLLM; host TTFT/phase boundaries cannot substitute for device time.",
-        "causal_retention_overhead": "Single sequential run, no randomized repeated control; no causal optimization/speed claim."
-      }
+  "current_runtime_measurements": {
+    "evidence": "runs/framed-benchmark-dry/RESULT.json",
+    "publication": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "headline": {
+      "source": "vllm",
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "batch": 1,
+      "concurrency": 1,
+      "completed": 8,
+      "failed": 0,
+      "request_seconds": 34.821908578975126,
+      "ttft_ms": 755.0985858542845,
+      "mean_tpot_ms": 28.325286849358807,
+      "decode_tps": 35.30414379625733,
+      "prefill_device_us": null,
+      "decode_device_us": null,
+      "prefill_flops_pct": null,
+      "decode_dram_pct": null,
+      "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-dry-run/headline.json"
     },
-    {
-      "runtime": "ab2730c27e557b09b2eafe3494e47790adc210aa",
-      "source": "runs/phase-archive-runtime-benchmark/RESULT.json",
-      "matrix_seconds": 27.09793480101507,
-      "headline_ttft_ms": 753.7608764978359,
-      "headline_decode_tps": 35.32100514361217,
-      "device_hours": 0.07605465913249645,
-      "limitations": {
-        "device_times_and_rooflines": "No vLLM profiling; host TTFT/phase boundary timings cannot substitute for device time."
-      }
+    "stage11_matrix": {
+      "source": "tti",
+      "route": "stock launchers/run_llm_bench.py existing server",
+      "nominal_input_tokens": 128,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "completed": 8,
+      "failed": 0,
+      "actual_adapter_prompt_lengths": [
+        142,
+        143,
+        141,
+        141,
+        141,
+        141,
+        142,
+        141
+      ],
+      "request_seconds": 27.11071771394927,
+      "ttft_ms": 112.13657664484344,
+      "mean_tpot_ms": 25.797802938756124,
+      "decode_tps": 38.76299087848666,
+      "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-dry-run/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-07_02-03-58-306454_isl-128_osl-128_maxcon-1_n-8.json"
     },
-    {
-      "name": "B8 concurrency and context cadence",
-      "runtime_candidate": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
-      "selected": false,
-      "observation": "C4 default10248pool and C8 optional20480pool short-window host completion cadence rises with context. C8 aggregate/C4 ratios1.87 at4K to1.68 at131K, not a causal eval speedup. Samephysicalbatch does not imply fixed per-user attention cost. Async submission latency overlaps and must not substitute for completion cadence.",
-      "actual_local_device_hours": 0.47222091055555554,
-      "evidence": [
-        "runs/gpqa-b8-expanded-pool/local-confirmation.json",
-        "runs/gpqa-b8-expanded-pool/benchmark-confirmation.json",
-        "runs/gpqa-b8-expanded-pool/timing-baseline.json"
-      ]
-    },
-    {
-      "evidence": "runs/hex-runtime-benchmark/RESULT.json",
-      "publication": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
-      "headline": {
-        "source": "vllm",
-        "completed": 8,
-        "failed": 0,
-        "client_seconds": 34.80486502102576,
-        "ttft_ms": 754.1133353515761,
-        "mean_tpot_ms": 28.316457850508403,
-        "decode_tps": 35.31515153764353,
-        "input_tokens": 4096,
-        "output_tokens": 128,
-        "requests": 8,
-        "concurrency": 1,
-        "prefill_device_us": null,
-        "decode_device_us": null,
-        "prefill_flops_pct": null,
-        "decode_dram_pct": null
-      },
-      "stage11_matrix": {
-        "source": "tti",
-        "completed": 8,
-        "failed": 0,
-        "client_seconds": 27.21482825197745,
-        "ttft_ms": 128.01694698282517,
-        "mean_tpot_ms": 25.77519361110767,
-        "decode_tps": 38.79699276319134,
-        "nominal_input_tokens": 128,
-        "output_tokens": 128,
-        "requests": 8,
-        "concurrency": 1,
-        "actual_adapter_prompt_lengths": [
-          141,
-          141,
-          142,
-          141,
-          141,
-          141,
-          141,
-          142
-        ],
-        "evidence": "bringup/artifacts/stage12-hex-runtime-benchmark-retry/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_22-46-56-515182_isl-128_osl-128_maxcon-1_n-8.json"
-      },
-      "device_hours": 0.15386382062085127
-    }
-  ],
+    "logging_debug": false,
+    "request_logging": false,
+    "custom_logging_config": null
+  },
   "diagnostic_confirmations": [
     {
       "effort": "retention-c4-lifecycle",

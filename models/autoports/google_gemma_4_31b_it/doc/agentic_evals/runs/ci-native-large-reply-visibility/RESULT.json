@@ -1,0 +1,152 @@
+{
+  "effort": "ci-native-large-reply-visibility",
+  "status": "local_repair_kept_ci_transport_unconfirmed_infrastructure_blocked",
+  "goal": "Complete initial native replies observable by exact IDs/full JSON on unchanged stock release route",
+  "rank": "validity: unblocks GPQA dry-run reply visibility",
+  "change": {
+    "kept": true,
+    "sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "parent": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+    "files": [
+      "tt/native_log_formatter.py",
+      "tt/native_logging.json",
+      "tests/test_native_log_formatter.py"
+    ],
+    "mechanism": "Model-owned NativeFramedHandler emits hashed indexed ASCII frames with leading/trailing LF in single writes bounded by min(PIPE_BUF,4096); original envelope preserved",
+    "shared_runtime_plugin_harness_workflow_changes": false,
+    "private_tool": "Bounded fail-closed frame reassembly and markerless-suffix coverage detection; exact final-log replays accepted using per-index hashes"
+  },
+  "diagnosis": {
+    "actual_snapshot": "73fb566226420174ff97ac02c5d4004b4234406fc46e68f481d319629fb1e5f9",
+    "intact_chat_replies": 22,
+    "damaged_markerless_hex_suffixes": 8,
+    "initial_complete_reply_matches": 2,
+    "initial_requests": 8,
+    "mechanism_scope": "Host competing writers plus INFO filter reproduce prefix loss; exact original Docker/runner loss component remains unproved",
+    "no_inference": "Damaged suffixes do not identify requests or prove client acknowledgement"
+  },
+  "host_validation": {
+    "model_tests_passed": 3,
+    "private_tests_passed": 17,
+    "full_hooks": "passed after formatting",
+    "old_single_writer": "Exact filter roundtrip through13,000,574 encoded bytes",
+    "old_competing_writer": {
+      "sent": 20,
+      "intact": 18,
+      "damaged_suffixes": 2
+    },
+    "candidate_competing_writer": {
+      "sent": 12,
+      "intact": 12,
+      "competing_INFO_line_bytes_above_PIPE_BUF": true
+    },
+    "source_guard": "Only3 listed model files differ; original NativeHexFormatter class AST unchanged; all other published tree entries unchanged"
+  },
+  "local_validation": {
+    "planned_clients": 2,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "pool": 10248,
+    "layers": 60,
+    "baseline": "bringup/artifacts/ci-response-log-propagation/hex-local/candidate",
+    "request_fixture_caps": [
+      256,
+      384,
+      256
+    ],
+    "scope": "Previously accepted diagnostic fixture, not scored/release caps; no eval limit changed",
+    "native_semantic_tool_usage_token_fields_exact": 3,
+    "cross_arm_volatile_fields": "Request IDs, creation metadata and tool-call IDs are not semantic comparison fields",
+    "expected_decode_ids": 583,
+    "matched_decode_ids": 583,
+    "extra_active_samples_not_emitted": 2,
+    "overlap_steps": 200,
+    "nonidentity_remaps": 3,
+    "host_sampled_prefill_steps": 5,
+    "phase_pending": 0,
+    "phase_errors": [],
+    "phase_loss": false,
+    "transport_records": 11,
+    "transport_frames": 112,
+    "max_frame_bytes": 4028,
+    "transport_pending": 0,
+    "transport_errors": 0,
+    "full_JSON_exact_to_same_arm_saved_responses": 3,
+    "all_initial_replies_observed": true,
+    "idle_close": true,
+    "remaining_owners": [],
+    "actual_CI_transport_claim": false
+  },
+  "cost": {
+    "initial_forecast_device_hours": 0.08,
+    "initial_box_device_hours": 0.2,
+    "failed_local_preflight_queue_hours": 0.00139158752640166,
+    "failed_local_preflight_device_open_hours": 0,
+    "local_retry_queue_hours": 0.057777597563625833,
+    "total_accounted_device_queue_hours": 0.05916918509002749,
+    "CI_device_hours": 0,
+    "extended_forecast_device_hours": 0.24472474065,
+    "extended_box_device_hours": 0.5,
+    "CI_forecast_device_hours": 0.18555555556,
+    "CI_workflow_forecast_hours": 1.974444,
+    "frame_overhead_guess_hours": 0.005,
+    "speed_credit_hours": 0,
+    "speed_measurement": null,
+    "accounting_limit": "Queue/server-hold intervals, not measured kernel/device execution time; failed preflight label in original job.json was wall hold and preceded device initialization"
+  },
+  "CI_attempts": [
+    {
+      "run_id": 42326665396,
+      "build_job_id": 128263483966,
+      "runner": "tt-ubuntu-2204-large-stable-44qvs-runner-8lngj",
+      "build_wall_seconds": 88.0,
+      "tt_device_hours": 0,
+      "test_job": "skipped; no runner",
+      "cause": "Unchanged curl-builder DNF EPEL metadata fetch exhausted mirrors after HTTP403/proxy CONNECT failures",
+      "log": "bringup/artifacts/ci-native-large-reply-visibility/ci-build-failure.log",
+      "log_sha256": "b2a75c4d2565e3c50576b5fb503df6b847e0cf348c81d214583918ca93f90040"
+    },
+    {
+      "run_id": 42327188063,
+      "build_job_id": 128265138379,
+      "runner": "tt-ubuntu-2204-large-stable-44qvs-runner-55wvd",
+      "build_wall_seconds": 93.0,
+      "tt_device_hours": 0,
+      "test_job": "skipped; no runner",
+      "cause": "Unchanged curl-builder DNF EPEL metadata fetch exhausted mirrors after HTTP403/proxy CONNECT failures",
+      "log": "bringup/artifacts/ci-native-large-reply-visibility/ci-build-retry-failure.log",
+      "log_sha256": "4af266ad62872d5e73647521625f7eb3fe886b738bd311f38dc77cb294be0962"
+    }
+  ],
+  "problem_status": "Actual CI transport confirmation remains open: two stock image builds failed before the test job; no score, output or transport result exists for either",
+  "resume": {
+    "tti_sha": "483509781a0898395208fe0fdc14f54eb3ff8857",
+    "tt_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "tasks": [
+      152,
+      189
+    ],
+    "planned_clients": 2,
+    "configured_concurrency_ceiling": 4,
+    "baseline_run_id": 42302118669,
+    "requirement": "Restored stock build access or exact f579 image with provenance, then coordinator-admitted same2 native/retained-chain/frame audit",
+    "prohibited_workarounds": "No mirror/proxy/route/Dockerfile/shared-runtime edits; no blind repeated builds; no presumed operator response",
+    "prepared_inputs": "doc/agentic_evals/runs/ci-native-framed-confirmation; private live-command and frame parser preserved"
+  },
+  "evidence": [
+    "AUTODEBUG.md",
+    "candidate.json",
+    "private-tool-handoff.json",
+    "bringup/artifacts/ci-native-large-reply-visibility/damaged-records.json",
+    "bringup/artifacts/ci-native-large-reply-visibility/concurrent-pipe-check.json",
+    "bringup/artifacts/ci-native-large-reply-visibility/storage-repair.json",
+    "bringup/artifacts/ci-native-large-reply-visibility/live/native-pair-audit.json",
+    "bringup/artifacts/ci-native-large-reply-visibility/live/transport-audit.json",
+    "bringup/artifacts/ci-native-large-reply-visibility/live/idle-shutdown.json"
+  ],
+  "limitations": [
+    "No actual CI framing result; local source acceptance is not a dry/release pass",
+    "No scored improvement or serving speed claim",
+    "Final closure is this effort only; stage and independent normal runs remain active"
+  ]
+}

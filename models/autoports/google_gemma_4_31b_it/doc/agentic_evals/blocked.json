@@ -39,7 +39,7 @@
     "One closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-07T01:30:59.292788+00:00",
+  "updated_at": "2026-11-07T02:03:50.473688+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -193,22 +193,27 @@
     }
   },
   "initial_agent_reply_observability": {
-    "status": "small_actual_ci_replies_confirmed_large_reply_visibility_under_autofix",
+    "status": "local_repair_kept_actual_CI_transport_blocked",
     "observed_at": "2026-11-06T21:49:49.076105+00:00",
     "problem": "StockCI grep-v-i INFO strips native records and responsecontent; workflow remains unchanged",
     "evidence": [
-      "runs/ci-response-log-propagation/RESULT.json",
-      "runs/ci-response-log-publication/publication-confirmation.json",
-      "runs/ci-native-log-confirmation/audit.json"
+      "runs/ci-native-large-reply-visibility/RESULT.json",
+      "runs/ci-native-large-reply-visibility/AUTOFIX.md"
     ],
     "action": "Fresh AutoDebug/AutoFix source investigation; no runtime or route change authorized implicitly. Normal rungs continue independently.",
     "otlp": "Stock host request-finish spans exist, but collector/read route unavailable; no device profiler used or proposed.",
     "solution": "Model-only explicit native hex logging preserves exact stock records through filter; private observer decodes",
-    "remaining": "Resolve markerless hex suffix records (damaged starts) in C8/40 transport; initial unanswered IDs may still be running. Then frozen no-score dry.",
+    "remaining": "Two unchanged stock image builds failed EPEL proxy403 before devices. Need restored build access or exact f579 image provenance; operator question pending.",
     "ci_run_id": 42296943044,
     "ci_observation": "42302118669: two initial IDs and complete replies visible, matching harness outputs; first snapshot already scored, so not a dry pass",
     "diagnosis_effort": "runs/ci-response-log-propagation/plan.md",
-    "confirmation_run_id": 42302118669,
-    "new_effort": "runs/ci-native-large-reply-visibility/plan.md"
+    "confirmation_run_id": 42327188063,
+    "new_effort": "runs/ci-native-large-reply-visibility/plan.md",
+    "candidate_tt": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "local_confirmation": "native3 exact/583decodeIDs/112frames complete; cleanclosed",
+    "prior_confirmation_attempt": {
+      "run_id": 42326665396,
+      "outcome": "EPELproxy403 imagebuildfailure, noTTdevicejob"
+    }
   }
 }

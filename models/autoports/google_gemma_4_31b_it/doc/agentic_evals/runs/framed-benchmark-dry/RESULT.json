@@ -1,0 +1,143 @@
+{
+  "status": "local_frozen_benchmark_arm_dry_passed",
+  "combined_stage_dry_pass": false,
+  "release_run": false,
+  "freeze_evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/framed-benchmark-dry/freeze.json",
+  "freeze_sha256": "678c8b7de313ebbf36f6e0b5b1ae7266cc108154c3a303f44e7773d041aa0b0a",
+  "source": {
+    "tt_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "tti_sha": "af1ef17abfecb059da13d0a1287c00eace0f210e",
+    "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "runtime_files_matched": 16,
+    "frozen_file_hashes_verified": 26,
+    "full_layers": 60,
+    "batch": 1,
+    "max_num_seqs": 1,
+    "planned_clients": 1,
+    "context": 262144,
+    "response_debug": false,
+    "request_logging": false,
+    "static_logging_config": null
+  },
+  "headline": {
+    "source": "vllm",
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1,
+    "completed": 8,
+    "failed": 0,
+    "request_seconds": 34.821908578975126,
+    "ttft_ms": 755.0985858542845,
+    "mean_tpot_ms": 28.325286849358807,
+    "decode_tps": 35.30414379625733,
+    "prefill_device_us": null,
+    "decode_device_us": null,
+    "prefill_flops_pct": null,
+    "decode_dram_pct": null,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-dry-run/headline.json"
+  },
+  "stage11_matrix": {
+    "source": "tti",
+    "route": "stock launchers/run_llm_bench.py existing server",
+    "nominal_input_tokens": 128,
+    "output_tokens": 128,
+    "concurrency": 1,
+    "completed": 8,
+    "failed": 0,
+    "actual_adapter_prompt_lengths": [
+      142,
+      143,
+      141,
+      141,
+      141,
+      141,
+      142,
+      141
+    ],
+    "request_seconds": 27.11071771394927,
+    "ttft_ms": 112.13657664484344,
+    "mean_tpot_ms": 25.797802938756124,
+    "decode_tps": 38.76299087848666,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-dry-run/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-07_02-03-58-306454_isl-128_osl-128_maxcon-1_n-8.json"
+  },
+  "comparison": {
+    "baseline": "eef534 hex-runtime-benchmark-retry",
+    "headline_exact_generated_text_matches": 8,
+    "headline_requests": 8,
+    "headline_ttft_delta_ms": 0.985250502708368,
+    "headline_decode_tps_delta": -0.01100774138620153,
+    "matrix_text_matches": 0,
+    "matrix_scope": "Random native prompts not proven identical; same nominal stock row only. Text differences are not numerical discrepancy evidence.",
+    "causal_speed_claim": false
+  },
+  "phase_integrity": {
+    "frames": 72,
+    "unique_events": 4370,
+    "paired_contiguous_steps": 2185,
+    "step_range": [
+      1,
+      2185
+    ],
+    "prefill_steps": 26,
+    "decode_steps": 2159,
+    "sampling_modes": {
+      "device": 2176,
+      "host_compatibility": 9
+    },
+    "duplicates": 0,
+    "gaps": 0,
+    "errors_or_loss": false,
+    "final_pending_steps": 0,
+    "final_drain_boundary_ns": 960848537695484,
+    "retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    }
+  },
+  "cost": {
+    "started_at": "2026-11-07T02:00:55.622968+00:00",
+    "device_closed_at": "2026-11-07T02:05:26.668952+00:00",
+    "actual_device_hours": 0.0752905511111111,
+    "wrapper_ended_at": "2026-11-07T02:05:29.645226+00:00",
+    "wrapper_hours": 0.07611729960167496,
+    "forecast_device_hours": 0.07722610789,
+    "box_hours": 0.15
+  },
+  "shutdown": {
+    "at": "2026-11-07T02:05:26.166672+00:00",
+    "idle_metrics": [
+      "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+      "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+    ],
+    "owned_readiness_pid": 323514,
+    "signal": "SIGTERM to readiness hold handler only",
+    "device_closed_at": "2026-11-07T02:05:26.668952+00:00",
+    "remaining_owners": []
+  },
+  "artifact_parameter": "Only fresh ARTIFACT_ROOT differs between dry/release. Any semantic source/config/command change invalidates this local arm dry.",
+  "missing_reasons": [
+    "No serving profiling: device-time and device-roofline fields remain unknown.",
+    "GPQA finalcohort dry is separate and not completed by this benchmark arm."
+  ],
+  "limitations": [
+    "No spec tests or accuracy scores in this arm.",
+    "Headline generated text equality is scoped to these8 seeded requests, not all traffic.",
+    "Fullstage dry/release requires all selected frozen arms and unchanged semantics."
+  ]
+}

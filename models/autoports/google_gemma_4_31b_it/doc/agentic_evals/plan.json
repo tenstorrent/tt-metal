@@ -106,7 +106,15 @@
         "custom_logging_config": null
       }
     },
-    "per_arm_logging_status": "Selected, not finalfreeze; sameeacharm settingsmustbeusedindryandrelease"
+    "per_arm_logging_status": "Selected, not finalfreeze; sameeacharm settingsmustbeusedindryandrelease",
+    "local_benchmark_arm_dry": {
+      "passed": true,
+      "combined_dry_passed": false,
+      "freeze": "runs/framed-benchmark-dry/freeze.json",
+      "evidence": "runs/framed-benchmark-dry/RESULT.json",
+      "projected_device_hours": 0.0752905511111111,
+      "invalidation": "Any semantic source/config/command change requires rerun; fresh artifact output root only is allowed"
+    }
   },
   "runs": [
     {
@@ -2947,7 +2955,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42316311286",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T01:58:08.195232+00:00",
+      "last_observed_at": "2026-11-07T02:10:17.239485+00:00",
       "runner": "120-qb2-p05t01",
       "device_job_id": 128229759730,
       "device_job_started_at": "2026-11-07T00:08:14Z",
@@ -3097,7 +3105,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42323448662",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T01:58:25.872437+00:00",
+      "last_observed_at": "2026-11-07T02:10:34.842774+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 128253219243,
       "device_job_started_at": "2026-11-07T01:19:51Z",
@@ -3242,7 +3250,7 @@
       "context": 262144,
       "pool_ids": 10248,
       "arm": "ci-native-framed-confirmation",
-      "status": "building_or_queued",
+      "status": "failed_image_build_infrastructure",
       "tt_metal_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
       "docker_image": null,
       "image_reason": "New model-owned atomicframe handler/staticconfig requiresnewimage",
@@ -3266,13 +3274,20 @@
       "effort_total_box_hours": 0.5,
       "run_id": 42326665396,
       "submitted_at": "2026-11-07T01:56:20Z",
-      "workflow_status": "in_progress",
+      "workflow_status": "completed",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42326665396",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T01:57:44.847305+00:00",
+      "workflow_conclusion": "failure",
+      "last_observed_at": "2026-11-07T01:58:45.509146+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-8lngj",
       "build_started_at": "2026-11-07T01:56:36Z",
-      "build_completed_at": null
+      "build_completed_at": "2026-11-07T01:58:04Z",
+      "workflow_wall_hours": 0.029166666666666667,
+      "actual_hours": 0,
+      "actual_hours_basis": "No TT device job: run-tests skipped after stock image build EPEL metadata proxy403",
+      "failure": "EPEL metadata mirrors returned proxyCONNECT403",
+      "failure_evidence": "bringup/artifacts/ci-native-large-reply-visibility/ci-build-failure.log:6883",
+      "exit_status": 1,
+      "audit": "runs/ci-native-large-reply-visibility/RESULT.json"
     },
     {
       "arm": "framed-benchmark-dry",
@@ -3296,10 +3311,72 @@
       "request_logging": false,
       "static_logging_config": null,
       "scope": "Local arm dry and targetmeasurement; combineddry pendingGPQA; anysemantic/sourcechange invalidates arm"
+    },
+    {
+      "owner": "source_packaging",
+      "device": "qb2-ci",
+      "eval": "r1_gpqa_diamond",
+      "workflow": "evals",
+      "planned_clients": 2,
+      "configured_concurrency_ceiling": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Two original smoke tasks; smallest validated batch>=2, current C4 ceiling unchanged",
+      "tasks": [
+        152,
+        189
+      ],
+      "task_count": 2,
+      "tti_sha": "483509781a0898395208fe0fdc14f54eb3ff8857",
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "run_timeout_hours": 12,
+      "job_timeout_hours": 18,
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "context": 262144,
+      "pool_ids": 10248,
+      "tt_metal_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+      "docker_image": null,
+      "image_reason": "New model-owned atomicframe handler/staticconfig requiresnewimage",
+      "predicted_device_hours": 0.18555555555555556,
+      "predicted_hours": 1.9744444444444444,
+      "projection": {
+        "measured_baseline_device_hours": 0.18055555555555555,
+        "measured_build_hours": 0.9341666666666667,
+        "measured_queue_hours": 0.8494444444444444,
+        "measured_other_workflow_hours": 0.005277777777777778,
+        "new_framing_overhead_hours_guess": 0.005
+      },
+      "device_box_hours": 0.4,
+      "cohort_source": "cohorts.json existing originalsmoke2; exact same tasks152/189 as prior transport confirmation",
+      "scope": "Actual CI framedlogging confirmation and pairedoutputs; not normalrung/dry/release",
+      "task_resources": "HTTP only, no task containers; no resourceoverride",
+      "local_acceptance": "bringup/artifacts/ci-native-large-reply-visibility/live/native-pair-audit.json and transport-audit.json",
+      "effort_total_box_hours": 0.5,
+      "arm": "ci-native-framed-confirmation-retry",
+      "status": "failed_image_build_infrastructure",
+      "retry_of": 42326665396,
+      "prepared_at": "2026-11-07T02:02:30.116974+00:00",
+      "retry_reason": "Infrastructure EPELproxy403 beforedevice; unchangedsource/config/stockworkflow",
+      "run_id": 42327188063,
+      "submitted_at": "2026-11-07T02:02:32Z",
+      "workflow_status": "completed",
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42327188063",
+      "workflow_conclusion": "failure",
+      "last_observed_at": "2026-11-07T02:04:53.199951+00:00",
+      "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-55wvd",
+      "build_started_at": "2026-11-07T02:02:46Z",
+      "build_completed_at": "2026-11-07T02:04:19Z",
+      "workflow_wall_hours": 0.03,
+      "actual_hours": 0,
+      "actual_hours_basis": "No TT device job: run-tests skipped after stock image build EPEL metadata proxy403",
+      "exit_status": 1,
+      "audit": "runs/ci-native-large-reply-visibility/RESULT.json"
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-07T02:00:55.582197+00:00",
+  "last_updated": "2026-11-07T02:12:51.969316+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -4136,6 +4213,37 @@
       "audit": "runs/larger-gpqa40-c4-response-logging/audit.json",
       "valid": true,
       "actual_to_predicted_ratio": 0.9983286893131548
+    },
+    {
+      "arm": "ci-native-framed-confirmation",
+      "run_id": 42326665396,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 0,
+      "workflow_wall_hours": 0.029166666666666667,
+      "predicted_workflow_hours": 1.9744444444444444,
+      "workflow_conclusion": "failure",
+      "outcome": "Infrastructure image-build failure; no eval or device measurement"
+    },
+    {
+      "arm": "ci-native-framed-confirmation-retry",
+      "run_id": 42327188063,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 0,
+      "workflow_wall_hours": 0.03,
+      "predicted_workflow_hours": 1.9744444444444444,
+      "workflow_conclusion": "failure",
+      "outcome": "Infrastructure image-build failure; no eval or device measurement"
+    },
+    {
+      "arm": "framed-benchmark-dry",
+      "planned_clients": 1,
+      "batch": 1,
+      "device_job_hours": 0.0752905511111111,
+      "predicted_device_hours": 0.07722610789111867,
+      "status": "passed_local_arm_dry_only",
+      "evidence": "runs/framed-benchmark-dry/RESULT.json"
     }
   ],
   "local_idle_intervals": [
@@ -4380,7 +4488,7 @@
   "active_runs": [
     42316311286,
     42323448662,
-    42326665396
+    42327188063
   ],
   "latest_live_progress": {
     "run_id": 42296943044,
@@ -4393,48 +4501,49 @@
     "audit": "runs/larger-gpqa40-c4-response-logging/audit.json"
   },
   "current_runtime_benchmark": {
-    "evidence": "runs/hex-runtime-benchmark/RESULT.json",
-    "publication": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+    "evidence": "runs/framed-benchmark-dry/RESULT.json",
+    "publication": "f57978407eaacf09587f5793b8ae46ca7af839ea",
     "headline": {
       "source": "vllm",
-      "completed": 8,
-      "failed": 0,
-      "client_seconds": 34.80486502102576,
-      "ttft_ms": 754.1133353515761,
-      "mean_tpot_ms": 28.316457850508403,
-      "decode_tps": 35.31515153764353,
       "input_tokens": 4096,
       "output_tokens": 128,
-      "requests": 8,
+      "batch": 1,
       "concurrency": 1,
+      "completed": 8,
+      "failed": 0,
+      "request_seconds": 34.821908578975126,
+      "ttft_ms": 755.0985858542845,
+      "mean_tpot_ms": 28.325286849358807,
+      "decode_tps": 35.30414379625733,
       "prefill_device_us": null,
       "decode_device_us": null,
       "prefill_flops_pct": null,
-      "decode_dram_pct": null
+      "decode_dram_pct": null,
+      "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-dry-run/headline.json"
     },
     "stage11_matrix": {
       "source": "tti",
-      "completed": 8,
-      "failed": 0,
-      "client_seconds": 27.21482825197745,
-      "ttft_ms": 128.01694698282517,
-      "mean_tpot_ms": 25.77519361110767,
-      "decode_tps": 38.79699276319134,
+      "route": "stock launchers/run_llm_bench.py existing server",
       "nominal_input_tokens": 128,
       "output_tokens": 128,
-      "requests": 8,
       "concurrency": 1,
+      "completed": 8,
+      "failed": 0,
       "actual_adapter_prompt_lengths": [
+        142,
+        143,
+        141,
+        141,
         141,
         141,
         142,
-        141,
-        141,
-        141,
-        141,
-        142
+        141
       ],
-      "evidence": "bringup/artifacts/stage12-hex-runtime-benchmark-retry/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_22-46-56-515182_isl-128_osl-128_maxcon-1_n-8.json"
+      "request_seconds": 27.11071771394927,
+      "ttft_ms": 112.13657664484344,
+      "mean_tpot_ms": 25.797802938756124,
+      "decode_tps": 38.76299087848666,
+      "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/framed-benchmark-dry-run/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-07_02-03-58-306454_isl-128_osl-128_maxcon-1_n-8.json"
     },
     "logging_debug": false,
     "request_logging": false,
@@ -4783,10 +4892,7 @@
       "evidence": "bringup/artifacts/stage12-gpqa20-evals-current.log"
     }
   ],
-  "next_local_job": {
-    "status": "idle",
-    "reason": "Accepted source benchmark complete; no new device experiment admitted while CI rungs measure release workload"
-  },
+  "next_local_job": "Held for frozen release arm; no additional discriminating local work currently justified while CI rungs progress",
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T23:06:29.089061+00:00",
     "normal_rung": "Next80 only after valid40 and measured forecast with slow-tail allowance fits before stagehour31.3; never wait for optional C8 comparison, use selected C4 fallback.",
@@ -5041,11 +5147,17 @@
     "next": "Separate40 experiment planned; normal40/80 proceed onC4 independently"
   },
   "ci_native_transport_confirmation": {
-    "evidence": "runs/ci-native-log-confirmation/audit.json",
+    "evidence": "runs/ci-native-large-reply-visibility/RESULT.json",
     "passed": true,
     "dry_pass": false,
     "queue_hours": 0.8494444444444444,
-    "remaining": "Actual frozen no-score dry and full-cap logging transport remain unproved"
+    "remaining": "Actual frozen no-score dry and full-cap logging transport remain unproved",
+    "status": "blocked_stock_image_build_access",
+    "failed_runs": [
+      42326665396,
+      42327188063
+    ],
+    "action": "Operator question pending; no blind third build. Continue independent rungs and local benchmark audit."
   },
   "held_c4_forty_release_fallback": {
     "sha": "0b3f934eaf8da405a74486c37e3014aa736b25f8",

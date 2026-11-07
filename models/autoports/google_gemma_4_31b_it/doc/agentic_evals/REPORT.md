@@ -151,8 +151,8 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | gpqa40-c8-saturation-comparison | 3.69754 (guess) / unknown | 1.50000 | running/pending: Pending |
 | c4-forty-release-fallback | 0.00000 / 0.00000 | 0.00000 | kept/solved: Held directFF C4 exact40 candidate0b3f934;37 focused tests and fullhooks passed. Not published or selected. |
 | gpqa40-new-loop-diagnosis | 0.20000 (guess) / 0.13608 | 1.00000 | none/open: success: False; result: Four conditional checkpoints support loop tokens in both pinned HF/currentTT; no actionable discrepancy, no further device check justified; top1 matches: 4; checkpoints: 4 |
-| ci-native-large-reply-visibility | 0.24472 / unknown | 0.00000 | running/pending: Pending |
-| framed-benchmark-dry | 0.07723 / unknown | 0.00000 | running/pending: Pending |
+| ci-native-large-reply-visibility | 0.24472 / 0.05917 | 0.00000 | kept/open: success: False; local exactness passed: True; result: Atomic framed handler passes local exact native pair and competing-writer transport. Two stock CI image builds fail EPEL proxy403 before device; actual C… |
+| framed-benchmark-dry | 0.07723 / 0.07529 | 0.00000 | none/solved: success: True; result: Frozen local benchmark arm passed; 8/8 exact headline outputs vs eef; phase complete and devices closed. No combined dry/release claim.; credited saving hours: 0 |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
@@ -179,3 +179,5 @@ Execution changes are committed locally, with SHAs in the stage commit manifest.
 The completed retained SWE audit strengthens the observed loop/cap evidence without identifying its cause. Astropy native capped repetition is confirmed; the other nine discarded outputs remain unknown. Conditional HF/TT and forced-input diagnostics remain limited to their tested prefixes. With SWE stopped for independently unresolved network validity, hypothetical SWE release savings from loop or concurrency efforts are not credited; validity takes precedence over speed, and this finding does not authorize further device experiments.
 
 The streaming logging experiment completed8/8 headline and8/8 matrix requests but buffered the entire SSE response: headline TTFT4386.855ms and TPOT0.03755ms describe buffered delivery, not model decode speed. AutoFix therefore keeps response logging only on the nonstreaming GPQA arm; the B1 benchmark retains its measured unbuffered configuration and headline753.761ms/35.3210tokens/s/user. The experiment cost0.08307device hours versus0.07605forecast. See `runs/response-logging-runtime-benchmark/AUTOFIX.md`.
+
+Local frozen benchmark arm on `f5797840` passed: exact 4096/128 B1/C1 headline, 8/8 requests, 755.10 ms TTFT and 35.30 tokens/s/user; all eight visible outputs match the prior runtime. The unchanged stock matrix completed 8/8. Device hold was 0.075291 h versus 0.077226 h predicted. This is only the local arm dry; GPQA dry and release remain pending. Evidence: `runs/framed-benchmark-dry/RESULT.json`.
