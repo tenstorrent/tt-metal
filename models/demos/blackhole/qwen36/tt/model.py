@@ -6716,9 +6716,12 @@ class Qwen36Model:
         self._write_gdn_slot_eager(slot)
 
     def _write_gdn_slot_eager(self, slot):
+        # QWEN36_MAMBA_SPEC: the verify reads the recurrent state from the request's vLLM block, so only the conv taps
+        # go into the slot (as the eager prefill_for_spec path writes them)
+        paged = getattr(self, "_spec_blocks", None) is not None
         for dn, rec, conv, _carry, _zero0, _zerorec in self._gdn_prefill_scratch:
             assert dn.rec_state is not rec, "write_slot_from_scratch needs the batched decode buffers bound"
-            dn.write_slot(slot, rec, conv, consume=False)
+            dn.write_slot(slot, None if paged else rec, conv, consume=False)
 
     def _gdn_slot_write_fingerprint(self, conv_fmt=None):
         """Every device address a slot-write trace bakes, per GDN layer: the batched rec_state and the B=1 scratch rec +
