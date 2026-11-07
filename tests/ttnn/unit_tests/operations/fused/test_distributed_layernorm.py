@@ -366,3 +366,47 @@ def test_rms_norm_post_all_gather_applies_bias(device, height, width, use_weight
     passing, pcc = check_with_pcc(expected, got, 0.999)
     assert passing, pcc
     torch.testing.assert_close(got, expected, rtol=0.02, atol=0.05)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 1, 32, 8192), (1, 1, 2304, 8192), (1, 1, 32, 32768)],
+    ids=["w8192", "w8192_two_rows_per_core", "w32768"],
+)
+@pytest.mark.parametrize("affine", ["none", "gamma", "gamma_beta"])
+@pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+def test_post_all_gather_row_wider_than_l1_buffers(device, shape, affine, is_rmsnorm):
+    # Rows too wide for whole-row buffers are normalized in chunks that each fill the buffers exactly.
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    width = shape[-1]
+    inp = torch.randn(shape).bfloat16().float()
+    gamma = (torch.rand(width) + 0.5).bfloat16().float() if affine != "none" else None
+    beta = (torch.rand(width) - 0.5).bfloat16().float() if affine == "gamma_beta" else None
+
+    # One device holds the whole row, so its stats are the row's own sums.
+    stats = torch.zeros(shape[:-1] + (32 if is_rmsnorm else 64,))
+    stats[..., 0:1] = inp.pow(2).sum(-1, keepdim=True)
+    if not is_rmsnorm:
+        stats[..., 32:33] = inp.sum(-1, keepdim=True)
+
+    def put(tensor, layout=ttnn.TILE_LAYOUT):
+        return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+
+    tt_inp = put(inp)
+    tt_stats = put(stats)
+    tt_gamma = put(gamma.reshape(1, 1, -1, 32), ttnn.ROW_MAJOR_LAYOUT) if gamma is not None else None
+    tt_beta = put(beta.reshape(1, 1, -1, 32), ttnn.ROW_MAJOR_LAYOUT) if beta is not None else None
+    post_all_gather = ttnn.rms_norm_post_all_gather if is_rmsnorm else ttnn.layer_norm_post_all_gather
+    tt_out = post_all_gather(tt_inp, tt_stats, epsilon=epsilon, weight=tt_gamma, bias=tt_beta)
+
+    if is_rmsnorm:
+        expected = inp * torch.rsqrt(inp.pow(2).mean(-1, keepdim=True) + epsilon)
+    else:
+        expected = torch.nn.functional.layer_norm(inp, (width,), eps=epsilon)
+    if gamma is not None:
+        expected = expected * gamma
+    if beta is not None:
+        expected = expected + beta
+    got = ttnn.to_torch(tt_out).float()
+    torch.testing.assert_close(got, expected, rtol=0.05, atol=0.1)
