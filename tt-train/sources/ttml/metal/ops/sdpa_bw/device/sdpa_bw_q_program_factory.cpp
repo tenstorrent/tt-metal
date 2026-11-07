@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "metal/common/sdpa_work_split.hpp"
 
 namespace {
 
@@ -68,36 +69,6 @@ const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 const std::string kHasGateDefKey = "HAS_GATE";
 
-/**
- * Calculate work-balanced pair distribution for causal SDPA backward.
- *
- * For causal attention, row i within a sequence processes (i+1) K/V tiles.
- * By pairing row i with row (St-1-i), each pair has constant work = St+1.
- * This enables perfect work balance across cores.
- *
- * @param total_pairs Total number of pairs = NC * St / 2
- * @param num_cores Number of cores to distribute across
- * @return Vector of (start_pair_idx, num_pairs) for each core
- */
-std::vector<std::pair<uint32_t, uint32_t>> calculate_balanced_pair_distribution(
-    uint32_t total_pairs, uint32_t num_cores) {
-    TT_FATAL(num_cores > 0, "calculate_balanced_pair_distribution: num_cores must be > 0");
-    std::vector<std::pair<uint32_t, uint32_t>> distribution;
-    distribution.reserve(num_cores);
-
-    const uint32_t pairs_per_core = total_pairs / num_cores;
-    const uint32_t remainder = total_pairs % num_cores;
-
-    uint32_t current_pair = 0;
-    for (uint32_t core = 0; core < num_cores; ++core) {
-        const uint32_t pairs_for_this_core = pairs_per_core + (core < remainder ? 1 : 0);
-        distribution.emplace_back(current_pair, pairs_for_this_core);
-        current_pair += pairs_for_this_core;
-    }
-
-    return distribution;
-}
-
 }  // namespace
 
 namespace ttml::metal::ops::sdpa_bw::device {
@@ -139,10 +110,10 @@ void assign_per_core_runtime_args_balanced(
     const tt::tt_metal::Buffer* u_scaler_buffer,
     const uint32_t num_cores,
     const uint32_t num_cores_y,
-    const std::vector<std::pair<uint32_t, uint32_t>>& pair_distribution) {
+    const std::vector<CoreItemRuns>& pair_distribution) {
     for (uint32_t i = 0; i < num_cores; i++) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        const auto& [start_pair_idx, num_pairs] = pair_distribution[i];
+        const auto [start_pair_idx, num_pairs] = pair_distribution[i].front();
 
         // Reader kernel: reuses num_rows_to_process = num_pairs, start_row = start_pair_idx
         SetRuntimeArgs(
@@ -244,15 +215,16 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     tt::tt_metal::CoreRangeSet core_group_2{};
     uint32_t num_rows_per_core_group_1 = 0;
     uint32_t num_rows_per_core_group_2 = 0;
-    std::vector<std::pair<uint32_t, uint32_t>> pair_distribution;
+    std::vector<CoreItemRuns> pair_distribution;
 
     if (use_balanced_parallelism) {
         num_cores = std::min(num_available_cores, total_pairs);
         all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
         core_group_1 = all_cores;
 
-        pair_distribution = calculate_balanced_pair_distribution(total_pairs, num_cores);
-        num_rows_per_core_group_1 = pair_distribution.empty() ? 0 : pair_distribution[0].second * 2;
+        // Light/heavy pairs go out as contiguous blocks, the same rule as the forward work split.
+        pair_distribution = split_items_contiguous(total_pairs, num_cores);
+        num_rows_per_core_group_1 = pair_distribution.empty() ? 0 : pair_distribution[0].front().num_items * 2;
     } else {
         auto work_split = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
         num_cores = std::get<0>(work_split);
@@ -506,7 +478,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     };
 
     if (use_balanced_parallelism) {
-        const uint32_t max_pairs_per_core = pair_distribution.empty() ? 0 : pair_distribution[0].second;
+        const uint32_t max_pairs_per_core = pair_distribution.empty() ? 0 : pair_distribution[0].front().num_items;
 
         std::vector<uint32_t> compute_args = {
             max_pairs_per_core,  // 0: num_pairs (max pairs per core)
