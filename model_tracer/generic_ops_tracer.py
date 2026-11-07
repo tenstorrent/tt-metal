@@ -110,6 +110,20 @@ def _infer_board_type_from_arch(arch_str):
     return None
 
 
+def _infer_board_type_from_series(series):
+    """Map a tt-smi board series (e.g. ``"n150"``, ``"p150b"``) to a board type.
+
+    Some tt-smi versions (e.g. 6.7) omit ``arch`` from the snapshot, so when pyluwen is
+    not importable the series is the only arch signal left.
+    """
+    lower = (series or "").lower()
+    if lower.startswith(("n150", "n300")) or lower.endswith("-wh"):
+        return "Wormhole"
+    if lower.startswith(("p100", "p150", "p300")) or lower.endswith("-bh"):
+        return "Blackhole"
+    return None
+
+
 def _get_tt_smi_snapshot_json():
     """Return parsed ``tt-smi -s --snapshot_no_tty`` JSON, or ``None``."""
     try:
@@ -176,6 +190,8 @@ def get_machine_info(tt_smi_snapshot=None):
     detection), then falls back to ``tt-smi -s --snapshot_no_tty``
     (structured JSON) so that machine metadata is available even when
     pyluwen is not installed.
+
+    ``board_type`` comes from pyluwen, then the tt-smi ``arch`` key, then the board series.
     """
     board_type = None
     pyluwen_device_count = None
@@ -191,8 +207,8 @@ def get_machine_info(tt_smi_snapshot=None):
                 board_type = "Wormhole"
             elif chip.as_bh() is not None:
                 board_type = "Blackhole"
-            # Chip arch not recognised — leave board_type as None so
-            # downstream callers treat machine info as unavailable.
+            # An unrecognised arch leaves board_type as None; tt-smi's arch or board series
+            # fills it in below.
             pyluwen_device_count = len(pci_interfaces)
     except Exception:
         # pyluwen is an optional dependency; on any failure we fall back to tt-smi below.
@@ -223,6 +239,8 @@ def get_machine_info(tt_smi_snapshot=None):
             if series_counts:
                 board_series_raw, card_count = series_counts.most_common(1)[0]
                 device_series = board_series_raw.rstrip(" LR").strip()
+                if board_type is None:
+                    board_type = _infer_board_type_from_series(device_series)
 
                 machine_info = {
                     "board_type": board_type,
@@ -1091,6 +1109,22 @@ def detect_pytest_tests(test_path):
         return False
 
 
+def _run_and_tee(cmd, cwd=None, env=None):
+    """Run cmd with no shell, echo its combined output live, and return (exit code, output).
+
+    No shell means arguments such as JSON (--sampling_params '{"top_k": 1}') reach the test unchanged.
+    """
+    lines = []
+    with subprocess.Popen(
+        cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
+    ) as proc:
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            lines.append(line)
+    return proc.returncode, "".join(lines)
+
+
 def run_test_with_tracing(
     test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None, include_failed=False
 ):
@@ -1154,56 +1188,28 @@ def run_test_with_tracing(
     # Fast mode skips the tracing decorator for performance
     env["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": false}'
 
-    # Run the command with custom environment (always show live output now)
-    # Use a custom command wrapper with tee to capture output while showing it live
-    import re
-    import tempfile
+    returncode, output_text = _run_and_tee(cmd, cwd=BASE_DIR, env=env)
 
-    # Create a temp file to capture output
-    tmp_output_fd, tmp_output_path = tempfile.mkstemp(suffix=".log", text=True)
-    os.close(tmp_output_fd)  # Close fd, we'll open as file
+    # Parse pytest results from output
+    test_stats = {"passed": 0, "failed": 0, "total": 0}
 
-    try:
-        # Build command with tee to show output live AND save to file
-        # Convert cmd list to properly quoted string for shell
-        cmd_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
-        tee_cmd = f"set -o pipefail; {cmd_str} 2>&1 | tee {tmp_output_path}"
-
-        # Run with shell=True to use tee; use bash for pipefail support so we
-        # get the pytest exit code instead of tee's (always-zero) exit code.
-        result = subprocess.run(tee_cmd, shell=True, executable="/bin/bash", cwd=BASE_DIR, text=True, env=env)
-
-        # Read the captured output to parse test statistics
-        with open(tmp_output_path, "r") as f:
-            output_text = f.read()
-
-        # Parse pytest results from output
-        test_stats = {"passed": 0, "failed": 0, "total": 0}
-
-        # Look for pytest summary line like: "1 failed, 1 passed in X.XXs"
-        summary_match = re.search(r"(\d+)\s+failed.*?(\d+)\s+passed", output_text)
-        if summary_match:
-            test_stats["failed"] = int(summary_match.group(1))
-            test_stats["passed"] = int(summary_match.group(2))
-            test_stats["total"] = test_stats["passed"] + test_stats["failed"]
-        else:
-            # Check for only passed
-            passed_match = re.search(r"(\d+)\s+passed", output_text)
-            if passed_match:
-                test_stats["passed"] = int(passed_match.group(1))
-                test_stats["total"] = test_stats["passed"]
-            # Check for only failed
-            failed_match = re.search(r"(\d+)\s+failed", output_text)
-            if failed_match:
-                test_stats["failed"] = int(failed_match.group(1))
-                test_stats["total"] += test_stats["failed"]
-    finally:
-        # Clean up temp file
-        try:
-            os.remove(tmp_output_path)
-        except OSError:
-            # Best-effort cleanup: ignore failures to remove the temp file
-            pass
+    # Look for pytest summary line like: "1 failed, 1 passed in X.XXs"
+    summary_match = re.search(r"(\d+)\s+failed.*?(\d+)\s+passed", output_text)
+    if summary_match:
+        test_stats["failed"] = int(summary_match.group(1))
+        test_stats["passed"] = int(summary_match.group(2))
+        test_stats["total"] = test_stats["passed"] + test_stats["failed"]
+    else:
+        # Check for only passed
+        passed_match = re.search(r"(\d+)\s+passed", output_text)
+        if passed_match:
+            test_stats["passed"] = int(passed_match.group(1))
+            test_stats["total"] = test_stats["passed"]
+        # Check for only failed
+        failed_match = re.search(r"(\d+)\s+failed", output_text)
+        if failed_match:
+            test_stats["failed"] = int(failed_match.group(1))
+            test_stats["total"] += test_stats["failed"]
 
     # Collect generated JSON files from the unique subdirectory
     json_files = collect_operation_jsons(trace_dir, include_failed=include_failed)
@@ -1256,7 +1262,7 @@ def run_test_with_tracing(
             json.dump(
                 {
                     "test_path": test_path,
-                    "exit_code": result.returncode,
+                    "exit_code": returncode,
                     "passed": test_stats["passed"],
                     "failed": test_stats["failed"],
                     "total": test_stats["total"],
@@ -1268,8 +1274,8 @@ def run_test_with_tracing(
         logger.warning("Failed to write test results sidecar: %s", exc, exc_info=True)
 
     return {
-        "success": result.returncode == 0,
-        "exit_code": result.returncode,
+        "success": returncode == 0,
+        "exit_code": returncode,
         "trace_files": json_files,
         "trace_dir": trace_dir,
         "trace_uid": metadata["trace_uid"],
