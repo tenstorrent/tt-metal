@@ -335,3 +335,28 @@ def test_allgather_missing_peer_ends():
     ended(r)
     nonzero(r)
     clean(r)
+
+
+@known(
+    "P16: a recv whose peer never sends hangs rank 0 forever; fix: the per-call timeout on recv cancels and tears the job down"
+)
+def test_recv_without_send_ends():
+    """The recv side of the per-collective timeout: rank 0 waits in recv for a rank that never sends."""
+    r = run_case("recv_without_send", {"PROBE_COLL": "recv_no_send"}, DEADLINE_HANG)
+    ended(r)
+    nonzero(r)
+    clean(r)
+
+
+def test_slow_collective_within_deadline_completes():
+    """The timeout must fire only on a hang, not on a legitimately slow collective. Rank 1 joins the barrier 4 s late
+    with the operation timeout at 30 s: the barrier completes and the job exits 0. A per-call timeout that is too eager
+    would tear this down, so this gate guards against that."""
+    r = run_case(
+        "slow_collective_ok",
+        {"PROBE_COLL": "barrier_slow", "PROBE_SLOW_S": "4", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "30"},
+        DEADLINE_END,
+    )
+    ended(r)
+    assert r.exit == 0, str(r)
+    clean(r)

@@ -14,7 +14,8 @@ Env (all optional):
   PROBE_PHASE      before_init | after_init | in_open | after_open   (where the scenario lands; default after_open)
   PROBE_VICTIM     the rank that misbehaves (default 1)
   PROBE_DELAY_MS   delay before the fault (default 300; in_open: after open_enter)
-  PROBE_COLL       barrier | barrier_skip | allgather_skip | send_no_recv | recv_dead_peer | barrier_dead_peer | recv_bad_rank
+  PROBE_COLL       barrier | barrier_skip | barrier_slow | allgather_skip | send_no_recv | recv_no_send | recv_dead_peer | barrier_dead_peer | recv_bad_rank
+  PROBE_SLOW_S     seconds a slow-but-arriving peer waits before joining (barrier_slow); must be < the operation timeout
   PROBE_ON_ERROR   exit (default: a failed collective propagates and the rank exits non-zero, as an
                    application would) | continue (record and go on)
   PROBE_FABRIC_RANK   rank that sets FABRIC_2D before open (-1 none): a fabric-config conflict across ranks
@@ -177,6 +178,17 @@ elif COLL == "allgather_skip":
         time.sleep(30)
     else:
         timed("coll_allgather_int", lambda: ttnn.distributed_context_allgather_int(RANK))
+elif COLL == "barrier_slow":
+    if is_victim():
+        slow = float(env("PROBE_SLOW_S", "4"))
+        mark(f"coll_slow: victim joins the barrier {slow} s late (a legitimately slow peer, not a hang)")
+        time.sleep(slow)
+    timed("coll_barrier", ttnn.distributed_context_barrier)
+elif COLL == "recv_no_send":
+    if RANK == 0:
+        timed(f"coll_recv_16B_from_{VICTIM}", lambda: ttnn.distributed_context_recv_bytes(16, VICTIM, 7))
+    elif is_victim():
+        mark("coll_recv_no_send: victim never sends, goes to close")
 
 t = time.time()
 mark("close_enter")
