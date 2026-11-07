@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One Kimi-K3.1 pipeline stage on one galaxy, traced, at a given num_users, with real weights.
+"""One Kimi-K3.1 pipeline stage on one galaxy, traced, at a given num_users.
 
 The stage is built exactly as `prefill_runner` builds that rank (`compute_layer_split` over the
 adapter's split boundaries, `build_runtime` / `allocate_kv_cache` / `compile` / `capture_trace` with the
@@ -20,13 +20,21 @@ the whole allocation is addressed. DRAM per chip is logged after each phase (`ST
 
 `$K31_STAGE` is the PP4 rank (0-3); `$K31_STAGE_LAYERS` (`FIRST-LAST`, inclusive) instead runs a
 leading part of a stage: it must start where a rank starts and end on a full-attention layer (the
-kv-only last layer). The test skips without either, since it needs the stage's weights cached.
+kv-only last layer). The test skips without either.
+
+`$K31_STAGE_WEIGHTS=stub` is the capacity-sweep mode: every weight is allocated on device with the
+spec and mesh topology of its cache file (read from the file header, no tensor data read) and left
+uninitialized, so a num_users step costs no weight load. A layer not yet cached takes the files of a
+cached layer of the same kind (full attention or KDA, dense or MoE FFN): the shapes depend on the
+kind alone. The default, `real`, loads the stage's cached weights; use it to confirm a stub result.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -38,6 +46,7 @@ from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 
 ADAPTER = get_adapter("kimi_k3_1")
 MESH = (8, 4)
@@ -65,6 +74,80 @@ def _window() -> tuple[int, int] | None:
     if stage := os.getenv("K31_STAGE"):
         return split[int(stage)]
     return None
+
+
+def _layer_kind(layer_idx: int) -> tuple[bool, bool]:
+    """What a layer's weight shapes depend on: full attention (vs KDA), and dense FFN (vs MoE)."""
+    return layer_idx in KimiK31Config.mla_layer_ids(), layer_idx < KimiK31Config.NUM_DENSE_LAYERS
+
+
+def _stub_cache(real: Path, stub: Path) -> Path:
+    """A cache directory of symlinks in which every layer resolves: a cached layer to its own files, an
+    uncached one to those of the first cached layer of its kind, renamed. Shapes only; see `_header_only`."""
+    marker = ".layer_{}.complete"
+    cached = sorted(i for i in range(KimiK31Config.NUM_LAYERS) if (real / marker.format(i)).is_file())
+    layer_files = {}
+    for path in real.iterdir():
+        name = path.name
+        if name.startswith("layer_") or name.startswith("attn_res.layers."):
+            layer = int(name.removeprefix("layer_").removeprefix("attn_res.layers.").split(".")[0])
+            layer_files.setdefault(layer, []).append(name)
+        elif not name.startswith(".layer_"):
+            (stub / name).symlink_to(path)  # model-level tensors: embedding, final norm, AttnRes output
+    for layer in range(KimiK31Config.NUM_LAYERS):
+        source = next((c for c in cached if _layer_kind(c) == _layer_kind(layer)), None)
+        source = layer if layer in cached else source
+        assert source is not None, f"no cached layer of layer {layer}'s kind {_layer_kind(layer)} in {real}"
+        for name in layer_files[source]:
+            renamed = name.replace(f"layer_{source}.", f"layer_{layer}.", 1).replace(
+                f"attn_res.layers.{source}.", f"attn_res.layers.{layer}.", 1
+            )
+            (stub / renamed).symlink_to(real / name)
+        (stub / marker.format(layer)).symlink_to(real / marker.format(source))
+    logger.info(f"stub weight cache {stub}: layers {cached} cached, the rest stand in by kind")
+    return stub
+
+
+def _allocate_like(host: ttnn.Tensor, device, memory_config=None) -> ttnn.Tensor:
+    """An uninitialized device tensor with the host tensor's per-chip spec and mesh topology."""
+    spec = host.spec
+    if memory_config is None:
+        tensor = ttnn.allocate_tensor_on_device(spec, device)
+    else:  # placed with another memory config, as the routed experts are (32x32 tiles)
+        tensor = ttnn.allocate_tensor_on_device(spec.shape, spec.dtype, spec.layout, device, memory_config)
+    tensor.update_tensor_topology(host.tensor_topology())
+    return tensor
+
+
+@contextlib.contextmanager
+def _header_only():
+    """Weights are allocated on device, uninitialized, instead of uploaded. A cache load to host maps the
+    file and reads only its header, so spec and topology cost no data read. Two upload paths: a cache
+    load straight to device, and the routed experts', which load to host and place with `ttnn.to_device`
+    (stubbed only inside that loader, so no other host->device copy of the build is touched)."""
+    tensor_module = ttnn._ttnn.tensor
+    load = tensor_module.load_tensor_flatbuffer
+    load_experts = TtRoutedExpert.__dict__["_convert_and_cache_expert_weights"]
+
+    def load_header(file_name, device=None):
+        host = load(file_name, None)
+        return host if device is None else _allocate_like(host, device)
+
+    def load_experts_header(*args, **kwargs):
+        to_device = ttnn.to_device
+        ttnn.to_device = lambda host, device, memory_config=None, **_: _allocate_like(host, device, memory_config)
+        try:
+            return load_experts.__func__(*args, **kwargs)
+        finally:
+            ttnn.to_device = to_device
+
+    tensor_module.load_tensor_flatbuffer = load_header
+    TtRoutedExpert._convert_and_cache_expert_weights = staticmethod(load_experts_header)
+    try:
+        yield
+    finally:
+        tensor_module.load_tensor_flatbuffer = load
+        TtRoutedExpert._convert_and_cache_expert_weights = load_experts
 
 
 def _dram_per_chip(mesh_device) -> tuple[int, int]:
@@ -130,12 +213,17 @@ def _random_activation(runtime, mesh_device, seed: int) -> ttnn.Tensor:
     ],
     indirect=True,
 )
-def test_kimi_k3_1_stage_traced(mesh_device, device_params):
+def test_kimi_k3_1_stage_traced(mesh_device, device_params, tmp_path):
     window = _window()
     if window is None:
         pytest.skip("set $K31_STAGE (PP4 rank) or $K31_STAGE_LAYERS; the stage's weights must be cached")
     first_layer_idx, num_layers = window
     num_users = int(os.getenv("K31_STAGE_USERS", "1"))
+    weights = os.getenv("K31_STAGE_WEIGHTS", "real")
+    assert weights in ("real", "stub"), f"$K31_STAGE_WEIGHTS={weights!r}: real or stub"
+    weight_cache_path = ADAPTER.weight_cache_path(MESH)
+    if weights == "stub":
+        weight_cache_path = _stub_cache(weight_cache_path.resolve(), tmp_path)
     is_last_rank = first_layer_idx + num_layers == KimiK31Config.NUM_LAYERS or "K31_STAGE_LAYERS" in os.environ
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
@@ -152,24 +240,25 @@ def test_kimi_k3_1_stage_traced(mesh_device, device_params):
         num_links=2,
         gate_mode_name=ADAPTER.default_gate_mode,
         kv_only_last_layer=is_last_rank,
-        weight_cache_path=ADAPTER.weight_cache_path(MESH),
+        weight_cache_path=weight_cache_path,
         tp_shard_kv=True,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=True,
     )
     logger.info(
         f"K3.1 stage layers [{first_layer_idx}, {first_layer_idx + num_layers}) is_last={is_last_rank} "
-        f"num_users={num_users} max_seq_len={MAX_SEQ_LEN} kvpe={params.sparse_kv_cache_format} "
+        f"num_users={num_users} weights={weights} max_seq_len={MAX_SEQ_LEN} kvpe={params.sparse_kv_cache_format} "
         f"weights={params.weight_cache_path}"
     )
 
     _log_dram(mesh_device, "opened")
     t0 = time.perf_counter()
-    runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    with _header_only() if weights == "stub" else contextlib.nullcontext():
+        runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
     logger.info(f"STAGE_TIME weights {time.perf_counter() - t0:.1f} s")
-    weights = _log_dram(mesh_device, "weights")
+    weight_bytes = _log_dram(mesh_device, "weights")
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    caches = _log_dram(mesh_device, f"kv_caches({num_users} users)") - weights
+    caches = _log_dram(mesh_device, f"kv_caches({num_users} users)") - weight_bytes
     logger.info(f"STAGE_KV {caches} B per chip for {num_users} users ({caches / num_users / 1e6:.1f} MB per user)")
     try:
         t0 = time.perf_counter()
