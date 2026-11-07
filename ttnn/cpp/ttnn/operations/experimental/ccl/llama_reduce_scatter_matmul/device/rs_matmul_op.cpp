@@ -46,6 +46,9 @@ void validate_standard_tile(const Matmul_RS::tensor_args_t& tensor_args) {
 
 void Matmul_RS::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        !operation_attributes.matmul.transpose_a && !operation_attributes.matmul.transpose_b,
+        "llama_rs_matmul does not support transpose_a or transpose_b.");
     if (tensor_args.second_weight_tensor.has_value()) {
         operation_attributes_t::matmul_device_t::validate_on_program_cache_miss(
             operation_attributes.matmul,
@@ -65,6 +68,9 @@ void Matmul_RS::validate_on_program_cache_hit(
 
 void Matmul_RS::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        !operation_attributes.matmul.transpose_a && !operation_attributes.matmul.transpose_b,
+        "llama_rs_matmul does not support transpose_a or transpose_b.");
     if (tensor_args.second_weight_tensor.has_value()) {
         operation_attributes_t::matmul_device_t::validate_on_program_cache_miss(
             operation_attributes.matmul,
@@ -251,6 +257,9 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
     const std::optional<const ttnn::Tensor>& second_weight_tensor) {
     using OperationType = ttnn::operations::experimental::ccl::Matmul_RS;
 
+    TT_FATAL(
+        !transpose_a && !transpose_b,
+        "llama_rs_matmul does not support transpose_a or transpose_b.");
     TT_FATAL(
         rs_tensor.has_value() ^ second_weight_tensor.has_value(),
         "Exactly one of rs_tensor or second_weight_tensor must have a value");

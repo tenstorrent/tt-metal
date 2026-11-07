@@ -30,6 +30,9 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& weight_tensor = tensor_args.weight_tensor;
 
     TT_FATAL(
+        !operation_attributes.matmul.transpose_a && !operation_attributes.matmul.transpose_b,
+        "AllGatherMatmulAsync does not support transpose_a or transpose_b.");
+    TT_FATAL(
         input_tensor.logical_shape().rank() == 4 && weight_tensor.logical_shape().rank() == 4,
         "AllGatherMatmulAsync requires input tensors to be of rank 4");
     // A buffer repeated across input, weight and bias leaves the cached program with no buffer bindings, so later
@@ -200,6 +203,10 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     using OperationType = ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation;
+
+    TT_FATAL(
+        !transpose_a && !transpose_b,
+        "AllGatherMatmulAsync does not support transpose_a or transpose_b.");
 
     /* All Gather setup */
     const auto [all_gather_async_operation_attributes, all_gather_async_tensor_args] =
