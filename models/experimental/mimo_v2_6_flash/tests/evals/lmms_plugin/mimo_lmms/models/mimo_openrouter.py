@@ -307,7 +307,8 @@ class OpenRouterChat(lmms):
                 raise RuntimeError(
                     f"{path} is {size} bytes (> video_max_mb) or not mp4/webm/mov, and ffmpeg is missing"
                 )
-            tmp = out + ".tmp.mp4"
+            # Per-thread temp name: several questions share one video and are encoded concurrently.
+            tmp = f"{out}.{os.getpid()}.{threading.get_ident()}.tmp.mp4"
             # Same resolution and frame rate, H.264 at a quality setting, no audio track (the eval is video-only).
             cmd = [
                 ffmpeg,
