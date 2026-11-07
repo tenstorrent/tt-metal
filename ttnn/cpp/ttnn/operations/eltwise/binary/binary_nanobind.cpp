@@ -171,6 +171,16 @@ using BitwiseScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     const std::optional<CoreRangeSet>&,
     const std::optional<tt::tt_metal::SubDeviceId>&);
+using BitwiseWideScalarFn = Tensor (*)(
+    const Tensor&,
+    int64_t,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>&,
+    const std::optional<tt::tt_metal::SubDeviceId>&);
 using BitwiseTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
@@ -2386,7 +2396,7 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_and operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_and),
+        static_cast<detail::BitwiseWideScalarFn>(&ttnn::bitwise_and),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_and),
         ". ",
         detail::kBitwiseShiftDtypes,
@@ -2396,7 +2406,7 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_or),
+        static_cast<detail::BitwiseWideScalarFn>(&ttnn::bitwise_or),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_or),
         ". ",
         detail::kBitwiseShiftDtypes,
@@ -2406,7 +2416,7 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_xor operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_xor|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_xor),
+        static_cast<detail::BitwiseWideScalarFn>(&ttnn::bitwise_xor),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_xor),
         ". ",
         detail::kBitwiseShiftDtypes,
