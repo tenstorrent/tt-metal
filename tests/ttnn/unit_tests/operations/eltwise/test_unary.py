@@ -1123,6 +1123,26 @@ def test_unary_rejects_int8_input(ttnn_op, extra_kwargs, device, expect_error):
         ttnn_op(input_tensor, **extra_kwargs)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda x: ttnn.bitwise_not(x),
+        lambda x: ttnn.bitwise_and(x, 3),
+        lambda x: ttnn.bitwise_or(x, 3),
+        lambda x: ttnn.bitwise_xor(x, 3),
+        lambda x: ttnn.bitwise_left_shift(x, 1),
+        lambda x: ttnn.bitwise_right_shift(x, 1),
+    ],
+    ids=["bitwise_not", "bitwise_and", "bitwise_or", "bitwise_xor", "bitwise_left_shift", "bitwise_right_shift"],
+)
+def test_unary_integer_only_ops_reject_float_input(dtype, op, device, expect_error):
+    input_data = torch.randn((32, 32))
+    input_tensor = ttnn.from_torch(input_data, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "requires an integer input dtype"):
+        op(input_tensor)
+
+
 @pytest.mark.parametrize(
     "ttnn_fn, golden_fn",
     [
