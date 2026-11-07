@@ -1,5 +1,5 @@
 {
-  "status": "stage_active_gpqa40_and_c8_comparison",
+  "status": "stage_active_gpqa80_and_c8_forty_comparison",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -33,13 +33,13 @@
     "account_fallback": null
   },
   "remaining_work": [
-    "Complete40 and larger fitting GPQA rungs with measured projections",
-    "Accept or reject optional C8 from same20 scoredpair",
+    "Complete80 and project next GPQA rung from measured time",
+    "Accept or reject C8 from same40 scored comparison",
     "Frozen configuration, actual clean dry and immutable release including benchmark matrix",
     "One closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T21:31:43.734999+00:00",
+  "updated_at": "2026-11-07T01:30:59.292788+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -47,10 +47,10 @@
   ],
   "live_wait": {
     "run_ids": [
-      42296943044,
-      42293808766
+      42323448662,
+      42316311286
     ],
-    "status": "Normal40 devicejob active; optionalC8same20 newimage building"
+    "status": "Normal C4/80 and optional C8/40 devicejobs active"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -193,19 +193,20 @@
     }
   },
   "initial_agent_reply_observability": {
-    "status": "local_exact_formatter_repair_confirmed_actual_ci_pending",
+    "status": "actual_ci_native_transport_confirmed_frozen_dry_pending",
     "observed_at": "2026-11-06T21:49:49.076105+00:00",
     "problem": "StockCI grep-v-i INFO strips native records and responsecontent; workflow remains unchanged",
     "evidence": [
       "runs/ci-response-log-propagation/RESULT.json",
-      "runs/ci-response-log-publication/publication-confirmation.json"
+      "runs/ci-response-log-publication/publication-confirmation.json",
+      "runs/ci-native-log-confirmation/audit.json"
     ],
     "action": "Fresh AutoDebug/AutoFix source investigation; no runtime or route change authorized implicitly. Normal rungs continue independently.",
     "otlp": "Stock host request-finish spans exist, but collector/read route unavailable; no device profiler used or proposed.",
     "solution": "Model-only explicit native hex logging preserves exact stock records through filter; private observer decodes",
-    "remaining": "Actual CI initial request and full reply visibility; then frozen no-score dry",
+    "remaining": "Frozen no-score dry; complete cap-response transport not yet confirmed",
     "ci_run_id": 42296943044,
-    "ci_observation": "Correct autoport/full60/list/limits and enabled request flags, but no request-ID or response-body records in available CI log; no dry claim",
+    "ci_observation": "42302118669: two initial IDs and complete replies visible, matching harness outputs; first snapshot already scored, so not a dry pass",
     "diagnosis_effort": "runs/ci-response-log-propagation/plan.md",
     "confirmation_run_id": 42302118669
   }
