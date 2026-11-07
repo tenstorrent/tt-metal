@@ -152,8 +152,16 @@ Long videos (VGI-Bench, 10-40 min, 130-146K tokens, up to 315 MB): vLLM's per-it
 (`get_mm_max_tokens_per_item`; upstream's 114688 refused them); the proxy needs `TT_PROXY_FETCH_MAX_MB=400`,
 `TT_PROXY_FETCH_TIMEOUT_S=300` and `TT_PROXY_MAX_REQUEST_MB=512` (a 315 MB file is a 420 MB data URI), vLLM fetching a
 URL itself `VLLM_MAX_MEDIA_DOWNLOAD_SIZE_MB=400` and `VLLM_VIDEO_FETCH_TIMEOUT=300`. Such a request spends 1-4 minutes
-in the API server (decoding up to 4800 frames, the audio tokenizer on the CPU), where vLLM processes multimodal items one
-at a time.
+in the API server, where vLLM processes multimodal items one at a time. On bhg2's CPU (10.5 / 27.3 / 40.3 min videos,
+129.5 / 133.2 / 145.8K tokens; 2026-11-07): vLLM's OpenCV decode at 2 fps 6-20 s, the audio track's decode 1-4 s, the
+frame resize 1.2-4.4 s (OpenCV, `MIMO_VIDEO_RESIZE=cv2`, default; torch's 10-25 s), the checkpoint processor and mel
+3-4 s, and the fp32 CPU audio tokenizer 56-204 s (~5 s a minute of audio, 75-84 % of the front end). The next question on
+a video hits vLLM's processor cache (0.1-0.3 s; the track's decode is cached too, `MIMO_VIDEO_AUDIO_CACHE_MB`) and the
+prefix cache (129024 of 129538 tokens): 9.9 s end to end on the 10.5 min video, nearly all of it vLLM decoding the video
+again. A client that sends `"uuid": <video id>` in the video part of every request on a video, and `"video_url": null`
+with that uuid after the first, skips the fetch and decode too: 0.4-0.5 s. The uuid-keyed hash is not the content
+hash (pick one per video), and the item must still be in the processor cache (`--mm-processor-cache-gb`, default 4; a
+long video's item is 1.3-1.4 GB), else vLLM raises "Cache miss ... but data is not provided".
 Video-MME short docs 0-59, one row engine at concurrency 8 (Xiaomi's API: 75.0 %; 2026-11-07):
 
 | Video input | Score | Verbose / 60 | Prompt tokens p50 | Latency c=8 / c=1 |

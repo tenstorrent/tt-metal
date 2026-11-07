@@ -17,6 +17,7 @@ A synthetic 6 s clip (4 fps, AAC audio) goes through vLLM's media loader and the
 """
 
 import base64
+import collections
 import io
 import os
 
@@ -98,13 +99,25 @@ def processor():
     return Processor(info, Dummy(info))
 
 
-def run(proc, data, **kwargs):
+@pytest.fixture(scope="module")
+def cached_processor(processor):
+    """The processor with vLLM's processor cache, as the API server runs it."""
+    from vllm.multimodal.cache import MultiModalProcessorOnlyCache
+
+    cache = MultiModalProcessorOnlyCache(processor.info.ctx.model_config)
+    return type(processor)(processor.info, processor.dummy_inputs, cache=cache)
+
+
+def run(proc, data, uuids=None, **kwargs):
+    """``data``: the video file's bytes, fetched as vLLM's API server does; None: a uuid-only reference (``uuids``)."""
     from vllm.multimodal.media import MediaConnector
 
-    video = MediaConnector(media_io_kwargs={"video": {"num_frames": -1}}).fetch_video(
-        "data:video/mp4;base64," + base64.b64encode(data).decode()
-    )
-    out = proc(PROMPT, proc.info.parse_mm_data({"video": [video]}), hf_processor_mm_kwargs=kwargs)
+    video = None
+    if data is not None:
+        video = MediaConnector(media_io_kwargs={"video": {"num_frames": -1}}).fetch_video(
+            "data:video/mp4;base64," + base64.b64encode(data).decode()
+        )
+    out = proc(PROMPT, proc.info.parse_mm_data({"video": [video]}), uuids, hf_processor_mm_kwargs=kwargs)
     (ph,) = out["mm_placeholders"]["video"]
     (item,) = out["mm_kwargs"]["video"]
     return out["prompt_token_ids"], ph, item
@@ -182,6 +195,49 @@ def test_audio_track_shorter_than_the_picture(processor):
     seg_lens = item["video_audio_seg_lens"].data.reshape(-1)[:n_segs].tolist()
     assert n_segs == SECONDS * FPS // 2 and min(seg_lens) > 0, seg_lens
     assert ids[ph.offset : ph.offset + ph.length].count(vocab["<|audio_pad|>"]) == sum(seg_lens)
+
+
+def test_next_question_on_a_video_redoes_nothing(cached_processor, monkeypatch):
+    """The 2nd / 3rd question on a video, with vLLM's processor cache: the same bytes again neither decode the audio
+    track again (cached_audio_track) nor resize frames or run the audio tokenizer; a uuid-only reference (the request's
+    ``{"type": "video_url", "video_url": null, "uuid": id}`` after a first request with that uuid) also skips vLLM's
+    fetch and decode. Both give the first request's prompt and item."""
+    from models.experimental.mimo_v2_6_flash.tt import video_audio, video_input
+    from models.experimental.mimo_v2_6_flash.tt.audio import processor as audio_proc
+
+    monkeypatch.setattr(video_audio, "_TRACKS", collections.OrderedDict())
+    calls = collections.Counter()
+    for module, name in (
+        (video_audio, "decode_audio_track"),
+        (video_input, "_resized_frames"),
+        (audio_proc, "tokenize_mels"),
+    ):
+        fn = getattr(module, name)
+        monkeypatch.setattr(module, name, lambda *a, _fn=fn, _name=name, **k: (calls.update([_name]), _fn(*a, **k))[1])
+    data = clip()
+    uuids = {"video": ["test-next-question-on-a-video"]}
+    work = {"decode_audio_track": 1, "_resized_frames": 1, "tokenize_mels": 1}
+    first = run(cached_processor, data, uuids, mimo_video_audio=True)
+    assert calls == work, calls
+    again = run(cached_processor, data, uuids, mimo_video_audio=True)
+    reference = run(cached_processor, None, uuids, mimo_video_audio=True)
+    assert calls == work, calls
+    for ids, ph, item in (again, reference):
+        assert ids == first[0] and (ph.offset, ph.length) == (first[1].offset, first[1].length)
+        assert item.keys() == first[2].keys() and all(torch.equal(item[k].data, first[2][k].data) for k in item)
+
+
+def test_audio_track_cache_is_bounded(monkeypatch):
+    """cached_audio_track keeps the most recently used tracks up to MIMO_VIDEO_AUDIO_CACHE_MB."""
+    from models.experimental.mimo_v2_6_flash.tt import video_audio
+
+    monkeypatch.setattr(video_audio, "_TRACKS", collections.OrderedDict())
+    monkeypatch.setattr(video_audio, "TRACK_CACHE_BYTES", 3 * 4000)  # three 1000-sample float32 tracks
+    decoded = []
+    monkeypatch.setattr(video_audio, "decode_audio_track", lambda d: decoded.append(d) or np.zeros(1000, np.float32))
+    for data in (b"a", b"b", b"a", b"c", b"d", b"a", b"b"):
+        video_audio.cached_audio_track(data)
+    assert decoded == [b"a", b"b", b"c", b"d", b"b"]  # "d" evicted the least recently used "b", not "a"
 
 
 def test_track_ending_inside_the_last_grid_is_not_padded():
