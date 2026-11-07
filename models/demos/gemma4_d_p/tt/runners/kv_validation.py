@@ -410,6 +410,123 @@ def _kv64697_diag(layer, actual_heads, expected_heads):
     return lines
 
 
+def _kv64697_diag_fast(layer, actual_heads, expected_heads, pool):
+    """Same output as _kv64697_diag (identical hashes; errors equal up to float summation order), vectorized:
+    one squared-error reduction per head instead of one per (chunk, rank, head), hashes in a thread pool."""
+    import hashlib
+
+    cp, tp = Gemma4ServiceConfig.MESH_SHAPE
+    chunk = Gemma4ServiceConfig.CHUNK_SIZE
+    local = chunk // cp
+    blocks = 4
+    groups = {}
+    for config_id, actual in actual_heads:
+        name = "g" if config_id < 4 else ("k" if config_id < 20 else "v")
+        groups.setdefault(name, []).append((config_id, actual))
+    lines = []
+    for name, heads in groups.items():
+        first = {"g": 0, "k": 4, "v": 20}[name]
+        per_column = max(1, len(heads) // tp)
+        rows = heads[0][1].shape[0]
+        nchunks = rows // chunk
+        used = nchunks * chunk
+        raw = [actual[:used].contiguous().view(torch.uint8).numpy() for _, actual in heads]
+
+        def slab_hash(index):
+            start = (index // cp) * chunk + (index % cp) * local
+            digest = hashlib.blake2b(digest_size=3)
+            for array in raw:
+                digest.update(memoryview(array[start : start + local]))
+            return digest.hexdigest()
+
+        def head_error(item):
+            config_id, actual = item
+            width = actual.shape[1]
+            part = actual[:used].reshape(nchunks, chunk, width)[index].float()
+            expected = expected_heads[config_id][:used, :width].reshape(nchunks, chunk, width)[index].float()
+            num = ((part - expected) ** 2).reshape(len(index), cp, blocks, -1).sum(dim=3, dtype=torch.float64)
+            den = (expected**2).reshape(len(index), cp, blocks, -1).sum(dim=3, dtype=torch.float64)
+            return min((config_id - first) // per_column, tp - 1), num, den
+
+        hashes = list(pool.map(slab_hash, range(nchunks * cp)))
+        # A slab whose hash matches the clean reference has, by construction, the reference's errors too (same
+        # bytes, same golden), so errors are computed only for chunks with a deviating slab.
+        reference = _kv64697_reference()
+        todo = [
+            c
+            for c in range(nchunks)
+            if reference is None
+            or reference.get((layer, name, c), (None,))[0] != hashes[c * cp : (c + 1) * cp]
+        ]
+        col_num = torch.zeros(tp, nchunks, cp, blocks, dtype=torch.float64)
+        col_den = torch.zeros_like(col_num)
+        if todo:
+            index = torch.tensor(todo)
+            for column, num, den in pool.map(head_error, heads):
+                col_num[column][index] += num
+                col_den[column][index] += den
+        ratio = lambda n, d: (n / d if d else 0.0) * 1e4
+        cn, cd = col_num.tolist(), col_den.tolist()  # [tp][chunk][rank][block]
+        todo = set(todo)
+        for c in range(nchunks):
+            if c not in todo:
+                _, error_text, detail_text = reference[(layer, name, c)]
+                lines.append(
+                    f"KV64697 L{layer:02d} {name} c{c:02d} "
+                    + " ".join(hashes[c * cp : (c + 1) * cp])
+                    + " | "
+                    + error_text
+                    + " || "
+                    + detail_text
+                )
+                continue
+            errors, details = [], []
+            for r in range(cp):
+                col_n = [sum(cn[t][c][r]) for t in range(tp)]
+                col_d = [sum(cd[t][c][r]) for t in range(tp)]
+                blk_n = [sum(cn[t][c][r][b] for t in range(tp)) for b in range(blocks)]
+                blk_d = [sum(cd[t][c][r][b] for t in range(tp)) for b in range(blocks)]
+                errors.append(f"{ratio(sum(col_n), sum(col_d)):7.2f}")
+                details.append(
+                    "/".join(f"{ratio(n, d):.1f}" for n, d in zip(col_n, col_d))
+                    + ":"
+                    + "/".join(f"{ratio(n, d):.1f}" for n, d in zip(blk_n, blk_d))
+                )
+            lines.append(
+                f"KV64697 L{layer:02d} {name} c{c:02d} "
+                + " ".join(hashes[c * cp : (c + 1) * cp])
+                + " | "
+                + " ".join(errors)
+                + " || "
+                + " ".join(details)
+            )
+    return lines
+
+
+_KV64697_FAST = os.getenv("KV64697_FAST_DIAG", "0") == "1"
+_KV64697_REFERENCE = []
+
+
+def _kv64697_reference():
+    """Clean-run kv64697_diag.txt (KV64697_REF_DIAG) as {(layer, group, chunk): (hashes, error text, detail text)}."""
+    if not _KV64697_REFERENCE:
+        path = os.getenv("KV64697_REF_DIAG")
+        table = None
+        if path:
+            table = {}
+            for line in open(path):
+                line = line.rstrip("\n")
+                if not line.startswith("KV64697 L"):
+                    continue
+                head, rest = line.split(" | ", 1)
+                error_text, detail_text = rest.split(" || ", 1)
+                _, layer, name, c, *hashes = head.split()
+                table[(int(layer[1:]), name, int(c[1:]))] = (hashes, error_text, detail_text)
+            logger.info(f"[KV64697] fast diag reference: {len(table)} lines from {path}")
+        _KV64697_REFERENCE.append(table)
+    return _KV64697_REFERENCE[0]
+
+
 def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
     started = time.perf_counter()
     timings = dict(reference_seconds=0.0, readback_seconds=0.0, comparison_seconds=0.0, wait_seconds=0.0)
@@ -420,13 +537,14 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
     layer_metrics = []
     kv64697_lines = []
     layers = range(Gemma4ServiceConfig.NUM_LAYERS)
+    prefetch = 3 if _KV64697_FAST else _PREFETCH_LAYERS  # KV64697_FAST_DIAG: golden loads are the bottleneck
     # Golden loads and device readback each run up to _PREFETCH_LAYERS ahead on their own thread;
     # reference/readback are those threads' busy time and wait is how long this thread blocked on them.
     # A layer's heads compare concurrently, but each worker keeps this thread's intra-op thread count,
     # so every reduction splits as it would serially, and results are folded in layer and head order:
     # every reported number is bit-identical to a serial pass.
     with (
-        ThreadPoolExecutor(1) as golden_loader,
+        ThreadPoolExecutor(3 if _KV64697_FAST else 1) as golden_loader,
         ThreadPoolExecutor(1) as device_reader,
         ThreadPoolExecutor(
             _COMPARE_WORKERS, initializer=torch.set_num_threads, initargs=(torch.get_num_threads(),)
@@ -439,12 +557,12 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
                 device_reader.submit(_timed, _read_layer_heads, read_heads, layer),
             )
 
-        pending = deque(submit(layer) for layer in layers[:_PREFETCH_LAYERS])
+        pending = deque(submit(layer) for layer in layers[:prefetch])
         try:
             for layer in layers:
                 golden, device = pending.popleft()
-                if layer + _PREFETCH_LAYERS < len(layers):
-                    pending.append(submit(layer + _PREFETCH_LAYERS))
+                if layer + prefetch < len(layers):
+                    pending.append(submit(layer + prefetch))
                 previous_timings = timings.copy()
                 start = time.perf_counter()
                 expected_heads, seconds = golden.result()
@@ -467,7 +585,10 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
                     measurements.append(dict(layer=layer, config=CONFIG_NAMES[config_id], pcc=scores))
                 timings["comparison_seconds"] += time.perf_counter() - start
                 if layer in _KV64697_LAYERS:
-                    kv64697_lines.extend(_kv64697_diag(layer, actual_heads, expected_heads))
+                    if _KV64697_FAST:
+                        kv64697_lines.extend(_kv64697_diag_fast(layer, actual_heads, expected_heads, comparer))
+                    else:
+                        kv64697_lines.extend(_kv64697_diag(layer, actual_heads, expected_heads))
                 all_comparisons.extend(layer_comparisons)
                 layer_summary = summarize_metrics(layer_comparisons)
                 layer_metrics.append(dict(layer=layer, **layer_summary))
