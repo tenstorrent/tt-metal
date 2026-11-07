@@ -233,8 +233,8 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
     const DFBSpecName GRAD_OUTPUT_DFB{"grad_output"};
     const DFBSpecName INPUT_DFB{"input"};
     const DFBSpecName GRAD_INPUT_DFB{"grad_input"};
-    const DFBSpecName READER_SCRATCH_DFB{"reader_scratch"};
-    const DFBSpecName WRITER_SCRATCH_DFB{"writer_scratch"};
+    const ScratchpadSpecName READER_SCRATCH{"reader_scratch"};
+    const ScratchpadSpecName WRITER_SCRATCH{"writer_scratch"};
     const TensorParamName GRAD_OUTPUT{"grad_output"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
@@ -281,22 +281,23 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
         output_single_tile_size,
         can_alias_shards ? BorrowedFrom{OUTPUT} : std::nullopt));
 
+    // ---- Scratchpads ----
+
     // Scratch for the row-major kernels' unaligned pieces (see kernels/dataflow/row_major_pages.hpp):
     // one staging window of at most a chunk plus two alignment units, plus slack for rounding the
     // scratch start up to the widest buffer alignment. One each, since the reader and writer run
     // concurrently.
+    Group<ScratchpadSpec> scratchpads;
     if (rm_blocked) {
         const uint32_t max_alignment =
             std::max({grad_paging.alignment, input_paging.alignment, output_paging.alignment});
         const uint32_t scratch_bytes =
             std::max({grad_output_single_tile_size, input_single_tile_size, output_single_tile_size}) +
             (3 * max_alignment);
-        for (const DFBSpecName& name : {READER_SCRATCH_DFB, WRITER_SCRATCH_DFB}) {
-            dataflow_buffers.push_back(DataflowBufferSpec{
+        for (const ScratchpadSpecName& name : {READER_SCRATCH, WRITER_SCRATCH}) {
+            scratchpads.push_back(ScratchpadSpec{
                 .unique_id = name,
-                .entry_size = scratch_bytes,
-                .num_entries = 1,
-                .data_format_metadata = output_dfb_data_format,
+                .size_per_node = scratch_bytes,
             });
         }
     }
@@ -331,10 +332,6 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
     if (rm_blocked) {
         // Unary's row-major block scheme, with page addressing generalized per tensor -- see
         // kernels/dataflow/row_major_pages.hpp.
-        //
-        // Each scratch DFB is the staging window of one kernel. Only that kernel touches it, and only
-        // through get_write_ptr(), never through the FIFO. So the kernel is bound as both its
-        // producer and its consumer.
         reader = KernelSpec{
             .unique_id = READER,
             .source =
@@ -352,15 +349,12 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
                         .accessor_name = "input",
                         .endpoint_type = DFBEndpointType::PRODUCER,
                     },
-                    DFBBinding{
-                        .dfb_spec_name = READER_SCRATCH_DFB,
+                },
+            .scratchpad_bindings =
+                {
+                    ScratchpadBinding{
+                        .scratchpad_spec_name = READER_SCRATCH,
                         .accessor_name = "scratch",
-                        .endpoint_type = DFBEndpointType::PRODUCER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = READER_SCRATCH_DFB,
-                        .accessor_name = "scratch",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
                     },
                 },
             .tensor_bindings =
@@ -410,15 +404,12 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
                         .accessor_name = "dst",
                         .endpoint_type = DFBEndpointType::CONSUMER,
                     },
-                    DFBBinding{
-                        .dfb_spec_name = WRITER_SCRATCH_DFB,
+                },
+            .scratchpad_bindings =
+                {
+                    ScratchpadBinding{
+                        .scratchpad_spec_name = WRITER_SCRATCH,
                         .accessor_name = "scratch",
-                        .endpoint_type = DFBEndpointType::PRODUCER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = WRITER_SCRATCH_DFB,
-                        .accessor_name = "scratch",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
                     },
                 },
             .tensor_bindings =
@@ -706,6 +697,7 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
         .name = "unary_backward",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units =
             {

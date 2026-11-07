@@ -9,6 +9,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 
 // Row-major addressing shared by the unary-backward row-major reader and writer.
 //
@@ -136,9 +138,10 @@ inline void write_piece(
     noc.async_write_barrier();
 }
 
-// The scratch DFB is sized with slack (by the host, from the buffers' alignments) so its start can
+// The scratchpad is sized with slack (by the host, from the buffers' alignments) so its start can
 // be rounded up to the widest alignment any of its transfers use.
-template <typename Dfb>
-inline uint32_t aligned_scratch(const Dfb& scratch, uint32_t alignment) {
-    return round_up_to(scratch.get_write_ptr(), alignment);
+inline uint32_t aligned_scratch(const Scratchpad<uint8_t>& scratch, uint32_t alignment) {
+    // Rounding the start up to an alignment needs the raw L1 address.
+    return round_up_to(
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(scratch.local_mem())), alignment);
 }

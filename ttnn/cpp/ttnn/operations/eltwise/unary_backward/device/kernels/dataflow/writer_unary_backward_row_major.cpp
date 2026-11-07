@@ -35,8 +35,8 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_dst(dfb::dst);
-    DataflowBuffer dfb_scratch(dfb::scratch);
-    const uint32_t scratch = aligned_scratch(dfb_scratch, dst_paging.alignment);
+    Scratchpad<uint8_t> scratchpad(scratch::scratch);
+    const uint32_t scratch = aligned_scratch(scratchpad, dst_paging.alignment);
 
     const uint32_t end_block = start_block + num_blocks;
     for (uint32_t block = start_block; block < end_block; ++block) {
