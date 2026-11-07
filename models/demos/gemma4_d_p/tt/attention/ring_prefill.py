@@ -413,6 +413,7 @@ def sliding_ring_prefill_attention(
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
+    halo_parity=0,
 ):
     """Attend this rank's Q shard over the cached prefix via the CP ring, with separate K and V caches.
 
@@ -456,7 +457,11 @@ def sliding_ring_prefill_attention(
         scale=scale,
         compute_kernel_config=compute_kernel_config,
         dim=2,
-        multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
+        multi_device_global_semaphore=(
+            ccl_manager.ring_attention_ccl_semaphore_handles[:2] + [ccl_manager.kv64697_alt_halo_semaphore]
+            if halo_parity and ccl_manager.kv64697_alt_halo_semaphore is not None
+            else ccl_manager.ring_attention_ccl_semaphore_handles
+        ),
         num_links=ccl_manager.num_links,
         cluster_axis=mesh_config.cp_axis,
         mesh_device=mesh_device,

@@ -117,6 +117,12 @@ class CCLManager:
             ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)
         ]
         self._ring_gather_buffers = {}
+        # #64697 experiment: a second halo semaphore for odd sliding layers.
+        self.kv64697_alt_halo_semaphore = (
+            ttnn.create_global_semaphore(mesh_device, core_range_set, 0)
+            if os.environ.get("KV64697_ALT_HALO_SEM", "0") == "1"
+            else None
+        )
 
     def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Return persistent ring-attention receive storage.
