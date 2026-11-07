@@ -16,8 +16,8 @@ it. A restore writes conv_carry's tile rows past kc - 1 as zeros. tests/test_spe
 mode against the op chains.
 
 The descriptor is rebuilt per call: block pages and buffer addresses are common runtime args, which do not enter the
-program hash, so each mode compiles once (SpecGdnBlockState.warmup) and every later call reuses it. Nothing is
-allocated per call.
+program hash, so each mode compiles once per core grid (WINDOW and CHAIN grids grow with the entry count) and result
+accessor in SpecGdnBlockState.warmup, and every later call reuses it. Nothing is allocated per call.
 """
 
 from pathlib import Path
@@ -305,6 +305,29 @@ class GdnBlockIO:
             common += [0] * (4 * (WIN_MAX - len(part))) + layers
             accessors = (pv0.rec1, pv0.conv, w0, w0, pv0.k)
             self._run(WINDOW, cta, accessors, common, [w0, pv0.conv], len(part) * len(st.layers), l1)
+
+    def _entry_counts(self, per_entry, most):
+        """Entry counts 1 .. ``most``, one per core grid _cores gives a call of that many entries (``per_entry`` work
+        items each). The grid is in the program hash, so a call with another entry count can need another program."""
+        counts, grids = [], set()
+        for m in range(1, int(most) + 1):
+            n = self._cores(m * per_entry)[0]
+            if n not in grids:
+                grids.add(n)
+                counts.append(m)
+        return counts
+
+    def warmup(self, results=()):
+        """Compile every WINDOW and CHAIN program a step can build, writing only vLLM's null block 0: one call per core
+        grid, and CHAIN without a result buffer and with each of ``results`` (the result accessor is a compile-time
+        argument). Call before the decode traces are captured: a program compiled later misses the program cache."""
+        st = self.state
+        nl = len(st.layers)
+        for m in self._entry_counts(nl, WIN_MAX):
+            self.window([(0, 0, e % st.G, 0) for e in range(m)])
+        for res in (None, *results):
+            for m in self._entry_counts(nl * (st.layout.nv + 1), self._ch_max()):
+                self.chain([(0, e % st.G, 0, 0, None, (1,)) for e in range(m)], res)
 
     def _ch_max(self):
         """CHAIN entries per program: what the runtime args leave after the header and the layers."""

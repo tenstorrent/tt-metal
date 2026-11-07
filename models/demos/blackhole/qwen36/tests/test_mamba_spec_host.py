@@ -1011,6 +1011,143 @@ def test_a_checkpoint_from_a_snapshot_replays_that_slots_write_trace(monkeypatch
     assert eager == ["eager", "eager"]
 
 
+# ------------------------------------------------------------------- block I/O programs and the post-capture guard
+class _ProgramCache:
+    """GdnBlockIO._run's programs by what the generic_op program hash reads (mode and compile-time args with the core
+    grid, accessor args, runtime-arg count, circular buffer size). Once ``forbid`` is set a program not seen before
+    raises, as a program-cache miss does after QWEN36_FORBID_POST_CAPTURE_COMPILE=1 arms the guard."""
+
+    def __init__(self):
+        self.seen, self.forbid = set(), False
+
+    def run(self, io, mode, cta_extra, accessors, common, tensors, items, l1):
+        n, nx, _ = io._cores(items)
+        key = (mode, tuple(cta_extra), n, nx, tuple(t.acc for t in accessors), len(common), l1)
+        if self.forbid and key not in self.seen:
+            raise RuntimeError(f"program cache miss after capture: mode {mode} on {n} cores")
+        self.seen.add(key)
+
+
+class _Buf:
+    """A fake DRAM-interleaved device buffer; ``acc`` stands for its TensorAccessorArgs compile-time args."""
+
+    def __init__(self, acc, addr, page, shape=(), layout=None, dtype=None):
+        self.acc, self.addr, self.page, self.shape, self.layout, self.dtype = acc, addr, page, shape, layout, dtype
+
+    def buffer_address(self):
+        return self.addr
+
+    def buffer_aligned_page_size(self):
+        return self.page
+
+    def memory_config(self):
+        import ttnn
+
+        return SimpleNamespace(memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED)
+
+
+def _block_io_state(monkeypatch, cache):
+    """SpecGdnBlockState with 12 GDN layers in 3 groups (TP=8, BF8 block 1024) on a 13 x 10 core grid: its GdnBlockIO
+    programs go to ``cache``, the eager ops of warmup are stubbed out."""
+    import ttnn
+    from models.demos.blackhole.qwen36.tt import gdn_block_io as gbio
+    from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
+
+    monkeypatch.setattr(gbio, "_accessor", lambda t: [t.acc])
+    monkeypatch.setattr(gbio.GdnBlockIO, "_run", lambda io, *a: cache.run(io, *a))
+    monkeypatch.setattr(gbs, "zero_kv_blocks", lambda model, ids: None)
+    monkeypatch.setattr(sbs, "_PageTables", lambda s: contextlib.nullcontext())
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **k: t)
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
+    lay = _layout(8, 1024, 8, num_blocks=96)
+    C = (2 * 16 * 128 + 48 * 128) // 8
+    mesh = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=13, y=10))
+    layers = []
+    for i in range(12):
+        k, v = 1000 * (2 * i + 1), 1000 * (2 * i + 2)
+        views = sbs._LayerViews(
+            rec1=_Buf("fp32", k, sbs.FP32_PAGE),
+            rec2=_Buf("fp32", v, sbs.FP32_PAGE),
+            conv=_Buf("bf16", v, sbs.BF16_PAGE),
+            conv_k=_Buf("bf16", k, sbs.BF16_PAGE),
+            group=i % 3,
+            two_pool=True,
+            k=_Buf("bf8", k, sbs.BF8_TILE),
+            v=_Buf("bf8", v, sbs.BF8_TILE),
+        )
+        win = _Buf("window", 100_000 + i, sbs.BF16_PAGE, (B, 3 + T, C), ttnn.TILE_LAYOUT, ttnn.bfloat16)
+        dn = SimpleNamespace(
+            Nv=lay.nv, Dk=128, Dv=128, K=4, qkv_dim_tp=C, _spec_paged=views, verify_win_cur=lambda w=win: w
+        )
+        layers.append((i, dn, i % 3))
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.model = SimpleNamespace(
+        mesh_device=mesh,
+        _paged_kv_caches=[],
+        _bind_gdn_prefill_scratch=lambda: None,
+        _unbind_gdn_prefill_scratch=lambda prev: None,
+    )
+    st.mesh, st.T, st.G, st.layout, st.layers = mesh, T, 3, lay, layers
+    st._io = st._io_zero = None
+    # the fused steps' int32 ROW_MAJOR result buffers, set by MTPSpecEngine.prepare_decode before the warmup
+    st.chain_results = [
+        _Buf("result", 200_000 + r, 64, (2 + r, 64), ttnn.ROW_MAJOR_LAYOUT, ttnn.int32) for r in range(2)
+    ]
+    st.write_prefill = st.restore = lambda u: None
+    st.materialize = lambda *a, **k: None
+    st._zero_now = lambda ids: None
+    st._prepare_block_traces = lambda: None
+    return st
+
+
+def test_boundary_conv_writes_after_the_warmup_compile_nothing(tmp_path, monkeypatch):
+    """SpecGdnBlockState.warmup compiles every WINDOW program after_verify can build (one per core grid): decodes that
+    cross the 1024 boundary, then every count of boundary conv writes in a step, run with program-cache misses
+    forbidden."""
+    cache = _ProgramCache()
+    st = _block_io_state(monkeypatch, cache)
+    st.warmup()
+    cache.forbid = True
+    served = []
+
+    def serve(due):
+        st.book = SimpleNamespace(take_pending=lambda: list(due))
+        st.after_verify()
+        served.append(len(due))
+
+    class Served(_BookAsState):
+        def take_pending(self):
+            due = super().take_pending()
+            serve(due)
+            return due
+
+    monkeypatch.setitem(globals(), "_BookAsState", Served)
+    _decode_boundary_scenario(tmp_path)
+    assert sum(served) > 0
+    for n in range(1, 2 * B * st.G + 1):  # up to every row's three groups twice
+        serve([(u % B, 0, u % st.G, 5) for u in range(n)])
+
+
+@pytest.mark.parametrize("on_device", [False, True], ids=["counts_on_host", "result_buffer"])
+def test_chained_copies_after_the_warmup_compile_nothing(monkeypatch, on_device):
+    """SpecGdnBlockState.warmup compiles every CHAIN program run_chain_copies can build: host-selected (counts) and
+    device-selected (each fused step's result buffer), for every count of copies in a step."""
+    cache = _ProgramCache()
+    st = _block_io_state(monkeypatch, cache)
+    st.warmup()
+    cache.forbid = True
+    st.book = SimpleNamespace(forget_block=lambda b: None)
+    for n in range(1, 2 * st._io._ch_max() + 2):
+        for res in st.chain_results if on_device else [None]:
+            st.chain_copies = [(u % B, u % st.G, 5 + u, 40 + u, None if u % 2 else 1, (1, 2)) for u in range(n)]
+            if res is None:
+                st.run_chain_copies(counts={u: 1 for u in range(B)})
+            else:
+                st.run_chain_copies(result=res)
+            assert st.chain_copies == []
+
+
 @pytest.mark.parametrize("mode", ["none", "align"])
 def test_rows_left_out_of_a_step_are_held_and_resume(tmp_path, mode):
     # A long prompt arriving mid-decode takes the step budget: running rows sit out steps (the TT runner runs prefill

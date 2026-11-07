@@ -1183,8 +1183,8 @@ class SpecGdnBlockState:
 
     def warmup(self):
         """Run every eager program of the block paths once on vLLM's null block 0 (prefill write and restore on the
-        bound B=1 scratch, the conv write from the window, the whole-block copy and zeroing), so none compiles after
-        the decode traces are captured."""
+        bound B=1 scratch, the conv write from the window, the block I/O kernel's boundary conv writes and chained
+        copies, the whole-block copy and zeroing), so none compiles after the decode traces are captured."""
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn_block_state import zero_kv_blocks
 
@@ -1201,6 +1201,9 @@ class SpecGdnBlockState:
         with _PageTables(self) as pts:
             for g in range(self.G):
                 self.materialize(0, 0, g, 0, pts)
+        io = self._window_io()  # the verify windows exist: prepare_verify_trace ran before this warmup
+        if io is not None:  # after_verify and run_chain_copies run these programs instead of materialize
+            io.warmup(getattr(self, "chain_results", None) or ())
         mesh = model.mesh_device
         pt = ttnn.from_torch(
             torch.tensor([[0]], dtype=torch.int32),
