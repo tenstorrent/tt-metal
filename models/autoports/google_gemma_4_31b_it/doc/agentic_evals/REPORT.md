@@ -157,11 +157,12 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | framed-benchmark-dry | 0.07723 / 0.07529 | 0.00000 | none/solved: success: True; result: Frozen local benchmark arm passed; 8/8 exact headline outputs vs eef; phase complete and devices closed. No combined dry/release claim.; credited saving hours: 0 |
 | gpqa80-c8-saturation-comparison | 5.33396 / unknown | 2.27891 | running/pending: Final valid40 gain accepted; empirical-tail and devicebox projections fit firstdry reserve. NormalC4/80 continues. |
 | framed-logger-image-provenance | 0.00000 / 0.00000 | 0.00000 | none/solved: Old-image reuse rejected: all3changed files baked into image and no stock TT-tree overlay. Exact immutable image required; optional candidate cannot delay fallback. |
-| ci-framed-confirmation-operator9 | 0.18556 / unknown | 0.00000 | running/pending: Operator9 authorizes unchanged stock retry>=90min; owner plan explicitly covers it. No delay to normal rungs/dry; prior effort final evidence unchanged. |
+| ci-framed-confirmation-operator9 | 0.18556 / 0.16583 | 0.00000 | kept/solved: Actual CI original2 replies exact except volatile IDs/time; retained3151/5480 chains exact;22 unique frames/8 records,0errors/loss/pending. Fullcap and timely no-score observation remain unproven; separate e… |
 | release-freeze-materialization | 0.00000 / 0.00000 | 0.00000 | none/solved: Exact candidate dry/release argv and cohort parity prepared; complete initial8 native replies, freshness/no-score and workflow-drift checks specified. No freeze, dispatch or pass claim. |
 | ci-log-download-timeout | 0.00000 / 0.00000 | 0.00000 | none/solved: Existing bounded observers recovered unchanged: successful 61MB/21MB snapshots in1.916680s/1.088183s, hashes/offsets verified. Retrieval incident resolved; transport cause unresolved and upstream coverage/fr… |
+| early-banked40-fallback-dry | 2.17935 / unknown | 0.00000 | running/pending: Accepted f579 CI exactness and frozen40 C8 source/image; early fallback dry dispatched with2 other runs active. No final cohort selection;80 upgrade requires new dry. |
 
-Evidence is written once by each effort; this table summarizes the current coordinator disposition. The full ranking history is preserved through the `rankings_history` links in `efforts.json`, followed by its recent inline rankings. Unmeasured savings remain unknown or receive zero planning credit.
+Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
 ## Configuration and remaining limits
 
@@ -196,3 +197,5 @@ Operator decision9 permits unchanged build retries at least90minutes apart and a
 Historical benchmark jobs42239308813,42252352037 and42264721517 are now included in compute accounting. Their logs identify the stock `models.demos.gemma4_31b_qb2` adapter and throughput-target failures; they are excluded from this autoport's performance evidence. Current eval startup explicitly confirms this run's full60 autoport.
 
 The CI log-download incident recovered on unchanged observers: successful snapshots took1.916680s and1.088183s. No source, workflow or device action was needed. Its transport cause remains unknown, and successful blob retrieval does not establish complete/current runner coverage. Evidence: `runs/ci-log-download-timeout/RESULT.json`.
+
+Atomic logging is now confirmed on actual CI run42334508049: original2 native replies match apart from IDs/timestamps, retained3151/5480-token chains match, and22 unique frames reconstruct8 complete records without loss. Device allocation0.165833h versus0.185556h predicted; no speed claim. Full-cap transport and timely pre-score observation remain to prove. The early frozen40/C8 fallback dry42339332447 tests those conditions while both80 runs continue; it does not select the final cohort. Evidence: `runs/ci-native-framed-confirmation-retry90m/RESULT.json`, `runs/early-banked40-fallback-dry/freeze.json`.

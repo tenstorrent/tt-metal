@@ -1129,6 +1129,48 @@
       "ci-native-framed-confirmation-retry90m": [
         152,
         189
+      ],
+      "early-banked40-fallback-dry": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187,
+        153,
+        135,
+        81,
+        93,
+        7,
+        42,
+        24,
+        168,
+        20,
+        28,
+        13,
+        94,
+        61,
+        15,
+        123,
+        160,
+        27,
+        29,
+        90,
+        127,
+        121,
+        188,
+        136,
+        174,
+        184,
+        9,
+        80,
+        102,
+        182,
+        173
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562725+00:00",
@@ -1194,6 +1236,12 @@
       "registered_at": "2026-11-06T20:47:47.358757+00:00",
       "status": "held_not_admitted",
       "admission": "Previousrung valid plus measuredprojection withinrun12h andstageschedule; no rungskips"
+    },
+    "early_fallback_dry_source": {
+      "source": "default_rule",
+      "rule": "Exact unchanged banked40 cohort, early no-score dry only",
+      "registered_at": "2026-11-07T04:37:31.486313+00:00",
+      "evidence": "runs/early-banked40-fallback-dry/freeze.json"
     }
   },
   "swe_bench_verified": {

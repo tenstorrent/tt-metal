@@ -248,6 +248,10 @@
     {
       "fact": "A gh job-log download timeout covers the whole redirect/blob transfer. Preserve prior snapshot until a complete successful download; recovery and local hashes do not establish upstream log freshness/completeness.",
       "evidence": "runs/ci-log-download-timeout/RESULT.json"
+    },
+    {
+      "fact": "Atomic model-owned HEX2 records survived actual stock CI:22 unique frames reconstruct8 complete envelopes and both original2 replies match. First complete archived snapshot arrived after score; transport success is not timely no-score dry evidence.",
+      "evidence": "runs/ci-native-framed-confirmation-retry90m/RESULT.json"
     }
   ],
   "suite_timings": [
@@ -622,6 +626,22 @@
         0.7577702083276673
       ],
       "evidence": "runs/gpqa40-c8-saturation-comparison/audit.json"
+    },
+    {
+      "eval": "r1_gpqa_diamond",
+      "arm": "ci-native-framed-confirmation-retry90m",
+      "tasks": 2,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 0.04971316814249601,
+      "agent_hours": null,
+      "timeouts": 0,
+      "score": 1.0,
+      "confidence_interval_95": [
+        0.3423802275066531,
+        1.0
+      ],
+      "evidence": "runs/ci-native-framed-confirmation-retry90m/RESULT.json"
     }
   ],
   "generic_fixes": [

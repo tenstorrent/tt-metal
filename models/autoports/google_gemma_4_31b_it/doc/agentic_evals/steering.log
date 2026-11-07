@@ -46,3 +46,5 @@
 2026-11-07T03:16:47.611140+00:00 Resume boundary: inputs unchanged; operator decision9 found in AGENTS.md/run_contract. Stock build retries>=90min only; exact file-provenance required for image reuse; optional logger cannot delay CI-proven dry/release fallback. Recording three omitted failed benchmark jobs. No steering.md.
 2026-11-07T04:03:25.961500+00:00 Freeze preparation boundary: inputs unchanged extended48h/run12h; operator9 read and applied, no steering.md. Prepared commands do not select configuration; actual80, image confirmation and fresh dry remain pending.
 2026-11-07T04:22:39.972196+00:00 ci-log-download-timeout closure: re-read inputs/run_contract; no new steering; operator9 unchanged, no dispatch/source/policy change.
+2026-11-07T04:34:58.759005+00:00 early fallback-dry preparation: inputs/run_contract unchanged; no steering file; operator9 candidate acceptance required before source/image substitution. No dispatch yet.
+2026-11-07T04:36:57.816861+00:00 actual framed CI confirmation accepted after rereading inputs; operator9 unchanged, fullcap and dry remain separate.

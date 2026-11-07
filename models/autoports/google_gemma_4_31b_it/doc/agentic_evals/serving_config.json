@@ -431,6 +431,14 @@
       "max_num_seqs": 8,
       "pool_ids": 10248,
       "batch_reason": "Two original smoke tasks; smallest validated batch>=2, current C4 ceiling unchanged"
+    },
+    "early-banked40-fallback-dry": {
+      "batch": 8,
+      "planned_clients": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 20480,
+      "batch_reason": "Smallest validated batch>=8; accepted C8/40 measured31.298% shorter than C4 on same40",
+      "task_containers": 0
     }
   },
   "release_limits": {
@@ -720,7 +728,7 @@
     "terminal_bench_2_1": 2
   },
   "admission_limit_reason": "GPQA C4 admitted by full131072-context four-resident capacity test and valid scored10; tool suites remain C2. No four-full262144-context or four-task-sandbox claim.",
-  "current_runtime_publication_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+  "current_runtime_publication_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
   "singleton_candidate_capacity": {
     "batch": 1,
     "clients": 1,
@@ -802,5 +810,11 @@
       "eval40_hours": 2.5011817041318865,
       "shorter40_percent": 31.298211968846623
     }
+  },
+  "accepted_atomic_native_logging": {
+    "source": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+    "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ae8bf2ac98d004471bc58959995dd25dc04cc76bb250b794d746bc073ac8f7fe",
+    "evidence": "runs/ci-native-framed-confirmation-retry90m/RESULT.json",
+    "scope": "Actual stock CI original2 plus prior local exactness; fullcap/live dry remains to prove"
   }
 }
