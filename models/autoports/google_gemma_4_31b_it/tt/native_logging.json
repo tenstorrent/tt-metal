@@ -15,10 +15,9 @@
       "backup_count": 5
     },
     "native_hex": {
-      "class": "logging.StreamHandler",
+      "class": "models.autoports.google_gemma_4_31b_it.tt.native_log_formatter.NativeFramedHandler",
       "level": "INFO",
-      "stream": "ext://sys.stdout",
-      "formatter": "native_hex"
+      "stream": "ext://sys.stdout"
     }
   },
   "loggers": {

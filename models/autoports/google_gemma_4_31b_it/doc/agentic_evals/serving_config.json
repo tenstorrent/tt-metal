@@ -383,6 +383,27 @@
       "batch": 8,
       "max_num_seqs": 8,
       "batch_reason": "Conditional diagnosis reproduces B8 serving geometry of C4/40; not a performance comparison"
+    },
+    "ci-native-large-reply-visibility-local": {
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 10248,
+      "batch_reason": "Smallest supported bucket above2; exact accepted native paired fixture"
+    },
+    "ci-native-large-reply-visibility-local-retry": {
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 10248,
+      "batch_reason": "Smallest supported bucket above2; exact accepted native paired fixture"
+    },
+    "ci-native-framed-confirmation": {
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "pool_ids": 10248,
+      "batch_reason": "Two original smoke tasks; smallest validated batch>=2, current C4 ceiling unchanged"
     }
   },
   "release_limits": {

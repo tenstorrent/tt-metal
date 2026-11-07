@@ -1,0 +1,33 @@
+{
+  "status": "published_by_coordinator",
+  "checked_at": "2026-11-07T01:51:12.723314+00:00",
+  "tt_candidate": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+  "tt_remote_verified": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+  "candidate_parent_equals_remote": true,
+  "separate_checkout": "/home/mvasiljevic/gemma4-31b-pipeline-v3/metal-native-framed-logs",
+  "branch": "prep/native-framed-logs",
+  "dedicated_remote_branch": "mvasiljevic/gemma4-31b-goal12-v3",
+  "tree_guard": "Only model native_log_formatter.py, native_logging.json, test_native_log_formatter.py; all other tree entries unchanged; clean worktree",
+  "hooks": "full hooks passed;3 focused model host tests",
+  "publication_precondition": "Coordinator accepts local native pair and explicitly authorizes push; recheck remote before normal FF push",
+  "tti_ci_confirmation_existing_sha": "483509781a0898395208fe0fdc14f54eb3ff8857",
+  "tti_ci_confirmation_tasks": [
+    152,
+    189
+  ],
+  "tti_publication_required": false,
+  "new_tt_image_required": true,
+  "ci_baseline_run": 42302118669,
+  "ci_comparison": "Exact native outputs/retained chains and complete reassembled records, not score-only",
+  "normal80_existing_tti_sha": "9b4b88c0ac2762d75e824818ec7428c594dba0f0",
+  "ci_cost_proposal_from_coordinator": {
+    "device_hours": 0.180556,
+    "build_hours": 0.934167,
+    "queue_hours": 0.849444
+  },
+  "ci_admitted": true,
+  "no_dispatch": false,
+  "published_sha": "f57978407eaacf09587f5793b8ae46ca7af839ea",
+  "remote_verified": true,
+  "ci_run_id": 42326665396
+}
