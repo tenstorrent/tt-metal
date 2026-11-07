@@ -51,6 +51,7 @@ def _env_pixels(name, default):
 VIDEO_MAX_PIXELS = _env_pixels("MIMO_VIDEO_MAX_PIXELS", 307200)
 VIDEO_TOTAL_MAX_PIXELS = _env_pixels("MIMO_VIDEO_TOTAL_MAX_PIXELS", 268435456)
 RESIZE_CHUNK = 32  # frames turned into floats and resized at a time
+EVEN_FRAMES = os.environ.get("MIMO_VIDEO_EVEN_FRAMES", "1") == "1"
 
 
 def loader_timestamps(metadata, num_frames):
@@ -126,6 +127,17 @@ def _resized_frames(video, size):
     return torch.cat(out)
 
 
+def even_frames(video, metadata):
+    """Drop the last of an odd number of loader-sampled frames (MIMO_VIDEO_EVEN_FRAMES=1, default). The checkpoint's
+    processor would repeat it to fill the last frame pair; Xiaomi's API keeps whole pairs only (a 523.6 s clip at 2 fps:
+    its 1047 frames give it 523 grids, the repeat 524, 238 more prompt tokens)."""
+    indices = metadata.get("frames_indices") if isinstance(metadata, dict) else None
+    n = len(video) if hasattr(video, "__len__") else 0
+    if not EVEN_FRAMES or indices is None or n != len(indices) or n < 3 or n % 2 == 0:
+        return video, metadata
+    return video[:-1], dict(metadata, frames_indices=list(indices[:-1]))
+
+
 def mimo_video(video, metadata=None, resize=None):
     """A video as the checkpoint's processor takes it: (frames float [T, C, H, W], times float32 [T]), the loader's
     times with MIMO_VIDEO_TIMESTAMPS=loader and metadata that describes the frames, else upstream's. ``resize``:
@@ -134,6 +146,7 @@ def mimo_video(video, metadata=None, resize=None):
         return video
     if isinstance(video, tuple) and len(video) == 2 and (video[1] is None or isinstance(video[1], dict)):
         video, metadata = video
+    video, metadata = even_frames(video, metadata)
     shape = tuple(getattr(video, "shape", ()))
     if resize is not None and len(shape) == 4 and shape[-1] in (1, 3, 4):
         size = processor_frame_size(*resize, shape[1], shape[2], shape[0])

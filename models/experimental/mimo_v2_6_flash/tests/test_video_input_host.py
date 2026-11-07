@@ -179,6 +179,17 @@ def test_xiaomi_frame_sizes(processors):
     assert (t, gh * gw // 4) == (32, 276)
 
 
+def test_odd_frame_count_keeps_whole_pairs(processors, monkeypatch):
+    """33 sampled frames give 16 grids, as Xiaomi's API counts them (its 523.6 s clip at 2 fps: 523 grids), not the 17
+    the checkpoint's processor makes by repeating the last frame; MIMO_VIDEO_EVEN_FRAMES=0 keeps the repeat."""
+    from models.experimental.mimo_v2_6_flash.tt import video_input
+
+    frames = vi.sample_video(num_frames=33, size=(320, 192))
+    assert run(processors["ours"], (frames, loader_metadata(33)))[2]["video_grid_thw"].data.tolist()[0] == 16
+    monkeypatch.setattr(video_input, "EVEN_FRAMES", False)
+    assert run(processors["ours"], (frames, loader_metadata(33)))[2]["video_grid_thw"].data.tolist()[0] == 17
+
+
 def test_video_items_bounded_only_by_the_context(processors):
     """vLLM sizes its encoder cache from the processing info's per-item bounds and refuses a longer item; upstream's
     video bound (114688) refused a VGI-Bench clip of 124078 embedding rows. A video's bound is the context."""
