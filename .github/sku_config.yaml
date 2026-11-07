@@ -6,6 +6,8 @@
 #   merge_queue_sku: (Optional) Concrete prio SKU to use when github.event_name is
 #     merge_group. Logical test-list SKUs should set this instead of listing prio
 #     SKUs in YAML. Multiple logical SKUs may share the same merge_queue_sku.
+#   default_sku: (Optional) Concrete SKU to use on every other event. Lets a routing-only
+#     SKU send merge-queue runs to one pool and all other triggers to another.
 #   weights-cache-mode: (Optional) How model weights are mounted for the SKU.
 skus:
   wh_llmbox:
@@ -35,12 +37,20 @@ skus:
       - topology-6u
       - in-service
 
+  # Routing-only SKU for merge-gate test lists. The merge queue lands on the dedicated
+  # CIv1 galaxies; every other trigger lands on the general wh_galaxy pool.
   wh_galaxy_merge_gate:
+    merge_queue_sku: wh_galaxy_merge_gate_dedicated
+    default_sku: wh_galaxy
+
+  # CIv1 galaxies reserved for the merge queue. They carry pipeline-merge-gate instead of
+  # pipeline-functional or pipeline-perf, so general galaxy jobs cannot land on them.
+  wh_galaxy_merge_gate_dedicated:
     runs_on:
       - arch-wormhole_b0
-      - pipeline-functional
+      - pipeline-merge-gate
       - topology-6u
-      - in-service-dedicated-merge-gate
+      - in-service
 
   wh_galaxy_perf:
     runs_on:

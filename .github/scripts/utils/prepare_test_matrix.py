@@ -6,7 +6,7 @@ This script:
 1. Loads test definitions from a YAML file
 2. Filters tests based on enabled SKUs (comma-separated string)
 3. Optionally intersects with --sku-allowlist (change gating)
-4. Optionally rewrites SKUs to merge_queue_sku when --event is merge_group
+4. Optionally rewrites SKUs to merge_queue_sku (merge_group) or default_sku (other events)
 5. Adds runs_on labels from the SKU configuration
 6. Annotates each entry with weights-cache-mode from sku_config.yaml
    (used by the Blackhole demo pipeline so the per-job container volume mount can
@@ -22,7 +22,8 @@ key that appears under any test entry's skus mapping in the tests YAML. An empty
 tests YAML resolves ALL_SKUS_IN_TESTS to an empty matrix (matrix=[], exit 0) rather than failing.
 
 --event: when set to merge_group, logical SKUs with merge_queue_sku in sku_config are
-rewritten to that concrete prio SKU before runs_on lookup.
+rewritten to that concrete prio SKU before runs_on lookup. On any other event, logical
+SKUs with default_sku are rewritten to that SKU instead.
 
 --sku-allowlist: omit for no extra filter; empty string skips all tests (matrix=[]
 exit 0); otherwise comma-separated logical SKUs intersected with coverage.
@@ -106,17 +107,16 @@ def resolve_sku_for_event(sku_name, sku_config, event):
     Map a logical SKU to its concrete runner SKU for the given event.
 
     On merge_group, if sku_config[sku].merge_queue_sku is set, return that prio SKU.
+    On any other event, if sku_config[sku].default_sku is set, return that SKU.
     """
-    if event != MERGE_GROUP_EVENT:
-        return sku_name
-
+    alias_key = "merge_queue_sku" if event == MERGE_GROUP_EVENT else "default_sku"
     entry = sku_config.get(sku_name) or {}
-    alias = entry.get("merge_queue_sku")
+    alias = entry.get(alias_key)
     if not alias:
         return sku_name
 
     if alias not in sku_config:
-        print(f"::error::SKU '{sku_name}' has merge_queue_sku '{alias}' " f"which is not defined in SKU configuration.")
+        print(f"::error::SKU '{sku_name}' has {alias_key} '{alias}' " f"which is not defined in SKU configuration.")
         sys.exit(1)
 
     print(f"Event '{event}': rewriting SKU '{sku_name}' → '{alias}'")
