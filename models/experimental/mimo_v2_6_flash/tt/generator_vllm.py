@@ -952,6 +952,9 @@ class MiMoV2ForCausalLM:
         # pass is enqueued before any is read, the lanes interleaved so all replicas have work.
         # A lane's replayed later chunks, then its batch passes, go before its other rows: a batch reads no cached KV
         # (it starts at 0), and a replay must not run while an eager pass's output of that lane is alive.
+        # A row whose cached prefix holds a block another row of this step writes (a prefix hit on blocks vLLM
+        # scheduled in this very step) runs after that row, eagerly (``_prefill_readers``).
+        readers = self._prefill_readers(tables, placed)
         by_lane, traced_rows = [], set()
         for lane in range(self.dp):
             groups = {}
@@ -960,7 +963,8 @@ class MiMoV2ForCausalLM:
                     key = prefill_padded_len(p[4]) if self._batchable(p) else ("row", p[0])
                     groups.setdefault(key, []).append(p)
             batches = [g for key, g in groups.items() if not isinstance(key, tuple)]
-            rows_ = [g for key, g in groups.items() if isinstance(key, tuple)]
+            rows_ = [g for key, g in groups.items() if isinstance(key, tuple) and g[0][0] not in readers]
+            late = [g for key, g in groups.items() if isinstance(key, tuple) and g[0][0] in readers]
             # A replayed later chunk goes first: a replay must not run while an eager pass's output of that lane is
             # alive (its own output is copied into the slot's persistent logits row, which a batch replay leaves be).
             # A row is traced only when every chunk prefill_enqueue splits it into replays (chunk_traced); one that
@@ -975,7 +979,8 @@ class MiMoV2ForCausalLM:
                 and model.chunk_traced(g[0][2], g[0][3], g[0][4] - g[0][3])
             ]
             traced_rows.update(g[0][0] for g in traced)
-            by_lane.append(traced + batches + [g for g in rows_ if not any(g is t for t in traced)])
+            rest = [g for g in rows_ if not any(g is t for t in traced)]
+            by_lane.append(traced + batches + rest + self._after_writers(late, readers))
         order = [passes[k] for k in range(max(map(len, by_lane))) for passes in by_lane if k < len(passes)]
         # Nothing chains onto a verify a prefill followed (the plugin builds the next decode from host state).
         self._tip = None
@@ -1034,6 +1039,69 @@ class MiMoV2ForCausalLM:
             and prefill_padded_len(end) <= self.models[0].PREFILL_BATCH_MAX_PADDED
             and not self._mm_rows_in(placed_row[0], start, end)
         )
+
+    def _prefill_readers(self, tables, placed):
+        """{prefill row: the rows of this step it must run after}: a row whose cached prefix (positions before its
+        start) holds a KV block that another row of the step writes.
+
+        vLLM caches a block when it schedules the block's computation, not when the block is computed, so a request
+        admitted in the same step as the chunk that computes a shared prefix (requests sharing a long prompt prefix,
+        say several questions on one video, arriving together) can hit blocks that chunk has not written yet. On a GPU
+        one batched forward writes every row's K / V before any row's attention reads them; here every row is a pass
+        of its own, so the reader must run after the writer, or it attends whatever the blocks held before (another
+        request's K / V: the reader's answer is garbage). Each KV cache group's table is checked (block ids are per
+        lane, and a block belongs to one group at a time); vLLM's null block 0 is shared by design and skipped."""
+        block_sizes = getattr(self, "group_block_sizes", None)
+        if not block_sizes or tables is None or not any(p[3] > 0 for p in placed):
+            return {}
+        reads, writes = {}, {}
+        for i, lane, _, start, end, cached in placed:
+            group_rows = self._group_rows(tables, i)
+            for g, bs in block_sizes.items():
+                row = group_rows.get(g)
+                if row is None:
+                    continue
+                row = torch.as_tensor(row).reshape(-1)
+                # A row recomputed from position 0 in a batch over its cached blocks (``cached``) writes none of them.
+                first = max(start, cached * BLOCK_SIZE) // bs
+                writes[i, g] = row[first : -(-end // bs)]
+                if start > 0:
+                    reads[i, g] = row[: start // bs]
+        out = {}
+        for i, lane, *_ in placed:
+            for j, other, *_ in placed:
+                if j == i or other != lane:
+                    continue
+                for g in block_sizes:
+                    r, w = reads.get((i, g)), writes.get((j, g))
+                    if r is None or w is None or not r.numel() or not w.numel():
+                        continue
+                    w = w[w != 0]
+                    if w.numel() and bool(torch.isin(r, w).any()):
+                        out.setdefault(i, set()).add(j)
+                        break
+        if out:
+            logger.info(
+                "MiMo vLLM: prefill rows reading blocks other rows of the step write run after them: "
+                + ", ".join(f"row {i} after {sorted(js)}" for i, js in sorted(out.items()))
+            )
+        return out
+
+    @staticmethod
+    def _after_writers(rows, readers):
+        """The passes ``rows`` (rows that read blocks other rows of the step write) ordered so each runs after every
+        row of ``rows`` it reads from (the other writers run before all of them). A cycle, which vLLM's block
+        caching cannot make, keeps the remaining rows in their order."""
+        left, out, done = list(rows), [], set()
+        while left:
+            ready = [g for g in left if not (readers[g[0][0]] - done) & {h[0][0] for h in left}]
+            if not ready:
+                ready = left[:1]
+            for g in ready:
+                left.remove(g)
+                out.append(g)
+                done.add(g[0][0])
+        return out
 
     # Multimodal hooks of prefill_forward (MiMoV2OmniForCausalLM): the text model has no multimodal rows.
     def _mm_rows_in(self, row, start, end):
