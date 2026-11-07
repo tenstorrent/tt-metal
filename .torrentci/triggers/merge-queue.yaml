@@ -1,0 +1,30 @@
+---
+triggers:
+  - id: asan-build-merge-queue
+    kind: automatic
+    events: [push]
+    # GitHub's merge queue pushes each entry's candidate merge to its own
+    # branch, gh-readonly-queue/main/pr-<number>-<base sha>. asan-build runs on
+    # every entry to build a historical trend. It is not a required check:
+    # GitHub merges without waiting for it. Pull request heads report it
+    # skipped, "Runs in the merge queue", because only this queue trigger
+    # targets it. `*` spans `/`.
+    pattern: refs/heads/gh-readonly-queue/main/*
+    # Each queue branch carries one commit, so there is no older run to
+    # supersede.
+    concurrency:
+      group: ref
+      supersede: never
+    # GitHub deletes the queue branch when the entry merges or leaves the
+    # queue. Runs for entries that leave the queue (requeues and failures,
+    # about 25% of merge_group runs) are cancelled, so churn burns no CPU.
+    # Merge Gate takes 23-77 min (median 44); asan-build took about 49 min on
+    # a cold image, so a run can also be cancelled when its entry merges first.
+    on-ref-retired: cancel
+    # Normal tier, behind pull request work (default 100): nothing waits on
+    # this run, unlike a blocking queue gate (TorrentCI's own uses 64), so any
+    # free slot serves pull requests and interactive work first.
+    priority: 160
+    targets:
+      jobs: [asan-build]
+      dashboards: []
