@@ -3667,6 +3667,82 @@ void expect_ranks_survive_placement(
 
 }  // namespace
 
+// Required seats: two calls on one mesh intersect (AND); one call with two pools lets a mesh take either (OR).
+TEST(AdjacencyGuidedPlacement, RequiredSeatsManyToMany) {
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+)")};
+    MeshGraphDescriptor unlinked{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)")};
+    auto line = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
+    using tt::tt_metal::AsicID;
+    const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId> left{line.get_physical_node_id(AsicID{100})};
+    const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId> right{line.get_physical_node_id(AsicID{103})};
+
+    // AND across calls: mesh 0 would have to hold 100 and 103, which no 1x2 footprint does, so the second
+    // call is rejected (infeasible together with the first) and the session keeps only the first.
+    SatPlacementEnumerationSession both(pgd, unlinked, line, nullptr, {});
+    ASSERT_TRUE(both.add_required_constraint({MeshId{0}}, {left}));
+    EXPECT_FALSE(both.add_required_constraint({MeshId{0}}, {right}));
+    const auto left_only = both.next();
+    ASSERT_EQ(left_only.size(), 2u);
+    for (const PlacedMesh& placed : left_only) {
+        if (placed.mesh_id == MeshId{0}) {
+            EXPECT_TRUE(placed.placement.asics.contains(*left.begin()));
+        }
+    }
+
+    // One-to-many: mesh 0 may hold 100 or 103, so it is seated on exactly one of them.
+    for (const auto& pools : {std::vector{left, right}, std::vector{right, left}}) {
+        SatPlacementEnumerationSession one(pgd, unlinked, line, nullptr, {});
+        ASSERT_TRUE(one.add_required_constraint({MeshId{0}}, pools));
+        const auto placements = one.next();
+        ASSERT_EQ(placements.size(), 2u);
+        for (const PlacedMesh& placed : placements) {
+            if (placed.mesh_id == MeshId{0}) {
+                EXPECT_NE(
+                    placed.placement.asics.contains(*left.begin()), placed.placement.asics.contains(*right.begin()));
+            }
+        }
+    }
+
+    // Many-to-many: each mesh holds one of the two pools, and the two meshes take different ones.
+    SatPlacementEnumerationSession either(pgd, unlinked, line, nullptr, {});
+    ASSERT_TRUE(either.add_required_constraint({MeshId{0}, MeshId{1}}, {left, right}));
+    const auto placements = either.next();
+    ASSERT_EQ(placements.size(), 2u);
+    std::set<uint64_t> held;
+    for (const PlacedMesh& placed : placements) {
+        const bool has_left = placed.placement.asics.contains(*left.begin());
+        const bool has_right = placed.placement.asics.contains(*right.begin());
+        EXPECT_NE(has_left, has_right) << "mesh " << placed.mesh_id.get() << " must hold exactly one pool";
+        held.insert(has_left ? 100 : 103);
+    }
+    EXPECT_EQ(held.size(), 2u);
+}
+
 // Linked 1x2 meshes must sit on touching pairs; the same meshes with no seam may sit on
 // disconnected pairs; a required seam on disconnected pairs is unsat.
 //

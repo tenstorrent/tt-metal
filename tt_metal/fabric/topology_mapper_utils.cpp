@@ -872,15 +872,54 @@ void add_rank_binding_constraints(
     }
 }
 
-// Helper function to build pinning constraints.
-// Only applies pinnings whose ASIC positions exist on the current physical grouping; absent positions are
-// skipped. Returns an error if a present pinning conflicts with rank bindings (spill).
+// --mesh-pinning-file pins: a host rank takes exactly its pool, or (partial pool) covers every pinned ASIC.
+std::optional<std::string> add_mesh_host_rank_pinning_constraints(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>&
+        intra_mesh_constraints,
+    const TopologyMappingConfig& config,
+    MeshId logical_mesh_id,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    const auto mesh_ranks_it = fabric_node_id_to_mesh_rank.find(logical_mesh_id);
+    for (const auto& [mesh_host_rank, asics] : config.mesh_host_rank_pinnings) {
+        if (mesh_host_rank.first != logical_mesh_id || mesh_ranks_it == fabric_node_id_to_mesh_rank.end()) {
+            continue;
+        }
+        std::set<FabricNodeId> fabric_nodes;
+        for (const auto& [fabric_node, rank] : mesh_ranks_it->second) {
+            if (rank == mesh_host_rank.second) {
+                fabric_nodes.insert(fabric_node);
+            }
+        }
+        const bool added =
+            fabric_nodes.size() == asics.size()
+                ? intra_mesh_constraints.add_required_constraint(fabric_nodes, asics)
+                : std::all_of(asics.begin(), asics.end(), [&](const auto& asic) {
+                      return intra_mesh_constraints.add_cardinality_constraint(fabric_nodes, {asic}, /*min_count=*/1);
+                  });
+        if (!added) {
+            return fmt::format(
+                "Mesh-host-rank pinning: mesh {} host rank {} cannot take its pinned ASICs",
+                logical_mesh_id.get(),
+                mesh_host_rank.second.get());
+        }
+    }
+    return std::nullopt;
+}
+
+// MGD pinning groups (positions absent from this grouping are skipped), then --mesh-pinning-file pins.
 std::optional<std::string> add_pinning_constraints(
-    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>& intra_mesh_constraints,
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>&
+        intra_mesh_constraints,
     const std::map<AsicPosition, std::set<tt::tt_metal::experimental::PhysicalNodeId>>& asic_positions_to_asic_ids,
     const TopologyMappingConfig& config,
-    MeshId logical_mesh_id) {
-    return apply_pinning_groups(intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids);
+    MeshId logical_mesh_id,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    if (auto failure = apply_pinning_groups(
+            intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids)) {
+        return failure;
+    }
+    return add_mesh_host_rank_pinning_constraints(
+        intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank);
 }
 
 // Add the PGD-derived layout as PREFERRED (soft) intra-mesh constraints. Must be called AFTER the hard
@@ -1426,15 +1465,15 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
 
         auto asic_positions_to_asic_ids = build_asic_positions_map(physical_graph, config);
-        auto pinning_constraint_failure =
-            add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
+        auto pinning_constraint_failure = add_pinning_constraints(
+            intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id, fabric_node_id_to_mesh_rank);
         if (pinning_constraint_failure.has_value()) {
             record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
             set_mapping_failure(
                 result,
                 "mgd_pinning",
                 fmt::format(
-                    "intra-mesh mapping failed: MGD pinning constraints for logical mesh {} -> physical mesh {}: {}",
+                    "intra-mesh mapping failed: pinning constraints for logical mesh {} -> physical mesh {}: {}",
                     logical_mesh_id.get(),
                     physical_mesh_id.get(),
                     *pinning_constraint_failure));
@@ -1518,6 +1557,16 @@ TopologyMappingResult complete_intra_mesh_for_placement(
 
     result.success = true;
     return result;
+}
+
+// --mesh-pinning-file pools also bound the seating: a pinned mesh may only sit on a footprint containing them.
+void seed_mesh_host_rank_pins_into_seating(
+    ::tt::tt_fabric::SatPlacementEnumerationSession& session, const TopologyMappingConfig& config) {
+    for (const auto& [mesh_host_rank, asics] : config.mesh_host_rank_pinnings) {
+        session.add_required_constraint(
+            {mesh_host_rank.first},
+            {std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>(asics.begin(), asics.end())});
+    }
 }
 
 // ─────────────────────── MultiMeshSolutionEnumerator (SAT seating + identity intra) ───────────────────────
@@ -1676,6 +1725,7 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         unique_shapes,
         fabric_node_id_to_mesh_rank_,
         config_.placement_asic_allowlist);
+    seed_mesh_host_rank_pins_into_seating(*placement_session_, config_);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
@@ -1701,6 +1751,7 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         physical_node_id_to_mesh_rank_,
         unique_shapes,
         config_.placement_asic_allowlist);
+    seed_mesh_host_rank_pins_into_seating(*placement_session_, config_);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
@@ -1721,6 +1772,7 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         physical_node_id_to_mesh_rank_,
         unique_shapes,
         config_.placement_asic_allowlist);
+    seed_mesh_host_rank_pins_into_seating(*placement_session_, config_);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(MultiMeshSolutionEnumerator&&) noexcept = default;

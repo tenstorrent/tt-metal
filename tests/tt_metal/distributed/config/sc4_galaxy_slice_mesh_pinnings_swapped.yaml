@@ -1,0 +1,10 @@
+# 8x4 mesh over 2x2 host ranks (4x2 slices of one galaxy) on the SC4 pod: ranks 0/1 moved to d04u02 with their slices swapped.
+mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: bh-glx-110-d04u02
+    TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+  - mesh_id: 0
+    mesh_host_rank: 1
+    hostname: bh-glx-110-d04u02
+    TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"
