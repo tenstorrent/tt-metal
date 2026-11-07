@@ -12,7 +12,8 @@
 #   every exchange in exchanges.jsonl)   <dir>/meta.json (code SHAs, harness versions, env)   <dir>/suite.log
 #   <dir>/suite.jsonl (one record per finished step: rc, wall, score, requests / failures, cost)
 #
-# Resume: rerun the same command; finished requests come from each step's journal. A step whose smoke has failed
+# Resume: rerun the same command; finished requests come from each step's journal. A full set with failed requests is
+# rerun up to RESUME_PASSES (2) more times, which resends only the failed ones. A step whose smoke has failed
 # requests stops the suite (rc 3) on target vllm (a broken server should not burn the full sets); on openrouter the
 # failures are recorded and the suite goes on (rerunning retries them). Default benches, in order:
 #   ocrbench mmau_mini librispeech_clean videomme_short mmmu_pro_aa
@@ -86,7 +87,7 @@ run_step() {  # $1 bench, $2 step name, $3 limit or "", returns run_eval.sh's rc
     [ -n "$limit" ] && args+=(--limit "$limit")
     log "start $bench $step -> $out"
     t0=$(date +%s)
-    bash "$HERE/run_eval.sh" "${args[@]}" > "$out/stdout.log" 2>&1
+    bash "$HERE/run_eval.sh" "${args[@]}" >> "$out/stdout.log" 2>&1
     rc=$?
     record "$bench" "$step" "$out" "$rc" "$(( $(date +%s) - t0 ))"
     log "end $bench $step rc=$rc after $(( $(date +%s) - t0 )) s: $(tail -n 1 "$DIR/suite.jsonl" | cut -c1-400)"
@@ -128,6 +129,12 @@ for bench in $BENCHES; do
         fi
     fi
     [ "$PHASE" = smoke ] && continue
-    run_step "$bench" full ""
+    # Failed requests are not journaled: up to RESUME_PASSES reruns resend only those (the rest come from the journal).
+    for pass in $(seq 0 "${RESUME_PASSES:-2}"); do
+        run_step "$bench" full ""
+        nfail=$(failed_requests "$DIR/$bench/full")
+        [ "$nfail" = 0 ] && break
+        log "$bench full: $nfail failed requests after pass $pass"
+    done
 done
 log "suite done"

@@ -19,7 +19,8 @@ OpenRouter's `reasoning.enabled`, and `provider` (comma-separated slugs) pins pr
 
 Resume: every successful response is appended (fsync) to `journal` (JSONL), keyed by task, doc and request content
 (not by endpoint); rerunning the same command answers journaled requests from it. Failures are not journaled, so a
-rerun retries them. 4xx answers other than 408 / 429 are not retried (the request itself is bad); 5xx, 408, 429 and
+rerun retries them. 4xx answers other than 408 / 429 are not retried (the request itself is bad), except OpenRouter's
+relayed provider errors ("Provider returned error": transient under load, accepted on a resend); 5xx, 408, 429 and
 connection errors are retried `max_retries` times with backoff. A request that fails for good returns
 "[MIMO_REQUEST_FAILED <status>] ..." as its text (scored wrong) and is counted in `<journal>.stats.json`.
 
@@ -485,6 +486,14 @@ class OpenRouterChat(lmms):
             self.stats["attempts"] += 1
             self.stats["attempt_status"][str(status)] = self.stats["attempt_status"].get(str(status), 0) + 1
 
+    def _provider_error(self, body):
+        """OpenRouter's relay of an upstream provider's 4xx ("Provider returned error"). Under load the MiMo providers
+        answer "Invalid request parameters" to requests they accept on a resend, so these are retried like a 5xx."""
+        if self.target != "openrouter" or not isinstance(body, dict):
+            return False
+        err = body.get("error") if isinstance(body.get("error"), dict) else body
+        return err.get("message") == "Provider returned error" or bool((err.get("metadata") or {}).get("provider_name"))
+
     def _send(self, req):
         """dict(text, usage, finish, status, body, headers, attempts). Retries 5xx / 408 / 429 / transport errors and
         200s without a choice."""
@@ -539,7 +548,7 @@ class OpenRouterChat(lmms):
                     {"status": status, "latency_s": round(time.time() - t0, 3), "error": last, "headers": headers}
                 )
                 self._attempt_done(t0, status)
-                if NO_RETRY_4XX(status):
+                if NO_RETRY_4XX(status) and not self._provider_error(body):
                     break
             except (openai.APIConnectionError, openai.APITimeoutError) as exc:
                 status = "conn"
