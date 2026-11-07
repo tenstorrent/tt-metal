@@ -148,3 +148,32 @@ def test_plus_one_multi_core_sub_core_grids(device, memory_config):
         input_tensor, sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
     )
     assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)
+
+
+@pytest.mark.parametrize(
+    "num_cores, rows_per_shard",
+    [
+        (4, 2),
+        (2, 4),
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize("pass_sub_core_grids", [True, False])
+def test_plus_one_sharded_multi_row(device, num_cores, rows_per_shard, pass_sub_core_grids):
+    """Regression test for #63638: sharded plus_one must increment every row of each shard,
+    not only the first row."""
+    shape = (1, 1, num_cores * rows_per_shard, 32)
+    torch_input = (torch.arange(shape[2] * shape[3], dtype=torch.int32).reshape(shape) % 41) - 20
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(cores, [rows_per_shard, 32], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+    )
+    if pass_sub_core_grids:
+        ttnn.plus_one(tt_input, sub_core_grids=cores)
+    else:
+        ttnn.plus_one(tt_input)
+
+    assert torch.equal(ttnn.to_torch(tt_input), torch_input + 1)
