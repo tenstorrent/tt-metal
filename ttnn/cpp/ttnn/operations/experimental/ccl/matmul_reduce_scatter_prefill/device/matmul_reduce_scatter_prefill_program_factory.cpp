@@ -678,6 +678,15 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         .dst_full_sync_en = true,
         .math_approx_mode = attrs.math_approx_mode,
     };
+    // Blackhole with full 32x32 operand tiles: one math MOP per reuse row of a subblock (as the matmul factories'
+    // add_row_mop_define_if_supported); bit-identical.
+    const auto full_tile = [](const Tensor& t) {
+        const auto& tile = t.tensor_spec().tile();
+        return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    };
+    if (mesh->arch() == tt::ARCH::BLACKHOLE && full_tile(a) && full_tile(w)) {
+        compute.defines.emplace_back("MM_ROW_MOP", "1");
+    }
 
     KernelDescriptor writer;
     writer.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_writer.cpp");
