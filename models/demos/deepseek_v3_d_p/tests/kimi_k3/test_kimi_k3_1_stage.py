@@ -420,6 +420,8 @@ HANDOFF_CHUNKS = 2  # chunk 1's DSA layers read chunk 0's KV; its KDA layers sta
 # capture (kimi_k31_pro_10k, identical ids and top-1 at every step) plus the DSA indexer streams the accuracy
 # suite compares against.
 TRACE_10K = Path("/mnt/weka/model-weights/llm/ref-data/debug_traces/kimi_k31_pro_10k_v2/vllm-d06690a4-10240tok")
+# Miguel's 128K K3.1-Pro vLLM trace (126,976 prompt tokens): the 128K perf scenario's prompt.
+TRACE_128K = Path("/mnt/weka/model-weights/llm/ref-data/debug_traces/kimi_k31_pro_128k_v2/vllm-4984af7c-131072tok")
 SYSTEM_MAX_USERS = min(STAGE_MAX_USERS.values())
 ACK_FIFO_BYTES = 65536  # the K3 manifest's PREFILL_LAYER_ACK_FIFO_BYTES; holds the warm pass's acks
 ACK_TIMEOUT_S = 60
@@ -435,12 +437,12 @@ def _final_hidden_path(handoff_dir: Path, chunk: int) -> Path:
 
 
 @functools.cache
-def _trace_metadata() -> dict:
-    """`TRACE_10K`'s metadata (token ids, step counts), read once; skips when the trace is absent (a skip raises,
-    so it is not cached)."""
-    if not (TRACE_10K / "metadata.json").is_file():
-        pytest.skip(f"no K3.1 10K trace at {TRACE_10K}")
-    with (TRACE_10K / "metadata.json").open(encoding="utf-8") as handle:
+def _trace_metadata(trace_dir: Path) -> dict:
+    """A trace's metadata (token ids, step counts), read once per trace; skips when the trace is absent (a skip
+    raises, so it is not cached)."""
+    if not (trace_dir / "metadata.json").is_file():
+        pytest.skip(f"no K3.1 trace at {trace_dir}")
+    with (trace_dir / "metadata.json").open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
@@ -453,7 +455,7 @@ def _trace_stream(name: str) -> torch.Tensor:
 
 def _teacher_forced_prompt() -> list[int]:
     """The handoff test's prompt: the trace's prompt then its decoded completion, `HANDOFF_CHUNKS` chunks."""
-    metadata = _trace_metadata()
+    metadata = _trace_metadata(TRACE_10K)
     ids = metadata["token_ids"] + metadata["completion_token_ids"]
     assert len(ids) == HANDOFF_CHUNKS * CHUNK, f"{TRACE_10K.name}: {len(ids)} tokens, not {HANDOFF_CHUNKS} chunks"
     return ids
@@ -537,7 +539,7 @@ def _check_next_token(final_hidden: dict[int, torch.Tensor]) -> None:
     reported against the host top-k only. Its top-k rows are one per vLLM step: each prefill step's last
     position, then each decode step's. Two positions are checked: the prompt's last (row 1, the 8192-token
     prefill's next token) and the last position the trace scored (the last row, the second-to-last token)."""
-    metadata = _trace_metadata()
+    metadata = _trace_metadata(TRACE_10K)
     ids = _teacher_forced_prompt()
     n_prompt = metadata["n_prompt_tokens"]
     assert metadata["prefill_steps"] == 2, "top-k row 1 is the prompt's end only for 2 prefill steps"
@@ -763,12 +765,12 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
         logger.info(f"STAGE_KVPE stage {stage}: kvpe reset before chunk 1 changes {mismatched:.1%} of its output")
 
 
-# --- The 10K scenario, stage by stage: traced chunk periods and a device-profiler record per program ----------
+# --- The 10K and 128K scenarios, stage by stage: traced chunk periods and a device-profiler record per program ----
 #
-# Miguel's 10K vLLM trace prompt (8,192 tokens: two chunks, the second padded past the prompt as the producer
-# pads it) through each stage as it is served (`_served_stage`), stage 0 from the prompt's token ids and each
-# later stage from the previous stage's saved handoff, so every stage routes its experts on the real prompt.
-# Run the stages in order into one $K31_HANDOFF_DIR.
+# The prompt of one of Miguel's vLLM traces (10K: 8,192 tokens, two chunks; 128K: 126,976 tokens, 25 chunks; the last
+# chunk padded past the prompt as the producer pads it) through each stage as it is served (`_served_stage`), stage 0
+# from the prompt's token ids and each later stage from the previous stage's saved handoff, so every stage routes its
+# experts on the real prompt. Run the stages of one prompt in order into one $K31_HANDOFF_DIR.
 #
 # Timing follows K3's `test_prefill_perf`: whole passes of the prompt (every chunk, in order, as a request
 # arrives), each traced replay synchronized and timed on host (`STAGE_TIME replay` lines; one stage's chunk time is
@@ -779,16 +781,17 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
 # so durations alone do not partition the chunk, and a program without records (the DSA indexer's top-k on its
 # sub-device) shows only as a gap in a chip's timeline.
 #
-#     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/perf10k scripts/run_safe_pytest.sh \
-#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_prompt_perf[blackhole-stage$s-torus-xy-8x4]"; done
+#     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/perf128k scripts/run_safe_pytest.sh \
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_prompt_perf[blackhole-stage$s-128k-torus-xy-8x4]"; done
+PROMPT_TRACES = {"10k": TRACE_10K, "128k": TRACE_128K}
 PERF_PASSES = 5  # after the capture's warm pass; K3's test_prefill_perf times 5 iterations
 DEEP_START = MAX_SEQ_LEN - CHUNK
 
 
-def _trace_prompt() -> tuple[list[int], int]:
-    """(`TRACE_10K`'s prompt token ids padded to whole chunks with the producer's pad id, the prompt's length);
+def _trace_prompt(trace_dir: Path) -> tuple[list[int], int]:
+    """(the trace's prompt token ids padded to whole chunks with the producer's pad id, the prompt's length);
     skips when the trace is absent."""
-    metadata = _trace_metadata()
+    metadata = _trace_metadata(trace_dir)
     ids = metadata["token_ids"]
     assert len(ids) == metadata["n_prompt_tokens"], f"{len(ids)} token ids for {metadata['n_prompt_tokens']} tokens"
     return ids + [MTP_PAD_TOKEN_ID] * (-len(ids) % CHUNK), len(ids)
@@ -818,10 +821,11 @@ def _profiled_replay(mesh_device, run, path: Path) -> None:
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
+@pytest.mark.parametrize("trace_dir", PROMPT_TRACES.values(), ids=PROMPT_TRACES.keys())
 @pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
-def test_kimi_k3_1_stage_prompt_perf(stage, mesh_device, device_params, monkeypatch):
+def test_kimi_k3_1_stage_prompt_perf(stage, trace_dir, mesh_device, device_params, monkeypatch):
     handoff_dir = _handoff_dir()
-    prompt, prompt_len = _trace_prompt()
+    prompt, prompt_len = _trace_prompt(trace_dir)
     chunks = [(c * CHUNK, min((c + 1) * CHUNK, prompt_len)) for c in range(len(prompt) // CHUNK)]
     with _served_stage(stage, SYSTEM_MAX_USERS, handoff_dir, mesh_device, monkeypatch) as (
         runtime,
