@@ -25,12 +25,13 @@ arms are green upstream and this is a choice rather than a constraint.
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 
 # Aliased: the local `attn_res` in this module is the TtAttnRes instance, and the collision is
 # silent until the reference is called and LightweightModule.__call__ looks for a `forward`.
@@ -39,14 +40,17 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fol
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
+from models.demos.deepseek_v3_d_p.tests.kimi_k3 import test_kimi_k3_1_stage as k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     TRACE_1M,
     TRACE_100K,
+    TRACE_K31,
     load_checkpoint_tensors,
     resolve_checkpoint,
     resolve_trace,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import compose_activation
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     CACHE_LEN,
     HF_CONFIGS,
@@ -439,3 +443,159 @@ def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
             for other in range(slot):
                 assert not torch.equal(slots[slot], slots[other]), f"{name} slots {other} and {slot} are identical"
         logger.info(f"  {model} {name}: {slots.shape[0]} slots written, distinct, nothing past {SEQ_LEN}")
+
+
+# --- Kimi-K3.1 on real weights against its vLLM trace -------------------------------------------------------
+#
+# K3's ladder above, scored the same way (every layer's live residual against `decoder_output_layer_i`, the
+# same depth-aware bars, every full-attention layer's kvpe against `kv_post_transform_layer_i` by halves at
+# KV_CACHE_PCC) against `TRACE_K31`, which records all 93 layers. Two differences, both from what the K3.1
+# trace and weights are:
+#
+# * The stack is the runner's (`test_kimi_k3_1_stage._stage_params`: K3.1 TTNN weight cache, scaled-FP8 kvpe,
+#   bf8 indexer key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model is
+#   too large for one galaxy, so the ladder walks the PP4 stages: L1/L5/L12 are prefixes of stage 0, L24 is
+#   stage 0, and stages 1-3 each start from the previous stage's activation saved by
+#   `test_kimi_k3_1_stage_handoff` (`$K31_HANDOFF_DIR`, the served traced chain on the same prompt); stage 3
+#   builds layer 92 whole (`full_last_layer`) so it has a residual to score. Together: all 93 layers.
+# * The prompt is the handoff test's, the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
+#   two chunks, so chunk 1's DSA layers read chunk 0's KV and its KDA layers continue chunk 0's carry. The bar
+#   is held per chunk on prompt rows (chunk 0 [0, 5120), chunk 1 [5120, 8192)), as the chunked K3 test holds it
+#   per chunk; rows past the prompt line up with vLLM's decode steps and are logged, not gated.
+#
+# The indexer key cache is logged against `indexer/indexer_k_layer_i` for information only; whether and how
+# it is scored is tt_metal_tracker-ao3i.5.3's.
+#
+#     K31_HANDOFF_DIR=/path/handoff scripts/run_safe_pytest.sh \
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L5-torus-xy-8x4]"
+# rung -> (PP4 stage, layer count; None = the whole stage)
+K31_RUNGS = {
+    "L1": (0, 1),
+    "L5": (0, 5),
+    "L12": (0, 12),
+    "L24": (0, None),
+    "stage1": (1, None),
+    "stage2": (2, None),
+    "stage3": (3, None),
+}
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
+@pytest.mark.parametrize("rung", list(K31_RUNGS))
+def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
+    trace = resolve_trace(TRACE_K31)
+    assert trace is not None, f"no K3.1 golden at {TRACE_K31}"
+    stage, num_layers = K31_RUNGS[rung]
+    is_last = stage == k31_stage.NUM_STAGES - 1
+    chunk, num_chunks = k31_stage.CHUNK, k31_stage.HANDOFF_CHUNKS
+    prompt = k31_stage._teacher_forced_prompt()
+    prompt_len = len(trace.metadata["token_ids"])
+    handoff_dir = k31_stage._handoff_dir()
+    hf_config, params = k31_stage._stage_params(
+        stage,
+        1,
+        k31_stage._weight_cache_path(),
+        full_last_layer=is_last,
+        num_layers=num_layers,
+        max_seq_len=CACHE_LEN,
+        use_trace=False,
+    )
+    first, num_layers = params.first_layer_idx, params.num_layers
+    runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    kv_caches = k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    runtime.compile(kv_caches)
+
+    per_layer = {}  # (global layer, chunk) -> host [chunk, hidden]
+    current = {}
+    forward = runtime.model.forward
+
+    def tapped(*args, **kwargs):
+        tap = lambda idx, h: per_layer.__setitem__((first + idx, current["chunk"]), compose(mesh_device, h, chunk))
+        return forward(*args, layer_tap=tap, **kwargs)
+
+    runtime.model.forward = tapped
+    try:
+        for c in range(num_chunks):
+            current["chunk"] = c
+            chunk_input = k31_stage._chunk_input(runtime, mesh_device, handoff_dir, stage, c, prompt)
+            out = runtime.prefill_chunk(
+                chunk_input, kv_caches, slot_id=0, actual_start=c * chunk, actual_end=(c + 1) * chunk
+            )
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"K31 {rung} chunk {c} done: layers [{first}, {first + num_layers})")
+            saved = k31_stage._handoff_path(handoff_dir, stage, c)
+            if out is not None and num_layers == k31_stage.STAGES[stage][1] and saved.is_file():
+                # The traced chain's saved output for the same stage and chunk: says whether stages 1-3,
+                # which start from it, start from what this eager build would have handed them.
+                got = compose_activation(mesh_device, out)
+                want = torch.from_numpy(np.fromfile(saved, dtype=np.int16)).view(torch.bfloat16).reshape(got.shape)
+                logger.info(
+                    f"K31 {rung} chunk {c} output vs traced handoff {saved.name}: equal={torch.equal(got, want)} "
+                    f"pcc={comp_pcc(want.float(), got.float())[1]}"
+                )
+            if out is not None:
+                ttnn.deallocate(out)
+        slots = {
+            slot: runtime.model.schedule.global_index(local)
+            for local, slot in enumerate(runtime.model.schedule.kv_slot_of_local)
+            if slot is not None
+        }
+        kv = {
+            name: cache_rows(mesh_device, cache, chunk, num_chunks * chunk)
+            for name, cache in (("kvpe", kv_caches.kvpe), ("index", kv_caches.index))
+            if cache is not None
+        }
+    finally:
+        runtime.model.forward = forward
+        if kv_caches.kda_states is not None:
+            kv_caches.kda_states.deallocate()
+        runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
+
+    def pcc(want, got):
+        return float(str(comp_pcc(want, got)[1]).split()[-1])
+
+    # Prompt rows per chunk are gated; the teacher-forced decode rows the trace holds are logged. The trace
+    # ends one row short of the run: it has no row for the last decoded id, which vLLM never fed back.
+    windows = [(c * chunk, min((c + 1) * chunk, prompt_len)) for c in range(num_chunks) if c * chunk < prompt_len]
+    run_len = num_chunks * chunk
+
+    layer_pcc = DEEP_LAYER_PCC if first + num_layers > KimiK3Config.ATTN_RES_BLOCK_SIZE else SHALLOW_LAYER_PCC
+    scores = {}
+    for layer in range(first, first + num_layers):
+        golden = trace.decoder_output(layer, 0, run_len)
+        got = torch.cat([per_layer[(layer, c)] for c in range(num_chunks)])[: golden.shape[0]].float()
+        for c, (lo, hi) in enumerate(windows):
+            scores[(layer, c)] = pcc(golden[lo:hi], got[lo:hi])
+        decode_pcc = pcc(golden[prompt_len:], got[prompt_len:])
+        seal = " <- seal" if layer % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
+        cells = "  ".join(f"chunk{c} {scores[(layer, c)]:.6f}" for c in range(len(windows)))
+        logger.info(f"K31 {rung} layer {layer} vs decoder_output_layer_{layer}: {cells}  decode {decode_pcc:.6f}{seal}")
+
+    kv_failures = []
+    for slot, layer in sorted(slots.items()):
+        golden = trace.kv_cache(layer, 0, run_len)
+        got = kv["kvpe"][slot, : golden.shape[0]]
+        lora, rope = cache_half_pccs(
+            golden[:prompt_len], got[:prompt_len], KimiK3Config.KV_LORA_RANK, pe_interleave=False
+        )
+        dec_lora, dec_rope = cache_half_pccs(
+            golden[prompt_len:], got[prompt_len:], KimiK3Config.KV_LORA_RANK, pe_interleave=False
+        )
+        line = f"K31 {rung} kvpe slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}"
+        line += f"  decode lora={dec_lora:.6f} rope={dec_rope:.6f}"
+        if "index" in kv and trace.has("indexer", f"indexer_k_layer_{layer}"):
+            want_index = trace.rows("indexer", f"indexer_k_layer_{layer}", 0, prompt_len)
+            line += f"  index key (info) {pcc(want_index, kv['index'][slot, :prompt_len]):.6f}"
+        logger.info(line)
+        if min(lora, rope) < KV_CACHE_PCC:
+            kv_failures.append(f"slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}")
+
+    worst = min(scores, key=scores.get)
+    logger.info(f"K31 {rung} worst layer {worst[0]} chunk {worst[1]}: {scores[worst]:.7f} (bar {layer_pcc})")
+    below = {k: v for k, v in scores.items() if v < layer_pcc}
+    assert not below, f"layers below {layer_pcc}: " + ", ".join(
+        f"{l}/chunk{c}:{v:.6f}" for (l, c), v in sorted(below.items())
+    )
+    assert not kv_failures, "KV cache diverged: " + "; ".join(kv_failures)

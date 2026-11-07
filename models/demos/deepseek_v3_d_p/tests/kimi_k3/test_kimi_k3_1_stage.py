@@ -155,21 +155,32 @@ def _weight_cache_path() -> Path:
     return path.resolve()
 
 
-def _stage_params(stage: int, num_users: int, weight_cache_path: Path, full_last_layer: bool = False):
+def _stage_params(
+    stage: int,
+    num_users: int,
+    weight_cache_path: Path,
+    full_last_layer: bool = False,
+    *,
+    num_layers: int | None = None,
+    max_seq_len: int = MAX_SEQ_LEN,
+    use_trace: bool = True,
+):
     """(hf_config, PrefillRunParams) for PP4 rank `stage`, with the K3 manifest's knobs, as the runner sets them.
     `full_last_layer`: the last rank builds its last layer whole, plus the final norm, instead of kv-only, so
-    the model produces its final hidden state (the runner's last rank produces none)."""
-    first_layer_idx, num_layers = STAGES[stage]
+    the model produces its final hidden state (the runner's last rank produces none). The depth ladder
+    (`test_transformer_depth.py`) builds the stage's first `num_layers` layers, eager, at a short `max_seq_len`."""
+    first_layer_idx, stage_layers = STAGES[stage]
+    num_layers = stage_layers if num_layers is None else num_layers
     is_last_rank = stage == NUM_STAGES - 1
     hf_config = ADAPTER.load_hf_config()
-    hf_config.max_seq_len = MAX_SEQ_LEN
+    hf_config.max_seq_len = max_seq_len
     params = PrefillRunParams(
         mesh_shape=MESH,
         num_layers=num_layers,
         first_layer_idx=first_layer_idx,
         is_first_rank=first_layer_idx == 0,
         is_last_rank=is_last_rank,
-        max_seq_len=MAX_SEQ_LEN,
+        max_seq_len=max_seq_len,
         chunk_size=CHUNK,
         num_users=num_users,
         capacity_factor=8,  # the runner's PREFILL_CAPACITY_FACTOR default
@@ -179,11 +190,11 @@ def _stage_params(stage: int, num_users: int, weight_cache_path: Path, full_last
         weight_cache_path=weight_cache_path,
         tp_shard_kv=True,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
-        use_trace=True,
+        use_trace=use_trace,
     )
     logger.info(
         f"K3.1 stage {stage} layers [{first_layer_idx}, {first_layer_idx + num_layers}) is_last={is_last_rank} "
-        f"num_users={num_users} max_seq_len={MAX_SEQ_LEN} kvpe={params.sparse_kv_cache_format} "
+        f"num_users={num_users} max_seq_len={max_seq_len} trace={use_trace} kvpe={params.sparse_kv_cache_format} "
         f"kv_only_last_layer={params.kv_only_last_layer} cache={weight_cache_path}"
     )
     return hf_config, params
