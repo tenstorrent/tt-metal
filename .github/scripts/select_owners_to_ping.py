@@ -24,6 +24,10 @@ Inputs (environment variables):
   MOREH_TEAM_MEMBERS  thirdparty-moreh team members (excluded from pinging).
   PR_AUTHOR_LOGIN     PR author login (excluded from pinging).
   GITHUB_OUTPUT       Path to the step output file (GitHub Actions).
+  PING_RECORD_FILE    Optional. Where to write the per-rule record of this
+                      selection ({"rules": [{"rule", "any_of", "pinged"}]}) that
+                      codeowners_ping_record.py appends to the PR once the Slack
+                      message has gone out.
 
 Optional inputs, used to rank candidates by availability. Each one is a pure
 improvement: with none of them set the selection still works, it just treats
@@ -367,6 +371,8 @@ class Selector:
         self.approved_reviewers = os.environ.get("APPROVED_REVIEWERS", "")
         self.moreh_members = os.environ.get("MOREH_TEAM_MEMBERS", "")
         self.pr_author = os.environ.get("PR_AUTHOR_LOGIN", "")
+        # Filled by select(): one {"rule", "any_of", "pinged"} entry per pinged rule.
+        self.record: list[dict] = []
 
         # Availability data is optional: without it every candidate ranks the
         # same and the pick stays random.
@@ -461,9 +467,10 @@ class Selector:
             result[key] = has_approval
         return result
 
-    # -- pick up to 2 owners, most available first ------------------------------
-    def pick_two(self, candidates: list[str]) -> list[str]:
-        """Pick the two owners most likely to act on the request.
+    # -- rank owners, most available first; the top two are pinged ----------
+    def rank(self, candidates: list[str]) -> tuple[list[str], list[str]]:
+        """Return (pinged, ranking): the owners to ping, and every candidate in
+        preference order starting with them.
 
         Out-of-office candidates are dropped first, but only if that leaves
         someone: a rule where everyone is away still gets pinged. The two slots
@@ -474,9 +481,14 @@ class Selector:
         not reply. Slack presence only sorts a tier that has more candidates
         than remaining slots, which keeps the presence calls to the one group
         where they change the answer.
+
+        The rest of the ranking is ordered by tier, then by login, so the ping
+        record has an escalation order without extra presence calls or random
+        draws. It can hold out-of-office owners that were skipped for the ping,
+        which is why `pinged` is returned separately rather than as ranking[:2].
         """
         if not candidates:
-            return []
+            return [], []
         pool = [c for c in candidates if self.directory.tier(c, self.now_utc) < TIER_OOO]
         if not pool:
             log("All candidates are marked out of office; pinging them anyway")
@@ -496,7 +508,42 @@ class Selector:
 
         for login in chosen:
             log(f"DEBUG select-owners: {login} tier={self.directory.tier(login, self.now_utc)}")
-        return chosen
+        return chosen, chosen + self.by_tier([c for c in candidates if c not in chosen])
+
+    def by_tier(self, logins) -> list[str]:
+        return sorted(logins, key=lambda c: (self.directory.tier(c, self.now_utc), c))
+
+    def co_owners(self, files_csv: str, files_to_members: dict[str, str], exclude: list[str]) -> list[str]:
+        """Other owners whose approval also covers this rule's files.
+
+        Mirrors compute_approval(): members of the same file set and of any
+        overlapping one count, so the record's `any_of` stops the reminder on
+        the same approvals that clear the rule here.
+        """
+        files = set(f for f in files_csv.split(",") if f)
+        extra: list[str] = []
+        for key, members in files_to_members.items():
+            if files & set(key.split(",")):
+                extra.extend(m for m in members.split(",") if m)
+        return self.by_tier(set(self.unapproved_filtered(extra)) - set(exclude))
+
+    def team_co_owners(self, team_files_csv: str, files_to_members: dict[str, str], exclude: list[str]) -> list[str]:
+        """Owners whose approval alone clears a team rule.
+
+        The team check in select() needs an approved owner on every team file, so
+        only someone who owns each of those files can stop the reminder on their own.
+        """
+        coverers: set[str] | None = None
+        for tfile in (f for f in team_files_csv.split(",") if f):
+            owners_of_file = {
+                m
+                for key, members in files_to_members.items()
+                if tfile in key.split(",")
+                for m in members.split(",")
+                if m
+            }
+            coverers = owners_of_file if coverers is None else coverers & owners_of_file
+        return self.by_tier(set(self.unapproved_filtered(sorted(coverers or ()))) - set(exclude))
 
     def unapproved_filtered(self, candidates: list[str]) -> list[str]:
         """Drop approved reviewers, moreh members, and the PR author."""
@@ -519,6 +566,8 @@ class Selector:
 
         selected_owners: list[str] = []
         selected_slack_groups: list[str] = []
+        # One entry per pending rule, for the ping record (see PING_RECORD_FILE).
+        record: list[dict] = []
 
         # Teams
         for team_entry in split_nonempty(self.teams, "§"):
@@ -547,6 +596,16 @@ class Selector:
             if gid:
                 selected_slack_groups.append(gid)
                 log(f"Added pending Slack group: {team} -> {gid}")
+                # The whole group is mentioned, so there is no per-person order;
+                # members are listed as the team API returned them.
+                members = self.unapproved_filtered(self.team_owners(team))
+                record.append(
+                    {
+                        "rule": team,
+                        "any_of": members + self.team_co_owners(team_files, files_to_members, members),
+                        "pinged": [team],
+                    }
+                )
                 continue
 
             # No Slack group -> individual selection from team members.
@@ -554,14 +613,19 @@ class Selector:
             unapproved = self.unapproved_filtered(self.team_owners(team))
 
             # metalium-api-owners: always include akerteszTT for tt_metal/api/ files.
+            required: list[str] = []
             if team == API_OWNERS_TEAM:
                 files_under_api = any(f.lstrip("./").startswith("tt_metal/api/") for f in team_files.split(",") if f)
                 if files_under_api and API_REQUIRED_REVIEWER in unapproved:
-                    selected_owners.append(API_REQUIRED_REVIEWER)
+                    required = [API_REQUIRED_REVIEWER]
                     unapproved = [u for u in unapproved if u != API_REQUIRED_REVIEWER]
                     log(f"Added {API_REQUIRED_REVIEWER} as required reviewer (tt_metal/api/)")
 
-            selected_owners.extend(self.pick_two(unapproved))
+            pinged, ranked = self.rank(unapproved)
+            pinged, ranked = required + pinged, required + ranked
+            selected_owners.extend(pinged)
+            any_of = ranked + self.team_co_owners(team_files, files_to_members, ranked)
+            record.append({"rule": team, "any_of": any_of, "pinged": pinged})
 
         # Individual patterns
         for pattern_group in split_nonempty(self.individuals, "§"):
@@ -575,13 +639,16 @@ class Selector:
                 continue
 
             usernames = [pair.split("|", 1)[0] for pair in owners.split(",") if pair != ""]
-            unapproved = self.unapproved_filtered(usernames)
-            selected_owners.extend(self.pick_two(unapproved))
+            pinged, ranked = self.rank(self.unapproved_filtered(usernames))
+            selected_owners.extend(pinged)
+            any_of = ranked + self.co_owners(files, files_to_members, ranked)
+            record.append({"rule": pattern, "any_of": any_of, "pinged": pinged})
 
         # Sort + dedupe individual owners (parity with sort | uniq).
         final_owners = sorted(set(o for o in selected_owners if o))
         final_groups = [g for g in selected_slack_groups if g]
         no_owners = not final_owners and not final_groups
+        self.record = [r for r in record if r["pinged"]]
 
         return final_owners, final_groups, no_owners
 
@@ -610,9 +677,23 @@ def write_output(owners: list[str], groups: list[str], no_owners: bool) -> None:
             out.close()
 
 
+def write_record(rules: list[dict]) -> None:
+    path = os.environ.get("PING_RECORD_FILE", "")
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"rules": rules}, fh)
+    except OSError as exc:
+        # The record is bookkeeping for the follow-up reminder; never fail the ping over it.
+        log(f"WARNING select-owners: could not write ping record to {path} ({exc})")
+
+
 def main() -> int:
-    owners, groups, no_owners = Selector().select()
+    selector = Selector()
+    owners, groups, no_owners = selector.select()
     write_output(owners, groups, no_owners)
+    write_record(selector.record)
     return 0
 
 
