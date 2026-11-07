@@ -157,20 +157,40 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     nb::class_<tt::tt_metal::HostBuffer>(m_tensor, "HostBuffer")
         .def(nb::init<>())
         //.def(nb::init<const std::shared_ptr<std::vector<std::byte>>>()) // broke unity build
-        .def(nb::init<std::vector<std::byte>&&>())
-        .def(nb::init<const std::vector<std::byte>&>())
-        .def("__getitem__", [](const HostBuffer& self, std::size_t index) { return self.view_bytes()[index]; })
+        .def(
+            "__init__",
+            [](HostBuffer* self, const nb::bytes& data) {
+                const auto* begin = reinterpret_cast<const std::byte*>(data.c_str());
+                new (self) HostBuffer(std::vector<std::byte>(begin, begin + data.size()));
+            })
+        .def(
+            "__init__",
+            [](HostBuffer* self, const std::vector<uint8_t>& data) {
+                std::vector<std::byte> bytes(data.size());
+                for (std::size_t i = 0; i < data.size(); ++i) {
+                    bytes[i] = static_cast<std::byte>(data[i]);
+                }
+                new (self) HostBuffer(std::move(bytes));
+            })
+        .def(
+            "__getitem__",
+            [](const HostBuffer& self, std::size_t index) {
+                const auto bytes = self.view_bytes();
+                if (index >= bytes.size()) {
+                    throw nb::index_error("HostBuffer index out of range");
+                }
+                return static_cast<uint8_t>(bytes[index]);
+            })
         .def("__len__", [](const HostBuffer& self) { return self.view_bytes().size(); })
         .def(
             "__iter__",
             [](const HostBuffer& self) {
-                return nb::make_iterator<nb::rv_policy::reference_internal>(
-                    nb::type<tt::tt_metal::HostBuffer>(),
-                    "iterator",
-                    self.view_bytes().begin(),
-                    self.view_bytes().end());
-            },
-            nb::keep_alive<0, 1>())
+                nb::list values;
+                for (const std::byte b : self.view_bytes()) {
+                    values.append(static_cast<uint8_t>(b));
+                }
+                return nb::iter(values);
+            })
         .def(
             "__array__",
             [](HostBuffer& self) {
