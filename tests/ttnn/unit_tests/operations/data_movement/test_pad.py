@@ -2214,3 +2214,39 @@ def test_pad_codegen_auto_keeps_execution_controls_on_native(device, controls):
     assert torch.equal(output, expected)
     msg = "auto routed a pad with an execution control to codegen"
     assert device.num_program_cache_entries() == entries_before, msg
+
+
+def test_pad_rank1_nd_sharded_input(device):
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))])
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape([64]), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+    torch_input = torch.arange(256, dtype=torch.float32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    output = ttnn.pad(tt_input, [(0, 64)], 0.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(output), torch.nn.functional.pad(torch_input, (0, 64)))
+
+
+def test_pad_one_row_block_shards_squeezed_rank1(device):
+    # [1, 1, 1, 32] in two one-row [1, 16] block shards squeezes to a rank-1 spec with one page per shard; the row
+    # must split across the shards instead of overrunning the first one (comments on #58370).
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    in_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch_input = ((torch.arange(32) % 31 + 1) / 8).reshape(1, 1, 1, 32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem_config
+    )
+
+    output = ttnn.pad(tt_input, [[0, 3], [0, 0], [0, 0], [0, 0]], 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    expected = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, 0, 0, 3))
+    assert torch.equal(ttnn.to_torch(output), expected)

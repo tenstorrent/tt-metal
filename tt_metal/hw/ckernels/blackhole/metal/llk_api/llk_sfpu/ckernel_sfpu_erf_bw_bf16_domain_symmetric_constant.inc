@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// This macro is emitted only for the complete typed action shape certified by
-// detect_symmetric_constant_raw_tails. Keep the original records and hashes in
-// generated source: these assertions make the cheaper lowering subordinate to
-// that unchanged program rather than a replacement contract.
 inline void apply_raw_pre_domain_actions(vFloat x_raw, vFloat& result) {
     static_assert(TT_DOMAIN_ACTION_COUNT == 2, "symmetric tails require exactly two actions");
     constexpr auto first = TT_DOMAIN_ACTION_DATA[0];

@@ -58,7 +58,6 @@ constexpr uint32_t LUT_SIZE = LUT_SIZE_BF16;
 constexpr float ASYMPTOTIC_EXP_ARG_SCALE = -1.0000000000000000e+00f;
 constexpr float ASYMPTOTIC_SCALE = 1.0000000000000000e+00f;
 
-// Typed domain actions.
 struct TtDomainActionRecord {
     float bound;
     uint8_t direction;
@@ -77,8 +76,6 @@ constexpr float TT_DOMAIN_ACTION_SYMMETRIC_TAIL_BOUND = 9.3750000000000000e+00f;
 constexpr float TT_DOMAIN_ACTION_SYMMETRIC_TAIL_VALUE = 0.0000000000000000e+00f;
 constexpr uint8_t TT_DOMAIN_ACTION_SYMMETRIC_TAIL_INCLUSIVE = 1;
 
-// Declared special-value policy from the typed activation specification.
-// 0=NaN 1=+Inf 2=-Inf 3=+0 4=-0 5=finite_other(pass through)
 #define TT_TARGET_BH_BF16_RAW_NEG_NAN_RESULT 1
 constexpr float TT_TARGET_BH_BF16_RAW_NEG_NAN_CONSTANT = 0.0000000000000000e+00f;
 #define TT_TARGET_BH_BF16_RAW_POS_NAN_RESULT 1
