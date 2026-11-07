@@ -240,6 +240,19 @@ class MathFidelitySetting(Enum):
     HIFI4_FP32 = "hifi4fp32"
 
 
+# Math fidelity settings whose compute kernel config sets fp32_dest_acc_en=True. A 32-bit destination register
+# halves the addressable register half-extents, so an FP32-accumulating matmul allows at most
+# out_subblock_h * out_subblock_w <= 4 tiles where an FP16-accumulating one allows 8.
+FP32_DEST_ACC_MATH_FIDELITY_SETTINGS = frozenset(
+    {
+        MathFidelitySetting.HIFI2,
+        MathFidelitySetting.HIFI2_NOL1ACC,
+        MathFidelitySetting.HIFI4,
+        MathFidelitySetting.HIFI4_FP32,
+    }
+)
+
+
 class ModelOptimizations:
     @classmethod
     def accuracy(cls, model_name):
@@ -1419,6 +1432,17 @@ class ModelArgs:
     # full-grid 1D mcast_in0 matmul instead of the 2D mcast config (see short_prefill_1d_matmul_config).
     SHORT_PREFILL_1D_MAX_SEQ_LEN = 128
 
+    def any_decoder_fp32_dest_acc(self, op: OpGroup) -> bool:
+        """True when any decoder's compute kernel config for `op` accumulates in FP32.
+
+        One program config serves every decoder, so a shared config has to respect the strictest of them: the
+        decoders are keyed in get_math_fidelity by decoder id, which a program-config getter does not know.
+        """
+        for decoder_conf in self.decoders_optimizations.decoder_optimizations.values():
+            if decoder_conf.op_fidelity_settings.get(op) in FP32_DEST_ACC_MATH_FIDELITY_SETTINGS:
+                return True
+        return False
+
     def short_prefill_1d_matmul_config(self, seq_len: int, k: int, n: int, in0_block_w: int, fp32_dest_acc: bool):
         """Program config for a short-prompt prefill projection (QKV, WO, FF1/FF3, FF2), or None.
 
@@ -1456,7 +1480,11 @@ class ModelArgs:
     def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         if mode == Mode.PREFILL and (
             pc := self.short_prefill_1d_matmul_config(
-                seq_len, self.dim // self.cluster_shape[0], self.hidden_dim // self.cluster_shape[1], 2, False
+                seq_len,
+                self.dim // self.cluster_shape[0],
+                self.hidden_dim // self.cluster_shape[1],
+                2,
+                self.any_decoder_fp32_dest_acc(OpGroup.LI_FF1_FF3),
             )
         ):
             return pc
@@ -1532,7 +1560,11 @@ class ModelArgs:
     def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         if mode == Mode.PREFILL and (
             pc := self.short_prefill_1d_matmul_config(
-                seq_len, self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1), self.dim, 4, False
+                seq_len,
+                self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
+                self.dim,
+                4,
+                self.any_decoder_fp32_dest_acc(OpGroup.LI_FF2),
             )
         ):
             return pc
