@@ -260,6 +260,10 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
         setattr(layer, name, None)
     layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
+    # The TP all-gather as its own op (fuse_tp_gather off); _fused_gather_layer turns the fused gather on.
+    layer._tp_gather = None
+    # No side windows (#63311): the relay and the final carry run on their own.
+    layer._side_windows = None
     layer._validate_forward = Mock()
     layer._validate_runtime_bound = Mock()
     projected = SimpleNamespace(projected=object(), decay_rank_offset=0, output_gate_offset=0, beta_offset=0)
@@ -267,7 +271,9 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     calls.project_inputs.return_value = projected
     layer._compute_decay = calls.compute_decay
     layer.recurrence = calls.recurrence
-    calls.recurrence.return_value = SimpleNamespace(output=object(), final_state="final_recurrent")
+    calls.recurrence.return_value = SimpleNamespace(
+        output=object(), final_state="final_recurrent", beside_relay=None, final_carry=None
+    )
     layer._kda_rms_norm = calls.norm
     layer._project_output = calls.project_output
     calls.project_output.return_value = "output"
@@ -300,6 +306,24 @@ def test_kda_forward_slot_imports_gathers_runs_and_exports_in_order(monkeypatch)
     )
     freed = [c.args[0] for c in calls.deallocate.call_args_list]
     assert "gathered" in freed and freed[-2:] == ["final_recurrent", "new_convolution"]
+
+
+def test_kda_forward_slot_gathers_inside_the_input_projection(monkeypatch):
+    # fuse_tp_gather: the projection takes the TP shard and gathers it in its own program, into the persistent buffer
+    # the layer's other readers of the full-width input use; nothing frees that buffer.
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    gathered = object()
+    layer._tp_gather = SimpleNamespace(gathered=gathered)
+    slabs, slot, scratch, start, end = Mock(), object(), Mock(), object(), object()
+    calls.attach_mock(slabs, "slabs")
+    tp_shard = SimpleNamespace(shape=(1, 64, 64))
+    assert layer.forward_slot(tp_shard, scratch, slabs, slot, 7, start, end) == "output"
+    order = [c[0] for c in calls.mock_calls if not c[0].startswith("project_inputs().")]
+    assert order.index("slabs.import_layer") < order.index("project_inputs") < order.index("project_output")
+    assert order.index("project_output") < order.index("slabs.export_layer")
+    calls.all_gather.assert_not_called()
+    calls.project_inputs.assert_called_once_with(tp_shard)
+    assert gathered not in [c.args[0] for c in calls.deallocate.call_args_list]
 
 
 def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkeypatch):

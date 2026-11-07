@@ -85,7 +85,9 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # from run to run than the device does, hence the untraced gate's wider margin. Traced: mean of 3 runs on
 # bh-glx-120-b07u02 with the CI job's settings, where main measures 1.417 (CI 1.418). Untraced: that plus CI's 17 us
 # untraced overhead on main, since this host dispatches slower than CI's (main untraced 1.526 here, 1.435 on CI).
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.307, "untraced": 1.324}
+# The TP all-gather inside the input projection (all_gather_matmul_prefill) took traced to 1.171 on CI (run
+# 42397321077; 1.173-1.175 on b07u02); untraced, host-bound, measured 1.363 there, within the band.
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.171, "untraced": 1.324}
 _GALAXY_UNTRACED_PERF_MARGIN = 0.06
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
