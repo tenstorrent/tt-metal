@@ -297,6 +297,13 @@ class OpenRouterChat(lmms):
         if not os.path.exists(out):
             ffmpeg = shutil.which("ffmpeg")
             if ffmpeg is None:
+                try:  # the static binary of the imageio-ffmpeg wheel
+                    import imageio_ffmpeg
+
+                    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+                except Exception:  # noqa: BLE001 - no ffmpeg anywhere: raise below
+                    ffmpeg = None
+            if ffmpeg is None:
                 raise RuntimeError(
                     f"{path} is {size} bytes (> video_max_mb) or not mp4/webm/mov, and ffmpeg is missing"
                 )
