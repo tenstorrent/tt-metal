@@ -833,3 +833,40 @@ def test_moreh_norm_backward_zero_elements(device, p):
     assert (res_dx[0] == 0.0).all()
     assert res_dx[1, 0] == 0.0
     assert torch.allclose(res_dx[1, 1:], expected_dx[1, 1:], rtol=1e-1, atol=1e-1)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [
+        ([1, 1, 32, 32], 3),
+        ([2, 3, 64, 64], 2),
+        ([2, 3, 64, 64], 3),
+        ([2, 3, 64, 64], [2, 3]),
+        ([1, 1, 64, 100], 3),
+        ([45, 22], 1),
+        ([3, 4, 5, 17, 22], 3),
+        ([3, 4, 5, 17, 22], [3, 4]),
+    ],
+)
+@pytest.mark.parametrize("p", [2.0, 3.0])
+def test_moreh_norm_backward_keepdim_false_last_dims(input_shape, dim, p, device):
+    """keepdim=False over one of the last two dims, with output_grad shaped as torch gives it (the reduced dims
+    dropped)."""
+    torch.manual_seed(2024)
+    torch_input = torch.rand(input_shape).bfloat16().float().requires_grad_()
+    torch_output = torch.linalg.vector_norm(torch_input, ord=p, dim=dim, keepdim=False)
+    torch_output_grad = torch.rand(torch_output.shape).bfloat16().float()
+    torch_output.backward(torch_output_grad)
+    expected = torch_input.grad
+
+    ttnn_input = ttnn.from_torch(torch_input.detach(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.operations.moreh.norm(ttnn_input, p=p, dim=dim, keepdim=False)
+    ttnn_output_grad = ttnn.from_torch(torch_output_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_grad = ttnn.operations.moreh.norm_backward(
+        ttnn_input, ttnn_output, ttnn_output_grad, p=p, dim=dim, keepdim=False
+    )
+    actual = ttnn.to_torch(ttnn_input_grad).float()
+
+    assert actual.shape == expected.shape
+    tolerance = 0.05 * expected.abs().max() + 0.05 * expected.abs()
+    assert ((actual - expected).abs() <= tolerance).all()

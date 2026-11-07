@@ -563,6 +563,31 @@ def test_create_width_shard_by_head(
         )
 
 
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("n_local_heads, n_local_kv_heads, head_dim", ((36, 2, 32), (34, 2, 32)))
+@pytest.mark.parametrize("overlap_coregrid", (True, False))
+def test_create_min_width_shard_subcoregrid_more_than_32_q_heads(
+    device, n_local_heads, n_local_kv_heads, head_dim, overlap_coregrid
+):
+    """Q and KV heads pad to different tile counts once there are more than 32 Q heads."""
+    torch.manual_seed(0)
+    sub_core_grids = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    run_test_create_min_width_shard(
+        device=device,
+        batch=8,
+        n_local_heads=n_local_heads,
+        n_local_kv_heads=n_local_kv_heads,
+        head_dim=head_dim,
+        overlap_coregrid=overlap_coregrid,
+        sub_core_grids=sub_core_grids,
+    )
+
+
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @pytest.mark.parametrize("offset_dtype", (ttnn.bfloat16, ttnn.float32))
 def test_create_heads_with_slice_rejects_float_batch_offset(device, offset_dtype, expect_error):

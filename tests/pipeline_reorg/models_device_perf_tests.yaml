@@ -30,7 +30,10 @@
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
-      timeout: 20
+      # Same as wh_n150: the profiled prefill run is ~140 s on most P150 VMs but 306-430 s on some nights
+      # (vm-302 10-25, vm-304 10-27, vm-309 10-31, vm-307 11-03), and tracy post-processing varies too;
+      # 20 minutes cut the leg off on 10-25, 10-27 and 11-03.
+      timeout: 30
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_quietbox_2:
