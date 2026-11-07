@@ -204,6 +204,10 @@ def test_bitcast_sharded(
     # Convert output back to torch
     ttnn_output = ttnn.to_torch(ttnn_output_sharded, dtype=torch_output_dtype)
 
+    if torch_input.element_size() == 4:
+        assert torch.equal(ttnn_output.view(torch.int32), torch_input.view(torch.int32))
+        return
+
     # Compare values - bitcast should preserve exact bit patterns
     # Note: NaN values may convert to inf due to hardware packer limitation
     # For non-NaN, non-inf values, we expect exact match
@@ -224,22 +228,7 @@ def test_bitcast_sharded(
             assert torch.isinf(torch.tensor(actual)), f"Value {i}: Expected Inf, got {actual}"
         else:
             # Normal values should match exactly for bitcast
-            if torch_output_dtype == torch.float32:
-                # Allow tolerance for precision issues with large numbers
-                # Use relative tolerance for large numbers, absolute for small
-                abs_diff = abs(expected - actual)
-                if abs(expected) > 1.0:
-                    # Relative tolerance for large numbers (allow up to 0.1% relative error)
-                    rel_tol = abs_diff / abs(expected)
-                    assert (
-                        rel_tol < 0.001 or abs_diff < 0.002 or expected == actual
-                    ), f"Value {i}: Expected {expected}, got {actual}, difference: {abs_diff}, rel_diff: {rel_tol}"
-                else:
-                    # Absolute tolerance for small numbers
-                    assert (
-                        abs_diff < 0.002 or expected == actual
-                    ), f"Value {i}: Expected {expected}, got {actual}, difference: {abs_diff}"
-            elif torch_output_dtype == torch.bfloat16:
+            if torch_output_dtype == torch.bfloat16:
                 # bfloat16 denormals may be flushed to zero due to hardware limitations
                 expected_tensor = torch.tensor(expected)
                 is_denormal = (

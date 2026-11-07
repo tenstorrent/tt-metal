@@ -2149,7 +2149,7 @@ void py_module(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            dtype (ttnn.DataType): output data type. Must have the same bit size as input dtype. Supported pairs: UINT16 <-> BFLOAT16 (both 16 bits), UINT32 <-> FLOAT32 (both 32 bits), UINT32 <-> INT32 (both 32 bits).
+            dtype (ttnn.DataType): output data type. Must have the same bit size as input dtype. Supported pairs: UINT16 <-> BFLOAT16 (both 16 bits), UINT32 <-> FLOAT32 (both 32 bits), INT32 <-> FLOAT32 (both 32 bits), UINT32 <-> INT32 (both 32 bits).
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
