@@ -57,7 +57,11 @@ inline void calculate_unary_max_min(uint value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (a >> 2));
+        // Macro 0 loads, swaps against L12 and stores; only L0/L1 are written.
+        TT_LLK_SFPU_ISSUE_TT_MACRO(
+            TT_OP_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (a >> 2)),
+            0x0u,
+            0x3u);
         TTI_SFPNOP;
     }
     TTI_SFPNOP;
