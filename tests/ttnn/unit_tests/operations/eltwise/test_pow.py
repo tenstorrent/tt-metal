@@ -438,6 +438,90 @@ def test_binary_pow_fp32_base_zero(base, device):
         ), f"pow({base}, {exponent}): got {got.item()}, expected {want.item()}"
 
 
+NEGATIVE_BASE_LARGE_EXPONENT_CASES = {
+    "float32": [
+        (-1.0, 32767.0),
+        (-1.0, 32768.0),
+        (-1.0, 32769.0),
+        (-1.0, 40000.0),
+        (-1.0, 65537.0),
+        (-1.0, 1000001.0),
+        (-1.0, 8388609.0),
+        (-1.0, 16777216.0),
+        (-1.0, 3e7),
+        (-1.0, -32768.0),
+        (-1.0, -40001.0),
+        (-2.0, 40000.0),
+        (-2.0, 40001.0),
+        (-2.0, -40001.0),
+        (-0.5, 40001.0),
+        (-1.0, 32768.5),
+        (-1.0, 8388607.5),
+        (-2.0, 3.0),
+        (-2.0, 2.0),
+        (-2.0, -0.0),
+        # A -0 base keeps its sign through an odd integer pow.
+        (-0.0, 40001.0),
+        (-0.0, -40001.0),
+        (-0.0, 8388609.0),
+        (-1.0, float("nan")),
+        (-2.0, float("nan")),
+        (-2.0, float("inf")),
+        (-0.5, float("inf")),
+        (-2.0, float("-inf")),
+        (-1.0, float("inf")),
+        (-1.0, float("-inf")),
+    ],
+    # bf16-representable exponents only: every |pow| >= 256 is an even integer.
+    "bfloat16": [
+        (-1.0, 255.0),
+        (-1.0, 256.0),
+        (-1.0, 32768.0),
+        (-1.0, 65536.0),
+        (-1.0, -32768.0),
+        (-2.0, 32768.0),
+        (-2.0, -32768.0),
+        (-0.5, 32768.0),
+        (-1.0, 2.5),
+        (-2.0, 3.0),
+        (-2.0, -0.0),
+        (-1.0, float("nan")),
+        (-2.0, float("nan")),
+        (-2.0, float("inf")),
+        (-0.5, float("inf")),
+        (-2.0, float("-inf")),
+        (-1.0, float("inf")),
+        (-1.0, float("-inf")),
+    ],
+}
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_pow_negative_base_large_integer_exponent(device, dtype):
+    # vSMag16 saturates at 32767, so these used to read as non-integer and return NaN (#61533).
+    cases = NEGATIVE_BASE_LARGE_EXPONENT_CASES[dtype]
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    torch_base = torch.tensor([b for b, _ in cases], dtype=torch_dtype)
+    torch_exp = torch.tensor([e for _, e in cases], dtype=torch_dtype)
+    expected = torch.pow(torch_base.float(), torch_exp.float())
+    # The kernel returns NaN for a negative base with a +/-inf pow; torch gives 1 or 0/inf.
+    expected[torch.isinf(torch_exp) & (torch_base < 0)] = float("nan")
+
+    tt_base = ttnn.from_torch(torch_base, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_exp = ttnn.from_torch(torch_exp, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.pow(tt_base, tt_exp)).float()
+
+    for (base, exponent), got, want in zip(cases, output.flatten(), expected.flatten()):
+        if dtype == "bfloat16" and torch.isnan(want):
+            # bf16 dest packs NaN as inf (tenstorrent/tt-llk#675).
+            assert not torch.isfinite(got), f"pow({base}, {exponent}): got {got.item()}, expected non-finite"
+            continue
+        assert pow_result_matches(
+            got.item(), want.item()
+        ), f"pow({base}, {exponent}): got {got.item()}, expected {want.item()}"
+
+
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_pow_determinism(device, dtype):
     torch.manual_seed(0)
