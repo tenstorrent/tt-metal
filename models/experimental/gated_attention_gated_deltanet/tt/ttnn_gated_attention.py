@@ -294,6 +294,9 @@ def gated_attention_forward_ttnn(
         key_fill = key_states[:, :, :page_len, :] if page_len < key_states.shape[2] else key_states
         value_fill = value_states[:, :, :page_len, :] if page_len < value_states.shape[2] else value_states
 
+        if paged_kv_cache_key.dtype != key_fill.dtype:  # paged_fill_cache does not cast (e.g. a bf8 cache)
+            key_fill = ttnn.typecast(key_fill, paged_kv_cache_key.dtype)
+            value_fill = ttnn.typecast(value_fill, paged_kv_cache_value.dtype)
         ttnn.experimental.paged_fill_cache(paged_kv_cache_key, key_fill, chunk_page_table, batch_idx=0)
         ttnn.experimental.paged_fill_cache(paged_kv_cache_value, value_fill, chunk_page_table, batch_idx=0)
         ttnn.deallocate(key_states)

@@ -17,7 +17,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
-from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
+from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer, sharded_decode_rms_norm
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
@@ -532,6 +532,10 @@ class Qwen36Model:
         BASE argmax, so that call must stay byte-identical. The MTP drafter passes float32: its
         argmax only has to rank candidates, and at bf16 4.7-5.5% of draft rejections at 8k/32k were
         EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip."""
+        ternary = getattr(self, "ternary_lm_head", None)
+        if ternary is not None and out_dtype is None and x.shape[-2] <= 32:
+            # Bonsai one-token decode: its own ternary output weights (models/demos/blackhole/bonsai2/tt/ternary/mlp.py).
+            return ternary(x)
         kw, ccl_kw = {}, {}
         if out_dtype is not None:
             # HiFi2 matches the bfloat8_b weight; fp32 dest accumulation is what actually keeps the
@@ -550,6 +554,37 @@ class Qwen36Model:
             # the fp32 -> bf16 cast on this [1,1,B,vocab/tp] tensor actually returns garbage (the
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
+        elif (
+            not self._lmhead_vocab_sharded
+            and x.shape[-2] <= 32
+            and x.shape[-1] == 5120
+            and self.lm_head_weight.shape[-1] == 248320
+        ):
+            # single-device decode (one 32-row tile), base path: Blackhole sweep measured in0_block_w=1
+            # at 3488.0 vs 3513.1 us/call for the default 13x10 1D-mcast (in0_block_w=2); precision is
+            # held at the call's own default compute config.
+            kw = dict(
+                program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                    in0_block_w=1,
+                    out_subblock_h=1,
+                    out_subblock_w=6,
+                    out_block_h=1,
+                    out_block_w=60,
+                    per_core_M=1,
+                    per_core_N=60,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                ),
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                    dst_full_sync_en=False,
+                ),
+            )
         logits = ttnn.linear(x, self.lm_head_weight, **kw)
         if self._lmhead_vocab_sharded:
             from models.tt_transformers.tt.ccl import tt_all_gather
@@ -577,6 +612,9 @@ class Qwen36Model:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
             return self.norm(x, mode=Mode.DECODE, norm_config=nc)
+        if x.shape[-2] <= ttnn.TILE_SIZE:
+            # One chip: the same single-core norm; sharded over 40 cores, DRAM out as the LM head read it before.
+            return sharded_decode_rms_norm(self.norm, x, self.args.dim, ttnn.DRAM_MEMORY_CONFIG)
         return self.norm(x, mode=Mode.DECODE)
 
     @classmethod
@@ -987,7 +1025,14 @@ class Qwen36Model:
         fractured [1,1,B,dim/tp] — the seed the MTP drafter head consumes. Returns
         (logits, hidden) in that case.
         """
-        x = self.embd(token_ids_buf)
+        from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+        streaming = self.num_devices == 1 and stream_decode.active()
+        if streaming:  # Bonsai weight stream: the senders run through the whole step
+            stream_decode.STATE.launch()
+            x = stream_decode.embed(self.embd.weights, token_ids_buf, cur_pos_tensor, page_table)  # on the decode cores
+        else:
+            x = self.embd(token_ids_buf)
         if self.num_devices > 1:
             # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
@@ -1003,6 +1048,17 @@ class Qwen36Model:
         # LATER forward and all-gathers it, so it must survive the final norm + lm_head below (a
         # to_memory_config is a no-op alias when x is already DRAM, so the norm would free it).
         hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_hidden else None
+        if streaming and not (sharded_lm_head or self._ondev_argmax or return_hidden):
+            # the final norm inside the LM head's op (its fused norm + rotation)
+            sd = stream_decode.STATE
+            logits = sd.head.rotated(sd.final_nrot, x, lead=tuple(list(x.shape)[:-1]), host_pf=sd.head_pf())
+            ttnn.deallocate(x)
+            if os.environ.get("BONSAI_ARGMAX_TRACED", "1") == "1":
+                # the greedy argmax inside the step (and its trace): the caller reads one id (stream_decode.argmax)
+                from models.demos.blackhole.bonsai2.tt.ternary.argmax import row0_argmax
+
+                sd.argmax_out = (row0_argmax(logits, self.args.vocab_size), self.args.vocab_size)
+            return logits
         x = self._final_norm_decode(x)
         if sharded_lm_head or self._ondev_argmax:
             # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax).
@@ -4224,6 +4280,22 @@ class Qwen36Model:
 
     def _restore_deltanet_states(self, saved_states, device):
         """Restore GDN state via ttnn.copy (preserves trace-baked buffer addresses)."""
+        from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+        if stream_decode.active():
+            # Bonsai weight stream: no device copy op (it would run on the senders' cores too); write the host
+            # snapshot straight into the same buffers
+            idx = 0
+            for layer in self.layers:
+                if not layer.is_full_attention:
+                    dn = layer.attention
+                    saved = saved_states[idx]
+                    for key, dst in (("recurrent", dn.recurrent_state), ("conv", dn.fused_conv_state)):
+                        host = ttnn.from_torch(saved[key], dtype=dst.dtype, layout=ttnn.TILE_LAYOUT)
+                        ttnn.copy_host_to_device_tensor(host, dst)
+                    idx += 1
+            stream_decode.STATE.prefetch_first()  # the first GDN step's prefetched inputs, from the restored state
+            return
         idx = 0
         for layer in self.layers:
             if not layer.is_full_attention:

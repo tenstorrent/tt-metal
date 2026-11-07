@@ -4,6 +4,7 @@
 
 Branch B: paged decode — uses memory_config=mc and cur_pos_tensor=position_tensor.
 """
+import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention as _attn_mod
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import gated_attention_forward_ttnn
 
 
@@ -20,8 +21,42 @@ def decode_forward(
     page_table=None,
     paged_kv_cache_key=None,
     paged_kv_cache_value=None,
+    ternary=None,
 ):
     """Branch B — paged decode: paged_update_cache + paged_sdpa_decode via page_table."""
+    import ttnn as _ttnn
+    from models.demos.blackhole.bonsai2.tt.attn_qg import QGSplitTtnn, is_reordered
+
+    if ternary is None and is_reordered(weights) and _attn_mod.ttnn is _ttnn:
+        # dense decode with the reordered q_proj (models/demos/blackhole/bonsai2/tt/attn_qg.py); not under another
+        # stand-in (the ternary decode one has its own q weights and the dense q_proj is freed by then)
+        _orig = _attn_mod.ttnn
+        _attn_mod.ttnn = QGSplitTtnn(weights, config.num_heads, config.head_dim)
+        try:
+            return decode_forward(
+                x, cos, sin, weights, config, device, ckc, mc, position_tensor, page_table,
+                paged_kv_cache_key, paged_kv_cache_value,
+            )  # fmt: skip
+        finally:
+            _attn_mod.ttnn = _orig
+    if ternary is not None:
+        # Bonsai: q/k/v/o in its own ternary weights (models/demos/blackhole/bonsai2/tt/ternary/attention.py).
+        from models.demos.blackhole.bonsai2.tt.ternary.attention import TernaryAttentionTtnn
+
+        _orig, _orig_rope = _attn_mod.ttnn, _attn_mod.apply_rotary_pos_emb_ttnn
+        si = TernaryAttentionTtnn(weights, ternary)
+        ternary.kv_caches = (paged_kv_cache_key, paged_kv_cache_value)  # the decode SDPA's K / V prefetch
+        _attn_mod.ttnn = si
+        # Bonsai: q / k norm + RoPE in one op when the stand-in deferred the norms (TernaryAttentionTtnn.apply_rope)
+        _attn_mod.apply_rotary_pos_emb_ttnn = lambda q, k, c, s: si.apply_rope(q, k, c, s, _orig_rope)
+        try:
+            return decode_forward(
+                x, cos, sin, weights, config, device, ckc, mc, position_tensor, page_table,
+                paged_kv_cache_key, paged_kv_cache_value,
+            )  # fmt: skip
+        finally:
+            _attn_mod.ttnn = _orig
+            _attn_mod.apply_rotary_pos_emb_ttnn = _orig_rope
     output, _, _ = gated_attention_forward_ttnn(
         hidden_states=x,
         q_proj_weight=weights.q_proj,
