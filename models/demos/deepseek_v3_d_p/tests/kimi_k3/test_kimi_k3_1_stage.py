@@ -775,10 +775,11 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
 # Timing follows K3's `test_prefill_perf`: whole passes of the prompt (every chunk, in order, as a request
 # arrives), each traced replay synchronized and timed on host (`STAGE_TIME replay` lines; one stage's chunk time is
 # its retire period in the PP4 pipeline). Then one more pass under the real-time device profiler, one program
-# record per chip, and the same for one chunk at the deepest position of the per-user cache (the 1M probe of
-# ao3i.1.6). Each profiled chunk's programs go to `stage{s}.{label}.programs.json` in dispatch order with each
-# chip's [start, end] ns on that chip's clock, for attribution off device: programs overlap (sub-device regions),
-# so durations alone do not partition the chunk, and a program without records (the DSA indexer's top-k on its
+# record per chip, and, on the 128K prompt, the same for one chunk at the deepest position of the per-user cache (the
+# 1M probe of ao3i.1.6), after the slot's rows between the prompt and the probe are filled by the model (below).
+# Each profiled chunk's programs go to `stage{s}.{label}.programs.json` in dispatch order with each chip's
+# [start, end] ns on that chip's clock, for attribution off device: programs overlap (sub-device regions), so
+# durations alone do not partition the chunk, and a program without records (the DSA indexer's top-k on its
 # sub-device) shows only as a gap in a chip's timeline.
 #
 #     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/perf128k scripts/run_safe_pytest.sh \
@@ -858,7 +859,16 @@ def test_kimi_k3_1_stage_prompt_perf(stage, trace_dir, mesh_device, device_param
                     assert torch.isfinite(host).all(), f"stage {stage} chunk {chunk}: non-finite output"
         for chunk, (start, end) in enumerate(chunks):
             replay(chunk, start, end, profile_label=f"chunk{chunk}")
-        # The deep probe: the last chunk of the per-user cache, fed chunk 0's input (timing, not values).
+        # The deep probe: the last chunk of the per-user cache, fed chunk 0's input (timing, not values). First the
+        # rows up to it are written by the model: the prompt's chunks again, cyclically, as whole chunks at those
+        # positions, so the probe's indexer scores ~1M keys and KV rows the model wrote. Left zero-filled, ~930K keys
+        # score exactly 0 and every query short of 2,048 positive scores selects the same tied rows, which slows
+        # sparse_sdpa (ao3i.2.6). The fill's replays are logged like any other. Not on the 10K prompt: cycling two
+        # chunks gives every key ~100 copies on one DRAM bank, an artifact of its own (ao3i.2.8).
+        if trace_dir != TRACE_128K:
+            return
+        for start in range(len(chunks) * CHUNK, DEEP_START, CHUNK):
+            replay(start // CHUNK % len(chunks), start, start + CHUNK)
         for _ in range(PERF_PASSES):
             replay(0, DEEP_START, DEEP_START + CHUNK)
         replay(0, DEEP_START, DEEP_START + CHUNK, profile_label="deep")
