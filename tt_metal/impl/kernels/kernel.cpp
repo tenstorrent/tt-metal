@@ -363,6 +363,20 @@ void Kernel::process_semaphore_binding_handles(
     }
 }
 
+void Kernel::process_watcher_node_ranges(
+    const std::function<
+        void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& dfb_callback,
+    const std::function<void(
+        const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& semaphore_callback)
+    const {
+    for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
+        dfb_callback(accessor_name, handle.watcher_node_ranges);
+    }
+    for (const auto& [accessor_name, handle] : this->semaphore_binding_handles_) {
+        semaphore_callback(accessor_name, handle.watcher_node_ranges);
+    }
+}
+
 void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t cta_offset,
@@ -722,6 +736,20 @@ uint64_t Kernel::compute_hash() const {
             hash_llk_fields(*metadata);
         }
     };
+    // Baked into the generated header with Watcher NoC sanitizing. Empty otherwise, and then not hashed, so kernel
+    // hashes without Watcher are unchanged.
+    auto hash_watcher_node_ranges = [&](const std::vector<experimental::NodeRange>& node_ranges) {
+        if (node_ranges.empty()) {
+            return;
+        }
+        hasher.update(static_cast<uint64_t>(node_ranges.size()));
+        for (const experimental::NodeRange& range : node_ranges) {
+            hasher.update(static_cast<uint64_t>(range.start_coord.x));
+            hasher.update(static_cast<uint64_t>(range.start_coord.y));
+            hasher.update(static_cast<uint64_t>(range.end_coord.x));
+            hasher.update(static_cast<uint64_t>(range.end_coord.y));
+        }
+    };
     for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second.logical_dfb_id));
@@ -732,12 +760,14 @@ uint64_t Kernel::compute_hash() const {
         }
         hasher.update(static_cast<uint64_t>(it->second.pap));
         hasher.update(static_cast<uint64_t>(it->second.cap));
+        hash_watcher_node_ranges(it->second.watcher_node_ranges);
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second.id));
         hasher.update(static_cast<uint64_t>(it->second.scope));
         hasher.update(static_cast<uint64_t>(it->second.total_binder_harts));
+        hash_watcher_node_ranges(it->second.watcher_node_ranges);
     }
     // Tensor binding handles:
     //  - stored as a std::vector (user-specified order), so no sort step needed
