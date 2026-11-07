@@ -243,9 +243,9 @@ inline void sfpu_gguf_decode_init()
 }
 
 /**
- * @brief Group step of Q4_K and Q5_K: unpack the 6-bit scales and mins of a group once, for every tile of it decoded
- *        at the same DEST tiles, and its fp16 d and dmin, into tile dst_index + 1 past the page. Nothing
- *        for the other formats.
+ * @brief Group step of Q4_K, Q5_K and Q2_K: convert the fp16 d and dmin of a group once, into tile dst_index + 1
+ *        past the page, for every tile of it decoded at the same DEST tiles (Q4_K, Q5_K: also unpack its 6-bit scales
+ *        and mins). Nothing for the other formats.
  *
  * @tparam FMT: ckernel::gguf::Format of the page.
  * @param dst_index: As @ref sfpu_gguf_decode_tile; the page in tile dst_index + 1 is any page of the group.
@@ -263,6 +263,12 @@ inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uin
         gguf::k4_group<FMT>();
         sfpu_gguf_decode_done();
     }
+    else if constexpr (FMT == gguf::Q2_K)
+    {
+        sfpu_gguf_decode_start(dst_index, rows);
+        gguf::q2_group<FMT>();
+        sfpu_gguf_decode_done();
+    }
 }
 
 /**
@@ -276,7 +282,7 @@ inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uin
  * @param ti: The tile's index in its group of K tiles (page_layout<FMT>().group_tiles).
  * @param rows: DEST row offset of the page inside tile dst_index + 1 (several pages unpacked as one tile); the output
  *              tile and the scratch tile move with it.
- * @note Needs a 32-bit DEST and @ref sfpu_gguf_decode_init (Q4_K, Q5_K: and @ref sfpu_gguf_decode_group for the tile's
+ * @note Needs a 32-bit DEST and @ref sfpu_gguf_decode_init (Q4_K, Q5_K, Q2_K: and @ref sfpu_gguf_decode_group for the tile's
  *       group). Overwrites the programmable constants and may record into the replay buffer.
  */
 template <int FMT, bool PARAMS = true, bool BODY = true>

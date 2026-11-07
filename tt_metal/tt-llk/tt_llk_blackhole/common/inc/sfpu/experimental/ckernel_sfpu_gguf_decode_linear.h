@@ -77,12 +77,28 @@ sfpi_inline void k4_group()
     }
 }
 
+// Q2_K's group step: rows 8, 9 (fp16 d and dmin) to fp32, where pf32 reads them, past the page.
+template <int FMT>
+sfpi_inline void q2_group()
+{
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+        vUInt r0, r1, r2, r3;
+        rep4<FMT>(2, a, r0, r1, r2, r3);
+        sfpi::dst_reg[pf32_idx<FMT>(0, 0, a)] = k4_f16<0>(r0);
+        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)] = k4_f16<1>(r0);
+        sfpi::dst_reg[pf32_idx<FMT>(1, 0, a)] = k4_f16<0>(r1);
+        sfpi::dst_reg[pf32_idx<FMT>(1, 1, a)] = k4_f16<1>(r1);
+    }
+}
+
 // Phase 1 of the linear formats and of IQ4_NL (Q4_0's scale rows). TI = tile index inside the scale page's group of
 // K-tiles.
 template <int FMT, int TI>
 sfpi_inline void linear_params()
 {
-    if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0 && FMT != Q4_K && FMT != Q5_K)
+    if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0 && !group_scales<FMT>)
     {
         params_init<!q40_params<FMT>>();
     }
