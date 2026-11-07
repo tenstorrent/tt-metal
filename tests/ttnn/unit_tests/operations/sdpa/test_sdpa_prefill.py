@@ -917,3 +917,38 @@ def test_sdpa_block_map_rejects_windowed_and_sliding(device, mode, expect_error)
         ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, program_config=program_config, attn_mask_block_map=block_map, **kwargs
         )
+
+
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(0, 128), (128, 0)])
+def test_sdpa_block_map_rejects_zero_chunk_size(device, expect_error, q_chunk_size, k_chunk_size):
+    # The block-map shape check divides the sequence lengths by the chunk sizes.
+    s, d = 256, 64
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+    )
+    q, k, v = (
+        ttnn.from_torch(fa_rand(1, 1, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    mask = ttnn.from_torch(torch.zeros(1, 1, s, s), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    block_map = ttnn.from_torch(torch.ones(1, 1, 2, 2, dtype=torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "q_chunk_size .* and k_chunk_size .* must be greater than 0"):
+        ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=mask, program_config=program_config, attn_mask_block_map=block_map
+        )
+
+
+@pytest.mark.parametrize("v_heads", [0, 4])
+def test_flash_mla_prefill_rejects_bad_v_heads(device, expect_error, v_heads):
+    # The K/V chain grouping divides Q heads by V heads.
+    s = 128
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(), q_chunk_size=32, k_chunk_size=32
+    )
+    q = ttnn.from_torch(fa_rand(1, 2, s, 96), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    k = ttnn.from_torch(fa_rand(1, 1, s, 96), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v = ttnn.from_torch(fa_rand(1, v_heads, s, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Q num_heads must be >= V num_heads"):
+        ttnn.transformer.flash_mla_prefill(q, k, v, is_causal=False, program_config=program_config)
