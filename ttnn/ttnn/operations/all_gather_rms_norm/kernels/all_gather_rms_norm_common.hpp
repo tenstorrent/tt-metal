@@ -29,4 +29,5 @@ constexpr uint32_t cb_x_aligned = 8;       // regime N: dense output-aligned x t
 constexpr uint32_t cb_out_tiles = 9;       // normalized output tiles
 constexpr uint32_t cb_port_chunks = 10;    // port cores only: chunk staging between port reader and sender
 constexpr uint32_t cb_x_in = 11;           // native HEIGHT shard: the resident input shard (zero-copy, own slice)
+constexpr uint32_t cb_x_stage = 12;        // regime N bfloat8_b: bf16 staging of one landed row (compute -> reader)
 }  // namespace agrms_cb

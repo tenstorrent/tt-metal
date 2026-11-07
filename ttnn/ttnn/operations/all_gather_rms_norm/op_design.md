@@ -57,7 +57,7 @@ Entry-point contract:
 | Support gate (`UnsupportedAxisValue` / `ExcludedCell`) | SUPPORTED per axis, then EXCLUSIONS. Axis values are read from the call: dtype, layout, `memory_config().memory_layout`, per-device shape (taggers), `fp32_dest_acc_en` of the resolved config, gamma dtype / layout or `"none"`, cluster_axis, topology, num_links. An explicit num_links is checked against SUPPORTED. None is resolved to the discovered count and **not refused** (the design is generic in L). Sharded input / output must be L1. |
 | INPUT_TAGGERS | exactly two: `alignment` (`"w_non_aligned"` if `W_local % 32`; else `"h_non_aligned"` if `M % 32`; else `"tile_aligned"`) and `rank` (`len(shape)`), both on the per-device input shape `inputs[0]`. gamma_dtype / gamma_layout are **not** taggers: validate() reads `gamma.dtype` / `gamma.layout`, or `"none"`. |
 | Recommended Phase 0 SUPPORTED (implementer owns it) | dtype {float32, bfloat16, bfloat8_b}; fp32_dest_acc_en {True, False}; layout {TILE}; alignment {tile_aligned, w_non_aligned, h_non_aligned}; rank {2, 3, 4}; gamma_mode {gamma, no_gamma}; gamma_dtype {float32, bfloat16, "none"}; gamma_layout {TILE, ROW_MAJOR, "none"}; memory_layout {INTERLEAVED, HEIGHT_SHARDED, WIDTH_SHARDED}; cluster_axis {0, 1}; topology {Linear, Ring}; num_links {1, 2} |
-| Recommended EXCLUSIONS | `{dtype: float32, fp32_dest_acc_en: False}` (precision convention). `{dtype: bfloat8_b, alignment: w_non_aligned}`: the compose step (regime N) shifts datums across a block-float shared-exponent group, which cannot be done on packed bfp8 data. The base op's `bfloat8_b × h_non_aligned` exclusion is **not** carried over: H padding stays row-local here, and the transport moves whole bfp8 tiles unchanged. |
+| Recommended EXCLUSIONS | `{dtype: float32, fp32_dest_acc_en: False}` (precision convention). ~~`{dtype: bfloat8_b, alignment: w_non_aligned}`~~ lifted by Refinement 2: the compose cannot shift datums inside packed bfp8 shared-exponent groups, so compute first unpacks each landed row into a bf16 staging row (`cb_x_stage`) and the reader composes from that (see the regime N row). The base op's `bfloat8_b × h_non_aligned` exclusion is **not** carried over: H padding stays row-local here, and the transport moves whole bfp8 tiles unchanged. |
 | Index axes | none (the gathered / reduced dim is fixed at -1) |
 
 ## Tensors
@@ -382,7 +382,8 @@ T_in = T_out = input tile bytes; T_acc = 4096 (`fp32_dest_acc_en=True`) / 2048 (
 | `cb_gathered_sumsq` (k > 1) | 5 | T_acc | symmetric: `depth_g · k · block_row_tiles`; owner: base op `cb_plan()` row-form gather tiles | spans row × member | T_acc | writer | compute | exchange → combine |
 | `cb_inv_owned` (owner) | 6 | T_acc | base op `cb_plan()` | owned rows | T_acc | compute | writer | owner combine → return |
 | `cb_inv_rms` | 7 | T_acc | `block_row_tiles` | spans row | T_acc | compute (k = 1 / symmetric) or writer (owner return) | compute | finalize → end of normalize |
-| `cb_x_aligned` (regime N) | 8 | T_in | `compose_depth · out_unit` | streams W | input dtype | reader | compute | per unit |
+| `cb_x_aligned` (regime N) | 8 | T_in (bf16 when staged) | `compose_depth · out_unit` | streams W | input dtype (Float16_b when staged) | reader | compute | per unit |
+| `cb_x_stage` (regime N, bfp8) | 12 | 2048 | `STAGE_ROWS · land_w_tiles` (one landed row) | spans W | Float16_b | compute (copy of the row's landing tiles) | reader (compose) | per row |
 | `cb_out_tiles` | 9 | T_out | `out_depth · out_unit` | streams W | output dtype | compute | writer | per unit |
 | `cb_port_chunks` (ports only) | 10 | `run_pages · T_in` | `2 · group` | streams items | input dtype | port reader | port sender | per batch |
 
@@ -471,7 +472,7 @@ Helpers considered and rejected (raw_api entries):
 | Ring on a box without wrap links | QB2 2×2 has no wrap per axis | Ring raises `ValueError` there; the 1×4 / 4×1 snake mocks (`topology.ring_mock_meshes`) exercise it |
 | Regime only on some grids | k* depends on n_workers | pinned shapes need only n_workers ≥ 96 (any BH box, |P| ≤ 8) |
 | Non-aligned slices landing at non-tile offsets | dense output concat | regime N compose; per-slice tail zero-fill before Σx²; gamma and output stay dense-aligned |
-| bfp8 tiles in transport | 1088 B pages | `run_pages = floor(payload / 1088) = 13`; tile bytes move unchanged; bfp8 × w_non_aligned excluded |
+| bfp8 tiles in transport | 1088 B pages | `run_pages = floor(payload / 1088) = 13`; tile bytes move unchanged; regime N on bfp8: the slice tails are zeroed on the bfp8 mantissa bytes (exact zeros), compute unpacks the landed row into a bf16 staging row, the reader composes 2-byte datums from it into bf16 `cb_x_aligned` tiles, and the normalize packs bfp8 (Refinement 2) |
 | First call sets up the ready semaphore | a remote ready can race its zero-initialization | blocking initial write or one synchronize at creation, cached per mesh, outside traces |
 | `combine_lookahead` from the base op | a lookahead waits on the next block's landing | off in this op (Stall-shadow check) |
 | Determinism | regression suite checks bit-identical repeats | fixed reduction orders; no arrival-order-dependent arithmetic |

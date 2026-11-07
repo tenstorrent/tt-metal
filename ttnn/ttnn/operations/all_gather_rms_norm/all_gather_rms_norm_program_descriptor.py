@@ -42,12 +42,14 @@ CB_X_ALIGNED = 8  # regime N: composed dense x tiles
 CB_OUT = 9  # normalized output tiles
 CB_PORT_CHUNKS = 10  # ports: chunk staging
 CB_X_IN = 11  # native HEIGHT shard: the resident input shard (zero-copy; own-slice columns read in place)
+CB_X_STAGE = 12  # regime N, bfloat8_b (Refinement 2): bf16 staging of the landed row (compute -> reader compose)
 
 # ---- Blocking-model knobs (op_design.md -> Blocking Model). Every extent below derives from these. ----
 BLOCK_ROW_TILES = 1  # tile-rows per block (rows land progressively: one row per block)
 OUT_UNIT_CAP = 16  # writer / compose unit (tiles)
 OUT_DEPTH = 2  # cb_out_tiles depth in units
 COMPOSE_DEPTH = 2  # cb_x_aligned depth in units (regime N)
+STAGE_ROWS = 1  # cb_x_stage depth in landed rows (regime N bfp8; >1 needs compute look-ahead, not built)
 ITEM_MIN_CHUNKS = int(
     os.environ.get("AGRMS_ITEM_MIN_CHUNKS", "4")
 )  # (env: perf probes) chunks per transport item (one fused write + increment per item)
@@ -411,6 +413,7 @@ class Sizes:
     run_pages: int
     group: int
     has_gamma: bool
+    T_stage: int = 0  # regime N bfp8: bf16 staging tile bytes (0 = no staging, compose on the input dtype)
 
 
 def gamma_page_layout(gamma_dtype):
@@ -466,7 +469,10 @@ def cb_plan(geo: Geometry, sz: Sizes, split: Split):
             depth_g = 2 if split.blocks_max > 1 else 1  # lockstep slot reuse (base op mechanism cap)
             plan_[CB_GATHERED] = (depth_g * k * b, sz.T_acc)
     if geo.regime_n:
-        plan_[CB_X_ALIGNED] = (COMPOSE_DEPTH * unit, sz.T_in)
+        # staged (bfp8): the compose writes 2-byte datums, so cb_x_aligned holds bf16 tiles
+        plan_[CB_X_ALIGNED] = (COMPOSE_DEPTH * unit, sz.T_stage or sz.T_in)
+        if sz.T_stage:
+            plan_[CB_X_STAGE] = (STAGE_ROWS * geo.land_w_tiles, sz.T_stage)
     return plan_
 
 
@@ -698,7 +704,11 @@ def create_mesh_program_descriptor(
     run_pages = max(1, int(ttnn.get_tt_fabric_max_payload_size_bytes()) // T_in)
     group = max(1, min(PORT_GROUP_CAP, PORT_CB_BYTES // (2 * run_pages * T_in)))
     T_g, g_tail = gamma_page_layout(gamma.dtype) if has_gamma else (0, 0)
-    sz = Sizes(T_in, ttnn.tile_size(t_acc), T_g, g_tail, run_pages, group, has_gamma)
+    # regime N on bfp8 (Refinement 2): datums cannot be shifted inside shared-exponent groups, so compute unpacks the
+    # landed row into a bf16 staging row and the reader composes from it (2-byte datums)
+    stage = geo.regime_n and x_dtype == ttnn.bfloat8_b
+    T_stage = ttnn.tile_size(ttnn.bfloat16) if stage else 0
+    sz = Sizes(T_in, ttnn.tile_size(t_acc), T_g, g_tail, run_pages, group, has_gamma, T_stage)
 
     # ---- native sharded placement (Refinement 1): the shard grid fixes the split; the ports avoid its cores ----
     allowed = allowed_cores(mesh_device)
@@ -818,11 +828,12 @@ def create_mesh_program_descriptor(
         SEM_LOCAL_LOADED,
         plan_.get(CB_X_ALIGNED, (0, 0))[0],
         1 if native_h else 0,  # own slice read in place from the input shard (cb_x_in)
+        1 if stage else 0,  # regime N bfp8: compose from the bf16 staging row (cb_x_stage)
     ] + list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     owner = 1 if split.combine_owner else 0
     row_gather = _div_up(k, ROW_GATHER)
     compute_ct = [k, w_pitch, BLOCK_ROW_TILES, 1 if geo.regime_n else 0, unit, geo.out_w_tiles, owner, row_gather]
-    compute_ct += [1 if native_h else 0, geo.Wt_lp]
+    compute_ct += [1 if native_h else 0, geo.Wt_lp, 1 if stage else 0]
     writer_ct = [
         out_page,
         geo.out_w_tiles,
@@ -864,7 +875,8 @@ def create_mesh_program_descriptor(
         CB_GATHERED: t_acc,
         CB_INV_RMS: t_acc,
         CB_INV_OWNED: t_acc,
-        CB_X_ALIGNED: x_dtype,
+        CB_X_ALIGNED: ttnn.bfloat16 if stage else x_dtype,
+        CB_X_STAGE: ttnn.bfloat16,
         CB_OUT: x_dtype,
         CB_X_IN: x_dtype,
     }

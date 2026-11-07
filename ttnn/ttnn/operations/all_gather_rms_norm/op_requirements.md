@@ -48,7 +48,7 @@
   `TensorAccessor`s (the work split ignores the shard grid; see Refinement 1)
 - **SUPPORTED cross-device axes**: cluster_axis ∈ {0, 1}, topology ∈ {Linear, Ring}, num_links ∈ {1, 2}
 - **EXCLUSIONS**: `{float32, fp32_dest_acc_en=False}` (precision convention, permanent);
-  `{bfloat8_b, w_non_aligned}` (Refinement 2)
+  `{bfloat8_b, w_non_aligned}` (lifted by Refinement 2)
 - **Cores**: multi-core: 2·L port cores per chip (one per direction × link, placed next to their Ethernet core) +
   96–104 member cores on QB2 in round-robin row groups of k slice-nested members (focus: k = 8, 12 groups)
 - **Compute config**: `default_compute_kernel_config()` = HiFi4, fp32_dest_acc_en=True, approx off; any
@@ -113,7 +113,7 @@ in Phase 0 (20.25, 14.28 µs). Perf cases unchanged: 31.46 / 41.70 / 100.02 µs 
 Next: make narrow-shard WIDTH keep up. Merge adjacent one-tile members' runs into one packet (scatter headers,
 Refinement 3) and give the k-way combine a hierarchy. Not done here: that is transport / combine work, not placement.
 
-### [ ] Refinement 2 — bfloat8_b with W_local non-tile-aligned (regime N compose on a bf16 staging row)
+### [x] Refinement 2 — bfloat8_b with W_local non-tile-aligned (regime N compose on a bf16 staging row)
 
 **Goal**: move the 720 `{dtype: bfloat8_b, alignment: w_non_aligned}` cells out of `EXCLUSIONS` to passing. Regime N
 composes each dense output tile by shifting datums across tile columns (slices land at non-tile offsets). That
@@ -136,6 +136,13 @@ bfp8 mantissa bytes yields exact zeros. Then drop the EXCLUSION.
 **Done when**: all 720 golden `bfloat8_b × w_non_aligned` cells pass (PCC ≥ 0.99 against the device-quantized input,
 the golden gate). The EXCLUSION is removed from the op file. No regression on the bf16 / fp32 regime N cells or on
 the perf cases.
+**Outcome**: built as specified. The slice tails are zeroed on the bfp8 mantissa bytes. Compute copies each landed
+row (own slice from `cb_x_in` on native HEIGHT) into `cb_x_stage` (bf16, one row). The reader composes 2-byte datums
+from it into bf16 `cb_x_aligned`, and the normalize packs bfp8. EXCLUSION removed. Golden: every supported
+bfp8 × w_non_aligned cell run passes (180/180 at cluster_axis 1, 2 links; 72/72 at cluster_axis 0, 1 link; the rest
+are INVALID gamma skips). Acceptance + native-shard 35/35. The aligned paths only gained a CT flag (the perf cases are
+bf16 aligned and untouched). Possible next step: stream the staging per `out_unit` window instead of one row. That
+needs compute to interleave the copy with the normalize, and it only matters for L1 on wide non-aligned rows.
 
 ### [ ] Refinement 3 — TRANSPORT: fill the packets (perf, focus case)
 

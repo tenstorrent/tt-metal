@@ -90,3 +90,30 @@ def test_owner_combine(mesh_device, shape, force_k, monkeypatch):
 
     monkeypatch.setattr(pd, "FORCE_K", force_k)
     _run(mesh_device, shape, topology=ttnn.Topology.Linear, num_links=1, gamma_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+# ---- Refinement 2: bfloat8_b x W_local non-aligned (regime N bf16 staging row) ---------------------------------
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True, ids=["torus_xy"])
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True, ids=["mesh1x4"])
+@pytest.mark.parametrize("shape", [(1, 1, 32, 50), (1, 1, 17, 50)], ids=["32x50", "17x50"])
+def test_bf8b_regime_n_columns(mesh_device, shape):
+    """Device d holds value (d + 1) * (1 + col/64): every output column's error is printed, so a wrong compose
+    source / offset or a zeroing that hits real datums shows up as a column pattern."""
+    from ttnn.operations.all_gather_rms_norm import all_gather_rms_norm
+    from tests.ttnn.unit_tests.operations.all_gather_rms_norm import test_all_gather_rms_norm as acc
+
+    G, w = 4, shape[-1]
+    base = torch.zeros((1, G, *shape))
+    for d in range(G):
+        base[0, d] = (d + 1) * (1 + torch.arange(w).float() / 64)
+    x = acc.quantize_like_device(base.to(torch.bfloat16), ttnn.bfloat8_b)
+    exp = acc.torch_reference(x, None, 1)[0, 0]
+    tx = acc.to_mesh(x, mesh_device, dtype=ttnn.bfloat8_b, layout=acc.TILE)
+    out = all_gather_rms_norm(tx, cluster_axis=1, epsilon=acc.EPS, topology=ttnn.Topology.Linear, num_links=1)
+    got = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
+    err = (got - exp).abs().amax(dim=tuple(range(got.dim() - 1)))
+    bad = (err > 0.05).nonzero().flatten().tolist()
+    print("bad columns:", bad)
+    print("row0 got:", got.reshape(-1, G * w)[0].tolist())
+    print("row0 exp:", exp.reshape(-1, G * w)[0].tolist())
+    assert not bad

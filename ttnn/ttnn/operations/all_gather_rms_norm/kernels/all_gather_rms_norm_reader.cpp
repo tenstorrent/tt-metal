@@ -42,13 +42,21 @@ constexpr uint32_t num_streams = get_compile_time_arg_val(11);
 constexpr uint32_t sem_local_loaded_id = get_compile_time_arg_val(12);
 constexpr uint32_t aligned_cb_pages = get_compile_time_arg_val(13);  // regime N: cb_x_aligned capacity
 constexpr bool own_in_shard = get_compile_time_arg_val(14) != 0;     // native HEIGHT: own slice = input shard
-constexpr auto x_args = TensorAccessorArgs<15>();
+constexpr bool stage = get_compile_time_arg_val(15) != 0;            // regime N bfp8: compose from the bf16 staging row
+constexpr auto x_args = TensorAccessorArgs<16>();
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
 constexpr uint32_t FACE_DATUMS = FACE_DIM * FACE_DIM;
 constexpr uint32_t W = G * W_local;
 constexpr uint32_t w_valid_tail = W_local - TILE_DIM * (Wt_lp - 1);
+// bfloat8_b tiles: 64 shared-exponent bytes (one per face row), then one mantissa byte per datum in face order.
+// Zeroing mantissa bytes yields exact zeros whatever the shared exponent, so the tail zero-fill is in place.
+constexpr uint32_t land_hdr = elem_bytes == 1 ? 64 : 0;
+// The compose works on 2/4-byte datums: the input-dtype landing tiles, or (stage) the bf16 staging row.
+constexpr uint32_t cmp_elem = stage ? 2 : elem_bytes;
+constexpr uint32_t cmp_page = stage ? TILE_DIM * TILE_DIM * 2 : page_bytes;
+static_assert(!regime_n || cmp_elem != 1, "regime N on bfloat8_b composes from the bf16 staging row");
 
 // datum offset (in datums) of (row, col) inside a tile: faces 0/1 (rows < 16), 2/3, each 16 x 16 row-major
 FORCE_INLINE uint32_t datum_ofs(uint32_t row, uint32_t col) {
@@ -56,12 +64,13 @@ FORCE_INLINE uint32_t datum_ofs(uint32_t row, uint32_t col) {
            (col % FACE_DIM);
 }
 
-// zero columns [c0, 32) of every row of the tile at `tile`
+// zero columns [c0, 32) of every row of the tile at `tile` (datums of `eb` bytes after a `hdr`-byte header)
+template <uint32_t eb = elem_bytes, uint32_t hdr = land_hdr>
 FORCE_INLINE void zero_cols(uint32_t tile, uint32_t c0) {
     for (uint32_t row = 0; row < TILE_DIM; ++row) {
         for (uint32_t c = c0; c < TILE_DIM;) {
             const uint32_t n = FACE_DIM - (c % FACE_DIM);
-            dataflow_kernel_lib::fill_l1_range<elem_bytes>(tile + datum_ofs(row, c) * elem_bytes, n * elem_bytes, 0);
+            dataflow_kernel_lib::fill_l1_range<eb>(tile + hdr + datum_ofs(row, c) * eb, n * eb, 0);
             c += n;
         }
     }
@@ -77,29 +86,31 @@ FORCE_INLINE void copy_run(uint32_t dst, uint32_t src, uint32_t n) {
 }
 
 // Regime N: dense output tile t of local row li, composed from the landing tiles of that row (own slice p_self
-// from the input shard row xin_row when own_in_shard).
+// from the input shard row xin_row when own_in_shard). stage: landing_row is the bf16 staging row instead (it holds
+// every slice, own included), xin_row unused.
 FORCE_INLINE void compose_tile(uint32_t dst_tile, uint32_t landing_row, uint32_t xin_row, uint32_t p_self, uint32_t t) {
     uint32_t x = t * TILE_DIM;
     const uint32_t x_end = x + TILE_DIM;
     while (x < x_end) {
         const uint32_t xo = x - t * TILE_DIM;
         if (x >= W) {
-            zero_cols(dst_tile, xo);
+            zero_cols<cmp_elem, 0>(dst_tile, xo);
             return;
         }
         const uint32_t q = x / W_local;
         const uint32_t c = x - q * W_local;
         const uint32_t cc = c % TILE_DIM;
-        const uint32_t src_tile = (own_in_shard && q == p_self) ? xin_row + (c / TILE_DIM) * page_bytes
-                                                                : landing_row + (q * Wt_lp + c / TILE_DIM) * page_bytes;
+        const uint32_t src_tile = (own_in_shard && !stage && q == p_self)
+                                      ? xin_row + (c / TILE_DIM) * page_bytes
+                                      : landing_row + (q * Wt_lp + c / TILE_DIM) * cmp_page;
         uint32_t len = TILE_DIM - xo;
         len = (FACE_DIM - xo % FACE_DIM) < len ? (FACE_DIM - xo % FACE_DIM) : len;
         len = (W_local - c) < len ? (W_local - c) : len;
         len = (FACE_DIM - cc % FACE_DIM) < len ? (FACE_DIM - cc % FACE_DIM) : len;
         for (uint32_t row = 0; row < TILE_DIM; ++row) {
-            const uint32_t d = dst_tile + datum_ofs(row, xo) * elem_bytes;
-            const uint32_t s = src_tile + datum_ofs(row, cc) * elem_bytes;
-            if constexpr (elem_bytes == 4) {
+            const uint32_t d = dst_tile + datum_ofs(row, xo) * cmp_elem;
+            const uint32_t s = src_tile + datum_ofs(row, cc) * cmp_elem;
+            if constexpr (cmp_elem == 4) {
                 copy_run<uint32_t>(d, s, len);
             } else {
                 copy_run<uint16_t>(d, s, len);
@@ -208,8 +219,13 @@ void kernel_main() {
         // ---- compose_aligned_block (regime N) ----
         if constexpr (regime_n) {
             for (uint32_t i = i0; i < i0 + rows; ++i) {
-                const uint32_t landing_row = landing + i * w_pitch * page_bytes;
+                uint32_t landing_row = landing + i * w_pitch * page_bytes;
                 const uint32_t xin_row = xin + i * Wt_lp * page_bytes;
+                if constexpr (stage) {
+                    // compute unpacked this row's landing tiles (own slice included) into one bf16 staging row
+                    cb_wait_front(cb_x_stage, w_pitch);
+                    landing_row = get_read_ptr(cb_x_stage);
+                }
                 for (uint32_t t0 = 0; t0 < out_w_tiles;) {
                     // a unit is written linearly from the write pointer: clamp it to the ring end
                     uint32_t n = (out_w_tiles - t0) < out_unit ? (out_w_tiles - t0) : out_unit;
@@ -217,11 +233,14 @@ void kernel_main() {
                     cb_reserve_back(cb_x_aligned, n);
                     const uint32_t wptr = get_write_ptr(cb_x_aligned);
                     for (uint32_t j = 0; j < n; ++j) {
-                        compose_tile(wptr + j * page_bytes, landing_row, xin_row, p_self, t0 + j);
+                        compose_tile(wptr + j * cmp_page, landing_row, xin_row, p_self, t0 + j);
                     }
                     cb_push_back(cb_x_aligned, n);
                     aligned_pos = (aligned_pos + n == aligned_cb_pages) ? 0 : aligned_pos + n;
                     t0 += n;
+                }
+                if constexpr (stage) {
+                    cb_pop_front(cb_x_stage, w_pitch);
                 }
             }
         }

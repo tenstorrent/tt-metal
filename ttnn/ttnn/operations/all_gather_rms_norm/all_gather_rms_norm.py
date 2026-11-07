@@ -99,8 +99,7 @@ SUPPORTED = {
 EXCLUSIONS = [
     # Precision convention: fp32 input requires fp32 DEST accumulation.
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
-    # Regime N composes the dense row by shifting datums across tile columns: not expressible on packed bfp8 tiles.
-    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    # (bfloat8_b x w_non_aligned is supported since Refinement 2: regime N composes from a bf16 staging row.)
 ]
 
 

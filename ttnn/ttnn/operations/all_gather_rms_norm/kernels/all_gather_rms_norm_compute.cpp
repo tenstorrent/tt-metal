@@ -55,6 +55,7 @@ constexpr bool combine_owner = get_compile_time_arg_val(6) != 0;  // k > K_SYM_M
 constexpr uint32_t row_gather = get_compile_time_arg_val(7);      // owner: gather tiles per owned row, ceil(k / 32)
 constexpr bool own_in_shard = get_compile_time_arg_val(8) != 0;   // native HEIGHT: own slice read from cb_x_in
 constexpr uint32_t Wt_lp = get_compile_time_arg_val(9);           // tiles per slice (cb_x_in row pitch)
+constexpr bool stage = get_compile_time_arg_val(10) != 0;         // regime N bfp8: bf16 staging row for the compose
 
 // rsqrt(sum * (1/W) + eps) on column 0 of DST[dst] — the reduce() post_reduce_op (base op FinalizeInvRms).
 #ifdef TRISC_MATH
@@ -332,6 +333,37 @@ ALWI void pad_out_row(uint32_t out_pad) {
     }
 }
 
+// regime N bfp8, stage_row: unpack n landed tiles (Strided range x of x_cb) and pack them as bf16 into cb_x_stage,
+// in landing-column order. The reader composes the dense row from these 2-byte datums (bfp8 datums cannot be shifted
+// across shared-exponent groups).
+template <uint32_t x_cb>
+ALWI void stage_segment(StridedTileRange x, uint32_t n) {
+    constexpr auto x_in = input(
+        x_cb,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Strided);
+    eltwise_chain(IterationShape::grid(1, n), CopyTile<x_in>{x}, PackTile<output(cb_x_stage)>{});
+}
+
+// one landed row (block row i, local row i0 + i): landing, the own slice from the input shard when own_in_shard
+ALWI void stage_row(uint32_t i0, uint32_t i, uint32_t own_c0) {
+    if constexpr (own_in_shard) {
+        if (own_c0 > 0) {
+            stage_segment<cb_x_landing>(StridedTileRange{i * w_pitch, w_pitch}, own_c0);
+        }
+        stage_segment<cb_x_in>(StridedTileRange{(i0 + i) * Wt_lp, Wt_lp}, Wt_lp);
+        if (own_c0 + Wt_lp < w_pitch) {
+            stage_segment<cb_x_landing>(
+                StridedTileRange{i * w_pitch + own_c0 + Wt_lp, w_pitch}, w_pitch - own_c0 - Wt_lp);
+        }
+    } else {
+        stage_segment<cb_x_landing>(StridedTileRange{i * w_pitch, w_pitch}, w_pitch);
+    }
+}
+
 // regime N: one window of n dense tiles [t0, t0 + n) of block row i, x streamed from cb_x_aligned
 ALWI void normalize_streamed(uint32_t i, uint32_t t0, uint32_t n) {
     constexpr auto x_in = input(cb_x_aligned);  // PerTile wait / pop
@@ -386,6 +418,9 @@ void kernel_main() {
 #endif
         if constexpr (regime_n) {
             for (uint32_t i = 0; i < rows; ++i) {
+                if constexpr (stage) {
+                    stage_row(i0, i, own_c0);  // the reader composes row i from it while this core normalizes
+                }
                 for (uint32_t t0 = 0; t0 < out_w_tiles; t0 += out_unit) {
                     const uint32_t n = (out_w_tiles - t0) < out_unit ? (out_w_tiles - t0) : out_unit;
                     normalize_streamed(i, t0, n);

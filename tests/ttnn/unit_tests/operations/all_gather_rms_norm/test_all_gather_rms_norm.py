@@ -223,6 +223,10 @@ AXIS1_CASES = [
     pytest.param((1, 1, 17, 50), ttnn.bfloat16, RING, 1, RM, ttnn.bfloat16, id="17x50-ring-L1-gRM"),
     pytest.param((1, 1, 64, 1000), ttnn.float32, RING, 2, TILE, ttnn.float32, id="64x1000-fp32-ring-L2-gTILE"),
     pytest.param((4, 128, 47), ttnn.bfloat16, RING, 1, None, None, id="r3_4x128x47-ring-L1-nogamma"),
+    # bfloat8_b x W_local non-aligned (Refinement 2): regime N composes from a bf16 staging row
+    pytest.param((1, 1, 17, 50), ttnn.bfloat8_b, RING, 1, RM, ttnn.bfloat16, id="17x50-bf8b-ring-L1-gRM"),
+    pytest.param((1, 1, 64, 1000), ttnn.bfloat8_b, RING, 2, TILE, ttnn.float32, id="64x1000-bf8b-ring-L2-gTILE"),
+    pytest.param((4, 128, 47), ttnn.bfloat8_b, LINE, 1, None, None, id="r3_4x128x47-bf8b-line-L1-nogamma"),
     # Linear over the same four devices
     pytest.param((1, 1, 640, 384), ttnn.bfloat16, LINE, 2, RM, ttnn.bfloat16, id="focus_640x384-line-L2-gRM"),
     pytest.param((1, 1, 64, 128), ttnn.float32, LINE, 1, TILE, ttnn.float32, id="64x128-fp32-line-L1-gTILE"),

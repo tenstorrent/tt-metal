@@ -75,3 +75,28 @@
 - Tests added: `test_all_gather_rms_norm_native_shard.py` (6 cases: HEIGHT regime A / N, WIDTH symmetric / owner /
   ragged, each asserting the native placement was taken, plus a WIDTH case asserting the gate's fallback).
   `perf_ablation_all_gather_rms_norm.py` gains `AGRMS_PERF_SHAPE` / `AGRMS_PERF_MEMORY_LAYOUT` overrides for sharded A/B.
+
+## Refinement 2 — bfloat8_b with W_local non-tile-aligned (regime N compose on a bf16 staging row)
+- Date: 2026-11-07
+- What was done: regime N on bfloat8_b. The transport still moves whole bfp8 tiles unchanged.
+  - Reader: the slice-tail zero-fill is bfp8-aware (it skips the 64 B shared-exponent header and zeroes mantissa bytes,
+    which gives exact zeros). The compose reads 2-byte datums from the bf16 staging row (all slices, own included) and
+    writes bf16 `cb_x_aligned` tiles, stepping by the bf16 page.
+  - Compute: `stage_row` copies (eltwise_chain `CopyTile` → `PackTile`, helper path) the row's landing tiles into
+    `cb_x_stage` before normalizing that row. On native HEIGHT the own slice comes from `cb_x_in`. The normalize then
+    reads bf16 `cb_x_aligned` and packs bfp8 into `cb_out_tiles` (the chain reconfigures the formats).
+  - Host: `CB_X_STAGE = 12` (`STAGE_ROWS · land_w_tiles` bf16 pages, `STAGE_ROWS = 1`), `Sizes.T_stage`, and
+    `cb_x_aligned` is Float16_b when staged. The new CB is in `cb_plan`, so the split's L1 fit check counts it. There is
+    one new CT flag each for the reader and compute.
+  - The `{bfloat8_b, w_non_aligned}` EXCLUSION is removed.
+  - Reused: the regime N compose (`compose_tile`, now parameterized on datum size and page), the tail zero-fill, the
+    landing / normalize chain. Added: `cb_x_stage`, compute's `stage_segment` / `stage_row`.
+- Accuracy achieved: PCC ≥ 0.99 against the device-quantized input on (1,1,17,50), (1,1,64,1000), (4,128,47) and on every
+  golden cell run. The column-exact debug test (monotonic per-device input) shows no bad columns.
+- Golden test progress: bfp8 × w_non_aligned slice 252/252 supported cells pass (cluster_axis 1 / 2 links: 180; cluster_axis 0 /
+  1 link, no-gamma + bf16 RM gamma: 72), across all six shapes and the INTERLEAVED / HEIGHT / WIDTH layouts. The rest
+  of the slice is INVALID gamma skips.
+- Issues encountered: the first run stepped `cb_x_aligned` by the bfp8 page (1088 B) instead of the bf16 page. The
+  column debug test exposed it (every column past the first tile was shifted).
+- Tests added: 3 bfp8 regime N cases in `test_all_gather_rms_norm.py`, and `test_bf8b_regime_n_columns` (2 shapes) in
+  `test_all_gather_rms_norm_debug.py`.
