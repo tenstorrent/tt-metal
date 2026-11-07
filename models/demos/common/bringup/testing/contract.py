@@ -13,7 +13,10 @@ Checks (each failure is listed in ``contract_failures``; metric ``contract_check
                     the chunk's slot and [actual_start, actual_end)); with an adapter that has ``kv_slot_layer_ids``
                     (hybrids: only the layers that own a KV slab ack), one per slab layer
   ack timing        at each ack, the table's blocks for that layer and chunk already hold their final bytes
-                    (re-read after a full sync must be byte-identical); ``acks_early`` counts violations
+                    (re-read after a full sync must be byte-identical); ``acks_early`` counts violations. A Snapshot
+                    config (tensor_type Snapshot: fixed-size state rewritten by design on every chunk) is checked the
+                    way tt-d-gen ships it (prefill_reader.cpp: non-KV tensors only with the request's last chunk): at
+                    the last chunk's acks only, every record of its declared positions (AckReads)
   table             build_kv_chunk_table round-trips through protobuf; the migration base address is entry 0
   producer          the producer's own KV read-back PCC vs the golden (``pcc_producer_kv_*``), plus the model's
                     independent read-back (``pcc_kv_independent_min``) when the hooks provide one, and their gap
@@ -189,6 +192,54 @@ def producer_limits(s, adapter, mins: dict, drift: dict, failed: list[str]) -> N
             failed.append(f"producer read-back PCC {k} ({name}) {v:.5f} < limit {lim:.5f}")
 
 
+def is_snapshot_config(cfg) -> bool:
+    """A table config of tensor_type Snapshot (KvChunkTensorType.Snapshot; a table without the field: False)."""
+    t = getattr(cfg, "tensor_type", None)
+    return t is not None and str(getattr(t, "name", t)).split(".")[-1] == "Snapshot"
+
+
+class AckReads:
+    """The ack-timing check (``acks_early``). ``on_ack(row, chunk, start, end)`` reads the blocks an ack claims ready;
+    ``early()`` re-reads them all (after the request and a full sync) and counts those whose bytes changed.
+    History (KV) configs: the chunk's first and last 32-token block, at every chunk's ack (unchanged rule). Snapshot
+    configs (``is_snapshot_config``): rewritten by design on every chunk and shipped by tt-d-gen with the request's
+    last chunk only, so read at the last chunk's acks only (``last_chunk``), every record of the config's declared
+    positions [0, max_sequence_length) that has a table entry; never at a position past it (tt-metal's table refuses
+    that lookup). ``table``: read_device_chunk(layer=, position=, slot=, config_id=), config(cid), lookup(l, p, s, c),
+    num_configs()."""
+
+    def __init__(self, table, slot: int, last_chunk: int, block: int = BLOCK):
+        self.table, self.slot, self.last_chunk, self.block = table, int(slot), int(last_chunk), int(block)
+        self.n_cfg = table.num_configs()
+        self.snap = {}  # snapshot config id -> its record positions
+        for cid in range(self.n_cfg):
+            cfg = table.config(cid)
+            if is_snapshot_config(cfg):
+                self.snap[cid] = list(range(0, int(cfg.max_sequence_length), int(cfg.chunk_n_tokens)))
+        self.reads = {}
+
+    def _read(self, row: int, pos: int, cid: int) -> bytes:
+        return bytes(self.table.read_device_chunk(layer=row, position=pos, slot=self.slot, config_id=cid))
+
+    def on_ack(self, row: int, chunk: int, start: int, end: int) -> None:
+        for cid in range(self.n_cfg):
+            if cid in self.snap:
+                if chunk != self.last_chunk:
+                    continue
+                for pos in self.snap[cid]:
+                    if self.table.lookup(row, pos, self.slot, cid).size_bytes:
+                        self.reads[(row, chunk, pos, cid)] = self._read(row, pos, cid)
+                continue
+            for pos in {start, ((end - 1) // self.block) * self.block}:
+                self.reads[(row, chunk, pos, cid)] = self._read(row, pos, cid)
+
+    def clear(self) -> None:
+        self.reads.clear()
+
+    def early(self) -> int:
+        return sum(self._read(r, p, cid) != data for (r, _chunk, p, cid), data in self.reads.items())
+
+
 def run_contract_test(s, mesh) -> list[str]:
     import ttnn
     from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
@@ -243,7 +294,7 @@ def run_contract_test(s, mesh) -> list[str]:
         if t2.num_configs() != n_cfg or t2.total_entries() != table.total_entries():
             failed.append("table protobuf round-trip changed the table")
 
-    early_reads, acks, cur = {}, [], {"chunk": None, "start": 0, "end": 0}
+    ack_reads, acks, cur = AckReads(table, slot, n_chunks - 1), [], {"chunk": None, "start": 0, "end": 0}
     slab_layers = getattr(adapter, "kv_slot_layer_ids", lambda n: None)(L)
     # the table's layer of an acked global layer: its KV slot on a hybrid, else the layer itself
     table_row = {g: k for k, g in enumerate(slab_layers)} if slab_layers is not None else None
@@ -255,17 +306,14 @@ def run_contract_test(s, mesh) -> list[str]:
                 row = layer if table_row is None else table_row.get(layer)
                 if row is None:
                     continue  # not a slab layer: the ack list check reports it
-                # Read the blocks this ack claims are ready: first and last 32-token block of the chunk, every config.
-                for pos in {cur["start"], ((cur["end"] - 1) // BLOCK) * BLOCK}:
-                    for cid in range(n_cfg):
-                        early_reads[(row, cur["chunk"], pos, cid)] = bytes(
-                            table.read_device_chunk(layer=row, position=pos, slot=slot, config_id=cid)
-                        )
+                # Read the blocks this ack claims are ready: first and last 32-token block of the chunk, every history
+                # config; a Snapshot config's records at the request's last chunk only (AckReads)
+                ack_reads.on_ack(row, cur["chunk"], cur["start"], cur["end"])
 
     rt.set_layer_completion_sink(Sink())
     rt.compile(kv)
     acks.clear()
-    early_reads.clear()
+    ack_reads.clear()
 
     tokens = g.tokens().tolist()
     for c in range(n_chunks):
@@ -279,14 +327,11 @@ def run_contract_test(s, mesh) -> list[str]:
     want = [(layer, c, (slot, c * chunk, min((c + 1) * chunk, actual_len))) for c in range(n_chunks) for layer in acked]
     if acks != want:
         failed.append(f"acks {acks[:6]}... != one per layer in order per chunk ({len(acks)} vs {len(want)})")
-    early = sum(
-        bytes(table.read_device_chunk(layer=l_, position=p, slot=slot, config_id=cid)) != data
-        for (l_, _chunk, p, cid), data in early_reads.items()
-    )
+    early = ack_reads.early()
     metrics.record("acks_early", early)
-    metrics.record("ack_blocks_checked", len(early_reads))
+    metrics.record("ack_blocks_checked", len(ack_reads.reads))
     if early:
-        failed.append(f"{early} of {len(early_reads)} blocks changed after their layer was acknowledged")
+        failed.append(f"{early} of {len(ack_reads.reads)} blocks changed after their layer was acknowledged")
     if rt.kv_migration_base_address(kv) != table.lookup(0, 0, 0, 0).noc_addr & 0xFFFFFFFF:
         failed.append("migration base address != table entry (layer 0, pos 0, slot 0, config 0)")
 

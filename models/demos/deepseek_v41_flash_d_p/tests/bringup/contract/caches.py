@@ -661,10 +661,15 @@ def table_rules(table_path: str, layers: list[int], num_users: int, bank_limits:
             fails.append(f"{name}: chunk_n_tokens {cfg.chunk_n_tokens} != {R.RECORD_TOKENS}")
         if cfg.num_slots < num_users:
             fails.append(f"{name}: {cfg.num_slots} slots < max_slots {num_users}")
-        if cfg.max_sequence_length < R.MAX_SEQ:
-            fails.append(f"{name}: max_sequence_length {cfg.max_sequence_length} < max_seq {R.MAX_SEQ}")
         if name != w["name"]:
+            if cfg.max_sequence_length < R.MAX_SEQ:
+                fails.append(f"{name}: max_sequence_length {cfg.max_sequence_length} < max_seq {R.MAX_SEQ}")
             continue
+        if w.get("snapshot"):  # P.43: decode's table declares the snapshot's own 128 positions
+            if cfg.max_sequence_length != SNAP:
+                fails.append(f"{name}: snapshot max_sequence_length {cfg.max_sequence_length} != {SNAP}")
+        elif cfg.max_sequence_length < R.MAX_SEQ:
+            fails.append(f"{name}: max_sequence_length {cfg.max_sequence_length} < max_seq {R.MAX_SEQ}")
         if cfg.chunk_size_bytes != w["record_bytes"]:
             fails.append(
                 f"{name}: chunk_size_bytes {cfg.chunk_size_bytes} != {w['record_bytes']} "

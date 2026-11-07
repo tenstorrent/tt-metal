@@ -942,7 +942,7 @@ TABLE = {
         "runner refuses it)",
     ),
     "DECODER_SKIP": Setting(
-        "off",
+        "replay128",
         ("off", "exact", "replay128"),
         "P.30 (owner 2026-11-03, the Causal Encoder-Decoder's decoder skip, arXiv 2609.19969; default off until the "
         "owner decides). off = every layer on every chunk (the caller's ``last`` is ignored). exact = on a chunk the "
@@ -951,14 +951,14 @@ TABLE = {
         "compressor: the compressed KV and index keys layers 20-39 read); layer 20's attention / MoE and layers 21-39 "
         "are skipped (their window caches note the positions as missing). On the last chunk (last=True, or None: not told) "
         "every layer runs; a decoder layer whose window rows before the chunk were skipped masks them (the window "
-        "index lists of position 0: never reads them). Exact for rows >= chunk start + 20 x 127: the caller starts a "
-        "last chunk >= 2688 tokens before its end (the model does not pull back). replay128 = P.31 (owner 2026-11-03, "
-        "DeepSeek-V4.1-Flash's SWA Bounded Replay, n_win 128; approximate by design): the same skip on chunks marked "
-        "not last; the chunk marked last (last=True) runs the decoder only on its last <= 128 rows, as a chunk of its "
+        "index lists of position 0: never reads them). Exact for rows >= chunk start + 20 x 127. replay128 = P.31 (owner "
+        "2026-11-03, DeepSeek-V4.1-Flash's SWA Bounded Replay, n_win 128; approximate by design): the same skip on "
+        "chunks marked not last; the chunk marked last (last=True) runs the decoder only on its tail, as a chunk of its "
         "own on the decoder tail model (TtDS41Model.build_tail: tail_chunk = 32 SP TP rows, the rows on mesh row 0), "
-        "every window truncated to those rows; a request on a cached prefix starts replay_rows (128) before its new "
-        "tokens, begin_chunk(.., replay=True): every layer's window truncated at that start. last=None (not told: "
-        "the harness, the engine) runs every layer in both values",
+        "every window truncated to the tail; a request on a cached prefix starts replay_rows (128) before its new "
+        "tokens, begin_chunk(.., replay=True): every layer's window truncated at that start. Where the request's last "
+        "chunk starts and where replay128's tail starts: SKIP_TAIL_START (the caller asks TtDS41Model.last_start(end)). "
+        "last=None (not told: the harness, the engine) runs every layer in both values",
     ),
     "WINDOW_KV_KEEP": Setting(
         "snapshot128",
@@ -986,8 +986,25 @@ TABLE = {
         "are zero. bf16 ROW_MAJOR 512 wide, 32-row records in one DRAM bank (4 records of 32 KiB a layer), the same bytes "
         "on every chip (one device group). Rewritten from the ring after the layer's window write on every chunk the "
         "caller does not mark not-last (begin_chunk last=False skips it; tt-d-gen's chunk header has no last flag, so "
-        "the serving runtime writes it on every chunk and the snapshot is final at the last chunk's acks). Not written "
-        "for the layers DECODER_SKIP=replay128 runs on its tail model (their windows are truncated there by design)",
+        "the serving runtime writes it on every chunk and the snapshot is final at the last chunk's acks). Under "
+        "DECODER_SKIP=exact / replay128 every layer's snapshot is written on the request's last chunk when "
+        "SKIP_TAIL_START=cap (P.43; the decoder layers replay128 runs on its tail model from the tail's own window "
+        "rows, truncated at the tail's start by design); SKIP_TAIL_START=end (P.42) writes none for those layers",
+    ),
+    "SKIP_TAIL_START": Setting(
+        "cap",
+        ("cap", "end"),
+        "P.43 (OWNER 2026-11-07): where a request's last chunk may start under DECODER_SKIP=exact / replay128, and where "
+        "replay128's decoder tail starts, so that decode's window snapshot [cap - 128, cap) (cap = (end - 1) // "
+        "KV_BLOCK_SIZE x KV_BLOCK_SIZE, WINDOW_KV_KEEP=snapshot128) is computed for every layer. cap (the default) = "
+        "relative to cap: replay128's tail starts at min(end - 128, cap - 128) (so it holds [cap - 128, end), 129 to "
+        "192 rows) and the last chunk must start at or before it; exact's last chunk starts at or before "
+        "min(end - 2688, cap - 2668) (the decoder is exact from start + 20 x 127, so rows >= cap - 128 are); both "
+        "clamped at 0 / the request's start. The caller picks the start (TtDS41Model.last_start(end, request_start)); "
+        "the model checks it on the last chunk (ValueError, never a silent pull-back) and writes every layer's "
+        "snapshot. end = P.42's rule, relative to the prompt's end: the tail = the last <= 128 rows (from "
+        "ceil32(end - 128)), exact's last chunk at or before end - 2688, no check, no snapshot for the layers "
+        "replay128 runs on its tail. No effect under DECODER_SKIP=off or on a chunk not marked last",
     ),
     "KV_BLOCK_SIZE": Setting(
         64,
