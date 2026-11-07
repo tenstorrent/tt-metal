@@ -144,6 +144,10 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "(INT32 and UINT32 are supported for MAX/MIN/SUM) - got {}.",
             tensor_args.dtype());
         TT_FATAL(
+            !(tensor_args.dtype() == DataType::UINT32 && tensor_args.device()->arch() == tt::ARCH::QUASAR),
+            "UINT32 reduce is not supported on Quasar, which has no UInt32 format - got {}.",
+            tensor_args.dtype());
+        TT_FATAL(
             !(is_mx(tensor_args.dtype()) && operation_attributes.negate),
             "MIN reduce (-MAX(-x)) is not supported for MX inputs: the fused-negate kernels copy tiles back out of a "
             "bf16 scratch ring, which packs zeros for MX on Quasar (issue #62742)");
