@@ -20,6 +20,13 @@ from models.common.sampling.generator import (
 from models.common.tt_ccl import get_tt_ccl
 from models.demos.gemma4_26b_a4b_qb2.tt.model import MODEL_ID, REVISION, Gemma4Model
 
+try:
+    from models.common.tt_ccl import get_tt_ccl
+except ModuleNotFoundError as error:
+    if error.name != "models.common.tt_ccl":
+        raise
+    from models.common.modules.tt_ccl import get_tt_ccl
+
 
 class _Gemma4SamplingGenerator(SamplingGenerator):
     """Include the public-token copy in the canonical sampling trace."""
