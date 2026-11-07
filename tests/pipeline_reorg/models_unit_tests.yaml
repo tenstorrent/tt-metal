@@ -26,6 +26,7 @@
     pytest --timeout 60 models/ttt_compat/tests/test_decode_output_rows.py
     pytest --timeout 60 models/ttt_compat/tests/test_generator_logprobs_single_device.py
     pytest --timeout 60 models/ttt_compat/tests/test_batched_prefill_slots.py
+    pytest --timeout 60 models/ttt_compat/tests/test_prefill_page_table.py
     pytest --timeout 300 models/ttt_compat/tests/test_batched_prefill_extract.py
     pytest --timeout 60 models/ttt_compat/tests/test_accuracy_precision_family.py
     pytest --timeout 60 models/ttt_compat/tests/test_minimal_prefill_matmul_blocks.py
@@ -1031,7 +1032,7 @@
       timeout: 25
       tier: 2
     bh_p150:
-      timeout: 20
+      timeout: 30
       tier: 2
   owner_id: U09LNK7BT1Q # Andrija Cicovic
   team: models

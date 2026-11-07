@@ -17,15 +17,12 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric_1d_device_params,
-    torus_xy_device_params,
-    tp_axis_is_wrapped,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, tp_axis_is_wrapped
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
     LayerNrmseThresholds,
     deallocate_state,
+    kda_device_params,
     make_kimi_k3_device_case,
     make_synthetic_kimi_k3_test_case,
 )
@@ -52,11 +49,16 @@ _LOUDBOX_PERF_SKU = "bh_loudbox"
 _QUIETBOX_PERF_SKU = "bh_quietbox"
 _PERF_MARGIN = 0.03
 # Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
-# through device synchronization.
-# LoudBox SP8xTP1: CI run https://github.com/tenstorrent/tt-metal/actions/runs/41978641236 on main 95531ac9c2d.
+# through device synchronization. SP8xTP1 and SP4xTP1 open FABRIC_1D_RING, every other case a 2D fabric with K3's
+# payload (kda_device_params).
+# LoudBox SP8xTP1: relay's 1.152 x 1.015, conv's FP32-DST / BF16-DST ratio from run
+# https://github.com/tenstorrent/tt-metal/actions/runs/42012069827; composed from conv's measured ratio on relay's
+# reference, not measured on this base.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.341,
+        # Kimi-K3 HiFi3 (scan, affine prefix, output projection), composed, not measured on this base: 1.169 x 1.035,
+        # the traced HiFi3 / HiFi2 ratio over 3 interleaved rounds on bh-lb-18 (before the relay prefix).
+        "SP8xTP1": 1.210,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
@@ -69,10 +71,13 @@ _PERF_REFERENCE_MS = {
 # lowers the clock by an amount that varies by runner. The cross-chip programs' wait for their neighbours still moves
 # a single replay by a few percent, hence the wider margin.
 _DEVICE_PERF_MARGIN = 0.05
-# QuietBox SP4xTP1: CI run https://github.com/tenstorrent/tt-metal/actions/runs/41978641236 on main 95531ac9c2d.
+# QuietBox SP4xTP1: relay's 1.164 x 1.015, conv's ratio from the same run; composed from conv's measured ratio on
+# relay's reference, not measured on this base.
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.289,
+        # Kimi-K3 HiFi3, composed, not measured on this base: 1.181 x 1.035, assuming LoudBox SP8xTP1's ratio (same
+        # per-chip workload); not measured on QuietBox.
+        "SP4xTP1": 1.222,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
@@ -83,8 +88,14 @@ _REDUCE_SCATTER_CALLS_PER_TRACE = 20
 _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
-# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 1.271
+# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
+# untraced call also pays its host dispatch, which a block of 10 calls does not fully hide.
+# Galaxy SP8xTP4: relay's 1.205 / 1.225 x 1.013, conv's traced median ratio over 3 interleaved c03u08 rounds (conv
+# 43ad083e1ee vs main 28a48b08a82), then x 1.040 for Kimi-K3 HiFi3 (scan, affine prefix, output projection), HiFi3's
+# traced ratio over 3 interleaved c03u08 rounds, measured before the relay prefix with the output projection unfused.
+# Composed from measured ratios on relay's reference, not measured on this base. The untraced entry assumes the
+# traced ratios.
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.270, "untraced": 1.291}
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
@@ -115,10 +126,10 @@ _LOUDBOX_ACTUAL_START = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 _L1_SMALL_SIZE = 1152
 
 
-def _perf_reference_ms(layout: str) -> float:
+def _perf_reference_ms(layout: str, traced: bool = True) -> float:
     """Return the wall-time reference for a gated layout on the KDA_PERF_SKU it opts in to."""
     if layout == "SP8xTP4":
-        return _GALAXY_PERF_REFERENCE_MS
+        return _GALAXY_PERF_REFERENCE_MS["traced" if traced else "untraced"]
     skus = sorted(sku for sku, references in _PERF_REFERENCE_MS.items() if layout in references)
     if not skus:
         raise ValueError(f"{layout} has no host wall-time reference")
@@ -333,9 +344,9 @@ def _untraced_wall_samples_ms(
         pytest.param(
             (2, 4),
             0,
-            fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            kda_device_params((2, 4), l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="SP4xTP2-fabric-1d",
+            id="SP4xTP2-fabric-2d",
         ),
         pytest.param(
             (8, 1),
@@ -347,9 +358,9 @@ def _untraced_wall_samples_ms(
         pytest.param(
             (2, 2),
             1,
-            fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            kda_device_params((2, 2), l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-            id="SP2xTP2-fabric-1d",
+            id="SP2xTP2-fabric-2d",
         ),
         pytest.param(
             (4, 1),
@@ -361,7 +372,7 @@ def _untraced_wall_samples_ms(
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
+            kda_device_params((8, 4), l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
@@ -384,7 +395,7 @@ def test_synthetic_kimi_k3_perf(
     if layout == "SP8xTP4":
         require_high_power(f"kimi_k3 KDA {layout} perf")
     device_reference_ms = None if report_only else _device_perf_reference_ms(layout)
-    reference_ms = None if report_only or device_reference_ms is not None else _perf_reference_ms(layout)
+    reference_ms = None if report_only or device_reference_ms is not None else _perf_reference_ms(layout, traced)
     sequence, num_heads, actual_start = {
         "SP8xTP4": (PREFILL_CHUNK_TOKENS, None, _GALAXY_ACTUAL_START),
         "SP4xTP2": (_LOUDBOX_SEQUENCE, _LOUDBOX_NUM_HEADS, _LOUDBOX_ACTUAL_START),
@@ -481,7 +492,7 @@ def test_synthetic_kimi_k3_perf(
             (4, 1),
             0,
             ttnn.Topology.Ring,
-            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, l1_small_size=_L1_SMALL_SIZE),
+            kda_device_params((4, 1), l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
             id="TP4-ring",
         ),
@@ -491,7 +502,7 @@ def test_synthetic_kimi_k3_perf(
             (2, 4),
             1,
             ttnn.Topology.Linear,
-            fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            kda_device_params((2, 4), l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="TP4-linear",
         ),
