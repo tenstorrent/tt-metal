@@ -12,7 +12,7 @@
 
 namespace ttnn::experimental::prim {
 void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
     const auto& tensor = tensor_args.input_tensor;
@@ -44,6 +44,10 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Input last dimension must be the same as padded last dimension, got logical_dim: {} vs padded_dim: {}",
         tensor.logical_shape()[-1],
         tensor.padded_shape()[-1]);
+    TT_FATAL(
+        args.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Output memory config must use INTERLEAVED memory layout, got: {}",
+        args.memory_config.memory_layout());
 }
 
 tt::tt_metal::TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
@@ -58,7 +62,7 @@ tt::tt_metal::TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output
     output_shape[-1] = num_tiles_w * TILE_WIDTH;
 
     return tt::tt_metal::TensorSpec(
-        output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
+        output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), args.memory_config));
 }
 
 Tensor FusedRMSNormPreAllGatherDeviceOperation::create_output_tensors(
@@ -71,12 +75,16 @@ Tensor FusedRMSNormPreAllGatherDeviceOperation::create_output_tensors(
 namespace ttnn::prim {
 
 Tensor fused_rmsnorm_pre_all_gather(
-    const Tensor& input_tensor, tt::tt_metal::DataType dtype, const DeviceComputeKernelConfig& compute_kernel_config) {
+    const Tensor& input_tensor,
+    tt::tt_metal::DataType dtype,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const tt::tt_metal::MemoryConfig& memory_config) {
     using OperationType = ttnn::experimental::prim::FusedRMSNormPreAllGatherDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .dtype = dtype,
         .compute_kernel_config = compute_kernel_config,
+        .memory_config = memory_config,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor,
