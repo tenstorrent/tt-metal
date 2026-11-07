@@ -1415,8 +1415,51 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    # Prefill sequence lengths up to this value, on a single card, run their projection matmuls as a
+    # full-grid 1D mcast_in0 matmul instead of the 2D mcast config (see short_prefill_1d_matmul_config).
+    SHORT_PREFILL_1D_MAX_SEQ_LEN = 128
+
+    def short_prefill_1d_matmul_config(self, seq_len: int, k: int, n: int, in0_block_w: int, fp32_dest_acc: bool):
+        """Program config for a short-prompt prefill projection (QKV, WO, FF1/FF3, FF2), or None.
+
+        At most 4 row tiles of activations fan out against a large weight, so the 2D mcast config leaves most of
+        the grid reading a thin slice of the weight. Giving every core of the 8x8 grid its own N slice through the
+        1D mcast_in0 program reads the weight with the whole grid. Applies only to a single card and
+        seq_len <= SHORT_PREFILL_1D_MAX_SEQ_LEN; every other case returns None and keeps its existing config.
+        """
+        if self.num_devices != 1 or self.is_galaxy or not 0 < seq_len <= self.SHORT_PREFILL_1D_MAX_SEQ_LEN:
+            return None
+        if self.use_minimal_prefill_matmul(seq_len):
+            return None
+        k_tiles = math.ceil(k / ttnn.TILE_SIZE)
+        n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        grid_x, grid_y = 8, 8
+        num_cores = grid_x * grid_y
+        per_core_N = math.ceil(n_tiles / num_cores)
+        # Largest K block not above the requested one that divides K.
+        block_w = max(d for d in range(1, in0_block_w + 1) if k_tiles % d == 0)
+        dest_limit = 4 if fp32_dest_acc else 8
+        out_subblock_w = max(d for d in range(1, per_core_N + 1) if per_core_N % d == 0 and d <= dest_limit)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=block_w,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_M=math.ceil(seq_len / ttnn.TILE_SIZE),
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
     @lru_cache(maxsize=None)
     def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+        if mode == Mode.PREFILL and (
+            pc := self.short_prefill_1d_matmul_config(
+                seq_len, self.dim // self.cluster_shape[0], self.hidden_dim // self.cluster_shape[1], 2, False
+            )
+        ):
+            return pc
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
                 return self.matmul_1d_config_from_tensor_shapes(
@@ -1487,6 +1530,12 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+        if mode == Mode.PREFILL and (
+            pc := self.short_prefill_1d_matmul_config(
+                seq_len, self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1), self.dim, 4, False
+            )
+        ):
+            return pc
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
                 return self.matmul_1d_config_from_tensor_shapes(
@@ -1859,6 +1908,12 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for the QKV matmul in attention."""
+        if mode == Mode.PREFILL and (
+            pc := self.short_prefill_1d_matmul_config(
+                seq_len, self.dim // self.cluster_shape[0], self.qkv_size // self.cluster_shape[1], 2, True
+            )
+        ):
+            return pc
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return self.matmul_1d_ring_config(
@@ -2193,6 +2248,12 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_wo_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for WO (dense output) matmul in attention."""
+        if mode == Mode.PREFILL and (
+            pc := self.short_prefill_1d_matmul_config(
+                seq_len, (self.n_heads * self.head_dim) // self.num_devices, self.dim, 4, True
+            )
+        ):
+            return pc
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 k_wo = self.dim

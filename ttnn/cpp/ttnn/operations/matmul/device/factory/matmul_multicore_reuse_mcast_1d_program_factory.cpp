@@ -2970,7 +2970,8 @@ static void override_mcast_in0_program_parameters(
         // address is owned by the GCB (not tensor-backed), so the tensor overload of
         // UpdateDynamicCircularBufferAddress would TT_FATAL on a program-cache hit. Skip it there,
         // mirroring the gather_in0 override.
-        if (!global_cb.has_value()) {
+        // A DRAM-sharded in1 is read through the accessor, so cb_src1 is not tensor-backed either.
+        if (!global_cb.has_value() && !src_b_tensor.memory_config().is_dram()) {
             UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(0), src_b_tensor);
         }
     }
@@ -3269,6 +3270,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             !transpose_b,
             "matmul mcast_in0 over prefetcher_pipes does not support transpose_b: the pipes deliver the weight's "
             "K-blocks in its DRAM layout");
+    }
+
+    // A weight sharded in DRAM (the DRAM-sharded decode layout) cannot back cb_in1, which only an L1 shard can.
+    // Read it through its tensor accessor, page by page, exactly like an interleaved weight. The override on a
+    // program-cache hit skips the cb_in1 rebind for the same reason.
+    if (in1_is_sharded && in1_tensor.memory_config().is_dram()) {
+        const auto& in1_shard_spec = in1_tensor.shard_spec();
+        TT_FATAL(
+            in1_shard_spec.has_value() && in1_shard_spec->shape[0] % in1_tile.get_height() == 0 &&
+                in1_shard_spec->shape[1] % in1_tile.get_width() == 0,
+            "matmul mcast_in0 with a DRAM-sharded in1 needs a shard shape that is a whole number of tiles");
+        in1_is_sharded = false;
     }
 
     // Mask-mode sparsity (the sparse matmul): the in0 sender and the in1 sender/writer read the mask
