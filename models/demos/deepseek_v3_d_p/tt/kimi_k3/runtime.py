@@ -301,6 +301,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
                 layer_rows=self.kda_table_layer_rows(recurrent_layout),
             )
 
+        mla_rows = self.kv_table_layer_rows([kvpe_layout])
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
             kvpe_cache=kv_caches.kvpe,
@@ -315,9 +316,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layouts=token_layouts,
-            layer_rows=self.kv_table_layer_rows([kvpe_layout]),
+            layer_rows=mla_rows,
             index_kv_cache=kv_caches.index,
-            index_layer_ids=self.kv_table_layer_rows(token_layouts[1:]) if self._has_index_cache else None,
+            index_layer_ids=mla_rows if self._has_index_cache else None,  # the index cache shares kvpe's slabs
             kda=kda,
             dflash_caches=dflash_caches,
             dflash_spec=dflash_spec,
