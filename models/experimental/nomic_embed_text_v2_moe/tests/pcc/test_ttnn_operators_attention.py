@@ -610,16 +610,16 @@ def test_placement_never_splits_a_head_into_three_query_chunks(tt_config, config
 
 
 # (batch, seqlen, residual head tensors deep, QKV's output in L1): shapes up to 8192 tokens whose rule
-# key chunk does not fit L1 beside the heads, so the placement takes another, among them chunks that
-# do not divide the sequence (16x512 k192, 17x480 q256 k256, 15x416 k160, 27x288 k160).
+# key chunk does not fit L1 beside the heads, masked or not, so the placement takes another, among them
+# chunks that do not divide the sequence (16x512 q256 k192, 17x480 q256 k256, 15x416 k256, 27x288 k192).
 PLACEMENT_SHAPES = [
-    (16, 512, 2, False),
-    (16, 512, 1, True),
-    (17, 480, 1, True),
-    (15, 416, 1, True),
-    (23, 352, 2, True),
-    (21, 384, 2, False),
-    (27, 288, 1, True),
+    (16, 512, 3, False),
+    (17, 480, 3, True),
+    (15, 416, 2, True),
+    (18, 416, 1, False),
+    (18, 384, 2, True),
+    (23, 352, 2, False),
+    (27, 288, 3, True),
 ]
 
 
