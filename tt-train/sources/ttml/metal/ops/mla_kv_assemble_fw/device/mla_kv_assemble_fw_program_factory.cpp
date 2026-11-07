@@ -64,8 +64,8 @@ using namespace tt::constants;
 
 namespace {
 
-// kv_up's (batch, sequence tile row) blocks over the device's compute grid. create_descriptor() pins it against
-// split_work_to_cores, and override_runtime_arguments() walks the same cores from it.
+// kv_up's (batch, sequence tile row) blocks over the device's compute grid. create_descriptor() and
+// override_runtime_arguments() walk the same cores from it.
 WorkSplit make_work_split(const ttnn::Tensor& kv_up) {
     const auto& shape = kv_up.padded_shape();
     return compute_work_split(
@@ -110,8 +110,6 @@ tt::tt_metal::ProgramDescriptor MLAKVAssembleFwProgramFactory::create_descriptor
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
     const WorkSplit split = make_work_split(kv_up);
-    check_work_split(
-        split, num_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2);
 
     // ── CBs ──
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(kv_up.dtype());

@@ -10,6 +10,7 @@
 #include <map>
 #include <string>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/work_split.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <type_traits>
 #include <utility>
@@ -347,7 +348,7 @@ inline uint64_t available_l1_bytes(const ttnn::distributed::MeshDevice& device) 
  * override_runtime_arguments() of descriptor factories, which keep no shared variables and must not rerun
  * split_work_to_cores on every cache hit (it builds CoreRangeSets: about +3 us per hit on 64 cores). The first
  * `units % num_cores` cores of the walk get one extra unit (group 1); with no remainder every core is in group 1.
- * create_descriptor() pins it against split_work_to_cores with check_work_split().
+ * Its counts come from tt::tt_metal::experimental::split_work_to_cores_counts(), as split_work_to_cores' own do.
  */
 struct WorkSplit {
     uint32_t num_cores = 0U;          // cores with work: min(units, grid.x * grid.y)
@@ -362,22 +363,15 @@ struct WorkSplit {
 };
 
 inline WorkSplit compute_work_split(const tt::tt_metal::CoreCoord& grid, uint32_t units) {
-    WorkSplit split;
-    split.num_cores_y = static_cast<uint32_t>(grid.y);
-    if (units == 0U) {
-        return split;
-    }
-    split.num_cores = std::min(units, static_cast<uint32_t>(grid.x * grid.y));
-    const uint32_t remainder = units % split.num_cores;
-    if (remainder == 0U) {
-        split.num_group_1_cores = split.num_cores;
-        split.units_per_core_group_1 = units / split.num_cores;
-    } else {
-        split.num_group_1_cores = remainder;
-        split.units_per_core_group_1 = units / split.num_cores + 1U;
-        split.units_per_core_group_2 = units / split.num_cores;
-    }
-    return split;
+    const tt::tt_metal::experimental::WorkSplitCounts counts =
+        tt::tt_metal::experimental::split_work_to_cores_counts(static_cast<uint32_t>(grid.x * grid.y), units);
+    return WorkSplit{
+        .num_cores = counts.num_cores,
+        .num_cores_y = static_cast<uint32_t>(grid.y),
+        .num_group_1_cores = counts.num_cores_group_1,
+        .units_per_core_group_1 = counts.units_per_core_group_1,
+        .units_per_core_group_2 = counts.units_per_core_group_2,
+    };
 }
 
 // Rows of tiles of a TILE-layout tensor: the height of its physical 2D shape (every dim but the last, padded) in units
@@ -398,31 +392,6 @@ inline WorkSplit compute_tile_work_split(const ttnn::Tensor& tensor) {
     return compute_work_split(
         tensor.device()->compute_with_storage_grid_size(),
         static_cast<uint32_t>(tensor.physical_volume() / tensor.tensor_spec().tile().get_tile_hw()));
-}
-
-// TT_FATALs unless `split` describes the same cores and units as the split_work_to_cores result passed in.
-inline void check_work_split(
-    const WorkSplit& split,
-    uint32_t num_cores,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2,
-    uint32_t num_units_per_core_group_1,
-    uint32_t num_units_per_core_group_2) {
-    TT_FATAL(
-        split.num_cores == num_cores && split.num_group_1_cores == core_group_1.num_cores() &&
-            split.num_cores - split.num_group_1_cores == core_group_2.num_cores() &&
-            split.units_per_core_group_1 == num_units_per_core_group_1 &&
-            split.units_per_core_group_2 == num_units_per_core_group_2,
-        "compute_work_split disagrees with split_work_to_cores: {} cores ({} in group 1, {}/{} units) vs {} cores "
-        "({} in group 1, {}/{} units)",
-        split.num_cores,
-        split.num_group_1_cores,
-        split.units_per_core_group_1,
-        split.units_per_core_group_2,
-        num_cores,
-        core_group_1.num_cores(),
-        num_units_per_core_group_1,
-        num_units_per_core_group_2);
 }
 
 /**
