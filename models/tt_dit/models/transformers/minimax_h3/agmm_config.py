@@ -146,9 +146,7 @@ def agmm_pins(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> d
     return {cls.name: pins[AGMM_PINNED_BLOCKING[(k, n)][cls.name]] for cls in LENGTH_CLASSES}
 
 
-def agmm_kwargs(
-    pins: dict[str, AgmmPin] | None, k: int, n: int, rows: int, *, rules_fallback: bool = False
-) -> dict:
+def agmm_kwargs(pins: dict[str, AgmmPin] | None, k: int, n: int, rows: int, *, rules_fallback: bool = False) -> dict:
     """The linear's blocking kwargs for a `(K, N)` layer at `rows` per-device rows: the length class's pin,
     else (legacy path) the length-keyed swept table."""
     if pins is None:
