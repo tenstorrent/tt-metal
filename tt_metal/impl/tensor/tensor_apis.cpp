@@ -584,7 +584,8 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                 case DataType::MXINT8:
                 case DataType::MXINT4:
                 case DataType::MXINT2: return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::mx_tag>();
-                case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
+                case DataType::INVALID:
+                default: TT_THROW("Unsupported data type conversion requested. Destination type is {}", dst_type);
             }
             TT_THROW("Unreachable");
         };
@@ -609,7 +610,8 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             case DataType::INT8: return with_src.operator()<int8_t>();
             case DataType::INT32: return with_src.operator()<int32_t>();
             case DataType::FP8_E4M3: return with_src.operator()<float8_e4m3>();
-            case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
+            case DataType::INVALID:
+            default: TT_THROW("Unsupported data type conversion requested. Source type is {}", src_type);
         }
         TT_THROW("Unreachable");
     }();

@@ -754,6 +754,51 @@ def _golden_function_load_tensor(file_name, *, device=None, **_):
     return host_tensor.to_torch()
 
 
+@ttnn.register_python_operation(name="ttnn.from_gguf", golden_function=None)
+def from_gguf(
+    blocks: "numpy.ndarray",
+    shape: Union[ttnn.Shape, Tuple[int, int]],
+    dtype: ttnn.DataType,
+    *,
+    device: Optional[ttnn.MeshDevice] = None,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
+) -> ttnn.Tensor:
+    """
+    Makes a GGUF weight tensor from its blocks. Only bits move: the tensor holds exactly the blocks' bytes.
+
+    Args:
+        blocks (numpy.ndarray): the weight's GGUF bytes as a GGUF file stores them, N rows of K / block-size blocks.
+        shape (ttnn.Shape or (K, N)): the logical shape [K, N]: K is the GGUF row length.
+        dtype (ttnn.DataType): one of ttnn.GGUF_DTYPES.
+
+    Keyword Args:
+        device (ttnn.MeshDevice, optional): the device to put the tensor on. Defaults to `None` (host).
+        memory_config (ttnn.MemoryConfig, optional): defaults to DRAM interleaved.
+
+    Returns:
+        ttnn.Tensor: a TILE layout tensor; each page is one GGUF record of 32 columns by 32 * group K rows.
+    """
+    import numpy as np
+
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    spec = ttnn.TensorSpec(ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, memory_config)
+    tensor = ttnn._ttnn.tensor.from_gguf(np.ascontiguousarray(blocks, dtype=np.uint8).reshape(-1), spec)
+    if device is not None:
+        tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
+    return tensor
+
+
+@ttnn.register_python_operation(name="ttnn.to_gguf", golden_function=None)
+def to_gguf(tensor: ttnn.Tensor) -> "numpy.ndarray":
+    """
+    Returns the GGUF blocks of a GGUF tensor as a uint8 numpy array, the exact inverse of ttnn.from_gguf.
+    Dequantize them with gguf.quants.dequantize (gguf-py).
+    """
+    if ttnn.is_tensor_storage_on_device(tensor):
+        tensor = ttnn.from_device(tensor)
+    return ttnn._ttnn.tensor.to_gguf(tensor)
+
+
 @ttnn.register_python_operation(name="ttnn.load_tensor", golden_function=_golden_function_load_tensor)
 def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None) -> ttnn.Tensor:
     """

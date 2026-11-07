@@ -39,7 +39,33 @@ enum class DataType {
     MXINT8 = 15,
     MXINT4 = 16,
     MXINT2 = 17,
-    INVALID = 18,
+    // GGUF quantized weights, one value per format: TILE layout, each page one GGUF record, see GgufTraits.
+    GGUF_Q8_0 = 18,
+    GGUF_Q4_0 = 19,
+    GGUF_IQ4_NL = 20,
+    GGUF_MXFP4 = 21,
+    GGUF_NVFP4 = 22,
+    GGUF_Q6_K = 23,
+    GGUF_Q4_K = 24,
+    GGUF_Q5_K = 25,
+    GGUF_Q3_K = 26,
+    GGUF_Q2_K = 27,
+    GGUF_IQ4_XS = 28,
+    GGUF_TQ2_0 = 29,
+    GGUF_Q2_0 = 30,
+    GGUF_Q1_0 = 31,
+    GGUF_IQ2_XXS = 32,
+    GGUF_IQ1_S = 33,
+    GGUF_IQ2_S = 34,
+    GGUF_IQ3_S = 35,
+    GGUF_IQ3_XXS = 36,
+    GGUF_IQ2_XS = 37,
+    GGUF_IQ1_M = 38,
+    GGUF_Q4_1 = 39,
+    GGUF_Q5_0 = 40,
+    GGUF_Q5_1 = 41,
+    GGUF_TQ1_0 = 42,
+    INVALID = 43,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
@@ -72,6 +98,44 @@ bool is_block_float(DataType dtype);
 // True for the MX formats. Kept separate from is_block_float(): BFP and MX share the "TILE-only,
 // packed on the host" property but use different encodings, packers and supported architectures.
 bool is_mx(DataType dtype);
+
+// True for the GGUF formats. Their pages hold GGUF records, not values: ops that do not handle GGUF see
+// DataFormat::Invalid for them, and the host converts them only with from_gguf / to_gguf.
+bool is_gguf(DataType dtype);
+
+// One GGUF format. A page holds the record of 32 columns of N by 32 * group_tiles rows of K: their GGUF bytes, with
+// the bits regrouped for the Blackhole decoder (scale fields, then or after the codes parts of page_tiles K tiles
+// each).
+struct GgufTraits {
+    uint32_t format_id;    // the decoder's format number (ckernel::gguf::Format)
+    uint32_t block_elems;  // elements per GGUF block
+    uint32_t block_bytes;  // bytes per GGUF block
+    uint32_t group_tiles;  // K tiles per page
+    uint32_t page_tiles;   // K tiles per codes part
+    uint32_t code_bytes;   // bytes per codes part
+    uint32_t scale_rows;   // 64-byte rows of scale fields per page
+    uint32_t fp16_rows;    // the last scale rows: fp16 fields, given fp32 copies in the decoder's L1 page
+    uint32_t code_offset;  // bytes of grid levels before the codes in the decoder's L1 page (codebook formats)
+
+    uint32_t page_height() const { return 32 * group_tiles; }
+    uint32_t page_bytes() const { return 32 * page_height() * block_bytes / block_elems; }
+
+    // The decoder's L1 page of page_tiles K tiles (ckernel::gguf::page_layout): the codes from code_offset, the scale
+    // fields from l1_scale_offset, with their fp32 copies l1_scale_bytes in all.
+    uint32_t l1_scale_offset() const { return (code_offset + code_bytes + 255) / 256 * 256; }
+    uint32_t l1_scale_bytes() const {
+        return fp16_rows ? ((scale_rows + 3) / 4 * 4 + 8 * fp16_rows) * 64 : scale_rows * 64;
+    }
+    uint32_t l1_page_bytes() const {
+        uint32_t bytes = 1024;
+        while (bytes < l1_scale_offset() + l1_scale_bytes()) {
+            bytes *= 2;
+        }
+        return bytes;
+    }
+};
+
+const GgufTraits& gguf_traits(DataType dtype);
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
