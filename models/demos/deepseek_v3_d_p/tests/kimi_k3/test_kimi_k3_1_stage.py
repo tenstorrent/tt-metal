@@ -37,6 +37,7 @@ Overrides for a capacity sweep: `$K31_STAGE_USERS` (num_users) and `$K31_STAGE_W
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import struct
@@ -47,6 +48,7 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
+from safetensors.torch import load_file
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -56,6 +58,7 @@ from models.demos.common.prefill.runners.migration import setup_kv_chunk_table
 from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID, compute_layer_split, d2d_activation_rows
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import load_checkpoint_tensors
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import (
     compose_activation,
     load_activation,
@@ -152,8 +155,10 @@ def _weight_cache_path() -> Path:
     return path.resolve()
 
 
-def _stage_params(stage: int, num_users: int, weight_cache_path: Path):
-    """(hf_config, PrefillRunParams) for PP4 rank `stage`, with the K3 manifest's knobs, as the runner sets them."""
+def _stage_params(stage: int, num_users: int, weight_cache_path: Path, full_last_layer: bool = False):
+    """(hf_config, PrefillRunParams) for PP4 rank `stage`, with the K3 manifest's knobs, as the runner sets them.
+    `full_last_layer`: the last rank builds its last layer whole, plus the final norm, instead of kv-only, so
+    the model produces its final hidden state (the runner's last rank produces none)."""
     first_layer_idx, num_layers = STAGES[stage]
     is_last_rank = stage == NUM_STAGES - 1
     hf_config = ADAPTER.load_hf_config()
@@ -170,7 +175,7 @@ def _stage_params(stage: int, num_users: int, weight_cache_path: Path):
         capacity_factor=8,  # the runner's PREFILL_CAPACITY_FACTOR default
         num_links=2,
         gate_mode_name=ADAPTER.default_gate_mode,
-        kv_only_last_layer=is_last_rank,
+        kv_only_last_layer=is_last_rank and not full_last_layer,
         weight_cache_path=weight_cache_path,
         tp_shard_kv=True,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
@@ -179,7 +184,7 @@ def _stage_params(stage: int, num_users: int, weight_cache_path: Path):
     logger.info(
         f"K3.1 stage {stage} layers [{first_layer_idx}, {first_layer_idx + num_layers}) is_last={is_last_rank} "
         f"num_users={num_users} max_seq_len={MAX_SEQ_LEN} kvpe={params.sparse_kv_cache_format} "
-        f"cache={weight_cache_path}"
+        f"kv_only_last_layer={params.kv_only_last_layer} cache={weight_cache_path}"
     )
     return hf_config, params
 
@@ -272,11 +277,24 @@ def _random_activation(runtime, mesh_device, seed: int) -> ttnn.Tensor:
 
 
 @contextlib.contextmanager
-def _built_stage(stage: int, num_users: int, weight_cache_path: Path, mesh_device, *, stub=False, before_capture=None):
-    """PP4 rank `stage` built as the runner builds it, traced; yields (runtime, kv_caches). Weights (header-only
-    stubs if `stub`), every slot's KV caches, compile, the D2D backings, `before_capture(runtime, kv_caches)` for
-    what the runner registers between compile and capture, then the capture. DRAM is logged after each step."""
-    hf_config, params = _stage_params(stage, num_users, weight_cache_path)
+def _built_stage(
+    stage: int,
+    num_users: int,
+    weight_cache_path: Path,
+    mesh_device,
+    *,
+    stub=False,
+    before_capture=None,
+    full_last_layer=False,
+):
+    """PP4 rank `stage` built as the runner builds it, traced; yields (runtime, kv_caches, final_hidden). Weights
+    (header-only stubs if `stub`), every slot's KV caches, compile, the D2D backings, `before_capture(runtime,
+    kv_caches)` for what the runner registers between compile and capture, then the capture. DRAM is logged after
+    each step. `full_last_layer` (last rank only, see `_stage_params`): `final_hidden()` returns the traced
+    forward's output, the final hidden state, which the runtime drops on the last rank; it is the capture's
+    output tensor, so each replay refreshes it in place. Otherwise `final_hidden` is None."""
+    assert not full_last_layer or stage == NUM_STAGES - 1, "full_last_layer is for the last rank"
+    hf_config, params = _stage_params(stage, num_users, weight_cache_path, full_last_layer)
     _log_dram(mesh_device, "opened")
     t0 = time.perf_counter()
     with _header_only() if stub else contextlib.nullcontext():
@@ -295,11 +313,22 @@ def _built_stage(stage: int, num_users: int, weight_cache_path: Path, mesh_devic
         _log_dram(mesh_device, f"d2d backings ({len(d2d_backings)})")
         if before_capture is not None:
             before_capture(runtime, kv_caches)
+        final_hidden = None
+        if full_last_layer:
+            kept = {}
+            forward = runtime.model.forward
+
+            def keep_output(*args, **kwargs):
+                kept["hidden"] = forward(*args, **kwargs)
+                return kept["hidden"]
+
+            runtime.model.forward = keep_output  # an instance attribute; the runtime ends with this context
+            final_hidden = lambda: kept["hidden"]
         t0 = time.perf_counter()
         runtime.capture_trace(kv_caches)
         logger.info(f"STAGE_TIME capture {time.perf_counter() - t0:.1f} s")
         _log_dram(mesh_device, "traced")
-        yield runtime, kv_caches
+        yield runtime, kv_caches, final_hidden
     finally:
         # The captured trace buffers must go before the mesh_device fixture closes the device.
         runtime.release_trace()
@@ -333,7 +362,7 @@ def test_kimi_k3_1_stage_traced(stage, mesh_device, device_params, tmp_path):
     logger.info(f"K3.1 stage {stage} weights={weights}")
 
     stage_built = _built_stage(stage, num_users, weight_cache_path, mesh_device, stub=weights == "stub")
-    with stage_built as (runtime, kv_caches):
+    with stage_built as (runtime, kv_caches, _):
         slot = num_users - 1
         for start in REPLAY_STARTS:
             if runtime.config.is_first_rank:
@@ -358,14 +387,29 @@ def test_kimi_k3_1_stage_traced(stage, mesh_device, device_params, tmp_path):
 # (written by rank 0) covers stage 0's layers only. No H2D socket: stage 0 takes the chunk's tokens as the
 # runtime's chunk input.
 #
-# The prompt (deterministic ids) runs twice, on the highest slot and then on slot 0: outputs and the slot's
-# cache rows (index, KDA) must agree bit for bit. A whole repeat run (all four stages again into another
-# directory) must reproduce every saved file byte for byte (`cmp`). No golden for K3.1: outputs are checked
-# finite only. The kvpe cache is too large to read at the system maximum; `test_kimi_k3_1_stage_kvpe` covers it.
+# The prompt is the token sequence of Miguel's 10K vLLM trace (`TRACE_10K`): its 8192 prompt ids and the 2048
+# completion ids it decoded, teacher-forced, 10240 tokens = two chunks. The model is causal, so every position
+# up to the prompt's last (8191) sees what it sees in the 8192-token prefill, and the later positions match
+# the trace's decode steps. One difference from the runner's last rank: the last stage builds layer 92 whole
+# and the final norm (`full_last_layer`), not kv-only, so the model has a final hidden state, saved per chunk.
+# The host then checks the next token (`_check_next_token`) at the prompt's last position and at the last
+# position the trace scored. The kv-only last rank is covered by the capacity, kvpe and prompt perf tests.
+#
+# The prompt runs twice, on the highest slot and then on slot 0: outputs and the slot's cache rows (index,
+# KDA) must agree bit for bit. A whole repeat run (all four stages again into another directory) must
+# reproduce every saved file byte for byte (`cmp`). Hidden states and caches are checked finite here; their
+# accuracy against the trace streams belongs to the accuracy suite. The kvpe cache is too large to read at
+# the system maximum; `test_kimi_k3_1_stage_kvpe` covers it.
 #
 #     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/run1 scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_handoff[blackhole-stage$s-torus-xy-8x4]"; done
 HANDOFF_CHUNKS = 2  # chunk 1's DSA layers read chunk 0's KV; its KDA layers start from chunk 0's carry
+# Miguel's 10K K3.1-Pro vLLM trace, v2 capture: the same weights, vLLM build and token sequence as the first
+# capture (kimi_k31_pro_10k, identical ids and top-1 at every step) plus the DSA indexer streams the accuracy
+# suite compares against.
+TRACE_10K = Path("/mnt/weka/model-weights/llm/ref-data/debug_traces/kimi_k31_pro_10k_v2/vllm-d06690a4-10240tok")
+# Miguel's 128K K3.1-Pro vLLM trace (126,976 prompt tokens): the 128K perf scenario's prompt.
+TRACE_128K = Path("/mnt/weka/model-weights/llm/ref-data/debug_traces/kimi_k31_pro_128k_v2/vllm-4984af7c-131072tok")
 SYSTEM_MAX_USERS = min(STAGE_MAX_USERS.values())
 ACK_FIFO_BYTES = 65536  # the K3 manifest's PREFILL_LAYER_ACK_FIFO_BYTES; holds the warm pass's acks
 ACK_TIMEOUT_S = 60
@@ -375,12 +419,34 @@ def _handoff_path(handoff_dir: Path, stage: int, chunk: int) -> Path:
     return handoff_dir / f"stage{stage}.chunk{chunk}.activation.bin"
 
 
-def _random_prompt(runtime) -> list[int]:
-    """The handoff test's prompt: HANDOFF_CHUNKS chunks of deterministic random token ids."""
-    ids = torch.randint(
-        0, runtime.hf_config.vocab_size, (HANDOFF_CHUNKS * CHUNK,), generator=torch.Generator().manual_seed(31)
-    )
-    return ids.tolist()
+def _final_hidden_path(handoff_dir: Path, chunk: int) -> Path:
+    """The last stage's final hidden state (after the final norm), bf16 [1, 1, chunk, hidden], token order."""
+    return handoff_dir / f"stage{NUM_STAGES - 1}.chunk{chunk}.final_hidden.bin"
+
+
+@functools.cache
+def _trace_metadata(trace_dir: Path) -> dict:
+    """A trace's metadata (token ids, step counts), read once per trace; skips when the trace is absent (a skip
+    raises, so it is not cached)."""
+    if not (trace_dir / "metadata.json").is_file():
+        pytest.skip(f"no K3.1 trace at {trace_dir}")
+    with (trace_dir / "metadata.json").open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _trace_stream(name: str) -> torch.Tensor:
+    """A single-shard stream of `TRACE_10K` (the top-k streams: one row per vLLM step)."""
+    with (TRACE_10K / "index.json").open(encoding="utf-8") as handle:
+        (shard,) = json.load(handle)["tensor_streams"][name]["chunks"]
+    return load_file(TRACE_10K / shard["path"])[name]
+
+
+def _teacher_forced_prompt() -> list[int]:
+    """The handoff test's prompt: the trace's prompt then its decoded completion, `HANDOFF_CHUNKS` chunks."""
+    metadata = _trace_metadata(TRACE_10K)
+    ids = metadata["token_ids"] + metadata["completion_token_ids"]
+    assert len(ids) == HANDOFF_CHUNKS * CHUNK, f"{TRACE_10K.name}: {len(ids)} tokens, not {HANDOFF_CHUNKS} chunks"
+    return ids
 
 
 def _chunk_input(runtime, mesh_device, handoff_dir: Path, stage: int, chunk: int, prompt: list[int]) -> ttnn.Tensor:
@@ -453,6 +519,49 @@ def _write_raw(tensor: torch.Tensor, path: Path) -> None:
     tensor.contiguous().view(torch.uint8).numpy().tofile(path)
 
 
+def _check_next_token(final_hidden: dict[int, torch.Tensor]) -> None:
+    """The next token on host: checkpoint `lm_head.weight` times the final hidden state (already after the final
+    norm), float32, argmax, against the trace's recorded top-1 (`topk_indices`, vLLM's own logits).
+
+    The trace sampled (temperature 1, top-p 0.95), so the token it fed next is a draw, not its argmax; it is
+    reported against the host top-k only. Its top-k rows are one per vLLM step: each prefill step's last
+    position, then each decode step's. Two positions are checked: the prompt's last (row 1, the 8192-token
+    prefill's next token) and the last position the trace scored (the last row, the second-to-last token)."""
+    metadata = _trace_metadata(TRACE_10K)
+    ids = _teacher_forced_prompt()
+    n_prompt = metadata["n_prompt_tokens"]
+    assert metadata["prefill_steps"] == 2, "top-k row 1 is the prompt's end only for 2 prefill steps"
+    trace_ids, trace_logprobs = _trace_stream("topk_indices"), _trace_stream("topk_logprobs").float()
+    assert len(trace_ids) == len(ids) - n_prompt + 1, f"{len(trace_ids)} top-k rows for {len(ids) - n_prompt} decodes"
+    checked = {n_prompt - 1: 1, len(ids) - 2: len(trace_ids) - 1}  # position -> top-k row
+
+    checkpoint = Path(os.getenv("PREFILL_HF_MODEL") or ADAPTER.hf_model_default)
+    lm_head = load_checkpoint_tensors(checkpoint, ["lm_head.weight"])["lm_head.weight"].float()
+    mismatches = []
+    for position, row in checked.items():
+        hidden = final_hidden[position // CHUNK][0, 0, position % CHUNK].float()
+        logits = lm_head @ hidden
+        logprobs = torch.log_softmax(logits, dim=-1)
+        top = torch.topk(logits, trace_ids.shape[-1])
+        host_top, trace_top = top.indices.tolist(), trace_ids[row].tolist()
+        argmax, expected, sampled = host_top[0], trace_top[0], ids[position + 1]
+        margin = float(logits[argmax] - logits[expected])
+        sampled_rank = host_top.index(sampled) if sampled in host_top else None
+        logger.info(
+            f"NEXT_TOKEN position {position} (trace top-k row {row}): host argmax {argmax}, trace top-1 {expected}, "
+            f"logit margin argmax - trace top-1 {margin:.4f}, "
+            f"host top1-top2 logit gap {float(top.values[0] - top.values[1]):.4f}; "
+            f"host top-5 {host_top[:5]} logprobs {[round(float(logprobs[i]), 4) for i in host_top[:5]]}; "
+            f"trace top-5 {trace_top[:5]} logprobs {[round(v, 4) for v in trace_logprobs[row, :5].tolist()]}; "
+            f"top-5 overlap {len(set(host_top[:5]) & set(trace_top[:5]))}/5; "
+            f"host logprob of trace top-1 {float(logprobs[expected]):.4f}; "
+            f"sampled next id {sampled} at host top-{len(host_top)} rank {sampled_rank}"
+        )
+        if argmax != expected:
+            mismatches.append(f"position {position}: host {argmax}, trace {expected}, logit margin {margin:.4f}")
+    assert not mismatches, f"next token differs from the trace's top-1: {mismatches}"
+
+
 def _cached_stage(stage: int) -> Path:
     """The weight cache, skipping when any layer of the stage is not cached yet."""
     weight_cache_path = _weight_cache_path()
@@ -472,10 +581,11 @@ def _handoff_dir() -> Path:
 
 
 @contextlib.contextmanager
-def _served_stage(stage: int, num_users: int, handoff_dir: Path, mesh_device, monkeypatch):
+def _served_stage(stage: int, num_users: int, handoff_dir: Path, mesh_device, monkeypatch, full_last_layer=False):
     """PP4 rank `stage` with real weights and the runner pieces built between compile and capture: the D2H
     layer-ack service and the migration export (see above). Yields (runtime, kv_caches, d2h_service, acks per
-    chunk) once the capture's warm-pass acks are read."""
+    chunk, final_hidden) once the capture's warm-pass acks are read; `full_last_layer` and `final_hidden` as in
+    `_built_stage`."""
     weight_cache_path = _cached_stage(stage)
     first_layer_idx, num_layers = STAGES[stage]
     d2h_service = None
@@ -509,14 +619,14 @@ def _served_stage(stage: int, num_users: int, handoff_dir: Path, mesh_device, mo
         )
         _log_dram(mesh_device, "migration export")
 
-    with _built_stage(stage, num_users, weight_cache_path, mesh_device, before_capture=before_capture) as (
-        runtime,
-        kv_caches,
-    ):
+    stage_built = _built_stage(
+        stage, num_users, weight_cache_path, mesh_device, before_capture=before_capture, full_last_layer=full_last_layer
+    )
+    with stage_built as (runtime, kv_caches, final_hidden):
         acks_per_chunk = runtime.warmup_ack_count()
         assert acks_per_chunk >= num_layers, f"{acks_per_chunk} acks per chunk for {num_layers} layers"
         _read_acks(d2h_service, acks_per_chunk)  # the capture's warm pass
-        yield runtime, kv_caches, d2h_service, acks_per_chunk
+        yield runtime, kv_caches, d2h_service, acks_per_chunk, final_hidden
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
@@ -526,13 +636,10 @@ def _served_stage(stage: int, num_users: int, handoff_dir: Path, mesh_device, mo
 def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch):
     handoff_dir = _handoff_dir()
     num_users = int(os.getenv("K31_STAGE_USERS", SYSTEM_MAX_USERS))
-    with _served_stage(stage, num_users, handoff_dir, mesh_device, monkeypatch) as (
-        runtime,
-        kv_caches,
-        d2h_service,
-        acks_per_chunk,
-    ):
-        prompt = _random_prompt(runtime)
+    prompt = _teacher_forced_prompt()  # skips before the weight load when the trace is absent
+    is_last_rank = stage == NUM_STAGES - 1
+    served = _served_stage(stage, num_users, handoff_dir, mesh_device, monkeypatch, full_last_layer=is_last_rank)
+    with served as (runtime, kv_caches, d2h_service, acks_per_chunk, final_hidden):
         outputs, states = {}, {}
         for slot in (num_users - 1, 0):
             for chunk in range(HANDOFF_CHUNKS):
@@ -543,10 +650,14 @@ def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch)
                 assert set(acks) == {
                     (slot, start, end)
                 }, f"ack records {sorted(set(acks))} for chunk {(slot, start, end)}"
-                if out is None:
-                    continue
-                path = _handoff_path(handoff_dir, stage, chunk)
-                host = save_activation(mesh_device, out, path)
+                if is_last_rank:
+                    assert out is None
+                    host = compose_activation(mesh_device, final_hidden())
+                    hidden_shape = (1, 1, CHUNK, runtime.hf_config.hidden_size)
+                    assert tuple(host.shape) == hidden_shape, f"final hidden {tuple(host.shape)}, not {hidden_shape}"
+                    _write_raw(host, _final_hidden_path(handoff_dir, chunk))
+                else:
+                    host = save_activation(mesh_device, out, _handoff_path(handoff_dir, stage, chunk))
                 assert torch.isfinite(host).all(), f"stage {stage} chunk {chunk} slot {slot}: non-finite output"
                 if chunk in outputs:
                     assert torch.equal(outputs[chunk], host), f"stage {stage} chunk {chunk}: slot {slot} differs"
@@ -564,6 +675,8 @@ def test_kimi_k3_1_stage_handoff(stage, mesh_device, device_params, monkeypatch)
             unwritten = first["index"].abs().amax(dim=-1).eq(0).sum()
             assert not unwritten, f"stage {stage}: {unwritten} index cache rows of the prompt are unwritten"
         logger.info(f"STAGE_HANDOFF stage {stage}: {sorted(p.name for p in handoff_dir.glob(f'stage{stage}.*'))}")
+    if is_last_rank:
+        _check_next_token(outputs)
 
 
 # --- The kvpe cache of a stage, read whole, at two users ------------------------------------------------
@@ -601,10 +714,10 @@ def _kvpe_prompt_rows(raw: torch.Tensor, slot: int) -> torch.Tensor:
 def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
     handoff_dir = _handoff_dir()
     weight_cache_path = _cached_stage(stage)
-    with _built_stage(stage, KVPE_USERS, weight_cache_path, mesh_device) as (runtime, kv_caches):
+    prompt = _teacher_forced_prompt()
+    with _built_stage(stage, KVPE_USERS, weight_cache_path, mesh_device) as (runtime, kv_caches, _):
         kvpe = kv_caches.kvpe.storage
         fresh = kvpe.cpu()  # the allocator's zero fill
-        prompt = _random_prompt(runtime)
 
         def run(slot, reset_kvpe_before=()):
             """The prompt's chunks on `slot`; the stage's outbound activations on host (None on the last rank)."""
@@ -658,21 +771,15 @@ def test_kimi_k3_1_stage_kvpe(stage, mesh_device, device_params):
 #
 #     for s in 0 1 2 3; do K31_HANDOFF_DIR=/path/perf128k scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_stage.py::test_kimi_k3_1_stage_prompt_perf[blackhole-stage$s-128k-torus-xy-8x4]"; done
-TRACES = Path("/mnt/weka/model-weights/llm/ref-data/debug_traces")
-PROMPT_TRACES = {
-    "10k": TRACES / "kimi_k31_pro_10k_v2/vllm-d06690a4-10240tok/metadata.json",
-    "128k": TRACES / "kimi_k31_pro_128k_v2/vllm-4984af7c-131072tok/metadata.json",
-}
+PROMPT_TRACES = {"10k": TRACE_10K, "128k": TRACE_128K}
 PERF_PASSES = 5  # after the capture's warm pass; K3's test_prefill_perf times 5 iterations
 DEEP_START = MAX_SEQ_LEN - CHUNK
 
 
-def _trace_prompt(trace: Path) -> tuple[list[int], int]:
+def _trace_prompt(trace_dir: Path) -> tuple[list[int], int]:
     """(the trace's prompt token ids padded to whole chunks with the producer's pad id, the prompt's length);
     skips when the trace is absent."""
-    if not trace.is_file():
-        pytest.skip(f"no K3.1 trace metadata at {trace}")
-    metadata = json.loads(trace.read_text())
+    metadata = _trace_metadata(trace_dir)
     ids = metadata["token_ids"]
     assert len(ids) == metadata["n_prompt_tokens"], f"{len(ids)} token ids for {metadata['n_prompt_tokens']} tokens"
     return ids + [MTP_PAD_TOKEN_ID] * (-len(ids) % CHUNK), len(ids)
@@ -702,17 +809,18 @@ def _profiled_replay(mesh_device, run, path: Path) -> None:
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENT, indirect=True)
-@pytest.mark.parametrize("trace", PROMPT_TRACES.values(), ids=PROMPT_TRACES.keys())
+@pytest.mark.parametrize("trace_dir", PROMPT_TRACES.values(), ids=PROMPT_TRACES.keys())
 @pytest.mark.parametrize("stage", range(NUM_STAGES), ids=[f"stage{s}" for s in range(NUM_STAGES)])
-def test_kimi_k3_1_stage_prompt_perf(stage, trace, mesh_device, device_params, monkeypatch):
+def test_kimi_k3_1_stage_prompt_perf(stage, trace_dir, mesh_device, device_params, monkeypatch):
     handoff_dir = _handoff_dir()
-    prompt, prompt_len = _trace_prompt(trace)
+    prompt, prompt_len = _trace_prompt(trace_dir)
     chunks = [(c * CHUNK, min((c + 1) * CHUNK, prompt_len)) for c in range(len(prompt) // CHUNK)]
     with _served_stage(stage, SYSTEM_MAX_USERS, handoff_dir, mesh_device, monkeypatch) as (
         runtime,
         kv_caches,
         d2h_service,
         acks_per_chunk,
+        _,
     ):
         slot = SYSTEM_MAX_USERS - 1
 
