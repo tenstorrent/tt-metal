@@ -67,6 +67,28 @@ def make_scaled_kv_cache(device, batch, T, seed, round_scale):
     return tt_packed, reconstructed
 
 
+def split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc, v_dim=V_DIM):
+    """True if the program has the split-K merge CBs: more CBs than the whole-token split at S = cores.
+    On a cache miss, NO_DISPATCH builds the program without compiling, running, or caching it.
+    On a cache hit, it reports the cached program."""
+    grid = device.compute_with_storage_grid_size()
+    H, k_dim, topk = tt_q.shape[1], tt_q.shape[3], tt_idx.shape[3]
+    whole_q = to_dev(torch.zeros(1, H, grid.x * grid.y, k_dim, dtype=torch.bfloat16), device, ttnn.bfloat16)
+    whole_idx = to_dev(torch.zeros(1, 1, grid.x * grid.y, topk, dtype=torch.int32), device, ttnn.uint32)
+
+    def num_cbs(q, idx):
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        try:
+            ttnn.transformer.sparse_sdpa(
+                q, tt_kv, idx, v_dim, kv_format=kv_format, scale=k_dim**-0.5, k_chunk_size=kc
+            )
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+        return sum(node["node_type"] == "circular_buffer_allocate" for node in graph)
+
+    return num_cbs(tt_q, tt_idx) > num_cbs(whole_q, whole_idx)
+
+
 # ---- op runs, output shape/layout correct ----
 @run_for_blackhole()
 def test_sparse_sdpa_runs(device):
@@ -738,3 +760,203 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
     probs = torch.cat([logits, model_sink.expand(1, H, S, 1)], dim=-1).softmax(dim=-1)[..., :-1]
     expected = probs @ kv.float()
     torch.testing.assert_close(ttnn.to_torch(out).float(), expected, atol=0.012, rtol=0.01)
+
+
+# ---- split-K work distribution (S > cores, S % cores != 0): tokens straddling two cores are merged ----
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,kc,nv_id,split",
+    [
+        (64, 160, 4096, 2048, 128, "all", True),  # GLM per-chip shape (16 chunks/token)
+        (64, 160, 1024, 512, 128, "mixed", True),  # sentinel tails: empty HEAD segments, masks in either segment
+        (32, 250, 1024, 512, 128, "causal", True),  # 2+ tokens/core, prefill-like valid counts
+        (64, None, 1024, 256, 64, "mixed", True),  # 1 token + a sliver per core: S = cores + 10
+        (128, 160, 1024, 512, 128, "mixed", True),  # Sqt=4: the merge fills DST
+        (96, 160, 1024, 512, 128, "mixed", True),  # Sqt=3
+        (128, 160, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
+    ],
+)
+def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id, split):
+    """Split-K must run (or fall back) as expected and match the torch golden (PCC), incl. sentinel tails."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    S = cores + 10 if S is None else S
+    if S <= cores:
+        pytest.skip(f"split-K needs S > cores ({cores})")
+    nv_fn = {
+        "all": lambda s: TOPK,
+        "mixed": lambda s: 1 + (s * 37) % TOPK,
+        "causal": lambda s: min(TOPK, 1 + s * 3),
+    }[nv_id]
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=71)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=72, round_scale=True)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    assert split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc) == split, f"expected split-K {split}"
+    out = ttnn.transformer.sparse_sdpa(
+        tt_q,
+        tt_packed,
+        tt_idx,
+        V_DIM,
+        kv_format=SCALED_FP8_KV,
+        scale=K_DIM**-0.5,
+        k_chunk_size=kc,
+    )
+    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    actual = ttnn.to_torch(out)
+    score = pcc(actual, expected)
+    worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
+    assert score >= 0.999 and worst >= 0.995, f"PCC {score:.5f}, worst token {worst:.5f}"
+
+
+# ---- split-K for S < cores (small chunks, e.g. GLM chunk 1024/2048 -> 32/64 rows per chip): <= 2 cores per token ----
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,kc,nv_id,split",
+    [
+        (64, 32, 4096, 2048, 128, "all", True),  # GLM chunk 1024 per chip: 64 cores, half a token each
+        (64, 64, 4096, 2048, 128, "all", True),  # GLM chunk 2048: 96 cores, 2/3 token each (HEAD+TAIL cores)
+        (64, 32, 1024, 512, 128, "mixed", True),  # sentinel tails: empty HEAD segments
+        (64, 64, 1024, 512, 128, "causal", True),  # prefill-like valid counts
+        (32, 40, 1024, 256, 64, "mixed", True),  # 4 chunks/token, odd S
+        (128, 32, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
+    ],
+)
+def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id, split):
+    """Small-S split-K must run (or fall back) as expected and match the torch golden (PCC), incl. sentinel tails."""
+    grid = device.compute_with_storage_grid_size()
+    if S >= grid.x * grid.y:
+        pytest.skip("needs S < cores")
+    nv_fn = {
+        "all": lambda s: TOPK,
+        "mixed": lambda s: 1 + (s * 37) % TOPK,
+        "causal": lambda s: min(TOPK, 1 + s * 3),
+    }[nv_id]
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=73)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=74, round_scale=True)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    assert split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc) == split, f"expected split-K {split}"
+    out = ttnn.transformer.sparse_sdpa(
+        tt_q,
+        tt_packed,
+        tt_idx,
+        V_DIM,
+        kv_format=SCALED_FP8_KV,
+        scale=K_DIM**-0.5,
+        k_chunk_size=kc,
+    )
+    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    actual = ttnn.to_torch(out)
+    score = pcc(actual, expected)
+    worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
+    assert score >= 0.999 and worst >= 0.995, f"PCC {score:.5f}, worst token {worst:.5f}"
+
+
+# ---- BF16 and plain FP8 KV: split-K only when every token gets two cores (2S <= cores), e.g. Qwen 3.8 QSA ----
+@run_for_blackhole()
+@pytest.mark.parametrize("kv_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16", "fp8"])
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,k_dim,v_dim,kc,nv_id,split",
+    [
+        (64, 32, 4096, 2048, K_DIM, V_DIM, 128, "all", True),  # GLM chunk 1024 per chip: half a token per core
+        (64, 32, 1024, 512, K_DIM, V_DIM, 128, "mixed", True),  # sentinel tails
+        (64, 40, 1024, 512, K_DIM, V_DIM, 128, "causal", True),  # prefill-like valid counts
+        (128, 16, 1024, 512, K_DIM, V_DIM, 64, "mixed", True),  # Sqt=4
+        (32, 1, 4096, 2048, 512, 256, 32, "all", True),  # Qwen 3.8 QSA decode: 1 row, 64 chunks on 2 cores
+        (32, 5, 4096, 2080, 512, 256, 32, "mixed", True),  # QSA rows with 65 chunks: 32 + 33 per token
+        (64, 64, 1024, 512, K_DIM, V_DIM, 128, "all", False),  # 2S > cores: whole-token split
+        (64, 160, 1024, 512, K_DIM, V_DIM, 128, "mixed", False),  # S > cores: whole-token split
+    ],
+)
+def test_sparse_sdpa_split_k_kv_formats(device, kv_dtype, H, S, T, TOPK, k_dim, v_dim, kc, nv_id, split):
+    """BF16 and plain FP8 KV must use split-K only when 2S <= cores and match the torch golden (PCC)."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    if split != (2 * S <= cores):
+        pytest.skip(f"case needs 2S {'<=' if split else '>'} cores ({cores})")
+    nv_fn = {
+        "all": lambda s: TOPK,
+        "mixed": lambda s: 1 + (s * 37) % TOPK,
+        "causal": lambda s: min(TOPK, 1 + s * 3),
+    }[nv_id]
+    q, kv, indices = make_inputs(H, S, T, TOPK, k_dim, nv_fn, seed=77)
+    fp8 = kv_dtype == ttnn.fp8_e4m3
+    kv_format = FP8_KV if fp8 else BF16_KV
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv if fp8 else kv.to(torch.bfloat16), device, kv_dtype)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    assert split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc, v_dim) == split, f"expected split-K {split}"
+    out = ttnn.transformer.sparse_sdpa(
+        tt_q, tt_kv, tt_idx, v_dim, kv_format=kv_format, scale=k_dim**-0.5, k_chunk_size=kc
+    )
+    kv_held = kv.to(torch.float8_e4m3fn if fp8 else torch.bfloat16).float()
+    expected = golden(q, kv_held, indices, k_dim**-0.5, v_dim)
+    actual = ttnn.to_torch(out)
+    score = pcc(actual, expected)
+    worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
+    assert score >= 0.999 and worst >= 0.995, f"PCC {score:.5f}, worst token {worst:.5f}"
+
+
+# ---- the split-K plan reads the free L1, so the program hash includes it: less free L1 must give a new program ----
+@run_for_blackhole()
+def test_sparse_sdpa_split_k_plan_follows_free_l1(device):
+    """An L1 tensor that leaves room for the whole-token CBs but not for the split-K CBs must give a new
+    whole-token program. A cache hit would reuse the split-K program, whose CB region overlaps the tensor."""
+    H, S, T, TOPK, kc = 64, 160, 4096, 2048, 128
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    if S <= cores or S % cores == 0:
+        pytest.skip(f"split-K needs S > cores ({cores}) and S % cores != 0")
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=75)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=76, round_scale=True)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    whole_q = to_dev(torch.zeros(1, H, cores, K_DIM, dtype=torch.bfloat16), device, ttnn.bfloat16)
+    whole_idx = to_dev(torch.zeros(1, 1, cores, TOPK, dtype=torch.int32), device, ttnn.uint32)
+    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+
+    def run(q_in, idx_in):
+        """Run the op. Return the output and the end of the CB region (0 on a program-cache hit)."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            out = ttnn.transformer.sparse_sdpa(
+                q_in, tt_packed, idx_in, V_DIM, kv_format=SCALED_FP8_KV, scale=K_DIM**-0.5, k_chunk_size=kc
+            )
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+        cbs = [node["params"] for node in graph if node["node_type"] == "circular_buffer_allocate"]
+        return out, max((int(p["address"]) + int(p["size"]) for p in cbs), default=0)
+
+    def l1_tensor(tiles_per_core):
+        shape = [1, 1, cores * tiles_per_core * 32, 32]
+        mem = ttnn.create_sharded_memory_config(shape, ttnn.CoreGrid(y=grid.y, x=grid.x), ttnn.ShardStrategy.HEIGHT)
+        data = torch.randn(shape, dtype=torch.bfloat16)
+        return data, ttnn.from_torch(
+            data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
+        )
+
+    device.clear_program_cache()
+    out_split, split_end = run(tt_q, tt_idx)
+    _, whole_end = run(whole_q, whole_idx)
+    assert split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc)
+    assert 0 < whole_end < split_end, f"CB region ends: whole-token {whole_end}, split-K {split_end}"
+
+    # L1 tensors are allocated top-down, so a one-tile probe finds the top of the free L1.
+    _, probe = l1_tensor(1)
+    top = probe.buffer_address() + 2048
+    ttnn.deallocate(probe)
+    data, blocker = l1_tensor(-(-(top - (whole_end + split_end) // 2) // 2048))
+    low = blocker.buffer_address()
+    assert whole_end <= low < split_end, f"L1 tensor at {low}, not in [{whole_end}, {split_end})"
+
+    assert not split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc)
+    entries = device.num_program_cache_entries()
+    out_whole, whole_run_end = run(tt_q, tt_idx)
+    assert device.num_program_cache_entries() == entries + 1, "less free L1 must give a new program"
+    assert 0 < whole_run_end <= low, f"CB region ends at {whole_run_end}, L1 tensor starts at {low}"
+    assert torch.equal(ttnn.to_torch(blocker), data), "the op wrote over the L1 tensor"
+    ttnn.deallocate(blocker)
+    for name, out in (("split-K", out_split), ("whole-token", out_whole)):
+        score = pcc(ttnn.to_torch(out), expected)
+        assert score >= 0.999, f"{name} PCC {score:.5f}"

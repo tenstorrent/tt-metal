@@ -268,7 +268,7 @@ def _run_sparse_sdpa_perf(device, H, S, T, TOPK, kc, nv, cache_format):
         (640, 56320, 2048, 256, "sparse", 0.576),
         (640, 56320, 2048, 256, "mixed", 1.838),
         (110, 56320, 2048, 256, "dense", 0.576),  # 1 token/core, 8 chunks, real T -> representative DRAM locality
-        (8, 56320, 2048, 256, "dense", 0.155),  # 8 cores -> low DRAM contention; isolates BW headroom vs floor
+        (8, 56320, 2048, 256, "dense", 0.101),  # 16 cores (split-K) -> low DRAM contention; BW headroom vs floor
     ],
     ids=["prod-dense", "prod-half", "prod-causal", "prod-sparse", "prod-mixed", "zone1tok", "lowcore"],
 )
