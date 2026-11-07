@@ -27,7 +27,7 @@ static constexpr const char* COMPUTE_KERNEL_PATH =
     "moreh_clip_grad_norm_step3_kernel.cpp";
 
 ProgramDescriptor MorehClipGradNormStep3Operation::create_descriptor(
-    const operation_attributes_t& /*operation_attributes*/,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& inputs) {
     const auto& clip_coef_clamped = tensor_args.clip_coef_clamped;
@@ -36,6 +36,8 @@ ProgramDescriptor MorehClipGradNormStep3Operation::create_descriptor(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = inputs.at(0).device();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -126,7 +128,12 @@ ProgramDescriptor MorehClipGradNormStep3Operation::create_descriptor(
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_group_1;
     compute_desc.compile_time_args = {num_inputs_per_core_group_1};
-    compute_desc.config = ComputeConfigDescriptor{};
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
     compute_desc.runtime_args.reserve(num_cores_to_be_used);
 
     ////////////////////////////////////////////////////////////////////////////
