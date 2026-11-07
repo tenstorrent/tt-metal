@@ -10,8 +10,9 @@ the documented OpenRouter forms, the same bytes to every endpoint:
 
   image  image_url, data:image/png;base64 (or jpeg with image_format=jpeg)
   audio  input_audio {data: base64 WAV (16-bit mono, resampled to audio_rate), format: "wav"}
-  video  video_url, data:video/mp4;base64 of the file (re-encoded once, same resolution, when above video_max_mb;
-         the transcode is cached next to the journal so every endpoint gets the same bytes)
+  video  video_url, data:video/mp4;base64 of the file with its audio track (re-encoded once, same resolution, audio
+         kept as AAC, when above video_max_mb; the transcode is cached next to the journal so every endpoint gets the
+         same bytes); an http(s) video is sent by URL, as is
 
 Media come first in the user turn, then the task's text. Reasoning is switched per `thinking`: "off" / "on" / "default"
 (send nothing). On target "vllm" the switch is chat_template_kwargs.enable_thinking; on "openrouter" it is
@@ -19,9 +20,19 @@ OpenRouter's `reasoning.enabled`, and `provider` (comma-separated slugs) pins pr
 
 Resume: every successful response is appended (fsync) to `journal` (JSONL), keyed by task, doc and request content
 (not by endpoint); rerunning the same command answers journaled requests from it. Failures are not journaled, so a
-rerun retries them. 4xx answers other than 408 / 429 are not retried (the request itself is bad); 5xx, 408, 429 and
+rerun retries them. 4xx answers other than 408 / 429 are not retried (the request itself is bad), except OpenRouter's
+relayed provider errors ("Provider returned error": transient under load, accepted on a resend); 5xx, 408, 429 and
 connection errors are retried `max_retries` times with backoff. A request that fails for good returns
 "[MIMO_REQUEST_FAILED <status>] ..." as its text (scored wrong) and is counted in `<journal>.stats.json`.
+
+Raw log: every request that reaches the network is also appended (fsync) to `<journal>.raw.jsonl`, one record per
+request after its last attempt, kept forever (never rewritten, also for failures): the request body with each media
+payload replaced by a reference (dataset doc id, source path when there is one, MIME type, size and sha256 of the data
+URL), the full response body (content, reasoning, usage incl. OpenRouter's cost, finish_reason, provider), the
+response headers, every attempt's status / latency / error, and the wall-clock latency. Retries back off
+exponentially with full jitter (and honour Retry-After); `<journal>.stats.json` also reports the effective
+concurrency (time-averaged in-flight HTTP requests) and 429 counts. Each invocation's stats are appended to
+`<journal>.stats.jsonl` too.
 
 `dry_run=True` sends nothing: an in-process httpx transport captures each request, checks it against the OpenRouter
 request shape (content-part types, MIME types, audio formats, no vLLM-only fields) and answers "A". The captured
@@ -33,6 +44,7 @@ import hashlib
 import io
 import json
 import os
+import random
 import shutil
 import subprocess
 import threading
@@ -121,6 +133,7 @@ def _validate_openrouter(req, target):
         "stream",
         "reasoning",
         "provider",
+        "usage",
     }
     if target == "vllm":
         allowed_top.add("chat_template_kwargs")  # our endpoint's reasoning switch (OpenRouter maps its own to it)
@@ -171,6 +184,42 @@ def _redact(req):
     return out
 
 
+def _media_refs(req, sources):
+    """The request with each media payload replaced by a reference, and the list of references (sha256 of the URL /
+    base64 string, size, MIME type, the visual's source path when it came from a file). `sources` lists the media
+    parts' sources in order (None for in-memory dataset values: those are identified by the record's doc id)."""
+    out = json.loads(json.dumps(req))
+    refs = []
+    for msg in out.get("messages", []):
+        if not isinstance(msg.get("content"), list):
+            continue
+        for part in msg["content"]:
+            payload = None
+            if part.get("type") in ("image_url", "video_url", "input_video"):
+                key = "image_url" if part["type"] == "image_url" else "video_url"
+                url = part[key]["url"]
+                if url.startswith("data:"):
+                    payload, mime = url, url[5:].split(";", 1)[0]
+                    holder, field = part[key], "url"
+            elif part.get("type") == "input_audio":
+                payload, mime = part["input_audio"]["data"], "audio/" + str(part["input_audio"].get("format"))
+                holder, field = part["input_audio"], "data"
+            if payload is None:
+                continue
+            i = len(refs)
+            ref = {
+                "index": i,
+                "type": part["type"],
+                "mime": mime,
+                "chars": len(payload),
+                "sha256": hashlib.sha256(payload.encode()).hexdigest(),
+                "source": sources[i] if i < len(sources) else None,
+            }
+            refs.append(ref)
+            holder[field] = f"<media #{i} {mime} sha256:{ref['sha256'][:16]} {len(payload)} chars>"
+    return out, refs
+
+
 class OpenRouterChat(lmms):
     is_simple = True
 
@@ -192,6 +241,8 @@ class OpenRouterChat(lmms):
         audio_rate=24000,
         video_max_mb=32,
         dry_run=False,
+        retry_cap_s=120,
+        raw_log=True,
         **kwargs,
     ):
         super().__init__()
@@ -207,6 +258,7 @@ class OpenRouterChat(lmms):
         self.provider = [p for p in str(provider).replace("+", ",").split(",") if p]
         self.num_concurrent = int(num_concurrent)
         self.max_retries = int(max_retries)
+        self.retry_cap_s = float(retry_cap_s)
         self.max_new_tokens = int(max_new_tokens) if max_new_tokens not in (None, "", "None") else None
         self.temperature = float(temperature) if temperature not in (None, "", "None") else None
         self.image_format = image_format.upper()
@@ -218,11 +270,15 @@ class OpenRouterChat(lmms):
         self.journal = journal or os.path.join(os.getcwd(), "mimo_openrouter_journal.jsonl")
         os.makedirs(os.path.dirname(os.path.abspath(self.journal)), exist_ok=True)
         self.video_cache = os.path.splitext(self.journal)[0] + "_video_cache"
+        self.raw_log = os.path.splitext(self.journal)[0] + ".raw.jsonl" if _truthy(raw_log) else None
         self._lock = threading.Lock()
+        self._transcode_locks = {}  # one lock per cached transcode: Video-MME asks 3 questions per video concurrently
         self._done = self._load_journal()
         self.stats = {"requests": 0, "from_journal": 0, "ok": 0, "failed": 0, "retried": 0, "status": {}}
         self.stats.update(input_tokens=0, output_tokens=0, reasoning_tokens=0, finish_length=0, empty_content=0)
+        self.stats.update(cost_usd=0.0, attempts=0, attempt_status={}, http_busy_s=0.0, max_in_flight=0)
         self._latencies = []
+        self._in_flight = 0
 
         import httpx
         from openai import OpenAI
@@ -255,9 +311,9 @@ class OpenRouterChat(lmms):
             eval_logger.info(f"mimo_openrouter: {len(done)} responses in journal {self.journal}")
         return done
 
-    def _append_journal(self, rec):
+    def _append_journal(self, rec, path=None):
         with self._lock:
-            with open(self.journal, "a") as f:
+            with open(path or self.journal, "a") as f:
                 f.write(json.dumps(rec) + "\n")
                 f.flush()
                 os.fsync(f.fileno())
@@ -292,43 +348,54 @@ class OpenRouterChat(lmms):
                     ext, "video/mpeg"
                 )
         os.makedirs(self.video_cache, exist_ok=True)
-        key = hashlib.sha256(f"{os.path.abspath(path)}:{size}:{self.video_max_bytes}".encode()).hexdigest()[:24]
+        key = f"{os.path.abspath(path)}:{size}:{self.video_max_bytes}:with-audio"  # older caches dropped the audio
+        key = hashlib.sha256(key.encode()).hexdigest()[:24]
         out = os.path.join(self.video_cache, key + ".mp4")
-        if not os.path.exists(out):
-            ffmpeg = shutil.which("ffmpeg")
-            if ffmpeg is None:
-                try:  # the static binary of the imageio-ffmpeg wheel
-                    import imageio_ffmpeg
-
-                    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-                except Exception:  # noqa: BLE001 - no ffmpeg anywhere: raise below
-                    ffmpeg = None
-            if ffmpeg is None:
-                raise RuntimeError(
-                    f"{path} is {size} bytes (> video_max_mb) or not mp4/webm/mov, and ffmpeg is missing"
-                )
-            # Per-thread temp name: several questions share one video and are encoded concurrently.
-            tmp = f"{out}.{os.getpid()}.{threading.get_ident()}.tmp.mp4"
-            # Same resolution and frame rate, H.264 at a quality setting, no audio track (the eval is video-only).
-            cmd = [
-                ffmpeg,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                path,
-                "-an",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-            ]
-            cmd += ["-crf", "28", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp]
-            subprocess.run(cmd, check=True, capture_output=True)
-            os.replace(tmp, out)
+        with self._lock:
+            transcode_lock = self._transcode_locks.setdefault(out, threading.Lock())
+        with transcode_lock:
+            if not os.path.exists(out):
+                self._transcode(path, size, out)
         with open(out, "rb") as f:
             return f.read(), "video/mp4"
+
+    def _transcode(self, path, size, out):
+        """Re-encode `path` (same resolution and frame rate, H.264, audio kept as AAC) into the cache file `out`."""
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            try:  # the static binary of the imageio-ffmpeg wheel
+                import imageio_ffmpeg
+
+                ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:  # noqa: BLE001 - no ffmpeg anywhere: raise below
+                ffmpeg = None
+        if ffmpeg is None:
+            raise RuntimeError(f"{path} is {size} bytes (> video_max_mb) or not mp4/webm/mov, and ffmpeg is missing")
+        # A per-process / per-thread temporary name: other processes (another endpoint's run sharing the cache)
+        # may encode the same video at the same time; the last os.replace wins with identical bytes.
+        tmp = f"{out}.{os.getpid()}.{threading.get_ident()}.tmp.mp4"
+        # Same resolution and frame rate, H.264 at a quality setting, the audio track kept: OpenRouter's providers
+        # (Xiaomi) feed a video's audio to the model, and some benchmarks ask what was said.
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            path,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+        ]
+        cmd += ["-crf", "28", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp]
+        subprocess.run(cmd, check=True, capture_output=True)
+        os.replace(tmp, out)
 
     def _video_part(self, path):
         if path.startswith(("http://", "https://")):
@@ -336,11 +403,15 @@ class OpenRouterChat(lmms):
         payload, mime = self._video_bytes(path)
         return {"type": "video_url", "video_url": {"url": f"data:{mime};base64," + base64.b64encode(payload).decode()}}
 
-    def _media_parts(self, visuals):
+    def _media_parts(self, visuals, sources=None):
         parts = []
         for visual in visuals:
             if visual is None:
                 continue
+            if sources is not None:
+                sources.append(
+                    visual if isinstance(visual, str) else (visual.get("path") if isinstance(visual, dict) else None)
+                )
             if isinstance(visual, Image.Image):
                 parts.append(self._image_part(visual))
             elif isinstance(visual, str):
@@ -363,8 +434,8 @@ class OpenRouterChat(lmms):
 
     # ------------------------------------------------------------------------------------------------ requests
 
-    def _build(self, context, gen_kwargs, visuals):
-        content = self._media_parts(visuals) + [{"type": "text", "text": context}]
+    def _build(self, context, gen_kwargs, visuals, sources=None):
+        content = self._media_parts(visuals, sources) + [{"type": "text", "text": context}]
         req = {"model": self.model_version, "messages": [{"role": "user", "content": content}]}
         max_tokens = self.max_new_tokens or gen_kwargs.get("max_new_tokens") or gen_kwargs.get("max_gen_toks")
         if max_tokens:
@@ -381,11 +452,14 @@ class OpenRouterChat(lmms):
                 req["chat_template_kwargs"] = {"enable_thinking": on}
         if self.target == "openrouter" and self.provider:
             req["provider"] = {"order": self.provider, "allow_fallbacks": False}
+        if self.target == "openrouter":
+            req["usage"] = {"include": True}  # OpenRouter's cost accounting in the response usage
         return req
 
     def _key(self, task, split, doc_id, req):
         stable = dict(req)
         stable.pop("provider", None)
+        stable.pop("usage", None)
         digest = hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()
         return f"{task}|{split}|{doc_id}|{digest[:32]}"
 
@@ -410,39 +484,107 @@ class OpenRouterChat(lmms):
         }
         return httpx.Response(200, json=body)
 
+    def _backoff(self, attempt, retry_after=None):
+        """Full-jitter exponential backoff, at least the server's Retry-After."""
+        wait = random.uniform(0, min(self.retry_cap_s, 5 * 2**attempt))
+        try:
+            wait = max(wait, min(self.retry_cap_s, float(retry_after)))
+        except (TypeError, ValueError):
+            pass
+        time.sleep(wait)
+
+    def _attempt_done(self, t0, status):
+        with self._lock:
+            self._in_flight -= 1
+            self.stats["http_busy_s"] += time.time() - t0
+            self.stats["attempts"] += 1
+            self.stats["attempt_status"][str(status)] = self.stats["attempt_status"].get(str(status), 0) + 1
+
+    def _provider_error(self, body):
+        """OpenRouter's relay of an upstream provider's 4xx ("Provider returned error"). Under load the MiMo providers
+        answer "Invalid request parameters" to requests they accept on a resend, so these are retried like a 5xx."""
+        if self.target != "openrouter" or not isinstance(body, dict):
+            return False
+        err = body.get("error") if isinstance(body.get("error"), dict) else body
+        meta = err.get("metadata") or {}
+        if "size limit" in str(meta.get("raw", "")):  # e.g. Xiaomi: "exceeded maximum size limit for video url data"
+            return False
+        return err.get("message") == "Provider returned error" or bool(meta.get("provider_name"))
+
     def _send(self, req):
-        """(text, usage dict, finish_reason, status). Retries 5xx / 408 / 429 / transport errors."""
+        """dict(text, usage, finish, status, body, headers, attempts). Retries 5xx / 408 / 429 / transport errors and
+        200s without a choice."""
         import openai
 
         last = "unknown error"
         status = None
+        body, headers, attempts = None, {}, []
         # The SDK's typed arguments; everything else (reasoning switch, provider pinning) goes in the body as is.
         standard = {k: v for k, v in req.items() if k in ("model", "messages", "max_tokens", "temperature", "top_p")}
         extra = {k: v for k, v in req.items() if k not in standard}
         for attempt in range(self.max_retries + 1):
+            t0 = time.time()
+            with self._lock:
+                self._in_flight += 1
+                self.stats["max_in_flight"] = max(self.stats["max_in_flight"], self._in_flight)
+            retry_after = None
             try:
-                resp = self.client.chat.completions.create(**standard, extra_body=extra or None)
-                if resp.choices:
-                    choice = resp.choices[0]
-                    usage = resp.usage.model_dump() if resp.usage else {}
-                    return choice.message.content or "", usage, choice.finish_reason, 200
-                # OpenRouter can answer 200 with an error object and no choices (an upstream provider error): retry
-                # like a 5xx, and count it as a failure if it persists.
-                status = "200-no-choices"
-                last = f"200 without choices: {str((resp.model_extra or {}).get('error'))[:300]}"
+                raw = self.client.chat.completions.with_raw_response.create(**standard, extra_body=extra or None)
+                status = raw.status_code
+                headers = {k: v for k, v in raw.headers.items() if k.lower() != "set-cookie"}
+                try:
+                    body = raw.http_response.json()
+                except ValueError:
+                    body = {"_text": raw.http_response.text[:20000]}
+                choices = body.get("choices") or []
+                attempts.append({"status": status, "latency_s": round(time.time() - t0, 3)})
+                self._attempt_done(t0, status)
+                if choices:
+                    message = choices[0].get("message") or {}
+                    usage = body.get("usage") or {}
+                    text = message.get("content") or ""
+                    return dict(
+                        text=text,
+                        usage=usage,
+                        finish=choices[0].get("finish_reason"),
+                        status=200,
+                        body=body,
+                        headers=headers,
+                        attempts=attempts,
+                    )
+                status = "no_choices"
+                last = f"200 without choices: {json.dumps(body)[:300]}"
+                attempts[-1]["error"] = last
             except openai.APIStatusError as exc:
                 status = exc.status_code
                 last = f"{status} {str(exc)[:300]}"
-                if NO_RETRY_4XX(status):
+                headers = {k: v for k, v in exc.response.headers.items() if k.lower() != "set-cookie"}
+                body = exc.body if isinstance(exc.body, (dict, list)) else {"_text": str(exc.body)[:20000]}
+                retry_after = exc.response.headers.get("retry-after")
+                attempts.append(
+                    {"status": status, "latency_s": round(time.time() - t0, 3), "error": last, "headers": headers}
+                )
+                self._attempt_done(t0, status)
+                if NO_RETRY_4XX(status) and not self._provider_error(body):
                     break
             except (openai.APIConnectionError, openai.APITimeoutError) as exc:
                 status = "conn"
                 last = f"{type(exc).__name__}: {str(exc)[:300]}"
+                attempts.append({"status": status, "latency_s": round(time.time() - t0, 3), "error": last})
+                self._attempt_done(t0, status)
             if attempt < self.max_retries:
                 with self._lock:
                     self.stats["retried"] += 1
-                time.sleep(min(60, 5 * 2**attempt))
-        return f"[MIMO_REQUEST_FAILED {status}] {last}", {}, None, status
+                self._backoff(attempt, retry_after)
+        return dict(
+            text=f"[MIMO_REQUEST_FAILED {status}] {last}",
+            usage={},
+            finish=None,
+            status=status,
+            body=body,
+            headers=headers,
+            attempts=attempts,
+        )
 
     def generate_until(self, requests):
         results = [None] * len(requests)
@@ -456,7 +598,8 @@ class OpenRouterChat(lmms):
 
         def run(item):
             i, context, gen_kwargs, visuals, doc_id, task, split = item
-            req = self._build(context, gen_kwargs, visuals)
+            sources = []
+            req = self._build(context, gen_kwargs, visuals, sources)
             key = self._key(task, split, doc_id, req)
             with self._lock:
                 self.stats["requests"] += 1
@@ -466,8 +609,15 @@ class OpenRouterChat(lmms):
                     self.stats["from_journal"] += 1
                 return i, rec["text"], rec.get("usage") or {}
             t0 = time.time()
-            text, usage, finish, status = self._send(req)
+            out = self._send(req)
+            text, usage, finish, status = out["text"], out["usage"], out["finish"], out["status"]
             latency = time.time() - t0
+            if self.raw_log:
+                logged, refs = _media_refs(req, sources)
+                raw = {"key": key, "task": task, "split": split, "doc_id": doc_id, "status": status}
+                raw.update(start=round(t0, 3), latency_s=round(latency, 3), attempts=out["attempts"])
+                raw.update(request=logged, media=refs, response=out["body"], response_headers=out["headers"])
+                self._append_journal(raw, self.raw_log)
             with self._lock:
                 self.stats["status"][str(status)] = self.stats["status"].get(str(status), 0) + 1
                 if status == 200:
@@ -479,6 +629,7 @@ class OpenRouterChat(lmms):
                     self.stats["reasoning_tokens"] += details.get("reasoning_tokens") or 0
                     self.stats["finish_length"] += finish == "length"
                     self.stats["empty_content"] += not text.strip()
+                    self.stats["cost_usd"] += float(usage.get("cost") or 0)
                 else:
                     self.stats["failed"] += 1
             if status == 200:
@@ -510,12 +661,15 @@ class OpenRouterChat(lmms):
         stats = dict(
             self.stats, wall_s=round(wall_s, 1), dry_run=self.dry_run, target=self.target, thinking=self.thinking
         )
+        stats.update(provider=self.provider, num_concurrent=self.num_concurrent, finished_at=time.time())
+        stats["effective_concurrency"] = round(self.stats["http_busy_s"] / wall_s, 2) if wall_s > 0 else None
         if lat:
             stats["latency_p50_s"] = round(lat[len(lat) // 2], 2)
             stats["latency_p95_s"] = round(lat[min(len(lat) - 1, int(0.95 * len(lat)))], 2)
         path = os.path.splitext(self.journal)[0] + ".stats.json"
         with open(path, "w") as f:
             json.dump(stats, f, indent=1)
+        self._append_journal(stats, os.path.splitext(self.journal)[0] + ".stats.jsonl")
         eval_logger.info(f"mimo_openrouter stats: {stats}")
 
     def loglikelihood(self, requests):

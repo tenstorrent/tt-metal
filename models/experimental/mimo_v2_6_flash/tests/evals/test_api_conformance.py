@@ -13,13 +13,16 @@ what OpenRouter would send. A case passes when the endpoint answers as the case 
 
 Env: BASE_URL (required; the suite is skipped without it), MODEL, API_KEY (or OPENROUTER_API_KEY), MM_TARGET
 ("vllm" default, or "openrouter": reasoning is switched off with OpenRouter's field and MM_PROVIDER pins providers),
-MM_TIMEOUT (s, default 600), MM_ASSETS_DIR (media cache). Needs httpx, Pillow and ffmpeg; no tt-metal imports
+MM_TIMEOUT (s, default 600), MM_ASSETS_DIR (media cache), MM_CONFORMANCE_LOG (append one JSONL record per request:
+case id, status, latency, the request with media payloads replaced by their size and sha256, and the full response). Needs httpx, Pillow and ffmpeg; no tt-metal imports
 (--confcutdir keeps the repo's root conftest out).
 """
 
+import hashlib
 import json
 import os
 import sys
+import time
 
 import pytest
 
@@ -32,6 +35,33 @@ MODEL = os.environ.get("MODEL", "XiaomiMiMo/MiMo-V2.6-Flash-MOPD")
 TARGET = os.environ.get("MM_TARGET", "openrouter" if "openrouter.ai" in BASE_URL else "vllm")
 API_KEY = os.environ.get("API_KEY") or os.environ.get("OPENROUTER_API_KEY") or "none"
 TIMEOUT = float(os.environ.get("MM_TIMEOUT", "600"))
+LOG = os.environ.get("MM_CONFORMANCE_LOG")
+
+
+def _media_ref(value):
+    return f"<{len(value)} chars sha256:{hashlib.sha256(value.encode()).hexdigest()[:16]}>"
+
+
+def _log(case_id, req, status, payload, latency):
+    """Append the exchange to MM_CONFORMANCE_LOG (media payloads by size and hash)."""
+    if not LOG:
+        return
+    logged = json.loads(json.dumps(req))
+    for msg in logged.get("messages", []):
+        for part in msg.get("content") if isinstance(msg.get("content"), list) else []:
+            for key in ("image_url", "video_url", "input_video"):
+                url = (part.get(key) or {}).get("url") if isinstance(part.get(key), dict) else None
+                if url and url.startswith("data:"):
+                    part[key]["url"] = url.split(",", 1)[0] + "," + _media_ref(url)
+            audio = part.get("input_audio")
+            if isinstance(audio, dict) and isinstance(audio.get("data"), str):
+                audio["data"] = _media_ref(audio["data"])
+    rec = {"case": case_id, "status": status, "latency_s": round(latency, 3), "request": logged, "response": payload}
+    with open(LOG, "a") as f:
+        f.write(json.dumps(rec, default=str) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
 
 pytestmark = pytest.mark.skipif(not BASE_URL, reason="set BASE_URL to the endpoint's /v1 URL")
 
@@ -136,7 +166,9 @@ def test_openrouter_form(case, http, media):
         req = mm_requests.apply_target(case.build(media), case, MODEL, TARGET)
     except RuntimeError as exc:  # ffmpeg missing or a download failed: a fixture problem, not an endpoint answer
         pytest.skip(f"fixture: {exc}")
+    t0 = time.time()
     status, payload = _post(http, req)
+    _log(case.id, req, status, payload, time.time() - t0)
     try:
         assert status < 500, f"{status} (5xx counts against uptime): {str(payload)[:400]}"
         if case.want == "ok":
@@ -156,6 +188,9 @@ def test_openrouter_form(case, http, media):
 def test_still_serves_text_after_suite(http):
     """Last: a plain text request after all the media cases (an engine killed by a prefill exception answers here)."""
     case = mm_requests.CASES[0]
-    status, payload = _post(http, mm_requests.apply_target(case.build(None), case, MODEL, TARGET))
+    req = mm_requests.apply_target(case.build(None), case, MODEL, TARGET)
+    t0 = time.time()
+    status, payload = _post(http, req)
+    _log("text_after_suite", req, status, payload, time.time() - t0)
     assert status == 200, payload
     _check_ok(case, payload)

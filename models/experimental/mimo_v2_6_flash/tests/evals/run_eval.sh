@@ -6,7 +6,7 @@
 #
 #   run_eval.sh <bench> <base_url> <model> [--limit N] [--concurrency C] [--out DIR] [--target vllm|openrouter]
 #               [--provider slug[,slug]] [--thinking on|off|default] [--max-tokens N] [--epochs N]
-#               [--user-model M] [--tag T] [--dry-run]
+#               [--user-model M] [--tag T] [--max-retries N] [--dry-run]
 #
 # Benches (harness, task, defaults):
 #   mmmu_pro          lmms-eval  mmmu_pro_standard_cot (1730 q, 10 options, CoT)   thinking off
@@ -16,6 +16,8 @@
 #   videomme_short    lmms-eval  videomme_short (900 q / 300 videos, no subtitles)  thinking off
 #   mmau_mini         lmms-eval  mmau_test_mini (1000)                              thinking off
 #   librispeech_clean lmms-eval  librispeech_test_clean (2620, WER)                 thinking off
+#   vgi_bench         lmms-eval  vgi_bench: Seldon's VGI-Bench public split (439 q, long videos by URL, Seldon's
+#                                prompt + parser, temperature 0, no max_tokens / reasoning switch: endpoint defaults)
 #   gpqa_diamond      inspect    gpqa_shuffled.py (198 q x 10 epochs, T=0.5, per-question shuffle = OpenRouter's)
 #   gpqa_openbench    openbench  gpqa_diamond (openbench as published: fixed permutation)
 #   tau2_airline      openbench  tau_bench_airline (50 tasks, T=0; user simulator --user-model, needs its key)
@@ -32,20 +34,23 @@
 # --dry-run: no network to the endpoint. lmms-eval benches capture and shape-check every request in-process
 # (<out>/journal.dryrun.jsonl) and answer "A"; inspect benches use inspect's mockllm model. Datasets are still loaded.
 #
-# Output: <out>/summary.json (score, n, failures by status, tokens, wall time, versions, command), harness logs beside.
+# Output: <out>/summary.json (score, n, failures by status, tokens, wall time, versions, command; every finish also
+# keeps a timestamped copy summary.<UTC>.json), harness logs beside; lmms-eval benches also keep every request (media
+# by reference) and full raw response in <out>/journal.raw.jsonl. --max-retries: retries of 5xx / 408 / 429 /
+# connection errors per request (default 3; full-jitter exponential backoff capped at 120 s).
 # Env: MM_EVALENV (venv, default /data/ttuser-agentx/mm/evalenv), MM_DATASETS (default /data/ttuser-agentx/mm/datasets;
 # HF_HOME defaults to $MM_DATASETS/hf), MM_RESULTS (default /data/ttuser-agentx/mm/evals/results), MM_HF_ENV (a file
 # exporting HF_TOKEN, default /data/ttuser-agentx/.hf_env).
 
 set -euo pipefail
 
-usage() { sed -n '4,42p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '4,43p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 [ $# -ge 3 ] || usage
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 BENCH=$1 BASE_URL=${2%/} MODEL=$3
 shift 3
-LIMIT="" CONC=16 OUT="" TARGET="" PROVIDER="" THINKING="" MAX_TOKENS="" EPOCHS="" USER_MODEL="" TAG="" DRY=0
+LIMIT="" CONC=16 OUT="" TARGET="" PROVIDER="" THINKING="" MAX_TOKENS="" EPOCHS="" USER_MODEL="" TAG="" DRY=0 RETRIES=""
 while [ $# -gt 0 ]; do
     case $1 in
         --limit) LIMIT=$2; shift 2 ;;
@@ -58,6 +63,7 @@ while [ $# -gt 0 ]; do
         --epochs) EPOCHS=$2; shift 2 ;;
         --user-model) USER_MODEL=$2; shift 2 ;;
         --tag) TAG=$2; shift 2 ;;
+        --max-retries) RETRIES=$2; shift 2 ;;
         --dry-run) DRY=1; shift ;;
         -h|--help) usage ;;
         *) echo "unknown option $1" >&2; usage ;;
@@ -104,6 +110,7 @@ run_lmms() {  # $1 task, $2 default thinking
     args="$args,num_concurrent=$CONC,journal=$OUT/journal.jsonl,dry_run=$DRY"
     [ -n "$PROVIDER" ] && args="$args,provider=${PROVIDER//,/+}"
     [ -n "$MAX_TOKENS" ] && args="$args,max_new_tokens=$MAX_TOKENS"
+    [ -n "$RETRIES" ] && args="$args,max_retries=$RETRIES"
     local extra=()
     [ -n "$LIMIT" ] && extra+=(--limit "$LIMIT")
     # --include_path although the plugin also lists its tasks: lmms-eval 0.7.4 adds a plugin's task dir only after
@@ -115,6 +122,7 @@ run_lmms() {  # $1 task, $2 default thinking
     "$PY" "$HERE/summarize_results.py" --harness lmms --bench "$BENCH" --task "$task" --out "$OUT" \
         --model "$MODEL" --base-url "$BASE_URL" --target "$TARGET" --thinking "$think" --start "$START" \
         --cmd "$CMDLINE"
+    cp "$OUT/summary.json" "$OUT/summary.$(date -u +%Y%m%dT%H%M%SZ).json" 2>/dev/null || true
 }
 
 inspect_model() {  # the inspect-ai model string for the target
@@ -165,6 +173,7 @@ case $BENCH in
     mmmu_pro_aa) run_lmms mmmu_pro_aa on ;;
     mmau_mini) run_lmms mmau_test_mini off ;;
     librispeech_clean) run_lmms librispeech_test_clean off ;;
+    vgi_bench) run_lmms vgi_bench default ;;
     gpqa_diamond) run_inspect inspect "$HERE/openbench_tasks/gpqa_shuffled.py@gpqa_diamond_shuffled" -T "epochs=${EPOCHS:-10}" ;;
     gpqa_openbench) run_inspect bench gpqa_diamond --epochs "${EPOCHS:-10}" ;;
     tau2_airline)
