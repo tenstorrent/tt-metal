@@ -26,6 +26,7 @@ namespace {
 constexpr uint32_t kSliceWriteRmShardedWriterKernelIdx = 1;
 constexpr uint32_t kSliceWriteRmShardedWriterAddressArgIdx = 0;
 constexpr uint8_t kSliceWriteRmShardedInputCbIndex = static_cast<uint8_t>(tt::CBIndex::c_0);
+constexpr uint8_t kSliceWriteRmShardedScratchCbIndex = static_cast<uint8_t>(tt::CBIndex::c_1);
 
 uint32_t slice_write_rm_sharded_writer_address(
     const Tensor& input_tensor,
@@ -35,12 +36,13 @@ uint32_t slice_write_rm_sharded_writer_address(
     auto* output_buffer = output_tensor.buffer();
     TT_FATAL(output_buffer != nullptr, "Output buffer should be allocated on device!");
     const auto shard_spec = input_tensor.shard_spec().value();
+    const auto grid_origin = shard_spec.grid.bounding_box().start_coord;
     const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const uint32_t input_row_size_bytes = shard_spec.shape[1] * input_tensor.element_size();
     uint32_t core_w_index = 0;
     if (is_block_sharded) {
-        core_w_index = rm_orientation ? core.x : core.y;
+        core_w_index = rm_orientation ? (core.x - grid_origin.x) : (core.y - grid_origin.y);
     }
     const uint32_t width_offset = core_w_index * input_row_size_bytes;
     return output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()) + width_offset;
@@ -166,13 +168,14 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     SliceWriteRuntimeArgs ret_val(num_cores_total);
 
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(output_tensor, output_tensor_start);
+    const auto grid_origin = input_cores.bounding_box().start_coord;
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
         uint32_t core_h_index = core_index;
         if (is_block_sharded) {
-            core_w_index = rm_orientation ? core.x : core.y;
-            core_h_index = rm_orientation ? core.y : core.x;
+            core_w_index = rm_orientation ? (core.x - grid_origin.x) : (core.y - grid_origin.y);
+            core_h_index = rm_orientation ? (core.y - grid_origin.y) : (core.x - grid_origin.x);
         }
         const uint32_t num_sticks_read = core_h_index * num_sticks_per_core;
         const uint32_t width_offset = core_w_index * input_row_size_bytes;
@@ -193,14 +196,18 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
             max_num_sticks_this_core += size_till_end[j] * accumulated_input_total_per_dim[j - 1];
         }
 
-        uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, output_row_size_bytes - width_offset);
+        uint32_t this_input_row_size_bytes =
+            width_offset < output_row_size_bytes ? std::min(input_row_size_bytes, output_row_size_bytes - width_offset)
+                                                 : 0;
         WriterKernelArgs writer_kernel_args = common_writer_kernel_args;
         writer_kernel_args[0] =
             slice_write_rm_sharded_writer_address(input_tensor, output_tensor, output_tensor_start, core);
         writer_kernel_args[2] = this_input_row_size_bytes;
 
         uint32_t num_sticks_this_core =
-            std::min<uint32_t>(num_sticks_per_core, std::max<int>(max_num_sticks_this_core + 1, 0));
+            this_input_row_size_bytes == 0
+                ? 0
+                : std::min<uint32_t>(num_sticks_per_core, std::max<int>(max_num_sticks_this_core + 1, 0));
 
         log_trace(
             tt::LogOp,
@@ -303,6 +310,12 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
         num_input_sticks_per_core,
         input_cb_data_format,
         input_buffer));
+    desc.cbs.push_back(make_slice_cb_descriptor(
+        kSliceWriteRmShardedScratchCbIndex,
+        input_cores,
+        input_row_size_bytes_offset + src_buffer_alignment,
+        1,
+        input_cb_data_format));
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
@@ -323,6 +336,7 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = input_cores;
     writer_kernel.compile_time_args = std::move(writer_compile_time_args_vec);
+    writer_kernel.defines = {{"SHARDED_RM_SCRATCH_CB", std::to_string(kSliceWriteRmShardedScratchCbIndex)}};
     writer_kernel.config = WriterConfigDescriptor{};
 
     const auto iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
