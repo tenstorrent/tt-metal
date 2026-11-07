@@ -94,6 +94,10 @@ void kernel_main() {
 #ifdef IS_ROW_MAJOR
         {
             constexpr uint32_t TILE_H = 32;
+            // tilize_init does not set the data formats. From the second row of tiles on, the unpacker, math and
+            // packer still hold the index formats of the previous row's untilize, so set the value formats here.
+            reconfig_data_format_srca(dfb::rm_input);
+            pack_reconfig_data_format(dfb::input_tensor);
             tilize_init(dfb::rm_input, number_of_tiles_per_core, dfb::input_tensor);
             rm_input_dfb.wait_front(TILE_H);
             input_tensor_dfb.reserve_back(number_of_tiles_per_core);
