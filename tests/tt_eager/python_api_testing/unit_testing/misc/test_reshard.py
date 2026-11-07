@@ -1601,16 +1601,18 @@ def _l1_dram_mem_config(scheme, buffer_type, height, width, device):
         )
         return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
 
-    if scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        if grid_size.x < 8:
-            pytest.skip("Device grid too small for 8-core height sharding")
-        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-        shard_shape = (height // 8, width)
-    elif scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        if grid_size.x < 8:
-            pytest.skip("Device grid too small for 8-core width sharding")
-        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-        shard_shape = (height, width // 8)
+    if scheme in (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED):
+        num_shards = 8
+        if buffer_type == ttnn.BufferType.DRAM:
+            while num_shards > device.dram_grid_size().x:
+                num_shards //= 2
+        elif grid_size.x < num_shards:
+            pytest.skip(f"Device grid too small for {num_shards}-core sharding")
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_shards - 1, 0))})
+        if scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            shard_shape = (height // num_shards, width)
+        else:
+            shard_shape = (height, width // num_shards)
     else:  # BLOCK_SHARDED
         if grid_size.x < 4 or grid_size.y < 4:
             pytest.skip("Device grid too small for 4x4 block sharding")
