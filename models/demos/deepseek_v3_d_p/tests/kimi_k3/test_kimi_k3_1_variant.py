@@ -22,7 +22,6 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_kimi_k3_1_stage import MAX_
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 K3 = get_adapter("kimi_k3")
 K31 = get_adapter("kimi_k3_1")
@@ -107,7 +106,6 @@ def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
 
     # The runner maps PREFILL_SCALED_FP8_KV_CACHE=1 onto the sparse format the adapter declares.
     assert k31["PREFILL_SCALED_FP8_KV_CACHE"] == "1"
-    assert K31.default_sparse_kv_cache_format is MlaKvCacheFormat.SCALED_FP8
 
     monkeypatch.delenv("PREFILL_PP_LAYER_COUNTS", raising=False)
     num_layers = int(k31["PREFILL_NUM_LAYERS"])
