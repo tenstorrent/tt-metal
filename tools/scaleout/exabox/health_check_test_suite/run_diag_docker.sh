@@ -121,6 +121,7 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
                              read-only
       --qsfp-tool-path PATH  In-container path to the tt-bh-glx-cluster-debug
                              binary
+      --skip-tray-power      Skip the tray 12 V feed latch reads
       --skip-sys-triage      Skip the sys-triage bundle
       --sys-triage-path PATH In-container path to the sys-triage binary
       --input-snapshot PATH  Host tt-smi snapshot JSON; mounted read-only
@@ -205,7 +206,7 @@ while (( $# )); do
             SKIP_QSFP=true; FORWARD+=("$1"); shift ;;
         --skip-sys-triage)
             SKIP_SYS_TRIAGE=true; FORWARD+=("$1"); shift ;;
-        --skip-tests|--skip-triage|--triage-gating|--qsfp-gating)
+        --skip-tests|--skip-triage|--triage-gating|--qsfp-gating|--skip-tray-power)
             FORWARD+=("$1"); shift ;;
 
         # Forwarded, in-container value.
@@ -576,6 +577,17 @@ if ! grep -q -e "--skip-sys-triage" "$(dirname "${HC_RUN_DIAG}")/diag_runner.py"
     set -- "${_kept[@]}"
     [ "${HC_WANT_SYS_TRIAGE}" != "true" ] \
         || _warn "the suite in this image predates the sys-triage phase; it will not run"
+fi
+# Same for the tray 12 V feed phase, which came later.
+if ! grep -q -e "--skip-tray-power" "$(dirname "${HC_RUN_DIAG}")/diag_runner.py" 2>/dev/null; then
+    _kept=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --skip-tray-power) shift ;;
+            *) _kept+=("$1"); shift ;;
+        esac
+    done
+    set -- "${_kept[@]}"
 fi
 
 # Everything the suite writes is owned by the image user (uid 1001) or, for the

@@ -73,6 +73,9 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Final deploy gate |
 | `pre_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 
+`pre_reboot` reads the [tray 12 V feed latches](#tray-12-v-feed-phase) right
+after the snapshot, before anything else touches the unit.
+
 The [sys-triage phase](#sys-triage-phase) runs last on `pre_reboot` only; it
 collects a bundle for the ticket and never gates the run.
 
@@ -362,6 +365,60 @@ timeout is 1200 s as a backstop. That has to stay well inside
 kills the process group and takes the report with it — so raise it when running
 `medium`, `deploy` or `pre_reboot` on a host that has the package.
 
+## tray 12 V feed phase
+
+A failing bus bar or tray 12 V feed sags a tray's input under load, and the
+tray drops off PCIe as 8 missing chips with nothing pointing at the feed. The
+tray's two MP5990 hot-swap controllers (HSCs, 8-bit addresses 0x40 and 0x42)
+latch what they saw, and so does the tray CPLD. The latches hold until the tray
+is re-powered (a power cycle or a glx_reset), so this phase runs on
+`pre_reboot` only, right after the snapshot.
+
+Per tray, in-band with `ipmitool raw 0x06 0x52` on the tray's bus (tray 1
+0x11, tray 2 0x13, tray 3 0x0d, tray 4 0x0f):
+
+| Read | Decoded |
+|---|---|
+| HSC STATUS_WORD (79h), STATUS_INPUT (7Ch), STATUS_IOUT (7Bh) | OFF, IOUT_OC, VIN_UV_FAULT, VIN_UV_WARN |
+| HSC FAULT_RECORD (FAh), FAULT_RECORD_LAST (FBh) | the HSC's own fault record words, logged as hex |
+| HSC READ_VOUT (8Bh) | output voltage, 31.25 mV/LSB |
+| HSC READ_IOUT_PEAK (A6h), READ_TEMP_PEAK (AFh) | peak current (62.5 mA/LSB) and peak temperature (deg C) since the last peak read or power-on |
+| HSC IOUT_OC_FAULT_LIMIT (46h), IOUT_OC_WARN_LIMIT (4Ah) | the HSC's own over-current limits, 62.5 mA/LSB |
+| CPLD reg 0x1E, debug 0x5F and 0x58 | 12 V-A / 12 V-B hot-swap power-good, power enable, over-current warning |
+
+Each HSC gets one log line with these record words. A read that got no reply or that the HSC does not support shows as "not read" there and as null in the check data, never as 0.
+
+| Status | Meaning |
+|---|---|
+| **PASS** | Both HSCs clean (CML alone is not a fault) and the CPLD shows both 12 V rails good. |
+| **FAIL** | A latched HSC fault or a CPLD 12 V loss. `details` names the tray, its BDF range, the HSC address and the bits, with the hint "bus bar / tray 12 V feed". |
+| **WARN** | A record-word flag on an otherwise clean tray: a nonzero FAULT_RECORD, an IOUT peak above that HSC's own IOUT_OC_WARN_LIMIT, or an IOUT peak more than 20 % above the median peak of the other feeds (needs 3 or more other feeds read). These flags are added to `details` on any status and never make a FAIL on their own. |
+| **WARN** | Some reads got no reply or were cut by the phase's time limit ("not read"), the CPLD reading is unexpected, or the tray is powered off (CPLD power enable low: its OFF latch is not judged, and no bus bar hint is given). |
+| **SKIP** | No route at all (no ipmitool, no sudo, no successful read on any tray), dry run, or `--skip-tray-power`. |
+
+The phase is bounded at 120 s in all, and each ipmitool call at 15 s (less
+when the phase has less left). Once the limit is spent it sends nothing more,
+and the reads still missing are WARN "not read". Every tray is tried: a tray
+whose reads all fail (a dead tray) is WARN "not read" and the other trays are
+still judged. The peak rule compares feeds across trays, so it runs once all
+trays are read. One `[diag] tray_power: tray N HSC 0xNN:` line per HSC that
+answered logs the record words and their decoded values, and `data["hsc"]`
+carries them too (`vout_v`, `iout_peak_a`, `temp_peak_c`,
+`iout_oc_fault_limit_a`, `iout_oc_warn_limit_a`). FAULT_RECORD_LAST has no rule:
+it reads 0x0012 on every healthy HSC seen so far. Two timeouts on a tray's bus
+before any read of it succeeded skip the rest of that tray (WARN "not read")
+and the next tray's first reads are still tried. Only when every tray's first
+reads time out is it no route: one SKIP, within the 120 s limit. A missing
+ipmitool or a sudo refusal is no route at once, after one call.
+
+Reads only. Every transaction is checked against a fixed list before ipmitool
+runs. PMBus reads only: nothing is written to an HSC (no CLEAR_FAULTS, no
+limit, no CLEAR_PEAK). READ_IOUT_PEAK and READ_TEMP_PEAK clear when read, so
+each is read once per HSC and never retried; a failed peak read is left unread.
+Every other read gets one retry. The only write on the bus is the CPLD's
+debug-index select ahead of its data read. The phase does not gate yet:
+VIN_UV_WARN also latches on feeds that sag without dropping the tray.
+
 ## sys-triage phase
 
 The last phase runs `sys-triage`, the syseng tool that collects a Blackhole
@@ -434,6 +491,7 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--qsfp-tool-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
 | `--qsfp-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
 | `--qsfp-gating` | off | Report QSFP findings at their real severity and let them gate the run. Off records every finding in `details`/`data` but holds the status at PASS. |
+| `--skip-tray-power` | off | Skip the tray 12 V feed latch reads |
 | `--skip-sys-triage` | off | Skip the sys-triage bundle entirely |
 | `--sys-triage-path PATH` | `sys-triage` on PATH | Override the sys-triage binary. A path that doesn't resolve is reported as its own SKIP. |
 | `--bmc-ip IP` | `$BMC_IP` | BMC address for sys-triage |

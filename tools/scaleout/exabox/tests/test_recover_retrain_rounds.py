@@ -311,8 +311,8 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
             self.assertNotIn("btl_tcp_if_include", launch["argv"])
             self.assertNotIn("oob_tcp_if_include", launch["argv"])
 
-    def test_inherited_include_does_not_skip_detection(self):
-        # Only an exclude conflicts with btl_tcp_if_include; an inherited include is overridden.
+    def test_inherited_include_is_left_alone_without_mpi_if(self):
+        # Without --mpi-if (and no docker image) nothing is pinned; Open MPI keeps the inherited include.
         code, _ = self.run_recover(
             "--max-retrains",
             "4",
@@ -326,9 +326,7 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(self.launches)
         for launch in self.launches:
-            argv = launch["argv"]
-            self.assertIn("btl_tcp_if_include", argv)
-            self.assertNotEqual(argv[argv.index("btl_tcp_if_include") + 1], "inherited0")
+            self.assertNotIn("btl_tcp_if_include", launch["argv"])
 
     def test_explicit_mpi_if_drops_the_inherited_interface_selection(self):
         # --mpi-if pins an interface, so an exclude from the environment must not reach mpirun with it.
