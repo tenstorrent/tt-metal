@@ -48,7 +48,7 @@ Tensor full_float_impl(
 
 Tensor full_int_impl(
     const ttsl::SmallVector<uint32_t>& shape,
-    const int fill_value,
+    const std::int64_t fill_value,
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     const std::optional<MeshDevice*> device,
@@ -236,7 +236,7 @@ Tensor full_like_float_impl(
 
 Tensor full_like_int_impl(
     const ttnn::Tensor& tensor,
-    const int fill_value,
+    const std::int64_t fill_value,
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     const std::optional<MeshDevice*> device,
