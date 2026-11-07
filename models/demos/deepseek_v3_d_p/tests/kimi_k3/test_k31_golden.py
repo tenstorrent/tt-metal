@@ -6,8 +6,8 @@
 `convert_golden.py` rewrites Miguel's chunked vLLM trace into the per-stream layout `golden.GoldenTrace`
 reads. Pinned here: the conversion round-trips through both readers that consume a golden — K3's
 `GoldenTrace` (the *_matches_golden tests) and the runner producer's KV loaders (the PCC gate) — and the
-converted K3.1 golden is the source trace row for row on the streams those gates score, at 24 and at
-93 layers, and enters at the K3.1 checkpoint's own token embedding.
+converted K3.1 golden is the source trace row for row on the streams those gates score (all 24 DSA
+layers' KV, the decoder output of layers 23 and 92), and enters at the K3.1 checkpoint's own token embedding.
 """
 
 import json
@@ -28,9 +28,6 @@ from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
     _load_sharded_rows,
     kvpe_golden_present,
 )
-
-# The runner's K3.1 legs: sc1 runs stage 0 (layers 0-23), sc4 all 93.
-DEPTHS = (24, KimiK3Config.NUM_LAYERS)
 
 
 def _write_chunked(root: Path, streams: dict[str, tuple[str, torch.Tensor]], shard_rows: int) -> None:
@@ -86,9 +83,10 @@ def test_converter_round_trips_through_both_golden_readers(tmp_path, expect_erro
 
 @pytest.fixture(scope="module")
 def k31_trace() -> GoldenTrace:
+    """Fails, not skips, when the golden is missing: the runner gate reads the same path, so a skip here
+    would turn a deleted golden into a green run."""
     trace = resolve_trace(TRACE_K31)
-    if trace is None:
-        pytest.skip(f"no K3.1 golden at {TRACE_K31}; set KIMI_K3_GOLDEN_TRACE")
+    assert trace is not None, f"no K3.1 golden at {os.getenv('KIMI_K3_GOLDEN_TRACE') or TRACE_K31}"
     return trace
 
 
@@ -102,26 +100,25 @@ def test_k31_golden_enters_at_the_k31_token_embedding(k31_trace):
     assert torch.equal(expected, k31_trace.decoder_input(0, rows).to(torch.bfloat16))
 
 
-@pytest.mark.parametrize("num_layers", DEPTHS, ids=lambda n: f"L{n}")
-def test_k31_golden_serves_the_runner_gate(k31_trace, num_layers):
-    """What a `num_layers` run scores is in the golden, and is the source trace's prompt rows unchanged.
+def test_k31_golden_serves_the_runner_gate(k31_trace):
+    """What the runner gate and the depth tests score is in the golden, as the source trace's prompt rows.
 
-    The producer compares the prompt span (`load_trace_golden_span`) of each DSA layer's kvpe; the depth
-    tests read the last layer's decoder output. Both through the readers those tests use.
+    The producer compares the prompt span (`load_trace_golden_span`) of every DSA layer's kvpe; the depth
+    tests read the last layer's decoder output, 23 for the 24-layer leg and 92 for the full model. Both
+    through the readers those consumers use.
     """
     trace_dir = k31_trace.path
     prompt = k31_trace.metadata["n_prompt_tokens"]
     source = Path(k31_trace.metadata["converted_from"]["path"])
     assert load_trace_golden_span(trace_dir) == (0, prompt) and len(load_trace_token_ids(trace_dir)) == prompt
 
-    dsa_layers = [layer for layer in KimiK3Config.mla_layer_ids() if layer < num_layers]
-    for layer in dsa_layers:
+    for layer in KimiK3Config.mla_layer_ids():
         assert kvpe_golden_present(trace_dir, layer), layer
         golden = _load_golden_kv_post(trace_dir, layer, prompt)
         key = f"kv_post_transform_layer_{layer}"
         assert torch.equal(golden, _load_sharded_rows(source / "kv_cache" / f"layer_{layer}", key, 0, prompt)), layer
 
-    last = num_layers - 1
-    golden = k31_trace.decoder_output(last, 0, prompt)
-    key = f"decoder_output_layer_{last}"
-    assert torch.equal(golden, _load_sharded_rows(source / "decoder_io" / key, key, 0, prompt))
+    for layer in (23, KimiK3Config.NUM_LAYERS - 1):
+        key = f"decoder_output_layer_{layer}"
+        golden = k31_trace.decoder_output(layer, 0, prompt)
+        assert torch.equal(golden, _load_sharded_rows(source / "decoder_io" / key, key, 0, prompt)), layer
