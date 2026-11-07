@@ -2,22 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The certified body is 18 slots, or 20 with the exponent-FF NaN class tail. Fusing the gradient
-// multiply (FUSE_GRAD_SINGLE_ROUNDING) adds 6 more and retires the separate gradient pass: the two
-// products, their gap, and the flushed-reciprocal guard (setcc, move, gap, endcc): 24 slots, or 26.
-// Every body is longer than the call's 16 replay slots, so it records its first 16 slots, the head, and
-// issues the tail after each replay (ckernel_sfpu_softsign_bw_bf16_replay_window.h).
 constexpr uint32_t kSquaredAbsDenominatorCertifiedSlots = 18u;
 constexpr uint32_t kSquaredAbsDenominatorBodySlots = kSquaredAbsDenominatorCertifiedSlots + 6u;
 constexpr bool kSquaredAbsDenominatorTtiReplay =
     TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS == kSquaredAbsDenominatorCertifiedSlots;
 constexpr uint32_t kSquaredAbsDenominatorHeadSlots = 16u;
 
-// Arm the existing BH load-macro RNE/store tail for this anonymous replay.
-// T1 captures the same FP32->BF16 RNE used by the plain body; macro sequence
-// zero fires it at issue+1 and the unchanged-format store at issue+3.  The
-// template issue is backdoor-only; no programmable constant beyond the
-// reciprocal helper's immutable 2.0 (Prgm0/L12) is consumed.
 inline void squared_abs_denominator_tti_lm_init() {
 #if !defined(DISABLE_SFPLOADMACRO)
     TTI_SFP_STOCH_RND(
@@ -77,7 +67,7 @@ inline void squared_abs_denominator_tti_row_head() {
         0,
         ckernel::p_sfpu::LREG0,
         ckernel::p_sfpu::LREG1,
-        1);  // magnitude = |x| (no clamp: certificate-proved unnecessary)
+        1);
     TTI_SFPMAD(
         ckernel::p_sfpu::LCONST_1,
         ckernel::p_sfpu::LREG1,
@@ -152,9 +142,6 @@ inline void squared_abs_denominator_tti_row_tail() {
     TTI_SFPSTORE(ckernel::p_sfpu::LREG4, 0, TT_ADDRMOD_DST_HOLD, 0);
 #endif
 #if !defined(DISABLE_SFPLOADMACRO)
-    // The load-macro itself is the result-MUL hazard gap.  Captured T1 RNE
-    // fires at issue+1, then the fixed store writes the same destination
-    // row at issue+3. L4 is dead after the second Newton update.
     TTI_SFPLOADMACRO(
         (0 << 2) | (ckernel::p_sfpu::LREG4 & 3),
         0,

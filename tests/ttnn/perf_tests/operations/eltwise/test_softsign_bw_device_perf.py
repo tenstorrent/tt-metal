@@ -16,7 +16,6 @@ from loguru import logger
 SHAPES = [(512, 512), (1024, 1024)]
 REPEATS = 5
 MARGIN = 0.05
-# The boards whose calls the fused program serves.
 FUSED_BOARDS = ("blackhole",)
 PATH = "tests/ttnn/perf_tests/operations/eltwise/test_softsign_bw_device_perf.py"
 # The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
@@ -218,7 +217,6 @@ def test_softsign_bw_layout_device_perf():
         pytest.skip("this board keeps the composite")
     subdir = "softsign_bw_layout_device_perf"
     clear_profiler_runtime_artifacts()
-    # Every layout runs on the fused program in this build: a failed or missing call fails the test.
     run_device_profiler(
         f"pytest {PATH}::test_softsign_bw_layout_profiled_calls",
         subdir,

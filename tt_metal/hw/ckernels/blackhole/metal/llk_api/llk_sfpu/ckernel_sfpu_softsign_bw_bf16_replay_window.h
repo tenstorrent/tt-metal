@@ -4,48 +4,27 @@
 
 #pragma once
 #include <cstdint>
-// TTI_REPLAY comes from the includer's ckernel.h (a TT-Metal kernel) or the deployment's headers.
 namespace ckernel::sfpu::bf16::softsign_bw {
-// An SFPU call owns replay slots 0-15: matmul and reduce record theirs from replay_buf_offset = 16 at init
-// and replay them across the call. A row that would record past slot 15 is issued, or records only a head that fits
-// (record_split).
 #define TTPOLY_SFPU_REPLAY_SLOTS 16
 inline constexpr std::uint32_t kSfpuReplaySlots = TTPOLY_SFPU_REPLAY_SLOTS;
 template <std::uint32_t Start, std::uint32_t Slots>
 inline constexpr bool replay_fits = Start + Slots <= kSfpuReplaySlots;
-// A row too long for the window records its first Head slots, the head: each replay plays them and issues the
-// tail itself. Head is the head's exact slot count. Execute false records without running, as record_row.
-template <
-    std::uint32_t Start,
-    std::uint32_t Slots,
-    std::uint32_t Head,
-    bool Execute = true,
-    typename HeadRow,
-    typename TailRow>
+template <std::uint32_t Start, std::uint32_t Slots, std::uint32_t Head, typename HeadRow, typename TailRow>
 inline void record_split(HeadRow&& head, TailRow&& tail) {
     static_assert(Head > 0 && Head <= Slots);
-    if constexpr (replay_fits<Start, Slots> && Execute) {
+    if constexpr (replay_fits<Start, Slots>) {
         load_replay_buf<Exec>(Start, Slots, [&] {
             head();
             tail();
         });
     }
-    if constexpr (replay_fits<Start, Slots> && !Execute) {
-        load_replay_buf(Start, Slots, [&] {
-            head();
-            tail();
-        });
-    }
-    if constexpr (!replay_fits<Start, Slots> && replay_fits<Start, Head> && Execute) {
+    if constexpr (!replay_fits<Start, Slots> && replay_fits<Start, Head>) {
         load_replay_buf<Exec>(Start, Head, [&] {
             head();
             tail();
         });
     }
-    if constexpr (!replay_fits<Start, Slots> && replay_fits<Start, Head> && !Execute) {
-        load_replay_buf(Start, Head, [&] { head(); });
-    }
-    if constexpr (!replay_fits<Start, Slots> && !replay_fits<Start, Head> && Execute) {
+    if constexpr (!replay_fits<Start, Slots> && !replay_fits<Start, Head>) {
         head();
         tail();
     }

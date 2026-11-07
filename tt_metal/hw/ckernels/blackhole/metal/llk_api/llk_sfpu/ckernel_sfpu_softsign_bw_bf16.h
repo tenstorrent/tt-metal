@@ -33,9 +33,6 @@ namespace ckernel::sfpu::SoftsignBwBf16Config_initialization {
 inline void init() {
     ckernel::sfpu::sfpu_reciprocal_init<false>();
     if constexpr (::ckernel::sfpu::SoftsignBwBf16Config_detail::kSquaredAbsDenominatorTtiReplay) {
-        // Prgm0/L12 remains the reciprocal helper's immutable 2.0.  No other
-        // programmable constant is consumed: the certificate proves the body
-        // needs neither a clamp bound nor a special poison.
         ::ckernel::sfpu::SoftsignBwBf16Config_detail::squared_abs_denominator_tti_lm_init();
     }
 }
