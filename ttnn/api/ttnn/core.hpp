@@ -37,6 +37,8 @@ std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor);
 
 void set_printoptions(TensorPrintProfile print_profile, SciMode sci_mode = SciMode::Default, int precision = 4);
 
+tensor_impl::PrintOptions get_printoptions();
+
 void segfault_handler(int sig);
 
 void dump_stack_trace_on_segfault();
@@ -57,6 +59,7 @@ void with_command_queue_id(QueueId cq_id, T&& func) {
 
 using core::get_current_command_queue_id_for_thread;
 using core::get_memory_config;
+using core::get_printoptions;
 using core::has_storage_type_of;
 using core::pop_current_command_queue_id_for_thread;
 using core::push_current_command_queue_id_for_thread;
