@@ -76,6 +76,19 @@ inline void llk_unpack_AB_matmul_set_in1_column_stride(
     _llk_unpack_AB_matmul_set_in1_column_stride_(tile_size, stride_tiles);
 }
 
+// Restores the matmul unpack state an unpack to DEST between matmul calls changes (see
+// _llk_unpack_AB_matmul_restore_after_unpack_to_dest_); same arguments as llk_unpack_AB_matmul_init's first three.
+__attribute__((always_inline)) inline void llk_unpack_AB_matmul_restore_after_unpack_to_dest(
+    const std::uint32_t /*operandA*/, const std::uint32_t operandB, const std::uint32_t transpose = 0) {
+    // In1 -> srcA (unpacker A)
+    const std::uint32_t operandA_id = get_operand_id(operandB);
+    _llk_unpack_AB_matmul_restore_after_unpack_to_dest_(
+        transpose,
+        get_operand_face_r_dim(operandA_id),
+        get_operand_num_faces(operandA_id),
+        get_operand_partial_face(operandA_id));
+}
+
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,

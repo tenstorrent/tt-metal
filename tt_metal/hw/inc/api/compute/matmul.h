@@ -432,14 +432,20 @@ ALWI void matmul_block_reload_partials(
              unpack_src_format[get_operand_id(partials_cb_id)], unpack_dst_format[get_operand_id(partials_cb_id)])));
     if (to_dest) {
         // Unpacker 0 takes the partials' formats for the copy and in1's back after it; the math thread's srcA format
-        // stays in1's, as no FPU op reads srcA in between. The copy reprograms unpacker 0's X end and transpose,
-        // which the matmul unpack init restores (its MOP is untouched; the copy runs no MOP).
+        // stays in1's, as no FPU op reads srcA in between. The copy reprograms unpacker 0's X end and transpose (and
+        // clears its Z/W counters); it runs no MOP, so the matmul's stays in place.
         UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE, false>(
             in1_cb_id, partials_cb_id)));
         UNPACK((llk_unpack_A_to_dest_tiles(partials_cb_id, partials_tile_index, ntiles)));
         UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE, false>(
             partials_cb_id, in1_cb_id)));
+        // The unpack to DEST left the matmul MOP in place: restore only the state it changed (the full init under the
+        // LLK sanitizer, which tracks the unpacker state through it).
+#if defined(LLK_SAN_ENABLE)
         UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+#else
+        UNPACK((llk_unpack_AB_matmul_restore_after_unpack_to_dest(in0_cb_id, in1_cb_id, transpose)));
+#endif
         MATH((llk_math_unpack_to_dest_tiles(0, ntiles, partials_cb_id)));
         return;
     }

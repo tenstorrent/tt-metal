@@ -294,6 +294,35 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 }
 
 /**
+ * @brief Restore the matmul unpack state that _llk_unpack_A_to_dest_tiles_ changes, after unpacking to DEST between
+ * matmul calls (the partials reload of a block matmul).
+ *
+ * The unpack to DEST rewrites the Haloize mode, operand A's x-end and the Z/W counters, and runs no MOP: the matmul MOP,
+ * the KT_DIM register and operand B's x-end stay as _llk_unpack_AB_matmul_init_ left them, so restoring the three is
+ * the same state as that init, without reprogramming the MOP.
+ *
+ * @param transpose: The matmul's transpose flag (Haloize mode).
+ * @param unpA_face_r_dim / unpA_num_faces / unpA_partial_face: Operand A's (in1's) tile shape, as the matmul init took.
+ */
+inline void _llk_unpack_AB_matmul_restore_after_unpack_to_dest_(
+    const std::uint32_t transpose, const std::uint32_t unpA_face_r_dim, const std::uint32_t unpA_num_faces, const bool unpA_partial_face)
+{
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
+
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+    if (unpA_partial_face)
+    {
+        config_unpacker_x_end<p_setadc::UNP_A>(unpA_face_r_dim);
+    }
+    else
+    {
+        const std::uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
+        TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+    }
+}
+
+/**
  * @brief No-op after a matmul operation.
  *
  * x-start/x-end is transient and reprogrammed by the next operation's init (see tt-llk#1036), so
