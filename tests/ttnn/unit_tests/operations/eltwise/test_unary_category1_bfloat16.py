@@ -781,3 +781,54 @@ def test_bessel_ops(device, ttnn_op, low, high):
     golden = flush_to_zero(golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("stock_op", ["sqrt", "sigmoid"])
+@pytest.mark.parametrize("generated_first", [True, False])
+def test_silu_with_stock_op_in_sfpu_chain(device, generated_first, stock_op):
+    """silu chained with a stock op (sigmoid reads Prgm1, which the BF16 silu reprograms) stores what the two ops store one after the other."""
+    generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), lambda tensor: ttnn.silu(tensor))
+    stock = (
+        ttnn.UnaryWithParam(getattr(ttnn.UnaryOpType, stock_op.upper())),
+        lambda tensor: getattr(ttnn, stock_op)(tensor),
+    )
+    first, second = (generated, stock) if generated_first else (stock, generated)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    def words(tensor):
+        return ttnn.to_torch(tensor).view(torch.int16)
+
+    for step, standalone in (generated, stock):
+        assert torch.equal(
+            words(ttnn.unary_chain(tt_in, [step])), words(standalone(tt_in))
+        ), f"{step} is not its op's kernel"
+
+    result = words(ttnn.unary_chain(tt_in, [first[0], second[0]]))
+    middle = ttnn.to_torch(first[1](tt_in))
+    expected = words(second[1](to_tt_tensor(middle, device)))
+    # A finite normal first result sits in DEST exactly as stored, so both runs feed the second op the same input.
+    checked = torch.isfinite(middle) & (middle.abs() >= SMALLEST_NORMAL_BF16)
+    assert checked.sum() >= 64
+    mismatched = checked & (result != expected)
+    assert not mismatched.any(), (
+        f"{int(mismatched.sum())} of {int(checked.sum())} lanes differ from the standalone second op, "
+        f"first at its input {middle[mismatched][0].item()!r}"
+    )
+
+
+def test_silu_bf16_unflushed_zero_and_subnormal_inputs(device):
+    """±0 and subnormal BF16 inputs, which TT-NN keeps in DEST, store +0 (0x0000)."""
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole",):
+        pytest.skip(f"ttnn.silu keeps its stock kernel on {board}")
+    words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
+    x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    device_out = ttnn.to_torch(ttnn.silu(tt_x))
+    raw = device_out.reshape(-1).view(torch.int16).to(torch.int32) & 0xFFFF
+    bits = words.repeat(4).to(torch.int32) & 0xFFFF
+    assert torch.all(raw[bits == 0x0000] == 0x0000)
+    assert torch.all(raw[bits == 0x8000] == 0x0000)
+    assert torch.all(raw[(bits > 0) & (bits < 0x80)] == 0x0000)
+    assert torch.all(raw[(bits > 0x8000) & (bits < 0x8080)] == 0x0000)
