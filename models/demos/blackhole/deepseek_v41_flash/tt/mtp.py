@@ -22,7 +22,7 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, NH, WINDOW, DSV41Attention
+from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, NH, PAD_HEADS, WINDOW, DSV41Attention
 from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
 from models.demos.blackhole.deepseek_v41_flash.tt.device_head import embed_lookup as _embed_lookup
 from models.demos.blackhole.deepseek_v41_flash.tt.layer import DSV41Layer
@@ -274,6 +274,50 @@ class DraftMoEBlock:
         )
         self.decode._mesh = md  # (_TailDecode.forward: the column tensor of the fused tail)
 
+    def view_batch(self, batch_per_device, buffers=None):
+        """DraftMoEBlock over the SAME expert weights / gate with batch_per_device = ``batch_per_device`` (own config + scratch buffers; the load-based decode buckets run the drafter for
+        the first Ub users of every mesh row: T_d = 5 Ub rows). -> (view, buffers) (``buffers`` shared by the 3 stages of one view).
+        """
+        from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
+
+        from models.common.moe.tt_moe_decode import _TTMoEDecodeBuffers
+        from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
+        from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import clamp_text
+
+        md = self.md
+        text = clamp_text(CONFIG_PATH.read_text(), "mtp")
+        text = text.replace("batch_per_device: 4 ", f"batch_per_device: {batch_per_device} ", 1)
+        text = text.replace("num_routed_experts: 384", f"num_routed_experts: {N_ROUTED}").replace(
+            "select_experts_k: 6", f"select_experts_k: {TOPK}"
+        )
+        text = text.replace("num_shared_experts: 1", "num_shared_experts: 0").replace(
+            "  shared_expert_ids_to_devices: fully_replicated\n", ""
+        )
+        cfg = TTMoEDecodeConfig.from_yaml(text, topology=ttnn.Topology.Linear)
+        if cfg.mesh_shape != tuple(md.shape):
+            cfg = cfg.with_mesh_shape(tuple(md.shape))
+        if cfg.batch_per_device != batch_per_device:
+            cfg = cfg.model_copy(update={"batch_per_device": batch_per_device})
+        if cfg.num_fast_reduce_outputs == 1:
+            cfg = cfg.model_copy(
+                update={"reduce": cfg.reduce.model_copy(update={"output_memory_config": ttnn.DRAM_MEMORY_CONFIG})}
+            )
+        if buffers is None:
+            bd = cfg.buffers.model_dump()
+            bd["compute_tilize_drain_core"] = ttnn.experimental.get_moe_tilize_drain_core(
+                md,
+                cfg.compute.output_height_shard_dim,
+                auto_output_width_shard_dim(cfg.hidden_size),
+                cfg.hidden_size,
+                mux_core_range_set=cfg.compute.mux_core_range_set,
+            )
+            buffers = _TTMoEDecodeBuffers(md, **bd)
+        dec = copy.copy(self.decode)  # shares expert_state, mesh handles, padding flags
+        dec.config, dec.buffers = cfg, buffers
+        v = copy.copy(self)
+        v.decode, v.decode_config = dec, cfg
+        return v, buffers
+
     def warmup(self):
         """Same L1 steering as ``DSV41MoEBlock.warmup`` (hole under the persistent allocations before the program's first compile)."""
         md = self.md
@@ -342,8 +386,24 @@ class DraftMoEBlock:
                 self.decode.fold = None
 
 
+def _ucfg_rows(T):
+    return ttnn.create_sharded_memory_config(
+        shape=(PAD_HEADS, HEAD_DIM),
+        core_grid=ttnn.num_cores_to_corerangeset(T, ttnn.CoreCoord(8, 8), row_wise=True),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 class DraftLayer(DSV41Layer):
     """One DSpark stage: ``DSV41Layer.forward`` (mHC, attention, MoE, shared expert) with the draft attention and the 128-expert MoE."""
+
+    def view_users(self, attention_view, moe_view, T_d):
+        """The same stage (weights, mHC, shared expert) for T_d = 5 Ub draft rows: its own attention view and MoE view (batch T_d)."""
+        v = copy.copy(self)
+        v.T, v.attention, v.moe = T_d, attention_view, moe_view
+        return v
 
     def __init__(
         self, md, mesh_config, ccl, attention, norms, mhc_params, moe_weights, users_rows, eps=1e-20, moe_buffers=None
@@ -434,6 +494,24 @@ class DraftAttention(_PagedMixin, DSV41Attention):
             )
         self.blk_idx = blk
         self._k_chunk = 64
+
+    def view_users(self, Ub):
+        """Shallow copy for the first Ub users of every mesh row (load-based decode bucket): SAME ring cache (one page per user: the smaller page tables address the pages u < Ub) and weights;
+        own T-dependent state (T_d = 5 Ub rows: page tables, block-slot indices, the sharded-memory config of the rows).
+        """
+        v = copy.copy(self)
+        T_d = BLOCK * Ub
+        v.T, v.U = T_d, Ub
+        v._ucfg = _ucfg_rows(T_d)
+        v.pt = self._mk_pt(torch.arange(Ub).repeat(BLOCK).reshape(T_d, 1))
+        v.pt_v = self._mk_pt(torch.arange(Ub).repeat_interleave(self.n).reshape(Ub * self.n, 1))
+        blk = []
+        for i in range(BLOCK):
+            idx = torch.full((T_d,), -1, dtype=torch.int32)
+            idx[i * Ub : (i + 1) * Ub] = RING + i
+            blk.append(self._mk_pt(idx))
+        v.blk_idx = blk
+        return v
 
     def view_n(self, n):
         """Shallow copy for another verify block size n: SAME ring cache / weights, own verify-row page table."""
@@ -539,6 +617,16 @@ class DraftState:
         )
         self.jmask = [fl((torch.arange(self.T_v) % n == j), self.T_v) for j in range(n)]
         self.jmask_all = self._fl_n(n, self.T_v)
+
+    def view_users(self, Ub, attn):
+        """Shallow copy for Ub users per mesh row (position tables shared; own row-count dependent vectors)."""
+        v = copy.copy(self)
+        v.U, v.attn = Ub, attn
+        v.T_d, v.T_v = BLOCK * Ub, Ub * self.n
+        v.off_d = self._fl(torch.arange(v.T_d) // Ub + 1, v.T_d)
+        v.jmask = [self._fl((torch.arange(v.T_v) % self.n == j), v.T_v) for j in range(self.n)]
+        v.jmask_all = self._fl_n(self.n, v.T_v)
+        return v
 
     def view_n(self, n):
         """Shallow copy for another verify block size n (position tables shared, own per-j masks)."""
@@ -828,6 +916,55 @@ class DSparkDrafter:
             ttnn.copy(ttnn.add(ttnn.multiply(a.cache, keep), new), a.cache)
             ttnn.deallocate(new)
         ttnn.deallocate(kvc)
+
+    def view_users(self, Ub):
+        """The same drafter (weights, rings) for the first Ub < U users of every mesh row (the load-based decode buckets, tt/spec_model.py ``Ub``): T_d = 5 Ub draft rows, T_v = Ub n verify rows,
+        own T-dependent state (attention page tables, position vectors, MoE views with batch T_d and their scratch buffers, the pad / noise rows). The ring caches are SHARED (one page per user),
+        so the rings seeded through the full drafter serve the users u < Ub with no copy."""
+        if Ub == self.U:
+            return self
+        assert 1 <= Ub < self.U
+        v = copy.copy(self)
+        v.U = Ub
+        v.T_d, v.T_v = BLOCK * Ub, Ub * self.n
+        T_d, T_v = v.T_d, v.T_v
+        v.attn = [a.view_users(Ub) for a in self.attn]
+        v.state = self.state.view_users(Ub, v.attn[0])
+        v.layers, bufs = [], None
+        for layer, a in zip(self.layers, v.attn):
+            mv, bufs = layer.moe.view_batch(T_d, bufs)
+            lv = layer.view_users(a, mv, T_d)
+            if not v.layers:
+                lv.moe.warmup()  # compile pass of the new batch with the L1 hole, before any trace exists
+            v.layers.append(lv)
+        up = self._up
+        v.pre0 = up(torch.tensor([1.0, 0, 0, 0]).repeat(T_d, 1, 1, 1), ttnn.float32)
+        v.Tp = _odd_t(T_d) if os.environ.get("DSV41_DRAFT_KEEP_PAD", "1") == "1" else None
+        if v.Tp:
+            Tp = v.Tp
+            rep_ = ttnn.ReplicateTensorToMesh(self.md)
+            v.pre0p = up(torch.tensor([1.0, 0, 0, 0]).repeat(Tp, 1, 1, 1), ttnn.float32)
+            v.tok_pad = ttnn.from_torch(
+                torch.full((Tp - T_d, 1), NOISE_ID, dtype=torch.int32),
+                device=self.md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=rep_,
+            )
+            v.me_pad = up(torch.zeros(1, 1, Tp - T_d, 256), ttnn.float32)
+            v.me_pad_rm = up(torch.zeros(1, 1, Tp - T_d, 256), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        v.ucfg_v = ttnn.create_sharded_memory_config(
+            shape=(32, HEAD_DIM),
+            core_grid=ttnn.num_cores_to_corerangeset(T_v, ttnn.CoreCoord(8, 8), row_wise=True),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        v._noise = None
+        v._pending_d = None
+        v.conf_q = None
+        return v
 
     def view_n(self, n):
         """The same drafter (weights, rings, MoE buffers) for ANOTHER verify block size n (rows U*n): used by the adaptive-length spec runners that share one drafter."""
