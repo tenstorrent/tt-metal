@@ -29,6 +29,7 @@ constexpr uint32_t kPrefillDestTiles = 4;           // Float32 tiles in half of 
 constexpr uint32_t kPrefillOutTiles = 24;           // c_16: a multiple of every subblock size, so no subblock wraps
 constexpr uint32_t kPrefillL1Budget = 1250 * 1024;  // bytes of circular buffers per core
 constexpr double kPrefillDecodeCycles = 300.0;      // one weight tile: page copy, decode, pack
+constexpr double kPrefillSumCycles = 150.0;         // one tile of a K split's sums: send, add
 
 // The formats with a decoder of fixed per-tile cost and no codebook lookups (the expanded layouts are not among them).
 bool prefill_format_supported(DataType dtype) {
@@ -44,14 +45,30 @@ bool prefill_format_supported(DataType dtype) {
     }
 }
 
-// Bands of mg whole grid rows share the band's M rows; the band's cores split N, nc tiles each. A band takes its M
-// tiles in chunks of mc and K in blocks of kb tiles (whole groups); the input arrives in units of ur rows x kb tiles.
-// ks = 2: K split, two bands with all M rows and half of K each, band 1 sending its fp32 sums per unit of rows to
-// band 0 through a two-unit ring.
+// Bands of whole grid rows. Without a K split (ks = 1): mg bands of equal rows, each with its share of the M rows and
+// all of K. With a K split (ks = 2): two bands with all M rows, band 0 of rows0 grid rows taking K tiles [0, kt0) and
+// band 1 the rest; band 1 sends its fp32 sums of each N tile, per unit of rows, to the core of band 0 that holds the
+// tile. A band's cores split N, nc[band] tiles each: bands of unequal rows with unequal K shares even out the cores'
+// work when the N tiles do not split evenly over one band. A band takes M in chunks of mc tiles and K in blocks of kb
+// tiles (whole groups); the input arrives in units of ur rows x kb tiles.
 struct PrefillPlan {
-    uint32_t mg = 0, nc = 0, mc = 0, kb = 0, ur = 1, ks = 1;
+    uint32_t mg = 0, ks = 1, rows0 = 0, kt0 = 0, mc = 0, kb = 0, ur = 1;
+    std::array<uint32_t, 2> nc{};
     double cost = 1e30;
 };
+
+// K split: every core sends to or receives from at most two cores of the other band.
+bool prefill_partners_fit(uint32_t n_tiles, uint32_t nc0, uint32_t nc1) {
+    for (const auto [mine, other] : {std::pair{nc0, nc1}, std::pair{nc1, nc0}}) {
+        for (uint32_t first = 0; first < n_tiles; first += mine) {
+            const uint32_t last = std::min(n_tiles, first + mine) - 1;
+            if (last / other - first / other > 1) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 uint32_t prefill_fixed_l1(const GgufTraits& f) {
     const uint32_t pages_per_group = f.group_tiles / f.page_tiles;
@@ -60,49 +77,70 @@ uint32_t prefill_fixed_l1(const GgufTraits& f) {
            (pages_per_group > 1 ? kPrefillRecordSlots * f.page_bytes() : 0) + kPrefillOutTiles * 2048;
 }
 
-// The least modeled time within the L1 budget: per core, the decodes (once per M chunk), the multiplies and a fixed
-// cost per block, against the band's input stream (measured multicast rates per band count).
+// The least modeled time within the L1 budget: per core, the decodes (once per M chunk), the multiplies, a fixed cost
+// per block and, on band 0 of a K split, the sums' exchange, against the band's input stream (measured multicast rates
+// per band count).
 std::optional<PrefillPlan> prefill_plan(
     const GgufTraits& f, uint32_t m_tiles, uint32_t k_tiles, uint32_t n_tiles, CoreCoord grid) {
-    const uint32_t gt = f.group_tiles, groups = k_tiles / gt;
+    const uint32_t gt = f.group_tiles;
     const uint32_t base_l1 = prefill_fixed_l1(f);
     PrefillPlan best;
-    for (uint32_t ks = 1; ks <= 2; ks++) {
-        if (ks == 2 && (grid.y % 2 || groups % 2)) {
+    auto core_cycles = [](uint32_t nc, uint32_t kt, uint32_t mb, uint32_t mc, uint32_t kb) {
+        return double(nc) * kt * (mb / mc) * kPrefillDecodeCycles + double(nc) * mb * kt * 32.0 +
+               double(mb / mc) * (kt / kb) * 2000.0;
+    };
+    auto consider = [&](PrefillPlan plan, double core) {
+        // Input bytes per cycle per band stream: ~30 for one band, ~40 for two or five, ~70 for ten.
+        const double rate = plan.mg == 1 ? 30.0 : plan.mg < 10 ? 40.0 : 70.0;
+        const double input = double(m_tiles) * k_tiles * 2048 / rate;
+        plan.cost = std::max(core, input) + 0.2 * std::min(core, input);
+        if (plan.cost < best.cost) {
+            best = plan;
+        }
+    };
+    auto fits = [&](uint32_t mc, uint32_t ur, uint32_t kb, uint32_t nc, bool ksplit) {
+        return base_l1 + kPrefillInputSlots * ur * kb * 2048 + kb * nc * 4096 + mc * nc * 4096 +
+                   (ksplit ? 4 * ur * nc * 4096 : 0) <=
+               kPrefillL1Budget;
+    };
+    for (uint32_t mg = 1; mg <= grid.y; mg++) {
+        if (grid.y % mg || m_tiles % mg) {
             continue;
         }
-        for (uint32_t mg = ks; mg <= grid.y; mg++) {
-            if (grid.y % mg || (ks == 1 && m_tiles % mg) || (ks == 2 && mg != 2)) {
-                continue;
+        const uint32_t nc = (n_tiles + grid.x * (grid.y / mg) - 1) / (grid.x * (grid.y / mg)), mb = m_tiles / mg;
+        for (uint32_t mc = 1; mc <= mb; mc++) {
+            const uint32_t ur = mc % 4 == 0 ? 4 : mc % 2 == 0 ? 2 : 1;
+            for (uint32_t kb = gt; mb % mc == 0 && kb <= k_tiles && kb <= 16; kb += gt) {
+                if (k_tiles % kb == 0 && fits(mc, ur, kb, nc, false)) {
+                    consider({mg, 1, 0, 0, mc, kb, ur, {nc, nc}}, core_cycles(nc, k_tiles, mb, mc, kb));
+                }
             }
-            const uint32_t band_cores = grid.x * (grid.y / mg), mb = ks == 2 ? m_tiles : m_tiles / mg;
-            const uint32_t kt = k_tiles / ks;
-            const uint32_t nc = (n_tiles + band_cores - 1) / band_cores;
-            for (uint32_t mc = 1; mc <= mb; mc++) {
-                if (mb % mc) {
+        }
+    }
+    for (uint32_t rows0 = 1; rows0 < grid.y; rows0++) {
+        const uint32_t nc0 = (n_tiles + grid.x * rows0 - 1) / (grid.x * rows0);
+        const uint32_t nc1 = (n_tiles + grid.x * (grid.y - rows0) - 1) / (grid.x * (grid.y - rows0));
+        // Band 0, which adds the sums, takes the fewer N tiles per core (measured faster than the reverse).
+        if (nc0 > nc1 || !prefill_partners_fit(n_tiles, nc0, nc1)) {
+            continue;
+        }
+        const uint32_t nc = std::max(nc0, nc1), mb = m_tiles;
+        for (uint32_t mc = 1; mc <= mb; mc++) {
+            const uint32_t ur = mc % 4 == 0 ? 4 : mc % 2 == 0 ? 2 : 1;
+            for (uint32_t kb = gt; mb % mc == 0 && 2 * kb <= k_tiles && kb <= 16; kb += gt) {
+                if (k_tiles % kb || !fits(mc, ur, kb, nc, true)) {
                     continue;
                 }
-                const uint32_t ur = mc % 4 == 0 ? 4 : mc % 2 == 0 ? 2 : 1;
-                for (uint32_t kb = gt; kb <= kt && kb <= 16; kb += gt) {
-                    if (kt % kb) {
+                // Band 0's K share: the multiples of kb next to the share that evens out the two bands' work.
+                const uint32_t even = uint32_t(double(k_tiles) * nc1 / (nc0 + nc1) / kb) * kb;
+                for (const uint32_t kt0 : {even, even + kb}) {
+                    if (kt0 == 0 || kt0 >= k_tiles) {
                         continue;
                     }
-                    const uint32_t l1 = base_l1 + kPrefillInputSlots * ur * kb * 2048 + kb * nc * 4096 +
-                                        mc * nc * 4096 + (ks == 2 ? 4 * ur * nc * 4096 : 0);
-                    if (l1 > kPrefillL1Budget) {
-                        continue;
-                    }
-                    const double blocks = double(mb / mc) * (kt / kb);
-                    const double core = double(nc) * kt * (mb / mc) * kPrefillDecodeCycles +
-                                        double(nc) * mb * kt * 32.0 + blocks * 2000.0 +
-                                        (ks == 2 ? double(mb) * nc * 600.0 : 0.0);
-                    // Input bytes per cycle per band stream: ~30 for one band, ~40 for two or five, ~70 for ten.
-                    const double rate = mg == 1 ? 30.0 : mg < 10 ? 40.0 : 70.0;
-                    const double input = double(m_tiles) * k_tiles * 2048 / rate;
-                    const double cost = std::max(core, input) + 0.2 * std::min(core, input);
-                    if (cost < best.cost) {
-                        best = {mg, nc, mc, kb, ur, ks, cost};
-                    }
+                    const double core = std::max(
+                        core_cycles(nc0, kt0, mb, mc, kb) + double(mb) * nc0 * kPrefillSumCycles,
+                        core_cycles(nc1, k_tiles - kt0, mb, mc, kb));
+                    consider({2, 2, rows0, kt0, mc, kb, ur, {nc0, nc1}}, core);
                 }
             }
         }
@@ -154,25 +192,40 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     const GgufTraits& f = gguf_traits(weight.dtype());
     const uint32_t k_tiles = weight.logical_shape()[0] / 32, n_tiles = weight.logical_shape()[1] / 32;
     const uint32_t m_tiles = prefill_rows(input) / 32;
-    const uint32_t groups = k_tiles / f.group_tiles, pages_per_group = f.group_tiles / f.page_tiles;
+    const uint32_t pages_per_group = f.group_tiles / f.page_tiles;
     const CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t l1_page = f.l1_page_bytes();
     const uint32_t unit = pages_per_group > 1 ? pages_per_group : kPrefillGroupsPerRead;
 
     const std::optional<PrefillPlan> p = prefill_plan(f, m_tiles, k_tiles, n_tiles, grid);
     TT_FATAL(p.has_value(), "GGUF prefill matmul: no blocking fits ({} M tiles, {} K tiles)", m_tiles, k_tiles);
-    const uint32_t mg = p->mg, nc = p->nc, mc = p->mc, kb = p->kb, ur = p->ur, ks = p->ks;
-    const uint32_t rows = grid.y / mg, band_cores = grid.x * rows, mb = ks == 2 ? m_tiles : m_tiles / mg;
-    const uint32_t kt = k_tiles / ks, mchunks = mb / mc, kblocks = kt / kb;
+    const uint32_t mg = p->mg, mc = p->mc, kb = p->kb, ur = p->ur, ks = p->ks;
+    const uint32_t nc = std::max(p->nc[0], p->nc[1]);  // N tiles the circular buffers are sized for
+    const uint32_t mb = ks == 2 ? m_tiles : m_tiles / mg, mchunks = mb / mc;
+    struct Band {
+        uint32_t row0, rows, nc, k0, kt;
+    };
+    std::vector<Band> bands;
+    if (ks == 2) {
+        bands = {{0, p->rows0, p->nc[0], 0, p->kt0}, {p->rows0, grid.y - p->rows0, p->nc[1], p->kt0, k_tiles - p->kt0}};
+    } else {
+        for (uint32_t band = 0; band < mg; band++) {
+            bands.push_back({band * (grid.y / mg), grid.y / mg, nc, 0, k_tiles});
+        }
+    }
     log_debug(
         tt::LogOp,
-        "GGUF prefill: M {} K {} N {} tiles: bands {} K split {} nc {} mc {} kb {} ur {}",
+        "GGUF prefill: M {} K {} N {} tiles: bands {} K split {} (band 0: {} rows, {} K tiles) nc {} / {} mc {} kb {} "
+        "ur {}",
         m_tiles,
         k_tiles,
         n_tiles,
         mg,
         ks,
-        nc,
+        bands[0].rows,
+        bands[0].kt,
+        p->nc[0],
+        p->nc[1],
         mc,
         kb,
         ur);
@@ -207,7 +260,8 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     const uint32_t count_sem0 = CreateSemaphore(program, all, 0);
     const uint32_t count_sem1 = CreateSemaphore(program, all, 0);
     const uint32_t source_sem = CreateSemaphore(program, all, 0);
-    const uint32_t partial_sem = CreateSemaphore(program, all, 0);
+    const uint32_t partial_sem0 = CreateSemaphore(program, all, 0);
+    const uint32_t partial_sem1 = CreateSemaphore(program, all, 0);
     const uint32_t senders = std::min<uint32_t>(kPrefillSenders, grid.x);
 
     const bool two_in_flight = weight.dtype() == DataType::GGUF_Q4_0 || weight.dtype() == DataType::GGUF_Q4_1;
@@ -226,10 +280,8 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         n_tiles,
         mc,
         kb,
-        kblocks,
         mchunks,
         kPrefillInputSlots,
-        band_cores,
         ready_sems[0],
         ready_sems[1],
         ready_sems[2],
@@ -239,7 +291,8 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         source_sem,
         senders,
         ur,
-        partial_sem};
+        partial_sem0,
+        partial_sem1};
     TensorAccessorArgs(*input.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 
@@ -287,18 +340,21 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
             .math_fidelity = MathFidelity::HiFi2,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = false,
-            .compile_args = {f.format_id, mc, kb, kblocks, mchunks, ur}});
+            .compile_args = {f.format_id, mc, kb, mchunks, ur}});
 
-    for (uint32_t band = 0; band < mg; band++) {
-        const CoreCoord v0 = device->worker_core_from_logical_core(CoreCoord(0, band * rows));
-        const CoreCoord v1 = device->worker_core_from_logical_core(CoreCoord(grid.x - 1, (band + 1) * rows - 1));
+    auto band_core = [&](uint32_t band, uint32_t j) { return CoreCoord(j % grid.x, bands[band].row0 + j / grid.x); };
+    for (uint32_t band = 0; band < bands.size(); band++) {
+        const Band& bd = bands[band];
+        const uint32_t band_cores = grid.x * bd.rows, bnc = bd.nc;
+        const CoreCoord v0 = device->worker_core_from_logical_core(CoreCoord(0, bd.row0));
+        const CoreCoord v1 = device->worker_core_from_logical_core(CoreCoord(grid.x - 1, bd.row0 + bd.rows - 1));
         // Sender s: a core of the band in a column of parity 1 - s (its writer on NoC s), preferably without N tiles.
         std::array<uint32_t, 2> sender = {band_cores, band_cores};
         for (uint32_t s = 0; s < senders; s++) {
             for (uint32_t pass = 0; pass < 2 && sender[s] == band_cores; pass++) {
                 for (uint32_t jj = band_cores; jj-- > 0;) {
                     const uint32_t j = pass ? (jj + band_cores / 2) % band_cores : jj;
-                    const bool idle = j * nc >= n_tiles;
+                    const bool idle = j * bnc >= n_tiles;
                     if ((j % grid.x) % 2 == 1 - s && (pass == 1 || idle)) {
                         sender[s] = j;
                     }
@@ -307,20 +363,36 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         }
         std::array<CoreCoord, 2> sender_v;
         for (uint32_t s = 0; s < 2; s++) {
-            const uint32_t j = sender[std::min(s, senders - 1)];
-            sender_v[s] = device->worker_core_from_logical_core(CoreCoord(j % grid.x, band * rows + j / grid.x));
+            sender_v[s] = device->worker_core_from_logical_core(band_core(band, sender[std::min(s, senders - 1)]));
         }
         for (uint32_t j = 0; j < band_cores; j++) {
-            const CoreCoord core(j % grid.x, band * rows + j / grid.x);
+            const CoreCoord core = band_core(band, j);
             const uint32_t parity = core.x % 2;
-            const uint32_t n0 = std::min(n_tiles, j * nc), my_nc = std::min(n_tiles, (j + 1) * nc) - n0;
-            // K split: band 1 sends to the core of band 0 with the same N tiles.
-            const uint32_t krole = ks == 2 ? (band == 1 ? 1u : 2u) : 0u;
-            const CoreCoord partner_v = device->worker_core_from_logical_core(
-                CoreCoord(core.x, (band ^ (ks == 2 ? 1 : 0)) * rows + j / grid.x));
-            // Subblock: sh x sw tiles within half of DEST, sw dividing nc, sh dividing ur; the largest.
-            uint32_t sh = 1, sw = 1;
-            for (uint32_t w = 1; w <= std::min(kPrefillDestTiles, std::max(my_nc, 1u)); w++) {
+            const uint32_t n0 = std::min(n_tiles, j * bnc), my_nc = std::min(n_tiles, (j + 1) * bnc) - n0;
+            // K split: band 1 (krole 1) sends the sums of its N tiles to the cores of band 0 (krole 2) holding them,
+            // at most two either way. Per partner: NoC x, y, this core's index among the partner's partners, and for a
+            // sender the tile offsets in its unit of sums and in the partner's, and the tiles.
+            const uint32_t krole = ks == 2 && my_nc > 0 ? (band == 1 ? 1u : 2u) : 0u;
+            std::vector<uint32_t> partners;
+            if (krole != 0) {
+                const uint32_t other = 1 - band, onc = bands[other].nc;
+                for (uint32_t o = n0 / onc; o <= (n0 + my_nc - 1) / onc; o++) {
+                    const uint32_t lo = std::max(n0, o * onc), hi = std::min(n0 + my_nc, (o + 1) * onc);
+                    const CoreCoord ov = device->worker_core_from_logical_core(band_core(other, o));
+                    partners.insert(
+                        partners.end(),
+                        {uint32_t(ov.x),
+                         uint32_t(ov.y),
+                         j - (o * onc) / bnc,
+                         (lo - n0) * ur,
+                         (lo - o * onc) * ur,
+                         (hi - lo) * ur});
+                }
+            }
+            // Subblock: sh x sw tiles within half of DEST, sw dividing nc, sh dividing ur; the largest. With a K split,
+            // ur x 1, so that a unit of sums holds each N tile's rows together.
+            uint32_t sh = ks == 2 ? ur : 1, sw = 1;
+            for (uint32_t w = 1; ks == 1 && w <= std::min(kPrefillDestTiles, std::max(my_nc, 1u)); w++) {
                 for (uint32_t h = 1; h * w <= kPrefillDestTiles; h++) {
                     if (my_nc % w == 0 && ur % h == 0 && kPrefillOutTiles % (h * w) == 0 && h * w > sh * sw) {
                         sh = h;
@@ -336,9 +408,9 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
                  n_tiles,
                  n0,
                  my_nc,
-                 groups / ks,
+                 bd.kt / f.group_tiles,
                  mchunks,
-                 band % ks * (groups / ks)});
+                 bd.k0 / f.group_tiles});
             std::vector<uint32_t> writer_args = {
                 uint32_t(input.buffer()->address()),
                 uint32_t(output.buffer()->address()),
@@ -358,13 +430,15 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
                 uint32_t(sender_v[0].y),
                 uint32_t(sender_v[1].x),
                 uint32_t(sender_v[1].y),
-                band % ks * kt,
+                bd.k0,
                 krole,
-                uint32_t(partner_v.x),
-                uint32_t(partner_v.y),
-                nc};
+                nc,
+                bd.kt / kb,
+                band_cores,
+                uint32_t(partners.size() / 6)};
+            writer_args.insert(writer_args.end(), partners.begin(), partners.end());
             SetRuntimeArgs(program, shared.writer[parity], core, writer_args);
-            SetRuntimeArgs(program, compute_kernel, core, {my_nc, nc, sh, sw, krole});
+            SetRuntimeArgs(program, compute_kernel, core, {my_nc, nc, sh, sw, krole, bd.kt / kb});
             shared.cores.push_back(core);
         }
     }

@@ -7,10 +7,11 @@
 // of the input (c_1: units of ur rows x kb tiles, [ur][kb]) in sh x sw subblocks. Partials accumulate in L1 (c_24,
 // Float32, packer L1 accumulation); in the last K block each unit of rows goes to c_16 as bf16 once its sums are
 // complete. Decode: per tile, the page is copied into DEST tile 1 and decoded into tile 0 on the math thread, then
-// packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0 adds the partner's (c_18).
-// Compile args: format id, mc, kb, K blocks, M chunks, ur (sh divides it). Runtime args: N tiles of this core (0:
-// nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that width, so
-// that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add them).
+// packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0 adds the partners' (c_18);
+// both in units of ur rows x the planned N tiles, the rows of each N tile together (subblocks of ur x 1).
+// Compile args: format id, mc, kb, M chunks, ur (sh divides it). Runtime args: N tiles of this core (0: nothing to
+// do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that width, so that c_24's
+// L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add them), K blocks.
 
 #include <cstdint>
 
@@ -32,9 +33,8 @@ void kernel_main() {
     constexpr uint32_t fmt = get_compile_time_arg_val(0);
     constexpr uint32_t mc = get_compile_time_arg_val(1);
     constexpr uint32_t kb = get_compile_time_arg_val(2);
-    constexpr uint32_t kblocks = get_compile_time_arg_val(3);
-    constexpr uint32_t mchunks = get_compile_time_arg_val(4);
-    constexpr uint32_t ur = get_compile_time_arg_val(5);  // input rows per unit (c_1 holds units of ur x kb tiles)
+    constexpr uint32_t mchunks = get_compile_time_arg_val(3);
+    constexpr uint32_t ur = get_compile_time_arg_val(4);  // input rows per unit (c_1 holds units of ur x kb tiles)
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
     constexpr bool group_step = fmt == gguf::Q4_K || fmt == gguf::Q5_K || fmt == gguf::Q3_K || fmt == gguf::Q2_K;
     constexpr uint32_t block_groups = kb / L.group_tiles;
@@ -46,6 +46,7 @@ void kernel_main() {
     const uint32_t sh = get_arg_val<uint32_t>(2);
     const uint32_t sw = get_arg_val<uint32_t>(3);
     const uint32_t krole = get_arg_val<uint32_t>(4);  // K split: 1 sends its sums (c_17), 2 adds the partner's (c_18)
+    const uint32_t kblocks = get_arg_val<uint32_t>(5);
     if (nc == 0) {
         return;
     }

@@ -12,15 +12,16 @@
 // block and then its count (b / senders + 1) through the same command buffer, so the count lands after the data.
 // A core counts itself ready for block j as soon as block j - slots has been consumed (an idle core: received). The
 // output (c_16, subblocks of sh x sw tiles in compute order) is written to DRAM whenever this kernel would wait. K
-// split: band 1 sends its fp32 sums per unit of rows (c_17) into its partner's c_18 in band 0, a ring of two units:
-// the partner grants each slot once its compute has freed it (counted in the sender's partial semaphore) and counts
-// the units that landed in its own.
-// Compile args: K tiles, N tiles, mc, kb, K blocks, M chunks, slots (<= 4), band cores, four slot ready semaphores, two
-// block count semaphores, a source semaphore, senders (1 or 2), ur, the partial semaphore, then the input's and the
-// output's TensorAccessorArgs. Runtime args: input address, output address, band rectangle (NoC x / y start, x / y
-// end, in this writer's NoC order), first M tile of the band, first N tile, N tiles (0: no output), sh, sw, role (0, or
-// 1 + the sender's index), the two senders' NoC x, y, first K tile of the band, K split role (0: none, 1: send sums,
-// 2: add the partner's), the partner's NoC x, y, the plan's N tiles per core (a unit of sums is ur x that).
+// split: band 1 sends its fp32 sums per unit of rows (c_17) to the one or two cores of band 0 holding its N tiles, into
+// their c_18, a ring of two units: each receiver grants a slot to its senders once its compute has freed it, and counts
+// the parts that landed, a partial semaphore per partner either way.
+// Compile args: K tiles, N tiles, mc, kb, M chunks, slots (<= 4), four slot ready semaphores, two block count
+// semaphores, a source semaphore, senders (1 or 2), ur, two partial semaphores, then the input's and the output's
+// TensorAccessorArgs. Runtime args: input address, output address, band rectangle (NoC x / y start, x / y end, in this
+// writer's NoC order), first M tile of the band, first N tile, N tiles (0: no output), sh, sw, role (0, or 1 + the
+// sender's index), the two senders' NoC x, y, first K tile of the band, K split role (0: none, 1: send sums, 2: add
+// the partners'), the plan's N tiles per core (a unit of sums is ur x that), K blocks, band cores, K split partners,
+// then six words per partner (below).
 
 #include <cstdint>
 
@@ -31,27 +32,25 @@ void kernel_main() {
     constexpr uint32_t n_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t mc = get_compile_time_arg_val(2);
     constexpr uint32_t kb = get_compile_time_arg_val(3);
-    constexpr uint32_t kblocks = get_compile_time_arg_val(4);
-    constexpr uint32_t mchunks = get_compile_time_arg_val(5);
-    constexpr uint32_t slots = get_compile_time_arg_val(6);
-    constexpr uint32_t band_cores = get_compile_time_arg_val(7);
+    constexpr uint32_t mchunks = get_compile_time_arg_val(4);
+    constexpr uint32_t slots = get_compile_time_arg_val(5);
     // Ready counts per slot (on the slot's sender of the moment; reset by it before each multicast into the slot).
     constexpr uint32_t ready_sems[4] = {
+        get_compile_time_arg_val(6),
+        get_compile_time_arg_val(7),
         get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(11)};
-    constexpr uint32_t count_sem0 = get_compile_time_arg_val(12), count_sem1 = get_compile_time_arg_val(13);
-    constexpr uint32_t source_sem = get_compile_time_arg_val(14);
-    constexpr uint32_t senders = get_compile_time_arg_val(15);
-    constexpr uint32_t ur = get_compile_time_arg_val(16);
-    constexpr uint32_t partial_sem = get_compile_time_arg_val(17);
+        get_compile_time_arg_val(9)};
+    constexpr uint32_t count_sem0 = get_compile_time_arg_val(10), count_sem1 = get_compile_time_arg_val(11);
+    constexpr uint32_t source_sem = get_compile_time_arg_val(12);
+    constexpr uint32_t senders = get_compile_time_arg_val(13);
+    constexpr uint32_t ur = get_compile_time_arg_val(14);
+    // K split, per partner index: on band 0 the units of sums that landed from it, on band 1 the slots it granted.
+    constexpr uint32_t partial_sems[2] = {get_compile_time_arg_val(15), get_compile_time_arg_val(16)};
     static_assert(slots <= 4);
-    constexpr auto input_args = TensorAccessorArgs<18>();
+    constexpr auto input_args = TensorAccessorArgs<17>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr uint32_t tile_bytes = 2048, block_tiles = ur * kb, block_bytes = block_tiles * tile_bytes;
     constexpr uint32_t units = mc / ur;  // per M chunk per K block
-    constexpr uint32_t blocks = mchunks * kblocks * units;
     constexpr uint32_t cb_in0 = 1, cb_out = 16, cb_send = 17, cb_recv = 18;
 
     const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(0));
@@ -75,15 +74,30 @@ void kernel_main() {
             get_arg_val<uint32_t>(12 + 2 * s), get_arg_val<uint32_t>(13 + 2 * s), get_semaphore(ready_sems[j % slots]));
     };
     const bool active = nc > 0;
-    // K split in two bands: band 1 (krole 1) sends its fp32 sums per unit to the core of band 0 with the same N tiles
-    // (krole 2), which adds them.
     const uint32_t k_base = get_arg_val<uint32_t>(16), krole = get_arg_val<uint32_t>(17);
-    const uint64_t partner_sem =
-        get_noc_addr(get_arg_val<uint32_t>(18), get_arg_val<uint32_t>(19), get_semaphore(partial_sem));
-    const uint32_t partner_x = get_arg_val<uint32_t>(18), partner_y = get_arg_val<uint32_t>(19);
-    volatile tt_l1_ptr uint32_t* partial_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(partial_sem));
-    const uint32_t unit_tiles = ur * get_arg_val<uint32_t>(20), unit_bytes = unit_tiles * 4096;  // ur x the planned nc
+    const uint32_t unit_tiles = ur * get_arg_val<uint32_t>(18), unit_bytes = unit_tiles * 4096;  // ur x the planned nc
+    const uint32_t kblocks = get_arg_val<uint32_t>(19), band_cores = get_arg_val<uint32_t>(20);
+    const uint32_t blocks = mchunks * kblocks * units;
+    // K split in two bands: band 1 (krole 1) sends its fp32 sums per unit of rows to the cores of band 0 (krole 2)
+    // holding its N tiles, which add them. Per partner p: NoC x, y, this core's index among the partner's partners
+    // (the partner's partial semaphore it counts in), and for a sender the tile offsets in its unit and in the
+    // partner's, and the tiles.
+    const uint32_t partners = get_arg_val<uint32_t>(21);
+    auto partner_arg = [&](uint32_t p, uint32_t i) { return get_arg_val<uint32_t>(22 + 6 * p + i); };
+    auto partner_sem = [&](uint32_t p) {
+        return get_noc_addr(partner_arg(p, 0), partner_arg(p, 1), get_semaphore(partial_sems[partner_arg(p, 2) & 1]));
+    };
+    volatile tt_l1_ptr uint32_t* partial_ptr[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(partial_sems[0])),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(partial_sems[1]))};
+    auto all_counted = [&](uint32_t n) {
+        for (uint32_t p = 0; p < partners; p++) {
+            if (*partial_ptr[p] <= n) {
+                return false;
+            }
+        }
+        return true;
+    };
     const uint32_t partial_units = active && krole ? mchunks * units : 0;
     uint32_t units_sent = 0, units_got = 0, units_granted = 0;
     constexpr uint32_t kRecvUnits = 2;  // c_18 holds two units of sums
@@ -99,27 +113,35 @@ void kernel_main() {
     uint32_t subs_done = 0, chunk = 0, row = 0, col = 0;
     auto drain = [&]() {
         if (krole == 1) {
-            // A unit goes into ring slot units_sent % kRecvUnits of the partner's c_18 once the partner has granted
-            // it (credits counted in this core's partial semaphore).
-            while (units_sent < partial_units && *partial_ptr > units_sent &&
+            // A unit goes into ring slot units_sent % kRecvUnits of each partner's c_18 once every partner has
+            // granted it.
+            while (units_sent < partial_units && all_counted(units_sent) &&
                    cb_pages_available_at_front(cb_send, unit_tiles)) {
-                noc_async_write(
-                    get_read_ptr(cb_send),
-                    get_noc_addr(partner_x, partner_y, recv_base + (units_sent % kRecvUnits) * unit_bytes),
-                    unit_bytes);
+                const uint32_t slot = recv_base + (units_sent % kRecvUnits) * unit_bytes;
+                for (uint32_t p = 0; p < partners; p++) {
+                    noc_async_write(
+                        get_read_ptr(cb_send) + partner_arg(p, 3) * 4096,
+                        get_noc_addr(partner_arg(p, 0), partner_arg(p, 1), slot + partner_arg(p, 4) * 4096),
+                        partner_arg(p, 5) * 4096);
+                }
                 noc_async_write_barrier();  // the sums have landed before they are counted
-                noc_semaphore_inc(partner_sem, 1);
+                for (uint32_t p = 0; p < partners; p++) {
+                    noc_semaphore_inc(partner_sem(p), 1);
+                }
                 cb_pop_front(cb_send, unit_tiles);
                 units_sent++;
             }
         } else if (krole == 2) {
-            // Grants the partner a slot once compute has freed it, then pushes each unit that has landed.
+            // Grants the partners a slot once compute has freed it, then pushes each unit once all partners' parts
+            // have landed.
             while (units_granted < partial_units && units_granted < units_got + kRecvUnits &&
                    cb_pages_reservable_at_back(cb_recv, (units_granted - units_got + 1) * unit_tiles)) {
-                noc_semaphore_inc(partner_sem, 1);
+                for (uint32_t p = 0; p < partners; p++) {
+                    noc_semaphore_inc(partner_sem(p), 1);
+                }
                 units_granted++;
             }
-            while (units_got < units_granted && *partial_ptr > units_got) {
+            while (units_got < units_granted && all_counted(units_got)) {
                 cb_reserve_back(cb_recv, unit_tiles);
                 cb_push_back(cb_recv, unit_tiles);
                 units_got++;
