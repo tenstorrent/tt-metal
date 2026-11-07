@@ -69,16 +69,20 @@ void kernel_main() {
             pack_reconfig_data_format(cb_w);
             pack_reconfig_l1_acc(0);
             cb_reserve_back(cb_w, w_tiles);
+            // Formats with a group step keep DEST across releases inside the block (half-sync: tile t of a record is
+            // in the half of t % 2), so the step runs once per record and half, not per tile. The release after the
+            // last tile of each half clears it for the matmul.
+            uint32_t left = kb * nc;
             for (uint32_t g = 0; g < block_groups; g++) {
                 for (uint32_t j = 0; j < nc; j++) {
-                    for (uint32_t t = 0; t < L.group_tiles; t++) {
+                    for (uint32_t t = 0; t < L.group_tiles; t++, left--) {
                         if (t % L.page_tiles == 0) {
                             cb_wait_front(cb_page, 1);
                         }
                         tile_regs_acquire();
                         dest_srca_mm_page_to_dest(cb_page, 0, 1);
-                        if constexpr (group_step) {
-                            gguf_decode_group<fmt>(0);  // per tile: DEST is cleared at each release
+                        if (group_step && t < 2) {
+                            gguf_decode_group<fmt>(0);
                         }
                         gguf_decode_tile<fmt>(0, t);
                         tile_regs_commit();
@@ -87,7 +91,11 @@ void kernel_main() {
                         }
                         tile_regs_wait();
                         pack_tile<true>(0, cb_w, (g * L.group_tiles + t) * nca + j);
-                        tile_regs_release();
+                        if (group_step && left > 2) {
+                            PACK((_llk_pack_dest_section_done_<DST_SYNC_MODE, DST_ACCUM_MODE, false>()));
+                        } else {
+                            tile_regs_release();
+                        }
                     }
                 }
             }
