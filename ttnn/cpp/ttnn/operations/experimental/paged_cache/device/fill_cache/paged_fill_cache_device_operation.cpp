@@ -146,6 +146,13 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
         // tensors would have batch_idx values scattered across NoC locations
         // the single read won't cover.
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Batch idx tensor must be in ROW_MAJOR layout");
+        // ROW_MAJOR pages are one last-dim row each, and the writer reads page 0 only. A [4, 1] or
+        // [4, 1, 1, 1] tensor has the right volume but four one-element pages, of which only the first is read.
+        TT_FATAL(
+            tensor.logical_shape()[-1] == tensor.logical_volume(),
+            "Batch idx tensor must occupy a single ROW_MAJOR page (all dimensions except the last must be 1), "
+            "got shape {}",
+            tensor.logical_shape());
         TT_FATAL(
             tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Batch idx tensor must have INTERLEAVED memory layout");
