@@ -17,7 +17,7 @@ namespace ckernel {
  * Performs element-wise remainder computation on input x by y , where x is each element of a tile
  * in DST register at index tile_index. The input can be of float data type. The denominator is provided to
  * remainder_tile_init and loaded into the SFPU constant registers. The
- * DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on
+ * DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on
  * the compute engine.
  *
  * Return value: None
@@ -42,7 +42,7 @@ ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
 /**
  * Performs element-wise unsigned remainder computation on input x by the uint32 scalar divisor,
  * where x is each element of a tile in DST register at index tile_index. The result is x mod divisor
- * in [0, divisor). The DST register buffer must be in acquired state via *acquire_dst* call. This
+ * in [0, divisor). The DST register buffer must be in acquired state via *tile_regs_acquire* call. This
  * call is blocking and is only available on the compute engine.
  *
  * Return value: None

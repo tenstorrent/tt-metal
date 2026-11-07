@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Performs element-wise computation of the logical not operation on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * @tparam data_format Template argument specifying the data type.

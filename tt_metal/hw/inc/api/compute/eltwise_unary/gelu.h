@@ -23,7 +23,7 @@ ALWI void gelu_tile_init() {
 /**
  * Performs element-wise computation of gelu  on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -127,7 +127,7 @@ ALWI void gelu_derivative_tile_init() {
 /**
  * Performs element-wise computation of GELU derivative on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * When fast_and_approx=false (default): uses piecewise polynomial approximation

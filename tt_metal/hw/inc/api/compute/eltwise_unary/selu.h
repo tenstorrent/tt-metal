@@ -16,7 +16,7 @@ namespace ckernel {
 /**
  * Performs element-wise computation of selu = scale * (max(0,x) + min(0, alpha * (exp(x)-1))), where x is each
  * element of a tile in DST register at index tile_index. scale and alpha are each passed as the raw bits of a
- * float. The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is
+ * float. The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is
  * only available on the compute engine.
  *
  * Return value: None

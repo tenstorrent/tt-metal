@@ -24,7 +24,7 @@ ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (
 /**
  * Performs element-wise computation of reciprocal sqrt on each element of a
  * tile in DST register at index idst. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  * On Wormhole and Blackhole, RsqrtMode::Default returns NaN for negative inputs.
  * RsqrtMode::Fast skips that negative-input check, leaving results for negative inputs

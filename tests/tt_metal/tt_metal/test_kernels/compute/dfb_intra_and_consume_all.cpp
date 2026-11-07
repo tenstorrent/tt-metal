@@ -44,11 +44,13 @@ void kernel_main() {
     copy_init(dfb::remapper_in);
 
     for (uint32_t i = 0; i < num_entries_consumer; i++) {
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         dfb_consumer.wait_front(1);
         copy_tile(dfb::remapper_in, 0, 0);
         dfb_consumer.pop_front(1);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
     dfb_consumer.finish();
 
@@ -78,7 +80,8 @@ void kernel_main() {
 #endif
         dfb_intra.push_back(1);
 
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         dfb_intra.wait_front(1);
         copy_tile(dfb::intra_out, 0, 0);
 #ifdef UCK_CHLKC_UNPACK
@@ -92,7 +95,8 @@ void kernel_main() {
         }
 #endif
         dfb_intra.pop_front(1);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
     dfb_intra.finish();
 }

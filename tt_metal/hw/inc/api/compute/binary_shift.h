@@ -19,7 +19,7 @@ namespace ckernel {
  *
  * A shift amount < 0 or >= 32 produces 0.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -64,7 +64,7 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
  * For UInt32 a shift amount >= 32 saturates to 31, matching scalar `right_shift_tile`. For Int32 and UInt16 a shift
  * amount < 0 or >= 32 produces 0.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -121,7 +121,7 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
  * A shift amount < 0 or >= 32 produces 0. Unlike `binary_right_shift_tile` on UInt32, out-of-range counts are not
  * saturated to 31.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.

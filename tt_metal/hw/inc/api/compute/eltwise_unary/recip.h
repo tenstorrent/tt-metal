@@ -47,7 +47,7 @@ ALWI void recip_tile_init() {
 /**
  * Performs element-wise computation of the reciprocal on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  * Only works for Float32, Float16_b, Bfp8_b data formats for full accuracy.
  * DEST precision defaults to DST_ACCUM_MODE and approximation defaults to APPROX.

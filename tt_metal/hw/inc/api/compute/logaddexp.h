@@ -18,7 +18,7 @@ namespace ckernel {
  * evaluated as max(x0, x1) + log1p(exp(-|x0 - x1|)) so that no intermediate leaves
  * the representable range. Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  *
  * Return value: None

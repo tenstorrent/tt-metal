@@ -25,7 +25,7 @@ ALWI void log1p_tile_init() {
 /**
  * Performs element-wise computation of logarithm of (1+x) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None

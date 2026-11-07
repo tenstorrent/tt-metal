@@ -23,7 +23,7 @@ ALWI void mask_tile_init() {
  * Performs element-wise computation of mask on each element of a tile
  * in data and mask DST register. *mask_tile* will mask each element with 0,
  * *mask_posinf_tile* will mask each element with *float(inf)*.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  *
  *

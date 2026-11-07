@@ -17,7 +17,7 @@ namespace ckernel {
 /**
  * Reshuffles the rows of the input tile to locations given by indices stored
  * at L1 address provided in idx_addr. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None

@@ -27,7 +27,7 @@ enum class CumsumMode { Default, Compensated };
  * CumsumMode::Compensated runs a compensated (Kahan) sum: the rounding error of each add is kept next to the
  * running totals and fed back into the next add, so the error does not grow with the length of the scan.
  * CumsumMode::Compensated is only available on Wormhole and Blackhole. Not supported on Quasar (compile error).
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  *
  * Return value: None

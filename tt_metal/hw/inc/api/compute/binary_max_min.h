@@ -21,7 +21,7 @@ namespace ckernel {
  * Performs an elementwise maximum operation on inputs of int32 data type at idst0, idst1: y = max(x0, x1).
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -68,7 +68,7 @@ ALWI void binary_max_int32_tile_init() {
  * Performs an elementwise maximum operation on inputs of uint32 data type at idst0, idst1: y = max(x0, x1).
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -109,7 +109,7 @@ ALWI void binary_max_uint32_tile_init() {
  * Performs an elementwise maximum operation on inputs at idst0, idst1: y = max(x0, x1).
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -155,7 +155,7 @@ ALWI void binary_max_tile_init() {
  * Performs an elementwise minimum operation on inputs of int32 data type at idst0, idst1: y = min(x0, x1).
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -202,7 +202,7 @@ ALWI void binary_min_int32_tile_init() {
  * Performs an elementwise minimum operation on inputs of uint32 data type at idst0, idst1: y = min(x0, x1).
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -243,7 +243,7 @@ ALWI void binary_min_uint32_tile_init() {
  * Performs an elementwise minimum operation on inputs at idst0, idst1: y = min(x0, x1).
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.

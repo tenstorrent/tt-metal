@@ -14,7 +14,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is infinity.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -43,7 +43,7 @@ ALWI void isinf_tile_init() { MATH(SFPU_UNARY_INIT(isinf)); }
 // clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is positive infinity.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -72,7 +72,7 @@ ALWI void isposinf_tile_init() { MATH(SFPU_UNARY_INIT(isposinf)); }
 // clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is negative infinity.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -101,7 +101,7 @@ ALWI void isneginf_tile_init() { MATH(SFPU_UNARY_INIT(isneginf)); }
 // clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is nan.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -130,7 +130,7 @@ ALWI void isnan_tile_init() { MATH(SFPU_UNARY_INIT(isnan)); }
 // clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is finite
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *

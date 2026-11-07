@@ -17,7 +17,7 @@ namespace ckernel {
  * Performs an elementwise atan2 operation on two inputs: y = atan2(x0, x1).
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  *
  * Return value: None

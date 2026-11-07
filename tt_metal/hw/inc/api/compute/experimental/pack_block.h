@@ -43,7 +43,7 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contig
  * Before calling this function, `pack_block_contiguous_init` must have
  * been called to configure the MOP, and `cb_reserve_back(n)` must have
  * been called to reserve at least `num_tiles` tiles in the output CB.
- * The DEST register buffer must be in acquired state via *acquire_dst*.
+ * The DEST register buffer must be in acquired state via *tile_regs_acquire*.
  *
  * This call is blocking and is only available on the compute engine
  * (Blackhole only).

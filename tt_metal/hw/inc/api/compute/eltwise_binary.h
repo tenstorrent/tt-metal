@@ -209,7 +209,7 @@ ALWI void mul_reuse_dest_init(std::uint32_t icb, std::uint32_t call_line = __bui
 /**
  * Performs element-wise multiplication C=A*B of tiles in two CBs at given
  * indices and writes the result to the DST register at index dst_tile_index.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  *
  * Return value: None
@@ -248,7 +248,7 @@ ALWI void mul_tiles(
 /**
  * Performs element-wise addition C=A+B of tiles in two CBs at given indices
  * and writes the result to the DST register at index dst_tile_index. The DST
- * register buffer must be in acquired state via *acquire_dst* call. This call
+ * register buffer must be in acquired state via *tile_regs_acquire* call. This call
  * is blocking and is only available on the compute engine.
  *
  * Return value: None
@@ -278,7 +278,7 @@ ALWI void add_tiles(
 /**
  * Performs element-wise subtraction C=A-B of tiles in two CBs at given indices
  * and writes the result to the DST register at index dst_tile_index. The DST
- * register buffer must be in acquired state via *acquire_dst* call. This call
+ * register buffer must be in acquired state via *tile_regs_acquire* call. This call
  * is blocking and is only available on the compute engine.
  *
  * Return value: None
@@ -310,7 +310,7 @@ ALWI void sub_tiles(
  * to a consecutive DST register slot. This is the uniform block entry point for the multiply op: its body is a
  * simple loop over `mul_tiles`, so it inherits `mul_tiles`'s semantics and requires the same initialization
  * (`mul_init`) to have been called first. The DST register buffer must be in acquired state via
- * *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ * *tile_regs_acquire* call. This call is blocking and is only available on the compute engine.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
@@ -347,7 +347,7 @@ ALWI void mul_block(
  * Performs element-wise addition C=A+B on `ntiles` consecutive tile pairs from two CBs, writing each result to a
  * consecutive DST register slot. This is the uniform block entry point for the add op: its body is a simple loop
  * over `add_tiles`, so it inherits `add_tiles`'s semantics and requires the same initialization (`add_init`)
- * to have been called first. The DST register buffer must be in acquired state via *acquire_dst* call. This call
+ * to have been called first. The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call
  * is blocking and is only available on the compute engine.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
@@ -386,7 +386,7 @@ ALWI void add_block(
  * a consecutive DST register slot. This is the uniform block entry point for the subtract op: its body is a simple
  * loop over `sub_tiles`, so it inherits `sub_tiles`'s semantics and requires the same initialization
  * (`sub_init`) to have been called first. The DST register buffer must be in acquired state via
- * *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ * *tile_regs_acquire* call. This call is blocking and is only available on the compute engine.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
@@ -453,7 +453,7 @@ ALWI void binary_reuse_dest_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_
  * and the other is unpacked from in_cb_id. reuse_dest selects which source register the DST tile is
  * loaded into (DEST_TO_SRCA: DST->SrcA, cb->SrcB; DEST_TO_SRCB: DST->SrcB, cb->SrcA). Assumes a prior op
  * populated DST[dst_tile_index], else it reads zeroes. Pair with add_reuse_dest_init<reuse_dest>. The DST
- * register buffer must be in acquired state via *acquire_dst*. Blocking; compute engine only.
+ * register buffer must be in acquired state via *tile_regs_acquire*. Blocking; compute engine only.
  *
  * | Param Type | Name                 | Description                                                          | Type                       | Valid Range | Required |
  * |------------|----------------------|----------------------------------------------------------------------|----------------------------|-------------|----------|

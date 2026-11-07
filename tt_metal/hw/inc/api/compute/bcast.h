@@ -295,7 +295,7 @@ ALWI void any_tiles_bcast(
  *
  * Performs a broadcast-operation *C=A+B* of tiles in two CBs at given indices
  * and writes the result to the DST register at index dst_tile_index. The DST
- * register buffer must be in acquired state via *acquire_dst* call. This call
+ * register buffer must be in acquired state via *tile_regs_acquire* call. This call
  * is blocking and is only available on the compute engine.
  *
  * Broadcasting semantics are defined as follows:

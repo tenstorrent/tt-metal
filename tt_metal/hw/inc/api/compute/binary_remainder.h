@@ -17,7 +17,7 @@ namespace ckernel {
  * Performs an elementwise remainder operation with the two 32-bit integer inputs: y = remainder(x0,x1)
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -54,7 +54,7 @@ ALWI void remainder_int32_tile_init() {
  * Performs an elementwise remainder operation with the two unsigned 32-bit integer inputs: y = remainder(x0,x1)
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
@@ -96,7 +96,7 @@ ALWI void remainder_uint32_tile_init() {
  *
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  *
  * Return value: None

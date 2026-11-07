@@ -18,7 +18,7 @@ namespace ckernel {
  * Both inputs must be int32.
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  *
  * Return value: None
