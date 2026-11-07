@@ -215,13 +215,12 @@ inline void _llk_math_reduce_row_max_mop_config_(const TensorShape& tensor_shape
  * @brief Sets up addrmods for REDUCE_COL.
  *
  * @param fidelity: Resolved source-format phase schedule.
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
-inline void _llk_math_reduce_col_addrmod_(const MathFidelitySchedule fidelity, const TensorShape& tensor_shape)
+inline void _llk_math_reduce_col_addrmod_(const MathFidelitySchedule fidelity)
 {
-    // For face_r_dim < 8, dest will be sparse with faces placed every 8 rows.
-    // For face_r_dim >= 8, dest in a dense manner faces placed every tensor_shape.face_r_dim rows
-    const std::uint16_t dest_face_incr = static_cast<std::uint16_t>((tensor_shape.face_r_dim < (FACE_R_DIM >> 1)) ? MAX_FPU_ROWS : tensor_shape.face_r_dim);
+    // The result is a 1xN tile (one 1x16 row per face column), so its faces sit MAX_FPU_ROWS apart in dest
+    // whatever the input face_r_dim is. This matches what pack expects for a 1xN output tile.
+    constexpr std::uint16_t dest_face_incr = MAX_FPU_ROWS;
 
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = dest_face_incr}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_0);
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0, .clr = 1}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_1);
@@ -238,7 +237,7 @@ inline void _llk_math_reduce_col_addrmod_(const MathFidelitySchedule fidelity, c
  * Face 2    | Face 3
  * --------------------
  * In order to get 1x32 row output (which means 2 output faces, 1x16 row each), then Face 0 + Face 2 are pooled together, and Face 1 and Face 3 are pooled
- * together.
+ * together. The output faces are placed MAX_FPU_ROWS rows apart in dest (the 1x32 tile layout).
  *
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @param fidelity: Resolved source-format phase schedule.
@@ -247,9 +246,9 @@ inline void _llk_math_reduce_col_addrmod_(const MathFidelitySchedule fidelity, c
 template <PoolType POOL_TYPE>
 inline void _llk_math_reduce_col_mop_config_(const MathFidelitySchedule fidelity, const TensorShape& tensor_shape)
 {
-    // So Face 0 reduce, dest counter += 16, Face 1 reduce, dest counter reset to 0
-    // then Face 2 reduce (which includes Face 0 reduce result in dest), dest counter += 16, Face 3 reduce(which includes Face 1 reduce result in dest at index
-    // 16)
+    // So Face 0 reduce, dest counter += MAX_FPU_ROWS, Face 1 reduce, dest counter reset to 0
+    // then Face 2 reduce (which includes Face 0 reduce result in dest), dest counter += MAX_FPU_ROWS, Face 3 reduce (which includes Face 1 reduce result in
+    // dest at row MAX_FPU_ROWS)
     const std::uint32_t MOP_OUTER_LOOP      = 1;
     const std::uint32_t MOP_INNER_LOOP      = (tensor_shape.total_num_faces() >= 2) ? (tensor_shape.total_num_faces() >> 1) : tensor_shape.total_num_faces();
     const std::uint32_t NUM_FIDELITY_PHASES = fidelity.phase_count - 1;
@@ -268,7 +267,7 @@ inline void _llk_math_reduce_col_mop_config_(const MathFidelitySchedule fidelity
             {
                 tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0x0>();
             }
-            // This increments dest by 8 rows for face_r_dim <= 8, and 16 otherwise
+            // This increments dest by MAX_FPU_ROWS, to the second face of the 1x32 output tile
             tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0x0>();
 
             // <<< Starting Point = NUM_FIDELITY_PHASES + 1: For total_num_faces() == 1 || num_faces_c_dim < num_faces_r_dim >>> //
@@ -421,6 +420,8 @@ inline void _llk_math_reduce_scalar_mop_config_(const MathFidelitySchedule fidel
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  * @note Pass the source register formats: for SUM/AVG, init lowers the fidelity to the highest one they can use and skips phases they
  *       cannot use. Run init again whenever either format changes.
+ * @note REDUCE_COL writes each result as a 1xN tile in dest (1x32, or 1x16 for a one-face-wide input),
+ *       not as a tile of the input shape. Pack it with that 1xN output tile shape.
  * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
  *       FPU path to it.
  * @note Int8 scalar SUM/AVG is not supported because the partials saturate in SrcB. Use the SFPU reduce instead.
@@ -455,7 +456,7 @@ inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataForm
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
     {
-        _llk_math_reduce_col_addrmod_(fidelity, tensor_shape);
+        _llk_math_reduce_col_addrmod_(fidelity);
         _llk_math_reduce_col_mop_config_<POOL_TYPE>(fidelity, tensor_shape);
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
@@ -465,9 +466,17 @@ inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataForm
         _llk_math_reduce_scalar_mop_config_<POOL_TYPE, EN_32BIT_DEST>(fidelity, final_fidelity, tensor_shape);
     }
 
-    // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
-    // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
-    _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
+    if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
+    {
+        // REDUCE_COL output tiles are 1xN tiles: MAX_FPU_ROWS dest rows per face column.
+        _set_tile_shape_idx_gpr_(MAX_FPU_ROWS * tensor_shape.num_faces_c_dim);
+    }
+    else
+    {
+        // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
+        // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
+        _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
+    }
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();

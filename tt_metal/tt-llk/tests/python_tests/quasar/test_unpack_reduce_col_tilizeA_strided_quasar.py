@@ -36,7 +36,11 @@ from helpers.param_config import (
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
-from helpers.stimuli_config import StimuliConfig
+from helpers.reduce_result import (
+    ReduceStimuliConfig,
+    reduce_result_golden,
+    reduce_result_tile_shape,
+)
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
@@ -230,6 +234,8 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     num_faces = tile_shape.total_num_faces()
     reduce_dim = ReduceDimension.Column
     math_fidelity = MathFidelity.LoFi
+    # The column reduce result is packed as a 1xN tile.
+    res_tile_shape = reduce_result_tile_shape(reduce_dim, tile_shape)
 
     src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -269,6 +275,9 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             tile_shape=tile_shape,
             input_format=input_fmt,
         )
+        golden_tensor = reduce_result_golden(
+            golden_tensor, reduce_dim, tile_shape, tile_cnt_A
+        )
 
     mathop = {
         ReduceDimension.Row: MathOperation.ReduceRow,
@@ -298,18 +307,19 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             NUM_FACES(num_faces),
             LOOP_FACTOR(loop_factor),
         ],
-        "variant_stimuli": StimuliConfig(
+        "variant_stimuli": ReduceStimuliConfig(
             src_A,
             formats.input_format,
             src_B,
             formats.input_format,
             formats.output_format,
+            input_tile_shape=tile_shape,
             tile_count_A=tile_cnt_A,
             tile_count_B=1,
             tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=tile_shape.face_r_dim,
-            tile_dimensions=tile_dimensions,
+            num_faces=res_tile_shape.total_num_faces(),
+            face_r_dim=res_tile_shape.face_r_dim,
+            tile_dimensions=res_tile_shape.tile_dims,
             use_dense_tile_dimensions=True,
         ),
         "unpack_to_dest": False,
@@ -331,5 +341,5 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape
+        golden_tensor, res_tensor, formats.output_format, tile_shape=res_tile_shape
     ), "Assert against golden failed"
