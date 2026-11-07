@@ -1168,8 +1168,12 @@ class SpecGdnBlockState:
 
         from models.demos.blackhole.qwen36.tt.gdn_block_io import GdnBlockIO
 
-        io = GdnBlockIO(self, self.model._paged_kv_caches)
-        why, zero_why = io.reason(), io.zero_reason()
+        try:
+            io = GdnBlockIO(self, self.model._paged_kv_caches)
+            why, zero_why = io.reason(), io.zero_reason()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[mamba_spec] block I/O kernel not bound ({e!r}): op chains and traces")
+            return
         self._io = io if why is None else None
         self._io_zero = io if zero_why is None else None
         logger.info(
