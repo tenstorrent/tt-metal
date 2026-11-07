@@ -14,8 +14,9 @@ test_sparse_mla_perf: the CI gate (Galaxy, LoudBox). Warm and long with the prod
 (SPxTP-sharded), torus XY on Galaxy and Fabric2D on LoudBox, for GATE_CASES: K3.1 (last DSA layer's slot of 24, at
 K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's
 top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one replay of the
-captured trace. Each (case, box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a
-box without targets only reports), and the traced output must match the untraced one. Each layer runs standalone
+captured trace. Each (case, box, scenario, mode) is gated against PERF_TARGETS_MS: traced two-sided ± PERF_MARGIN,
+untraced only above target + PERF_MARGIN (a box without targets only reports), and the traced output must match the
+untraced one. Each layer runs standalone
 (no next-layer KV prefetch overlapped with its attention), as the first layer of a stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
@@ -69,23 +70,33 @@ GATE_CASES = {
     "glm_5_3": ("glm_5_3", False),
     "glm_5_3-no_indexer": ("glm_5_3", True),
 }
-# Host time of one chunk forward through device synchronization, in ms, measured as CI runs perf jobs:
-# LOGURU_LEVEL=ERROR and TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per variant (-k kimi_k3_1, -k glm_5_3)
-# as the jobs run them. Galaxy: bh-glx-120-c02u02, 14kw, 2026-11-06, median of 3 runs, CPUs pinned (taskset; unpinned
-# processes on this host share 4 CPUs with the Weka client). LoudBox: not measured yet (report only).
-_GALAXY_TARGETS_MS = {
-    # case: (warm untraced, warm traced, long untraced, long traced)
-    "kimi_k3_1": (4.20, 3.24, 7.57, 6.93),
-    "glm_5_3": (4.20, 2.85, 7.37, 6.47),
-    "glm_5_3-no_indexer": (3.06, 2.26, 3.10, 2.32),
+# Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
+# untraced, long traced). From CI (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per model as
+# the jobs run them), two runs on 2026-11-07: traced is their mean, untraced the slower of the two, since untraced is
+# only a ceiling. K3.1 on Galaxy has no CI run yet: bh-glx-120-c02u02 (14kw, CPUs pinned, median of 3 runs, 2026-11-06).
+_TARGETS_MS = {
+    "Galaxy": {
+        "kimi_k3_1": (4.20, 3.24, 7.57, 6.93),
+        "glm_5_3": (4.79, 2.70, 7.09, 6.30),
+        "glm_5_3-no_indexer": (4.22, 2.19, 3.60, 2.25),
+    },
+    "LoudBox": {
+        "kimi_k3_1": (4.43, 2.77, 4.50, 4.04),
+        "glm_5_3": (4.39, 2.40, 5.04, 3.60),
+        "glm_5_3-no_indexer": (2.21, 2.10, 2.84, 2.72),
+    },
 }
 PERF_TARGETS_MS = {
-    (case, "Galaxy", scenario, mode): ms
-    for case, row in _GALAXY_TARGETS_MS.items()
+    (case, box, scenario, mode): ms
+    for box, rows in _TARGETS_MS.items()
+    for case, row in rows.items()
     for (scenario, mode), ms in zip([(s, m) for s in SCENARIO_CACHE_TOKENS for m in MODES], row)
 }
-# Untraced is host-bound and moves with the CPU clock; traced is device-bound and steady.
-PERF_MARGIN = {"untraced": 0.05, "traced": 0.03}
+# Traced is device-bound and steady (within ~1% run to run on CI), so it is gated both ways. Untraced is host-bound,
+# and on CI's shared hosts the same case moved up to ~23% between runs with the main thread on one CPU throughout, so it
+# is only a ceiling that catches large host-time regressions.
+PERF_MARGIN = {"untraced": 0.25, "traced": 0.03}
+PERF_TWO_SIDED = {"untraced": False, "traced": True}
 # Traced output must match the untraced output of the same forward.
 TRACE_PCC = 0.9999
 CI_RUN = os.environ.get("CI") == "true"
@@ -316,11 +327,8 @@ def _device_tensors(tensor):
     return [ttnn.to_torch(t) for t in ttnn.get_device_tensors(tensor)]
 
 
-# Diagnostics for host-time noise on CI: the CPU the main thread last ran on after each untraced sample.
-_HOST_CPUS = []
-
-
 def _host_cpu():
+    """The CPU this thread last ran on, or -1. A CI diagnostic for untraced host-time noise."""
     try:
         with open("/proc/thread-self/stat") as f:
             return int(f.read().rsplit(")", 1)[1].split()[36])  # field 39: processor
@@ -328,14 +336,32 @@ def _host_cpu():
         return -1
 
 
+def _cpu_ranges(cpus):
+    out, run = [], []
+    for cpu in cpus:
+        if run and cpu != run[-1] + 1:
+            out.append(run)
+            run = []
+        run.append(cpu)
+    if run:
+        out.append(run)
+    return ",".join(f"{r[0]}-{r[-1]}" if len(r) > 1 else f"{r[0]}" for r in out)
+
+
 def _host_state():
-    affinity = sorted(os.sched_getaffinity(0))
-    span = f"{affinity[0]}-{affinity[-1]}" if affinity else "none"
-    return f"{len(affinity)} CPUs allowed ({span}), {os.cpu_count()} online, load {os.getloadavg()[0]:.1f}"
+    try:
+        affinity = sorted(os.sched_getaffinity(0))
+        return (
+            f"{len(affinity)} CPUs allowed ({_cpu_ranges(affinity)}), {os.cpu_count()} online, "
+            f"load {os.getloadavg()[0]:.1f}"
+        )
+    except OSError as e:
+        return f"unavailable ({e})"
 
 
-def _time_untraced(mesh_device, case, start):
-    """Host ms of each timed eager forward through sync, and the last forward's per-device output."""
+def _time_untraced(mesh_device, case, start, cpus=None):
+    """Host ms of each timed eager forward through sync, and the last forward's per-device output. Appends the CPU
+    the main thread ran on after each sample to `cpus` if given."""
     for _ in range(UNTRACED_WARMUP):  # the first call compiles
         ttnn.deallocate(case.forward(start))
         ttnn.synchronize_device(mesh_device)
@@ -345,7 +371,8 @@ def _time_untraced(mesh_device, case, start):
         out = case.forward(start)
         ttnn.synchronize_device(mesh_device)
         samples.append((time.perf_counter() - t0) * 1e3)
-        _HOST_CPUS.append(_host_cpu())
+        if cpus is not None:
+            cpus.append(_host_cpu())
         if i == UNTRACED_SAMPLES - 1:
             reference = _device_tensors(out)
         ttnn.deallocate(out)
@@ -412,9 +439,9 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
     )
     start = cache
     samples = {}
-    _HOST_CPUS.clear()
-    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start)
-    print(f"{label} host: {_host_state()}; untraced sample CPUs {' '.join(map(str, _HOST_CPUS))}")
+    cpus = []
+    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, cpus)
+    print(f"{label} host: {_host_state()}; untraced sample CPUs {' '.join(map(str, cpus))}")
     samples["traced"], traced_out = _time_traced(mesh_device, case, start)
     trace_pcc = min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(eager_out, traced_out))
 
@@ -423,10 +450,12 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
         measured_ms = min(samples[mode])
         target_ms = PERF_TARGETS_MS.get((case_name, box, scenario, mode))
         margin = PERF_MARGIN[mode]
-        within = target_ms is not None and abs(measured_ms - target_ms) <= target_ms * margin
+        lower = target_ms * (1 - margin) if target_ms is not None and PERF_TWO_SIDED[mode] else 0.0
+        upper = target_ms * (1 + margin) if target_ms is not None else None
+        within = target_ms is not None and lower <= measured_ms <= upper
         print(  # print, not logger: CI runs perf jobs at LOGURU_LEVEL=ERROR
             f"{label} {mode}: {measured_ms:.3f} ms "
-            f"(max {max(samples[mode]):.3f}); target {target_ms} ms ± {margin:.0%}; "
+            f"(max {max(samples[mode]):.3f}); target {target_ms} ms {'±' if PERF_TWO_SIDED[mode] else '+'}{margin:.0%}; "
             f"samples {' '.join(f'{x:.3f}' for x in samples[mode])}"
         )
         emit_perf_metrics(
@@ -449,17 +478,17 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
                 "measured_ms": measured_ms,
                 "target_ms": target_ms,
                 "margin_pct": margin * 100.0,
+                "two_sided": PERF_TWO_SIDED[mode],
                 "within_band": within,
             },
         )
         if target_ms is None:
             unmeasured.append(f"{mode} {measured_ms:.3f} ms")
         elif not within:
-            lower, upper = target_ms * (1 - margin), target_ms * (1 + margin)
             direction = "faster than the target, re-centre it" if measured_ms < lower else "slower than the target"
             failures.append(
                 f"{mode}: {measured_ms:.3f} ms outside [{lower:.3f}, {upper:.3f}] "
-                f"(target {target_ms:.3f} ms ± {margin:.0%}); {direction}"
+                f"(target {target_ms:.3f} ms {'±' if PERF_TWO_SIDED[mode] else '+'}{margin:.0%}); {direction}"
             )
     if trace_pcc < TRACE_PCC:
         failures.append(f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}")
