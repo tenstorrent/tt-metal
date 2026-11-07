@@ -13,11 +13,11 @@ Scenarios (Galaxy sizes; smaller boxes scale the chunk and cache by SP/8 so each
 test_sparse_mla_perf: the CI gate (Galaxy, LoudBox). Warm and long with the production scaled-FP8 KVPE cache
 (SPxTP-sharded), torus XY on Galaxy and Fabric2D on LoudBox, for GATE_CASES: K3.1 (last DSA layer's slot of 24, at
 K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's
-top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one replay of the
-captured trace. Each (case, box, scenario, mode) is gated against PERF_TARGETS_MS: traced two-sided ± PERF_MARGIN,
-untraced only above target + PERF_MARGIN (a case without targets only reports), and the traced output must match the
-untraced one. Each layer runs standalone (no next-layer KV prefetch overlapped with its attention), as the first layer
-of a stage.
+top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one timed replay of
+the captured trace (one more, untimed, for the repeatability check). Each (case, box, scenario, mode) is gated
+against PERF_TARGETS_MS: traced two-sided ± PERF_MARGIN, untraced only above target + PERF_MARGIN (a case without
+targets only reports), and the traced output must match the untraced one. Each layer runs standalone (no next-layer KV
+prefetch overlapped with its attention), as the first layer of a stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
@@ -73,11 +73,10 @@ GATE_CASES = {
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced). From CI (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per model as
 # the jobs run them), two runs on 2026-11-07: traced is their mean, untraced the slower of the two, since untraced is
-# only a ceiling. K3.1 on Galaxy has one CI run so far (2026-11-07): traced from it, untraced the slower of it and the
-# pinned local run (bh-glx-120-c02u02, 2026-11-06/07).
+# only a ceiling. K3.1 on Galaxy: two CI runs (2026-11-07) as well; long untraced keeps the slower pinned local run.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (4.29, 3.10, 7.57, 6.71),
+        "kimi_k3_1": (4.99, 3.10, 7.57, 6.71),
         "glm_5_3": (4.79, 2.70, 7.09, 6.30),
         "glm_5_3-no_indexer": (4.22, 2.19, 3.60, 2.25),
     },
@@ -362,7 +361,7 @@ def _host_state():
 
 def _time_untraced(mesh_device, case, start, cpus=None, repeat=None):
     """Host ms of each timed eager forward through sync, and the last forward's per-device output. Appends the CPU
-    the main thread ran on after each sample to `cpus`, and the second-to-last forward's output to `repeat`, if
+    the main thread ran on after each sample to `cpus`, and the output of one more, untimed forward to `repeat`, if
     given."""
     for _ in range(UNTRACED_WARMUP):  # the first call compiles
         ttnn.deallocate(case.forward(start))
@@ -377,8 +376,10 @@ def _time_untraced(mesh_device, case, start, cpus=None, repeat=None):
             cpus.append(_host_cpu())
         if i == UNTRACED_SAMPLES - 1:
             reference = _device_tensors(out)
-        elif i == UNTRACED_SAMPLES - 2 and repeat is not None:
-            repeat.append(_device_tensors(out))
+        ttnn.deallocate(out)
+    if repeat is not None:
+        out = case.forward(start)
+        repeat.append(_device_tensors(out))
         ttnn.deallocate(out)
     return samples, reference
 
@@ -508,7 +509,8 @@ def test_sparse_mla_perf(mesh_device, device_params, variant, case_name, config_
                 bound = f"outside [{lower:.3f}, {upper:.3f}] (target {target_ms:.3f} ms ±{margin:.0%}); {direction}"
             failures.append(f"{mode}: {measured_ms:.3f} ms {bound}")
     if trace_pcc < TRACE_PCC:
-        # Which side is not repeatable: two eager forwards, and two replays of the same trace.
+        # Within-mode repeatability, for triage: if both pairs match, eager and traced disagree consistently; if one
+        # pair does not, that mode is not deterministic.
         failures.append(
             f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f} (eager vs eager "
             f"{min_pcc(eager_repeat[0], eager_out):.6f}, replay vs replay {min_pcc(traced_repeat[0], traced_out):.6f})"
