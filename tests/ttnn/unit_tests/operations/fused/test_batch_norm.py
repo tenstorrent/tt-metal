@@ -586,6 +586,13 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
 
     print(f"pccs_low={pccs_low}, pccs_high={pccs_high}")
 
+    assert all(low >= 0.99 for low in pccs_low), (
+        f"Low-accuracy config produced invalid output PCC (< 0.99): pccs_low={pccs_low}"
+    )
+    assert all(high >= 0.99 for high in pccs_high), (
+        f"High-accuracy config produced invalid output PCC (< 0.99): pccs_high={pccs_high}"
+    )
+
     # HiFi4 + fp32 accumulation should be at least as accurate as LoFi.
     # Strict high > low is numerically unstable; allow a small tolerance.
     pcc_ordering_tolerance = 1e-3
@@ -1293,3 +1300,67 @@ def test_batch_norm_running_var_bessel_correction(device):
         atol=1e-3,
         check_pcc=False,
     )
+
+
+@pytest.mark.parametrize("training", [False, True])
+@pytest.mark.parametrize(
+    "input_dtype, param_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.bfloat16),
+    ],
+)
+def test_batch_norm_mixed_precision_fp32_dest_acc_disabled(device, training, input_dtype, param_dtype):
+    """Regression test for #63629: mixed-precision batch_norm and running_statistics must
+    enable 32-bit Dest when any operand is float32 even if caller compute_kernel_config
+    sets fp32_dest_acc_en=False."""
+    x0 = ((torch.arange(2 * 32 * 32) % 31 - 15) / 8).reshape(1, 2, 32, 32).to(torch.float32)
+    mean0 = torch.tensor([1.0 / 16.0, -3.0 / 16.0], dtype=torch.float32)
+    var0 = torch.tensor([1.0, 4.0], dtype=torch.float32)
+    weight0 = torch.tensor([1.25, 0.75], dtype=torch.float32)
+    bias0 = torch.tensor([0.5, -0.25], dtype=torch.float32)
+
+    x_tt = ttnn.from_torch(x0, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    mean_tt = ttnn.from_torch(mean0.view(1, 2, 1, 1), dtype=param_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    var_tt = ttnn.from_torch(var0.view(1, 2, 1, 1), dtype=param_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    weight_tt = ttnn.from_torch(weight0.view(1, 2, 1, 1), dtype=param_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    bias_tt = ttnn.from_torch(bias0.view(1, 2, 1, 1), dtype=param_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cfg = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    out_tt = ttnn.batch_norm(
+        x_tt,
+        running_mean=mean_tt,
+        running_var=var_tt,
+        weight=weight_tt,
+        bias=bias_tt,
+        training=training,
+        eps=1e-5,
+        momentum=0.1,
+        compute_kernel_config=cfg,
+    )
+    got_out = ttnn.to_torch(out_tt).to(torch.float32)
+
+    ref_mean = mean0.clone()
+    ref_var = var0.clone()
+    ref_out = torch.nn.functional.batch_norm(
+        input=x0,
+        running_mean=ref_mean,
+        running_var=ref_var,
+        weight=weight0,
+        bias=bias0,
+        training=training,
+        eps=1e-5,
+        momentum=0.1,
+    )
+    assert_numeric_metrics(ref_out, got_out, pcc_threshold=0.999, rtol=0.02, atol=0.05, frobenius_threshold=0.02)
+    if training:
+        got_mean = ttnn.to_torch(mean_tt).to(torch.float32).view(-1)
+        got_var = ttnn.to_torch(var_tt).to(torch.float32).view(-1)
+        assert_numeric_metrics(ref_mean, got_mean, rtol=0.02, atol=0.05, check_pcc=False)
+        assert_numeric_metrics(ref_var, got_var, rtol=0.02, atol=0.05, check_pcc=False)
