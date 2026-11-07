@@ -39,7 +39,7 @@ from .attention import (
     page_table_width,
     verify_variants,
 )
-from .common import TILE, MeshPlan, as_weight, cache_fill, cache_name, compute_config, pad_to
+from .common import TILE, MeshPlan, as_weight, cache_fill, cache_name, compute_config, dram_linear, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .device_sampler import MAX_USERS, DeviceSampler
 from .greedy_head import GreedyHead
@@ -889,7 +889,7 @@ class TtMiMoModel:
         own_h = h is None
         if own_h:
             h = self.final_norm(x, prefill=prefill)
-        logits = ttnn.linear(
+        logits = dram_linear(
             h,
             self.lm_head,
             dtype=self.logits_dtype,

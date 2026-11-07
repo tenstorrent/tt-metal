@@ -77,7 +77,7 @@ from ..reference.spec_decode import (
     planned_drafts,
 )
 from ..reference.spec_inputs import pack_mtp_commits
-from .common import TILE, as_weight, cache_fill, cache_name, compute_config
+from .common import TILE, as_weight, cache_fill, cache_name, compute_config, dram_linear
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
 from .proj_stream import BankStreamMatmul
@@ -293,7 +293,7 @@ class TtMiMoMTP:
         if stream is not None:
             xs = stream(cat, layer.eh_proj, rows=4 if m.decode_users <= 4 else 8)
         else:
-            xs = ttnn.linear(
+            xs = dram_linear(
                 cat,
                 layer.eh_proj,
                 dtype=ttnn.bfloat16,
@@ -403,7 +403,7 @@ class TtMiMoMTP:
             cat = ttnn.concat([en, hn], dim=-1)
             en.deallocate(True)
             hn.deallocate(True)
-            xs = ttnn.linear(
+            xs = dram_linear(
                 cat,
                 layer.eh_proj,
                 dtype=ttnn.bfloat16,
