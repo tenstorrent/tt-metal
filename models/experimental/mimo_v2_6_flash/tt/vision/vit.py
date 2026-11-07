@@ -6,7 +6,7 @@
 Per chip: 4 of the 32 Q heads and 1 of the 8 KV heads (chip c holds Q heads 4c..4c+3 and the KV head they share),
 a 576-wide slice of the SwiGLU MLP and a 640-wide slice of the merger MLP. The residual stream [N, 1280] is
 replicated; the attention output projection, the MLP down projection and the merger's second linear end in an
-all-reduce over the row. In BF16 that is ~180 MB of weights per chip (full replication would be ~1.4 GB).
+all-reduce over the row. In BF16 that is 201 MB of weights per chip (full replication would be ~1.4 GB).
 
 Attention (see reference/vision.py for the semantics):
 
@@ -24,8 +24,14 @@ The 1/sqrt(64) attention scale is folded into the Q weights and bias (a power of
 
 Every attention sequence (a frame pair of a video or an image) is independent, so a long video runs as several
 passes of whole frames (``max_rows`` patch rows per pass); a single image always runs in one pass.
+
+Bounded programs: a pass is padded to the next of ``ROW_BUCKETS`` row counts (padding is its own masked window,
+dropped from the output), and ``cu_window_seqlens`` always has ``CU_ENTRIES`` entries (empty windows at the end), so
+every program a call runs is one of the ``len(ROW_BUCKETS)`` sets that ``warm()`` compiles up front. A pass longer
+than the largest bucket (only if the processor allows images over 32768 patches) falls back to a shape of its own.
 """
 
+import time
 from dataclasses import dataclass
 
 import torch
@@ -39,13 +45,28 @@ from ..decoder import TtRMSNorm
 BLOCK = 64  # query rows per window-attention block; keys per block: BLOCK + 2 * window
 MASK_NEG = -1.0e9
 DEFAULT_MAX_ROWS = 16384
+# Pass row buckets: four per octave from 1024 (at most 25% padding, ~14% at the top of an octave; multiples of 256:
+# SDPA chunks, 64-row attention blocks, 32-row merged tiles). 32768 is the processor's largest image (8388608 pixels
+# / 256 per patch). A 32-frame 640x360 video pass (14080 rows) lands in 14336.
+ROW_BUCKETS = tuple(
+    b for octave in (1024, 2048, 4096, 8192, 16384) for b in (octave, octave * 5 // 4, octave * 3 // 2, octave * 7 // 4)
+) + (32768,)
+# cu_window_seqlens entries per pass (fixed so the SDPA programs do not depend on the number of frames): up to
+# CU_ENTRIES - 2 sequences plus the padding window.
+CU_ENTRIES = 256
+MAX_SEQS_PER_PASS = CU_ENTRIES - 2
 
 
 @dataclass(frozen=True)
 class VisionNumerics:
     """``matmul_fidelity``: the linears' math fidelity (attention matmuls, softmax, RoPE and SDPA always run HiFi4
     with fp32 accumulation). ``residual_dtype``: the residual stream between blocks. ``reduce_dtype``: the partial
-    sums of the row-parallel projections (attention output, MLP down, merger) and their all-reduce."""
+    sums of the row-parallel projections (attention output, MLP down, merger) and their all-reduce.
+
+    An fp32 ``ttnn.all_reduce`` (reduce-scatter + all-gather) on the 1x8 row can hand its output to the next op
+    before every chip's share has landed (seen at [1, 1, 1024, 1280] and [1, 1, 1280, 1280]: random results run to
+    run, exact with a device sync after it), so fp32 reduces are followed by ``ttnn.synchronize_device``. bf16
+    reduces showed no such race (every row bucket is checked bit for bit run to run in tests/test_vision_tp8.py)."""
 
     matmul_fidelity: object = ttnn.MathFidelity.HiFi2
     residual_dtype: object = ttnn.bfloat16
@@ -53,15 +74,28 @@ class VisionNumerics:
 
 
 NUMERICS = {
-    "fast": VisionNumerics(),
-    "balanced": VisionNumerics(ttnn.MathFidelity.HiFi4, ttnn.float32, ttnn.bfloat16),
-    "accurate": VisionNumerics(ttnn.MathFidelity.HiFi4, ttnn.float32, ttnn.float32),
+    "fast": VisionNumerics(),  # fails the 0.99 per-block bar on some inputs
+    "balanced": VisionNumerics(ttnn.MathFidelity.HiFi4, ttnn.float32, ttnn.bfloat16),  # the default
+    "accurate": VisionNumerics(ttnn.MathFidelity.HiFi4, ttnn.float32, ttnn.float32),  # + a sync per fp32 reduce
 }
+DEFAULT_NUMERICS = "balanced"
 
 
-def padded_rows(n):
-    """Pass row count bucket: a multiple of 128 (SDPA chunks, 64-row attention blocks, 32-row merged tiles), coarser
-    as ``n`` grows (at most ~1/16 padding), so programs are reused across similar sizes."""
+def all_reduce(plan, x, numerics):
+    """The row's all-reduce; an fp32 one is followed by a device sync (see VisionNumerics)."""
+    out = plan.all_reduce(x)
+    if out.dtype == ttnn.float32:
+        ttnn.synchronize_device(plan.mesh_device)
+    return out
+
+
+def padded_rows(n, buckets=ROW_BUCKETS):
+    """Rows a pass of ``n`` patch rows runs with: the smallest bucket that holds it. Without buckets (or past the
+    largest) a multiple of 128 (SDPA chunks, 64-row attention blocks, 32-row merged tiles), coarser as ``n`` grows
+    (at most ~1/16 padding)."""
+    for b in buckets or ():
+        if b >= n:
+            return b
     step = 128
     while n > 16 * step:
         step *= 2
@@ -77,32 +111,40 @@ class PassGeometry:
     rows: int  # padded rows
 
     @classmethod
-    def build(cls, grids):
+    def build(cls, grids, buckets=ROW_BUCKETS):
         n = sum(t * h * w for t, h, w in grids)
-        return cls(grids=list(grids), n=n, rows=padded_rows(n))
+        return cls(grids=list(grids), n=n, rows=padded_rows(n, buckets))
 
     def seq_bounds(self):
-        """[0, ..., n, rows]: the sequences, then the padding as one more window (cu_window_seqlens)."""
+        """[0, ..., n, rows]: the sequences, then the padding as one more window."""
         cu = ref.cu_seqlens(self.grids).tolist()
         return cu + ([self.rows] if self.rows > self.n else [])
 
+    def cu_window_seqlens(self):
+        """seq_bounds padded to CU_ENTRIES with empty windows at ``rows`` (the SDPA skips them)."""
+        bounds = self.seq_bounds()
+        assert len(bounds) <= CU_ENTRIES, f"{len(bounds) - 1} windows in one pass (at most {CU_ENTRIES - 1})"
+        return bounds + [self.rows] * (CU_ENTRIES - len(bounds))
 
-def plan_passes(grid_thw, max_rows):
-    """Split items into passes of whole frames, at most ``max_rows`` patch rows each (a single frame / image larger
-    than that gets a pass of its own). Returns [(row_start, row_end, [(t, h, w), ...])]."""
-    passes, cur, start, rows = [], [], 0, 0
+
+def plan_passes(grid_thw, max_rows, max_seqs=MAX_SEQS_PER_PASS):
+    """Split items into passes of whole frames, at most ``max_rows`` patch rows and ``max_seqs`` frames / images each
+    (a single frame / image larger than ``max_rows`` gets a pass of its own).
+    Returns [(row_start, row_end, [(t, h, w), ...])]."""
+    passes, cur, start, rows, seqs = [], [], 0, 0, 0
     for t, h, w in ref.as_grid_list(grid_thw):
         frame = h * w
         left = t
         while left:
             fit = max(1, (max_rows - rows) // frame) if rows else max(1, max_rows // frame)
-            take = min(left, fit)
-            if rows and rows + take * frame > max_rows:
+            take = min(left, fit, max_seqs - seqs)
+            if rows and (take <= 0 or rows + take * frame > max_rows):
                 passes.append((start, start + rows, cur))
-                start, rows, cur = start + rows, 0, []
+                start, rows, seqs, cur = start + rows, 0, 0, []
                 continue
             cur.append((take, h, w))
             rows += take * frame
+            seqs += take
             left -= take
     if cur:
         passes.append((start, start + rows, cur))
@@ -170,16 +212,21 @@ class PassInputs:
             True: dev(to_col.reshape(1, rows).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             False: dev(to_row.reshape(1, rows).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
         }
-        self.cu = dev(torch.tensor(geo.seq_bounds(), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        self.cu = dev(torch.tensor(geo.cu_window_seqlens(), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         mask, sink = band_masks(geo, cfg.window_size)
         self.mask = dev(mask)
         self.sink = dev(sink)
-        # The halo around the first / last window block's keys (masked out; zeros keep them finite).
-        self.halo = dev(torch.zeros(1, 1, cfg.window_size, cfg.head_dim))
+        # Window blocks' key rows, block after block (b*BLOCK - window .. + span; rows outside the pass are masked,
+        # so they read any row: the nearest one).
+        nb, span = rows // BLOCK, BLOCK + 2 * cfg.window_size
+        keys = (torch.arange(nb) * BLOCK - cfg.window_size).view(nb, 1) + torch.arange(span).view(1, span)
+        self.window_rows = dev(
+            keys.clamp(0, rows - 1).reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+        )
 
     def deallocate(self):
         tensors = [*self.cos.values(), *self.sin.values(), *self.order.values(), self.cu, self.mask, self.sink]
-        for t in tensors + [self.halo]:
+        for t in tensors + [self.window_rows]:
             t.deallocate(True)
 
 
@@ -291,7 +338,7 @@ class TtVisionBlock:
         up.deallocate(True)
         down = self.linear(act, self.wd, self.bd, dtype=self.numerics.reduce_dtype)
         act.deallocate(True)
-        down = self.plan.all_reduce(down)
+        down = all_reduce(self.plan, down, self.numerics)
         out = ttnn.add(x2, down, dtype=res, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x2.deallocate(True)
         down.deallocate(True)
@@ -331,7 +378,7 @@ class TtVisionBlock:
         o.deallocate(True)
         out = self.linear(cat, self.wo, self.bo, dtype=self.numerics.reduce_dtype)
         cat.deallocate(True)
-        return self.plan.all_reduce(out)
+        return all_reduce(self.plan, out, self.numerics)
 
     def _sdpa_program(self, rows):
         chunk = 256 if rows >= 2048 else 128
@@ -344,23 +391,16 @@ class TtVisionBlock:
             exp_approx_mode=False,
         )
 
-    def _windows(self, t, nb, zeros):
-        """[1, 1, rows, d] -> [nb, 1, BLOCK + 2 * window, d]: block b's keys, rows b*BLOCK - window .. +span."""
-        window = self.cfg.window_size
-        assert window % BLOCK == 0, window
-        halo = window // BLOCK
-        d = t.shape[-1]
-        padded = ttnn.concat([zeros, t, zeros], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        blocks = ttnn.reshape(padded, (nb + 2 * halo, 1, BLOCK, d))
-        parts = [
-            ttnn.slice(blocks, (s, 0, 0, 0), (s + nb, 1, BLOCK, d), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            for s in range(2 * halo + 1)
-        ]
-        out = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for part in parts:
-            part.deallocate(True)
-        padded.deallocate(True)
-        return out
+    def _windows(self, t, nb, window_rows):
+        """[1, 1, rows, d] -> [nb, 1, BLOCK + 2 * window, d]: block b's keys, rows b*BLOCK - window .. +span (one
+        embedding lookup of the rows ``window_rows`` lists)."""
+        rows, d = t.shape[-2], t.shape[-1]
+        rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.embedding(
+            window_rows, ttnn.reshape(rm, (rows, d)), layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        rm.deallocate(True)
+        return ttnn.reshape(out, (nb, 1, -1, d))
 
     def band_attention(self, q, k, v, inp):
         rows = q.shape[-2]
@@ -369,8 +409,8 @@ class TtVisionBlock:
         qb = ttnn.reshape(q, (heads, nb, BLOCK, hd))
         qb_t = ttnn.permute(qb, (1, 0, 2, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qb = ttnn.reshape(qb_t, (nb, 1, heads * BLOCK, hd))
-        kw = self._windows(k, nb, inp.halo)
-        vw = self._windows(v, nb, inp.halo)
+        kw = self._windows(k, nb, inp.window_rows)
+        vw = self._windows(v, nb, inp.window_rows)
         scores = ttnn.matmul(
             qb,
             kw,
@@ -415,7 +455,8 @@ class TtMiMoVisionTransformer:
     """The ViT on one 1x8 mesh (or submesh). ``forward(pixel_values, grid_thw)`` -> host bf16 [N / 4, 4096].
 
     ``state_dict``: ``reference.vision.load_vision_state_dict`` output, or None to load everything from a warm
-    ``cache_dir``. ``weight_dtype``: matmul weights (norms, biases and sinks stay bf16)."""
+    ``cache_dir``. ``weight_dtype``: matmul weights (norms, biases and sinks stay bf16). ``buckets``: pass row
+    counts (``ROW_BUCKETS``; None pads each pass to a multiple of 128 instead, one program set per size)."""
 
     def __init__(
         self,
@@ -426,11 +467,15 @@ class TtMiMoVisionTransformer:
         weight_dtype=ttnn.bfloat16,
         max_rows=DEFAULT_MAX_ROWS,
         num_links=2,
-        numerics=NUMERICS["accurate"],
+        numerics=NUMERICS[DEFAULT_NUMERICS],
+        buckets=ROW_BUCKETS,
     ):
         assert tuple(mesh_device.shape)[0] == 1, f"one row (1 x TP), got {tuple(mesh_device.shape)}"
         self.plan = MeshPlan(mesh_device, num_links=num_links)
         self.cfg = cfg
+        self.buckets = tuple(sorted(buckets)) if buckets else ()
+        assert not self.buckets or max_rows <= self.buckets[-1], "a video pass must fit the largest bucket"
+        assert all(b % 256 == 0 for b in self.buckets), self.buckets
         self.max_rows = max_rows
         tp = self.plan.tp
         sd = state_dict
@@ -459,7 +504,8 @@ class TtMiMoVisionTransformer:
         loads the cached tensors."""
         cfg = ref.VisionConfig.from_model_path(model_path)
         tp = tuple(mesh_device.shape)[1]
-        with cache_fill(cache_dir, f"vit_tp{tp}") as need:
+        weight_dtype = kwargs.get("weight_dtype", ttnn.bfloat16)
+        with cache_fill(cache_dir, f"vit_tp{tp}_{weight_dtype.name.lower()}") as need:
             sd = ref.load_vision_state_dict(model_path) if need else None
             return cls(mesh_device, cfg, sd, cache_dir, **kwargs)
 
@@ -507,7 +553,7 @@ class TtMiMoVisionTransformer:
         h0.deallocate(True)
         out = ttnn.linear(g, self.merger_w2, **{**kw, "dtype": self.numerics.reduce_dtype})
         g.deallocate(True)
-        return self.plan.all_reduce(out)
+        return all_reduce(self.plan, out, self.numerics)
 
     def _host_rows(self, x, geo, to_row=None):
         """Chip 0's [rows, d] -> torch [n, d] in row (processor) order."""
@@ -517,13 +563,15 @@ class TtMiMoVisionTransformer:
         return t[: geo.n]
 
     def forward_pass(self, pixel_values, geo, hidden=None):
-        """One pass: pixel rows [geo.n, patch_dim] -> host bf16 [geo.n / 4, out_hidden]. ``hidden``: a list that
+        """One pass: pixel rows [geo.n, patch_dim] -> host bf16 [geo.n / 4, out_hidden]. Rows past ``geo.n`` (up to
+        ``geo.rows``; zeros when not given) are padding: they never reach the real rows. ``hidden``: a list that
         collects each block's output (host fp32 [n, hidden], row order) for tests."""
         cfg = self.cfg
         inp = PassInputs(self.plan, cfg, geo)
         pv = pixel_values.to(torch.bfloat16)
-        if geo.rows > geo.n:
-            pv = torch.cat([pv, torch.zeros(geo.rows - geo.n, pv.shape[-1], dtype=pv.dtype)])
+        assert geo.n <= pv.shape[0] <= geo.rows, (pv.shape, geo.n, geo.rows)
+        if geo.rows > pv.shape[0]:
+            pv = torch.cat([pv, torch.zeros(geo.rows - pv.shape[0], pv.shape[-1], dtype=pv.dtype)])
         x_in = ttnn.from_torch(
             pv.reshape(1, 1, geo.rows, -1),
             dtype=ttnn.bfloat16,
@@ -572,7 +620,21 @@ class TtMiMoVisionTransformer:
         [N / 4, out_hidden_size], items in order."""
         outs = []
         for start, end, grids in plan_passes(grid_thw, self.max_rows):
-            outs.append(self.forward_pass(pixel_values[start:end], PassGeometry.build(grids), hidden))
+            geo = PassGeometry.build(grids, self.buckets)
+            outs.append(self.forward_pass(pixel_values[start:end], geo, hidden))
         return torch.cat(outs, dim=0)
 
     __call__ = forward
+
+    def warm(self, buckets=None):
+        """Compile the programs of every pass size up front (each bucket's are fixed: see the module docstring), one
+        zero-pixel pass per bucket. ``buckets``: a subset of ``self.buckets`` (default: all). Returns {rows: seconds}.
+        Run it before the LLM captures its traces: compiling later allocates program binaries in DRAM."""
+        times = {}
+        for rows in buckets if buckets is not None else self.buckets:
+            assert rows in self.buckets, f"{rows} is not one of the buckets {self.buckets}"
+            grids = [(1, 32, rows // 32)]  # one image of exactly ``rows`` patches
+            t0 = time.time()
+            self.forward_pass(torch.zeros(rows, self.cfg.patch_dim), PassGeometry.build(grids, self.buckets))
+            times[rows] = time.time() - t0
+        return times
