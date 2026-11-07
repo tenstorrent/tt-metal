@@ -5,7 +5,7 @@
 
 ## Introduction
 This directory runs ViT-Base (`google/vit-base-patch16-224`) end to end on Blackhole: the patch
-embedding, twelve transformer encoder layers and the classifier over 1000 ImageNet classes, at batch
+embedding, twelve transformer encoder layers and the classifier over 1000 classes, at batch
 size 10 and 224x224 input. A high-resolution variant runs single encoder layers at longer sequences
 and wider hidden sizes, at batch size 1.
 
@@ -17,17 +17,19 @@ https://arxiv.org/abs/2010.11929
 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-- A Hugging Face token (`huggingface-cli login` or `export HF_TOKEN=<token>`) with access to
-  `ILSVRC/imagenet-1k` for the ImageNet demo when the dataset is not available locally.
 
 ## Demo
 
-From the repository root, run inference on the ImageNet-1k validation set with trace and two command
-queues, and check the top-1 accuracy:
+From the repository root, run inference with trace and two command queues:
 
 ```sh
-pytest --disable-warnings models/demos/vision/classification/vit/blackhole/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
+pytest --disable-warnings models/demos/vision/classification/vit/blackhole/demo/demo_vit_performant_inference.py::test_run_vit_trace_2cqs_inference
 ```
+
+`VIT_IMAGE_DIR` names a labelled image folder, one subfolder per class named by the classifier's
+class index (`0` to `999`) holding that class's images. Without it the demo and tests use
+synthetic images, which measure throughput only; with it they also report the top-1 accuracy.
+`test_run_vit_trace_2cqs_accuracy` runs every image in the folder and is skipped without it.
 
 ## Performance
 
@@ -91,12 +93,12 @@ VIT_NUM_LAYERS=1 pytest models/demos/vision/classification/vit/blackhole/tests/t
 ```
 models/demos/vision/classification/vit/
 ├── blackhole/
-│   ├── demo/      # ImageNet accuracy and throughput demos
+│   ├── demo/      # Inference, accuracy and throughput demos
 │   ├── tests/     # PCC tests, end-to-end and device performance, hi-res test infra
 │   └── tt/        # TTNN implementation: ttnn_optimized_sharded_vit_bh.py and ttnn_optimized_sharded_vit_hiRes_bh.py
 └── common/
     ├── common.py  # Loads the Hugging Face model, honors VIT_NUM_LAYERS
-    └── tests/     # Test infra shared with Wormhole: inputs, trace with two command queues, ImageNet loading
+    └── tests/     # Test infra shared with Wormhole: inputs, trace with two command queues, input loading
 ```
 
 ## Model Structure

@@ -88,7 +88,7 @@ class VitTestInfra:
 
         if use_random_input_tensor == False:
             ## IMAGENET INFERENCE
-            data_loader = get_data_loader("ImageNet_data", batch_size * self.num_devices, 2)
+            data_loader = get_data_loader(batch_size * self.num_devices, 2)
             self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
         else:
             self.torch_pixel_values = torch.randn(
