@@ -174,6 +174,8 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | early-banked80-fallback-dry | 2.22332 / unknown | 0.00000 | running/pending: Free grantedCI slot, separate allocations; normal160 and candidate160dry neverwait. Current40dry cannot prove exactbanked80. |
 | release-http-only-preflight-scope | 0.00000 / 0.00000 | 0.00000 | none/open: task storage: Harbor task-storage admission not applicable to selectedHTTP-only release; model storage: Operationalstartup observed; numerical filesystem/reserve/headroom unknown; blanket disk ok: False |
 | effort-ledger-size-repair | 0.00000 / 0.00000 | 0.00000 | kept/solved: semantic data unchanged: True; canonical hash equal: True; size hook passed: True; scope: Whitespace-onlyserialization, allhistoryretained |
+| gpqa86-entry-diagnosis | 0.20000 / unknown | 0.00000 | running/pending: Primarydeviceidle; distinctnewpattern entry nottestedbydoc139. Finishbeforeoriginalfirstdry deadline11:46UTC; independentCI rung/drys neverwait. |
+| release-dispatch-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: actual device hours: 0; release saving hours: 0; result: Both candidate freezes match recorded hashes; no selection or dispatch; evidence: runs/release-dispatch-preparation/commands.json |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

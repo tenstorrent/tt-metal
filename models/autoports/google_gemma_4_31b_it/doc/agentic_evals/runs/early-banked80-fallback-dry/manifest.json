@@ -132,7 +132,7 @@
   "submitted_at": "2026-11-07T08:34:42Z",
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42356076812",
   "workflow_status": "in_progress",
-  "last_observed_at": "2026-11-07T08:35:59.730076+00:00",
+  "last_observed_at": "2026-11-07T09:15:27.727939+00:00",
   "runner": "120-qb2-p04t05",
   "device_job_id": 128354391541,
   "device_job_started_at": "2026-11-07T08:34:55Z",

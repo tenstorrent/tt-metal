@@ -1,0 +1,25 @@
+{
+  "status": "prepared_coordinator_launch_only",
+  "server_command": "bash bringup/artifacts/gpqa86-entry-diagnosis/launch.sh > bringup/artifacts/gpqa86-entry-diagnosis/server-console.log 2>&1",
+  "client_command": "python_env/bin/python bringup/artifacts/gpqa86-entry-diagnosis/client.py > bringup/artifacts/gpqa86-entry-diagnosis/client.log 2>&1",
+  "idle_closer_command": "python_env/bin/python bringup/artifacts/gpqa86-entry-diagnosis/idle-close.py > bringup/artifacts/gpqa86-entry-diagnosis/idle-close.log 2>&1",
+  "planned_clients": 1,
+  "served_batch": 8,
+  "reason": "Match scoredB8 conditional numerical path; diagnostic, not throughput batch choice",
+  "capture_native_ids": 9500,
+  "capture_diagnostic_wall_seconds_after_request": 600,
+  "request_timeout_seconds": 14400,
+  "request_output_cap": 126976,
+  "server_outer_timeout": 15480,
+  "server_readiness_timeout": 15450,
+  "forecast_total_device_hours": 0.2,
+  "total_device_box_hours": 0.3,
+  "launch_requirements": [
+    "Coordinator /proc owner guard and queue/source hash snapshot before launch",
+    "Current accepted f579 runtime, all60 layers,pinned revision842da,stockplugin,top_k32 served defaults",
+    "Only these owned HTTP streams may be cancelled at diagnostic observation bound; no active engine kill. Blocking read at unchanged14400 socket timeout requires coordinator wall watchdog on own HTTPclient if stalled.",
+    "Capture must close idle and finalcollector drain; reserve remaining budget before separately admittingTT conditional test",
+    "No HF CPU model during native capture; reference can run after ownedserverclosed",
+    "At freshnative mismatch or missingfirsttoken/onset stop this hypothesis without more device work"
+  ]
+}

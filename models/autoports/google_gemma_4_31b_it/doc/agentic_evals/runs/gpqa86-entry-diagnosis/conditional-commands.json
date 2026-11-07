@@ -1,0 +1,60 @@
+{
+  "compare": [
+    "python_env/bin/python",
+    "bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+    "compare",
+    "--case",
+    "bringup/artifacts/gpqa86-entry-diagnosis/case.json",
+    "--hf",
+    "bringup/artifacts/gpqa86-entry-diagnosis/hf/logits.pt",
+    "--tt",
+    "bringup/artifacts/gpqa86-entry-diagnosis/tt/logits.pt",
+    "--output",
+    "bringup/artifacts/gpqa86-entry-diagnosis/compare"
+  ],
+  "conditional_tt_forecast_hours": 0.04722222222222222,
+  "conditional_tt_box_seconds": 300,
+  "hf_host_forecast_seconds": 500,
+  "hf_host_ceiling_seconds": 2100,
+  "requirements": [
+    "Root confirms capture idle/ownersclear and exactfreshprefix before conditional admission",
+    "Full60/pinnedHF/currentf579 B8 sourcehash guard; no model changes",
+    "TT nominal170seconds; proposed300second ceiling only if remaining.30h box covers closure",
+    "Casehash obtained from successful prepare_case; no priorcasehash substitution",
+    "CPUHF budget2040/outer2100, cachecontrol unchanged; run after TT deviceclosure",
+    "Stop if prefix mismatch, insufficient onset, priorcapture cost leaves too little TT headroom, or original11:46dry deadline risk"
+  ],
+  "status": "prepared_not_admitted_await_capture_idle_exactproof",
+  "total_effort_box_hours": 0.3,
+  "sequence": "Captureclose/ownersclear -> prepare_case + validate -> coordinator remainingbudget and sourceguard -> TT -> CPUHF -> compare; no concurrent arms",
+  "tt_command": [
+    "env",
+    "TT_METAL_CACHE=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/cache-env-validation/tt-metal-jit",
+    "XDG_CACHE_HOME=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/xdg-cache",
+    "python_env/bin/python",
+    "bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+    "tt",
+    "--case",
+    "bringup/artifacts/gpqa86-entry-diagnosis/case.json",
+    "--output",
+    "bringup/artifacts/gpqa86-entry-diagnosis/tt"
+  ],
+  "hf_after_tt_closed": [
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "TRANSFORMERS_OFFLINE=1",
+    "timeout",
+    "--signal=TERM",
+    "--kill-after=30s",
+    "2100s",
+    "python_env/bin/python",
+    "bringup/artifacts/gpqa-loop-logits-discriminator/diagnose.py",
+    "hf",
+    "--case",
+    "bringup/artifacts/gpqa86-entry-diagnosis/case.json",
+    "--budget-seconds",
+    "2040",
+    "--output",
+    "bringup/artifacts/gpqa86-entry-diagnosis/hf"
+  ]
+}
