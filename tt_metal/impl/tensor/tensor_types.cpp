@@ -30,7 +30,7 @@ constexpr std::array<GgufFormat, 25> kGgufFormats{{
     {"DataType::GGUF_Q6_K",    {6, 256, 210, 8, 1, 768, 9, 1, 0}},
     {"DataType::GGUF_Q4_K",    {7, 256, 144, 8, 1, 512, 8, 0, 0}},
     {"DataType::GGUF_Q5_K",    {8, 256, 176, 8, 2, 1280, 8, 0, 0}},
-    {"DataType::GGUF_Q3_K",    {9, 256, 110, 8, 2, 768, 7, 1, 0}},
+    {"DataType::GGUF_Q3_K",    {9, 256, 110, 8, 2, 768, 7, 0, 0}},
     {"DataType::GGUF_Q2_K",    {10, 256, 84, 8, 1, 256, 10, 0, 0}},
     {"DataType::GGUF_IQ4_XS",  {11, 256, 136, 8, 1, 512, 4, 1, 0}},
     {"DataType::GGUF_TQ2_0",   {12, 256, 66, 8, 1, 256, 1, 0, 0}},
