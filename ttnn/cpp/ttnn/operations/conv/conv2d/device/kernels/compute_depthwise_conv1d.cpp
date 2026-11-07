@@ -254,17 +254,22 @@ inline void mul_and_accumulate_coalesced_block(DFB_IN0 in0_dfb, DFB_IN1 in1_dfb,
     in0_dfb.wait_front(block_num_tiles);
     in1_dfb.wait_front(block_num_tiles);
 
+    // Configure once per block. The operands and their formats are fixed for the whole block, and nothing
+    // between the mul_tiles calls below touches the unpack or math state (pack_tile does not), so every tap
+    // reuses this init. ELWMUL always accumulates into DST, which the packer clears when it releases it, so the
+    // first tap needs no separate init either.
+    reconfig_data_format_srca(in0_cb_id);
+    reconfig_data_format_srcb(in1_cb_id);
+    mul_init(in0_cb_id, in1_cb_id);
+
     for (uint32_t h = 0; h < act_block_h_ntiles; ++h) {
         for (uint32_t c = 0; c < in_channels_ntiles; ++c) {
             tile_regs_acquire();
-            reconfig_data_format_srca(in0_cb_id);
-            reconfig_data_format_srcb(in1_cb_id);
 
             for (uint32_t tap = 0; tap < kernel_width; ++tap) {
                 const uint32_t act_tile_idx = h * in0_block_w + tap * in_channels_ntiles + c;
                 const uint32_t weight_tile_idx =
                     tap * act_block_h_ntiles * in_channels_ntiles + h * in_channels_ntiles + c;
-                mul_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U, __builtin_LINE());
                 mul_tiles(in0_cb_id, in1_cb_id, act_tile_idx, weight_tile_idx, 0);
             }
             tile_regs_commit();
