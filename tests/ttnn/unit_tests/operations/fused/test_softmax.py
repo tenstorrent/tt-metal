@@ -1482,3 +1482,125 @@ def test_scale_mask_softmax_scale_not_exact_in_float32(device, scale):
 
     assert torch.equal(output, expected)
     assert torch.allclose(output, torch_output, atol=1e-2)
+
+
+def _sharded_softmax_memory(layout, shard, start, end):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(*end))})
+    return ttnn.MemoryConfig(layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR))
+
+
+def _sharded_softmax_config(shard, end):
+    return ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(end[0] + 1, end[1] + 1),
+        subblock_w=1,
+        block_h=shard[0] // 32,
+        block_w=shard[1] // 32,
+    )
+
+
+def _sharded_softmax_case(device, case):
+    HS, WS, BS = (
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    )
+    causal = torch.triu(torch.full((64, 64), -16.0), diagonal=1).reshape(1, 1, 64, 64)
+
+    def put(host, memory_config, layout=ttnn.TILE_LAYOUT):
+        return ttnn.from_torch(
+            host.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config
+        )
+
+    if case in ("hw_dims_origin_grid", "hw_dims_offset_grid"):
+        start, end = ((0, 0), (0, 1)) if case == "hw_dims_origin_grid" else ((1, 1), (1, 2))
+        x_host = torch.zeros((1, 1, 64, 64))
+        x = put(x_host, _sharded_softmax_memory(HS, [32, 64], start, end))
+        mask = put(causal, ttnn.DRAM_MEMORY_CONFIG)
+        pc = _sharded_softmax_config([32, 64], end)
+        expected = torch.softmax(x_host * 0.125 + causal, dim=-1)
+        return expected, lambda: ttnn.scale_causal_mask_hw_dims_softmax_in_place(x, 0.125, mask, program_config=pc)
+
+    if case in ("batch_per_shard", "batches_per_shard"):
+        cores = 4 if case == "batch_per_shard" else 2
+        shard, end = [128 // cores, 64], (cores - 1, 0)
+        x_host = ((torch.arange(8192).reshape(4, 1, 32, 64) * 7 + 5) % 33 - 16) / 8
+        mask_host = torch.full((4, 1, 1, 64), -16.0)
+        for batch in range(4):
+            mask_host[batch, 0, 0, batch * 8] = 0.0
+        x = put(x_host, _sharded_softmax_memory(HS, shard, (0, 0), end))
+        mask = put(mask_host, ttnn.DRAM_MEMORY_CONFIG)
+        pc = _sharded_softmax_config(shard, end)
+        expected = torch.softmax(x_host + mask_host, dim=-1)
+        return expected, lambda: ttnn.scale_mask_softmax_in_place(x, 1.0, mask, program_config=pc)
+
+    if case in ("height_shards", "full_width_shard", "width_shards", "block_shards"):
+        layout, shard, end = {
+            "height_shards": (HS, [32, 128], (1, 0)),
+            "full_width_shard": (WS, [64, 128], (0, 0)),
+            "width_shards": (WS, [64, 64], (1, 0)),
+            "block_shards": (BS, [32, 64], (1, 1)),
+        }[case]
+        x_host = torch.zeros((1, 1, 64, 128))
+        x_host[..., 0] = 4.0
+        x_host[..., 64] = 4.0
+        x = put(x_host, _sharded_softmax_memory(layout, shard, (0, 0), end))
+        pc = _sharded_softmax_config(shard, end)
+        return torch.softmax(x_host, dim=-1), lambda: ttnn.softmax_in_place(x, program_config=pc)
+
+    if case in ("height_sharded_causal_mask", "width_sharded_causal_mask"):
+        x_host = torch.zeros((1, 1, 64, 64))
+        x = put(x_host, _sharded_softmax_memory(HS, [32, 64], (0, 0), (1, 0)))
+        if case == "width_sharded_causal_mask":
+            mask_memory = _sharded_softmax_memory(WS, [64, 32], (0, 0), (1, 0))
+        else:
+            mask_memory = _sharded_softmax_memory(HS, [32, 64], (0, 0), (1, 0))
+        mask = put(causal, mask_memory)
+        pc = _sharded_softmax_config([32, 64], (1, 0))
+        expected = torch.softmax(x_host + causal, dim=-1)
+        return expected, lambda: ttnn.scale_mask_softmax_in_place(x, 1.0, mask, program_config=pc, is_causal_mask=True)
+
+    # ROW_MAJOR mask [1, 1, Wt, 32] on one [64, 64] shard
+    x_host = ((torch.arange(4096).reshape(1, 1, 64, 64) * 7 + 11) % 33 - 16) / 8
+    mask_host = torch.zeros((1, 1, 1, 64))
+    mask_host[..., 48:] = -128.0
+    x = put(x_host, _sharded_softmax_memory(HS, [64, 64], (0, 0), (0, 0)))
+    mask = put(mask_host.reshape(1, 1, 2, 32), ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.ROW_MAJOR_LAYOUT)
+    pc = _sharded_softmax_config([64, 64], (0, 0))
+    expected = torch.softmax(x_host * 0.5 + mask_host, dim=-1)
+    return expected, lambda: ttnn.scale_mask_softmax_in_place(
+        x, 0.5, mask, program_config=pc, is_causal_mask=case == "row_major_causal_mask"
+    )
+
+
+@pytest.mark.parametrize(
+    "case, error",
+    [
+        ("row_major_causal_mask", "A causal mask needs TILE layout"),
+        ("hw_dims_offset_grid", "on the first 2 cores of the program grid"),
+        ("batches_per_shard", "each input shard must lie within one batch"),
+        ("width_shards", "every shard must hold whole rows"),
+        ("block_shards", "every shard must hold whole rows"),
+        ("width_sharded_causal_mask", "must be sharded like the input"),
+    ],
+)
+def test_sharded_softmax_rejects_unsupported_geometry(device, expect_error, case, error):
+    _, run = _sharded_softmax_case(device, case)
+    with expect_error(RuntimeError, error):
+        run()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "row_major_mask",
+        "hw_dims_origin_grid",
+        "batch_per_shard",
+        "height_shards",
+        "full_width_shard",
+        "height_sharded_causal_mask",
+    ],
+)
+def test_sharded_softmax_supported_geometry(device, case):
+    expected, run = _sharded_softmax_case(device, case)
+    actual = ttnn.to_torch(run()).float()
+    assert torch.allclose(actual, expected.float(), atol=2e-2), f"max error {(actual - expected).abs().max()}"
