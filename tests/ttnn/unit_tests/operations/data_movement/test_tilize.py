@@ -999,6 +999,7 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     "tensor_shape, shard_layout",
     [
         ([1, 1, 128, 256], None),  # Interleaved input/output.
+        ([1, 1, 32, 2048], None),  # Wide interleaved row: selects the block factory.
         ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),

@@ -70,6 +70,34 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
 
 
 @pytest.mark.parametrize(
+    "dtype, value",
+    [
+        (ttnn.bfloat16, 7.0),
+        (ttnn.float32, 7.0),
+        (ttnn.float32, 1.1),  # not representable in bfloat16
+        (ttnn.int32, 7.0),
+        (ttnn.uint32, 7.0),
+        (ttnn.uint16, 7.0),
+    ],
+)
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_pad_rm_interleaved_nonzero_value(device, dtype, value, use_multicore):
+    # W=26 leaves each padded row tail unaligned, and the H/C growth adds fully padded rows.
+    shape = [1, 2, 30, 26]
+    padded_shape = [1, 3, 32, 32]
+    padding = [(0, padded_shape[i] - shape[i]) for i in range(len(shape))]
+
+    torch_input = torch.rand(shape, dtype=torch.float32) if dtype == ttnn.float32 else random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
+    output = ttnn.to_torch(ttnn.pad(input_tensor, padding=padding, value=value, use_multicore=use_multicore))
+
+    expected = torch.full(padded_shape, value).to(output.dtype)
+    expected[: shape[0], : shape[1], : shape[2], : shape[3]] = torch_input.to(output.dtype)
+    assert output.shape == expected.shape
+    assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize(
     "shape,padding,torch_padding,use_multicore",
     [
         ((8, 1, 1, 1), ((0, 0), (0, 0), (0, 0), (0, 191)), (0, 191, 0, 0, 0, 0, 0, 0), True),
@@ -345,6 +373,22 @@ def to_torch_padding(padspec):
             (0, 0, 0, 0),
             3.0,
             {"core_grid": ttnn.CoreGrid(x=1, y=6), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # height and width padding with a width front pad
+            (1, 1, 2, 4),
+            (1, 1, 4, 16),
+            (0, 0, 0, 4),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=2), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # height and width padding with height and width front pads
+            (1, 1, 2, 4),
+            (1, 1, 4, 16),
+            (0, 0, 1, 4),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=2), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
     ],
 )

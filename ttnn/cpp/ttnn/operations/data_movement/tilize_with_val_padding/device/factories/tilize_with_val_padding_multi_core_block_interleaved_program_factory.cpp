@@ -185,10 +185,6 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
 
     uint32_t total_num_rows = a.logical_shape()[-2];
 
-    if (output.padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
-        total_num_rows = output.padded_shape()[-2];
-    }
-
     // One reader and one writer per buffer set, each over that set's cores and bound to that set's
     // buffers. A set's cores are exactly the cores whose block width its buffers are sized for, so
     // every instance's raw block write lands in a buffer that is an exact multiple of it. The set's

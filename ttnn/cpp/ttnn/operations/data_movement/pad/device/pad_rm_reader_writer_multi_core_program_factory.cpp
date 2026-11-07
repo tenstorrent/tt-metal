@@ -14,8 +14,7 @@ using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
-using ttnn::operations::data_movement::float_to_uint16;
-using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+using ttnn::operations::data_movement::pack_pad_value;
 
 namespace {
 // Names are prefixed per factory: all seven pad factories land in one unity-build
@@ -166,17 +165,17 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint
 // create_program_artifacts() can build it once on cache miss and hand its
 // MeshTensor to the framework as an op-owned tensor, deferring the device
 // deallocation until the cached Program is evicted (see #44565).
-Tensor build_pad_value_const_tensor_mc(const PadInputs& tensor_args, float pad_value) {
+Tensor build_pad_value_const_tensor_mc(const PadInputs& tensor_args, uint32_t packed_pad_value) {
     MeshDevice* device = tensor_args.input.device();
-    uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
+    uint32_t pad_value_const_buffer_size = 16;  // noc transfers in chunks of 64 bytes
     auto pad_value_const_buffer =
-        tt::tt_metal::HostBuffer(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
+        tt::tt_metal::HostBuffer(std::vector<uint32_t>(pad_value_const_buffer_size, packed_pad_value));
     // NOTE: The const buffer is always in L1
     // TODO: make a local buffer for each core?
     return Tensor(
                std::move(pad_value_const_buffer),
                ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
-               DataType::BFLOAT16,
+               DataType::UINT32,
                Layout::ROW_MAJOR)
         .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
 }
@@ -194,12 +193,12 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
     // every dispatch that hits this cached Program.
     std::vector<tt::tt_metal::MeshTensor> op_owned;
     op_owned.reserve(1);
-    Tensor pad_value_const_tensor = build_pad_value_const_tensor_mc(tensor_args, operation_attributes.pad_value);
+    const uint32_t packed_pad_value = pack_pad_value(a.dtype(), operation_attributes.pad_value);
+    Tensor pad_value_const_tensor = build_pad_value_const_tensor_mc(tensor_args, packed_pad_value);
     op_owned.push_back(pad_value_const_tensor.device_storage().release_mesh_tensor());
     const auto& pad_value_mesh_tensor = op_owned.back();
 
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
-    const auto& pad_value = operation_attributes.pad_value;
 
     auto output_shape = output_padded_shape;
 
@@ -209,9 +208,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
     distributed::MeshDevice* device = a.device();
-
-    uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
-    uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
 
     // uint32_t ntiles_h = output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2] / TILE_HEIGHT;
     uint32_t ntiles_h = output_padded_shape[2] / TILE_HEIGHT;
@@ -249,15 +245,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
         .data_format_metadata = in_df,
     };
 
-    uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
-    } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
-    } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
-    }
-
     KernelSpec reader{
         .unique_id = RM_MC_READER,
         .source =
@@ -282,6 +269,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                     .accessor_name = "pad_value",
                 },
             },
+        .compile_time_args = {{"element_size", a.element_size()}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names =
@@ -355,7 +343,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
         log_debug(tt::LogOp, "unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         log_debug(tt::LogOp, "padded_row_size_nbytes: {}", padded_row_size_nbytes);
         // log_debug(tt::LogOp, "padded_row_diff_size_nbytes: {}", padded_row_diff_size_nbytes);
-        log_debug(tt::LogOp, "pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
         log_debug(tt::LogOp, "packed_pad_value: {}", packed_pad_value);
         log_debug(tt::LogOp, "src_nbytes_per_core_w: {}", src_nbytes_per_core_w);
         log_debug(tt::LogOp, "dst_nbytes_per_core_w: {}", dst_nbytes_per_core_w);

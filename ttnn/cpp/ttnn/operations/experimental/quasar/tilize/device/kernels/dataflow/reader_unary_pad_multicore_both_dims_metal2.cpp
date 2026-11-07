@@ -111,7 +111,7 @@ void kernel_main() {
                           uint32_t width_size,
                           uint32_t size_2d,
                           uint32_t single_block_size) {
-        uint32_t padding_rows = num_rows == 32 ? 0 : 32 - num_rows;
+        uint32_t padding_rows = tile_height - num_rows;
         bool has_rows = (num_rows + padding_rows) > 0;
 
         cb_in0.reserve_back(single_block_size * has_rows);
