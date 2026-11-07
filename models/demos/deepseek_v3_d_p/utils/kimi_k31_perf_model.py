@@ -18,14 +18,17 @@ branch ``mvasilijevic/deepseek-v41-prefill``, and of GLM-5.3's sparse MLA, whose
 
   * placement: SP8 x TP4. The indexer and sparse attention split the chunk's queries over all 32 chips
     (``chunk / 32`` = 160 queries per chip, all heads; GLM-5.3 ring indexer and heads->sequence reshard). The index-K
-    cache is replicated per chip; the KVPE cache is deduped over all 32 chips (``PREFILL_TP_SHARD_KV``) and a DSA
-    layer gathers the whole visible prefix onto every chip (GLM-5.3 full-indexer layers: ``mla.py``
-    ``_sparse_kv_gather_buffer``; the per-row push is only for shared layers, which K3.1 does not have).
+    and KVPE caches are both deduped over all 32 chips (``PREFILL_TP_SHARD_KV``; ``indexer.py`` "KV dedup") and a DSA
+    layer gathers the whole visible prefix of each onto every chip (the fused ring indexer's full-mesh gather; GLM-5.3
+    full-indexer layers: ``mla.py`` ``_sparse_kv_gather_buffer``; the per-row push is only for shared layers, which
+    K3.1 does not have).
   * compute: matrix 4096 FLOP/cycle/core at LoFi divided by the fidelity phases; elementwise 128 per cycle per core
     (``tech_reports/matrix_engine/matrix_engine.md``); 120 cores (Galaxy compute grid 12x10); 1.35 GHz (repository
     constant, an assumption). SFPU primitives (exp) are counted, not timed. Exception, as in V4.1: the indexer top-k
-    is timed at its *measured* rate (``topk_large_indices``, k=2048: 7.1 elements/ns per chip, V4.1 bead F10,
-    LoudBox, one point at 256K: an implementation measurement, not a capability).
+    is timed at its *measured* rate (``topk_large_indices``, k=2048: 7.1 elements/ns per chip for 640 rows on a
+    110-core LoudBox, V4.1 bead F10, one point at 256K: an implementation measurement, not a capability). Rows run one
+    per core, so the measurement is turned into a per-core rate (that chip ran ceil(640/110) rows per core) and applied
+    to ceil(rows/cores) rows on this grid.
   * DRAM: 512 GB/s per chip (``ttnn/core/operation.cpp``). Optimistic traffic reads each selected KV row once per
     chip (union of the queries' selections); conservative traffic reads each query's rows with no reuse.
   * fabric: optimistic = per-chip ingress bound at 25 GB/s per link per direction x 2 links x 4 torus ports; this
@@ -35,12 +38,13 @@ branch ``mvasilijevic/deepseek-v41-prefill``, and of GLM-5.3's sparse MLA, whose
 
 Layer composition (``dsa_core``), as V4.1: optimistic = max(sum compute, sum optimistic DRAM, sum fabric) (all
 resources saturated in parallel); conservative = sum over ops of max(compute, conservative DRAM) + sum fabric; target =
-max(2 x optimistic, conservative) (V4.1's G2 target).
+max(2 x ideal + top-k, conservative), where ideal is the optimistic bound without the measured top-k: V4.1's G2 target
+(2 x optimistic) doubles only modelled ideal work, never an already measured time.
 
 Pipeline composition (``ttft``): PP4 stages 0-23 / 24-47 / 48-71 / 72-92, each with 6 attention layers.
 Chunks retire every ``period(P)``, the busiest stage's time at prefix P, so TTFT = sum of the prompt's chunk periods
-+ a pipeline fill. On K3's measurement this reproduces the measured TTFT within a few percent with the fill a constant
-0.6 s (``K3Measured.fill_ns``). K3.1's period is K3's measured first-chunk period with that stage's 6 dense MLA cores
++ a pipeline fill, the measured TTFT of K3's first chunk minus its period (``K3Measured.fill_ns``, 0.70 s). On K3's
+measurement this reproduces the first chunk exactly and the deeper probes within a few percent. K3.1's period is K3's measured first-chunk period with that stage's 6 dense MLA cores
 swapped for 6 DSA cores at the chunk's prefix.
 
 What this does not model: K3.1's KDA / MoE / AttnRes / projections are assumed to cost what K3's do (same code and
@@ -63,7 +67,11 @@ CHUNK = 5120  # K3 prefill chunk (``tests/kimi_k3/test_prefill_perf.py``), the C
 FIDELITY_PHASES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
 BYTES = {"bf16": 2.0, "bfp8": 1088 / 1024, "int32": 4.0}
 KVPE_ROW_BYTES = MlaKvCacheGeometry(latent_dim=C.KV_LORA_RANK, rope_dim=C.QK_ROPE_HEAD_DIM).packed_row_bytes
-TOPK_ELEMENTS_PER_NS = 7.1  # measured topk_large_indices rate at k=2048 (see module docstring)
+# Measured topk_large_indices at k=2048 (see module docstring): elements/ns per chip, rows, cores of that chip.
+TOPK_MEASURED_ELEMENTS_PER_NS, TOPK_MEASURED_ROWS, TOPK_MEASURED_CORES = 7.1, 640, 110
+TOPK_CORE_ELEMENTS_PER_NS = (
+    TOPK_MEASURED_ELEMENTS_PER_NS * -(-TOPK_MEASURED_ROWS // TOPK_MEASURED_CORES) / TOPK_MEASURED_ROWS
+)
 STAGES = ((0, 24), (24, 48), (48, 72), (72, 93))  # PP4 layer ranges, half-open, 0-based
 
 
@@ -106,13 +114,15 @@ class OpCost:
     fidelity: str = "HiFi2"
     eltwise: float = 0.0
     sfpu: dict = field(default_factory=dict)
-    topk_elements: float = 0.0  # timed at TOPK_ELEMENTS_PER_NS, with the one-row-per-core imbalance
+    topk_elements: float = 0.0  # timed at TOPK_CORE_ELEMENTS_PER_NS, one row per core
     topk_rows: float = 0.0
     dram_bytes: float = 0.0
     dram_bytes_cons: float | None = None
     fabric_ns: float = 0.0
     fabric_cons_ns: float = 0.0
-    compute_ns: float = 0.0
+    fpu_ns: float = 0.0
+    topk_ns: float = 0.0
+    compute_ns: float = 0.0  # fpu_ns + topk_ns
     dram_ns: float = 0.0
     dram_cons_ns: float = 0.0
 
@@ -125,11 +135,11 @@ def _finish(op: OpCost, hw: Galaxy8x4) -> OpCost:
     per_ns = hw.cores * hw.clock_ghz
     fpu = op.matmul_flop * FIDELITY_PHASES[op.fidelity] / hw.matmul_flop_per_cycle_core
     fpu += op.eltwise / hw.eltwise_per_cycle_core
-    topk = 0.0
+    op.fpu_ns = fpu / per_ns
     if op.topk_elements:
-        imbalance = -(-op.topk_rows // hw.cores) / (op.topk_rows / hw.cores)
-        topk = op.topk_elements / TOPK_ELEMENTS_PER_NS * imbalance
-    op.compute_ns = fpu / per_ns + topk
+        rows_per_core = -(-op.topk_rows // hw.cores)
+        op.topk_ns = rows_per_core * (op.topk_elements / op.topk_rows) / TOPK_CORE_ELEMENTS_PER_NS
+    op.compute_ns = op.fpu_ns + op.topk_ns
     op.dram_ns = op.dram_bytes / hw.dram_bytes_per_ns
     op.dram_cons_ns = (op.dram_bytes if op.dram_bytes_cons is None else op.dram_bytes_cons) / hw.dram_bytes_per_ns
     return op
@@ -189,10 +199,11 @@ def dsa_ops(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> list[OpC
             + s * idim * bf16,
         )
     )
-    # Index-K: the chunk's new keys all-gathered into every chip's replicated index-K cache (bfp8).
-    new_keys = chunk * idim * bfp8
-    opt, cal = _gather_fabric(new_keys * (hw.chips - 1) / hw.chips, hw.chips, hw)
-    ops.append(OpCost("index_k_write", dram_bytes=new_keys, fabric_ns=opt, fabric_cons_ns=cal))
+    # Index-K prefix (bfp8): every chip receives the visible keys it does not own (cache deduped over all chips) and
+    # writes them to its gather buffer once; the indexer score counts their read.
+    received = visible * idim * bfp8 * (hw.chips - 1) / hw.chips
+    opt, cal = _gather_fabric(received, hw.chips, hw)
+    ops.append(OpCost("index_k_gather", dram_bytes=received, fabric_ns=opt, fabric_cons_ns=cal))
     # Indexer score: relu(q.k) per head, weighted head sum, causal, LoFi bfp8 (GLM-5.3's deployed path).
     # Scores are materialized in bf16 for the top-k (the in-tree graph: indexer_score -> topk_large_indices).
     pairs = causal_pairs(last, q)
@@ -253,27 +264,24 @@ def dsa_ops(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> list[OpC
 
 @dataclass(frozen=True)
 class CoreEstimate:
-    optimistic_ns: float
+    ideal_ns: float  # max(sum FPU, sum DRAM, sum fabric): modelled work only
+    topk_ns: float  # measured-rate top-k
+    optimistic_ns: float  # max(sum FPU + top-k, sum DRAM, sum fabric)
     conservative_ns: float
     ops: tuple
 
     @property
     def target_ns(self) -> float:
-        return max(2 * self.optimistic_ns, self.conservative_ns)
+        return max(2 * self.ideal_ns + self.topk_ns, self.conservative_ns)
 
 
 def dsa_core(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> CoreEstimate:
     """One DSA layer's attention core on one chip for the chunk at ``prefix``."""
     ops = dsa_ops(prefix, chunk, hw)
-    optimistic = max(sum(o.compute_ns for o in ops), sum(o.dram_ns for o in ops), sum(o.fabric_ns for o in ops))
+    fpu, topk = sum(o.fpu_ns for o in ops), sum(o.topk_ns for o in ops)
+    dram, fabric = sum(o.dram_ns for o in ops), sum(o.fabric_ns for o in ops)
     conservative = sum(o.roofline_cons_ns for o in ops) + sum(o.fabric_cons_ns for o in ops)
-    return CoreEstimate(optimistic, conservative, tuple(ops))
-
-
-def dense_mla_core_flop(prefix: int, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> float:
-    """Per-chip matrix FLOP of K3's dense (absorbed) MLA attention core for the chunk at ``prefix``, evenly split."""
-    pairs = causal_pairs(prefix, chunk) / hw.chips
-    return 2 * pairs * C.NUM_ATTENTION_HEADS * (2 * C.KV_LORA_RANK + C.QK_ROPE_HEAD_DIM)
+    return CoreEstimate(max(fpu, dram, fabric), topk, max(fpu + topk, dram, fabric), conservative, tuple(ops))
 
 
 # --- measured K3 anchor ----------------------------------------------------------------------------------------
@@ -287,16 +295,18 @@ def _probe_chunk(label: str) -> int:
 
 @dataclass(frozen=True)
 class K3Measured:
-    """K3 sc4 (PP4 on four 8x4 Galaxies, 93 layers, traced) by probe chunk index: retire throughput and TTFT."""
+    """K3 sc4 (PP4 on four 8x4 Galaxies, 93 layers, traced) by probe chunk index: retire throughput, chunk latency
+    and TTFT (seconds, tok/s, ms as in ``perf_baselines.json``)."""
 
     throughput_tok_s: dict
+    chunk_time_ms: dict
     ttft_s: dict
 
     @classmethod
     def load(cls, path: Path = PERF_BASELINES, power: str = "8kw") -> "K3Measured":
         entry = json.loads(path.read_text())["baselines"]["kimi_k3"]["sc4"][power]
         pick = lambda metric: {_probe_chunk(lbl): v[metric] for lbl, v in entry.items() if metric in v}
-        return cls(pick("throughput_tok_s"), pick("ttft_s"))
+        return cls(pick("throughput_tok_s"), pick("chunk_time_ms"), pick("ttft_s"))
 
     def period_ns(self, d: int) -> float:
         """Retire period of chunk ``d``: the busiest stage's time, linearly interpolated between probes."""
@@ -308,26 +318,23 @@ class K3Measured:
         return at(lo) if hi == lo else at(lo) + (at(hi) - at(lo)) * (d - lo) / (hi - lo)
 
     def fill_ns(self) -> float:
-        """Measured TTFT beyond the sum of the retire periods (pipeline fill), median over the TTFT probes."""
-        residuals = sorted(t * 1e9 - sum(self.period_ns(c) for c in range(d + 1)) for d, t in self.ttft_s.items())
-        return residuals[len(residuals) // 2]
+        """Pipeline fill: the first chunk's TTFT minus its period. ``summarize_ci_run.py`` measures both chunk_time and
+        TTFT from the request's first layer ack, so chunk 0's chunk_time is its TTFT."""
+        return self.chunk_time_ms[0] * 1e6 - self.period_ns(0)
 
 
-def dense_mla_core_ns(prefix: int, k3: K3Measured, chunk: int = CHUNK, hw: Galaxy8x4 = GALAXY) -> float:
-    """K3's dense MLA core per layer at ``prefix``, at the efficiency K3 shows on its prefix growth.
+def dense_mla_core_ns(prefix: int, k3: K3Measured, chunk: int = CHUNK) -> float:
+    """K3's dense MLA core per layer for the chunk at ``prefix``, from K3's measured prefix growth.
 
     The retire period is the busiest stage's time; it grows with the prefix only through that stage's 6 MLA cores
-    (KDA, MoE, AttnRes and the projections do not depend on it). The period slope between the first and the deepest
-    probe divided by 6 is the measured cost of one more prefix token per layer; its ratio to the HiFi2 ideal gives the
-    efficiency, applied to the whole core.
+    (KDA, MoE, AttnRes and the projections do not depend on it). The core's work is proportional to its causal
+    (query, key) pairs, and one more prefix token adds ``chunk`` pairs, so the core costs the measured per-token slope
+    (period slope from the first to the deepest probe, per layer) times ``causal_pairs / chunk``.
     """
     probes = sorted(k3.throughput_tok_s)
     d0, d1 = probes[0], probes[-1]
     slope = (k3.period_ns(d1) - k3.period_ns(d0)) / ((d1 - d0) * chunk) / max(stage_attention_layers())
-    per_ns = hw.cores * hw.clock_ghz * hw.matmul_flop_per_cycle_core / FIDELITY_PHASES["HiFi2"]
-    ideal = lambda p: dense_mla_core_flop(p, chunk, hw) / per_ns
-    efficiency = (ideal(chunk) - ideal(0)) / chunk / slope
-    return ideal(prefix) / efficiency
+    return slope * causal_pairs(prefix, chunk) / chunk
 
 
 # --- K3.1 pipeline -----------------------------------------------------------------------------------------------
@@ -355,23 +362,23 @@ class Ttft:
         return self.prompt_tokens / self.ttft_s
 
 
-def ttft(prompt_tokens: int, scenario: str = "target", hw: Galaxy8x4 = GALAXY) -> Ttft:
+def ttft(prompt_tokens: int, scenario: str = "target", k3: K3Measured | None = None, hw: Galaxy8x4 = GALAXY) -> Ttft:
     """TTFT on PP4 8x4 for a ``prompt_tokens`` prompt in 5120-token chunks (the last one padded).
 
     TTFT = sum of the chunks' retire periods + K3's measured pipeline fill. A period is K3's measured first-chunk
     period with the busiest stage's 6 dense MLA cores swapped for attention cores at the chunk's prefix: DSA cores
     under ``scenario`` (``optimistic``, ``conservative``, ``target``), or dense MLA cores (``k3``: the self-check
-    that reproduces K3's measured TTFT).
+    that reproduces K3's measured TTFT). ``k3`` is the anchor (default: the CI baselines).
     """
     assert scenario in SCENARIOS, f"unknown scenario {scenario}"
-    k3 = K3Measured.load()
+    k3 = K3Measured.load() if k3 is None else k3
     assert min(k3.throughput_tok_s) == 0, "the anchor is the first chunk"
     layers = max(stage_attention_layers())
-    base = k3.period_ns(0) - layers * dense_mla_core_ns(0, k3, hw=hw)
+    base = k3.period_ns(0) - layers * dense_mla_core_ns(0, k3)
 
     def core(prefix: int) -> float:
         if scenario == "k3":
-            return dense_mla_core_ns(prefix, k3, hw=hw)
+            return dense_mla_core_ns(prefix, k3)
         e = dsa_core(prefix, hw=hw)
         return {"optimistic": e.optimistic_ns, "conservative": e.conservative_ns, "target": e.target_ns}[scenario]
 
