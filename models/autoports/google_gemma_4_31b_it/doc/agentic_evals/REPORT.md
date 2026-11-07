@@ -147,6 +147,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | logging-future-cohort-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: candidates: 4; focused tests each: 37; hooks: pass; registered ids exact: True |
 | c8-forty-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: c8 forty sha: e5a9a7638a1f46f22c0d89acf2ac333da5d53c02; focused tests: 37; hooks: passed; both eighty descendant trees exact: True |
 | gpqa40-c8-saturation-comparison | 3.69754 (guess) / unknown | 1.50000 | running/pending: Pending |
+| c4-forty-release-fallback | 0.00000 / 0.00000 | 0.00000 | kept/solved: Held directFF C4 exact40 candidate0b3f934;37 focused tests and fullhooks passed. Not published or selected. |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

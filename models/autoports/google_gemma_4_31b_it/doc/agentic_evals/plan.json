@@ -2643,7 +2643,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T00:11:19.423088+00:00",
+      "last_observed_at": "2026-11-07T00:22:27.607635+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 128164656843,
       "device_job_started_at": "2026-11-06T21:28:17Z",
@@ -2934,7 +2934,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42316311286",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-07T00:10:49.224796+00:00",
+      "last_observed_at": "2026-11-07T00:21:57.398122+00:00",
       "runner": "120-qb2-p05t01",
       "device_job_id": 128229759730,
       "device_job_started_at": "2026-11-07T00:08:14Z",
@@ -2943,7 +2943,7 @@
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-07T00:12:27.803682+00:00",
+  "last_updated": "2026-11-07T00:22:36.225513+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -4702,5 +4702,12 @@
     "dry_pass": false,
     "queue_hours": 0.8494444444444444,
     "remaining": "Actual frozen no-score dry and full-cap logging transport remain unproved"
+  },
+  "held_c4_forty_release_fallback": {
+    "sha": "0b3f934eaf8da405a74486c37e3014aa736b25f8",
+    "parent": "e5a9a7638a1f46f22c0d89acf2ac333da5d53c02",
+    "evidence": "runs/c4-forty-release-fallback/RESULT.json",
+    "selected": false,
+    "condition": "Only if valid40 and normal80 not admitted by measured forecast; no rung delay"
   }
 }
