@@ -76,6 +76,15 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         """DSpark taps target t at layer t+1's attention input, so tap 23 belongs to the rank starting at 24."""
         return target_layer_idx + 1
 
+    @property
+    def _has_index_cache(self) -> bool:
+        """Whether the full-attention layers are DSA layers with an indexer key cache (Kimi-K3.1): the table
+        then carries it as config 1. Read from the config, not the caches, so every rank agrees, including
+        one with no MLA layer and hence no caches to look at."""
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+
+        return resolve_has_indexer(self.hf_config)
+
     def _my_mla_layer_ids(self):
         """The GLOBAL model layers in this rank's slice that own a KV slab."""
         first = int(self.config.first_layer_idx)
@@ -113,8 +122,10 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         super().compile(kv_caches)
 
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
-        """Three stages, always, in table-config order: kvpe, KDA recurrent, KDA convolution. Under DSpark
-        the drafter's K and V follow, as in the shared runtime.
+        """One stage per table config, always, in config order: kvpe, the DSA index cache when the model has
+        an indexer (Kimi-K3.1), KDA recurrent, KDA convolution. Under DSpark the drafter's K and V follow, as
+        in the shared runtime. The index cache shares the kvpe cache's slabs, so its stage is numbered the
+        same way.
 
         Kimi-K3 writes a KV slab on 24 of its 93 layers, so a 12-layer rank owns 3. The shared
         implementation reports the rank's LAYER span, which disagrees with the cache it describes
@@ -138,8 +149,12 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         first_kda = sum(1 for layer in KimiK3Config.kda_layer_ids() if layer < first_layer_idx)
         my_kda = list(schedule.rank_kda_layer_ids())
 
-        if kv_caches.index is not None:
-            raise RuntimeError("Kimi-K3 has no DSA index cache; a merged table here is unexpected")
+        if (kv_caches.index is not None) != (self._has_index_cache and kv_caches.kvpe is not None):
+            raise RuntimeError(
+                f"the index cache is {'present' if kv_caches.index is not None else 'absent'} but the model "
+                f"{'has' if self._has_index_cache else 'has no'} DSA indexer and the kvpe cache is "
+                f"{'present' if kv_caches.kvpe is not None else 'absent'}; allocate_kv_cache disagrees with the runtime"
+            )
         # An empty stage still sits at this rank's slot offset: the merged table requires the gathered
         # stages to tile [0, total), and one at 0 would break that on any later rank.
         null_kda = KvCacheStage(0, first_kda, 0)
@@ -148,7 +163,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         if kv_caches.kvpe is None:
             if my_slots:
                 raise RuntimeError(f"no KVPE cache allocated but layers {my_slots} own MLA slabs")
-            kvpe_stage = KvCacheStage(0, first_slot, 0)
+            token_stages = [KvCacheStage(0, first_slot, 0)] * (1 + self._has_index_cache)
         else:
             slabs_per_user = kv_caches.kvpe.storage.shape[0] // self.config.num_users
             if slabs_per_user != len(my_slots):
@@ -157,16 +172,19 @@ class TtKimiK3Runtime(TtPrefillRuntime):
                     f"[{first_layer_idx}, {last}) own {len(my_slots)} MLA layers "
                     f"({my_slots}); the table cannot place them unless the cache is sized to the stage"
                 )
-            kvpe_stage = KvCacheStage(self._kvpe_base_address(kv_caches), first_slot, len(my_slots))
+            token_stages = [KvCacheStage(self._kvpe_base_address(kv_caches), first_slot, len(my_slots))]
+            if self._has_index_cache:
+                # Every DSA layer owns its indexer, so the index cache has the kvpe cache's slabs.
+                token_stages.append(KvCacheStage(int(kv_caches.index.buffer_address()), first_slot, len(my_slots)))
 
         kda = getattr(kv_caches, "kda_states", None)
         if kda is None:
             if my_kda:
                 raise RuntimeError(f"no KDA state slabs allocated but layers {my_kda} are KDA layers")
-            return [kvpe_stage, null_kda, null_kda, *self._dflash_stages(last)]
+            return [*token_stages, null_kda, null_kda, *self._dflash_stages(last)]
         self._check_kda_slabs(kda, my_kda)
         return [
-            kvpe_stage,
+            *token_stages,
             KvCacheStage(int(kda.recurrent.buffer_address()), first_kda, len(my_kda)),
             KvCacheStage(int(kda.convolution.buffer_address()), first_kda, len(my_kda)),
             *self._dflash_stages(last),
@@ -181,7 +199,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             raise RuntimeError(f"KDA slabs hold {slabs.num_slots} slots but the runtime serves {self.config.num_users}")
 
     def _dflash_stages(self, end_layer: int):
-        """The drafter's K and V after the three stages. Their rows continue the model's layer axis (93..97 on
+        """The drafter's K and V after the model's stages. Their rows continue the model's layer axis (93..97 on
         the tail), where the drafter's layer completions are numbered too."""
         return self._dflash_migration_stages(end_layer) if self.config.dflash_enabled else []
 
@@ -212,11 +230,13 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         num_my_layers=None,
         stage_layouts=None,
     ) -> str:
-        """One merged table over kvpe (config "00") and the KDA slabs (configs "01" and "02").
+        """One merged table over kvpe (config "00"), the DSA index cache when the model has one (K3.1,
+        "01"), and the KDA slabs (the next two configs: "01"/"02" on K3, "02"/"03" on K3.1).
 
         `stage_layouts` is one gathered layout per stage of `kv_migration_stages`, in order; None
-        (single-rank / tests) gathers them here. Only the kvpe layout goes to the shared builder as a
-        block-cyclic stage; the KDA layouts travel inside `KdaTableSpec`, since their configs sit on
+        (single-rank / tests) gathers them here. The kvpe and index layouts go to the shared builder as
+        block-cyclic stages, both published on the model's layer axis (the index cache sits on the MLA
+        layers, as GLM's on its full-indexer layers); the KDA layouts travel inside `KdaTableSpec`, since their configs sit on
         the contract's synthetic position axis, not the token axis. Under pipeline parallelism rank 0
         builds the table and may hold different KDA layers than a stage it describes, which is why the
         spec carries the geometry and the gathered layouts rather than only this rank's tensors.
@@ -241,13 +261,17 @@ class TtKimiK3Runtime(TtPrefillRuntime):
                 )
                 for stage in self.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
             ]
-        stage_layouts, dflash_caches, dflash_spec, dflash_first_layer = self._dflash_table_args(stage_layouts, 3)
-        if len(stage_layouts) != 3:
+        n_model_stages = 3 + self._has_index_cache
+        stage_layouts, dflash_caches, dflash_spec, dflash_first_layer = self._dflash_table_args(
+            stage_layouts, n_model_stages
+        )
+        if len(stage_layouts) != n_model_stages:
             raise RuntimeError(
-                f"Kimi-K3 declares three migration stages (kvpe, KDA recurrent, KDA convolution) but "
-                f"{len(stage_layouts)} layouts were gathered; the caller must gather one per stage"
+                f"Kimi-K3 declares {n_model_stages} migration stages but {len(stage_layouts)} "
+                "layouts were gathered; the caller must gather one per stage of kv_migration_stages"
             )
-        kvpe_layout, recurrent_layout, convolution_layout = stage_layouts
+        *token_layouts, recurrent_layout, convolution_layout = stage_layouts
+        kvpe_layout = token_layouts[0]
 
         # The gathered kvpe stage is authoritative for this rank's slab range (compacted MLA-slot space),
         # not the caller's model-layer span. Mirrors the shared implementation.
@@ -277,6 +301,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
                 layer_rows=self.kda_table_layer_rows(recurrent_layout),
             )
 
+        mla_rows = self.kv_table_layer_rows([kvpe_layout])
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
             kvpe_cache=kv_caches.kvpe,
@@ -290,8 +315,10 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             path=path,
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
-            stage_layouts=[kvpe_layout],
-            layer_rows=self.kv_table_layer_rows([kvpe_layout]),
+            stage_layouts=token_layouts,
+            layer_rows=mla_rows,
+            index_kv_cache=kv_caches.index,
+            index_layer_ids=mla_rows if self._has_index_cache else None,  # the index cache shares kvpe's slabs
             kda=kda,
             dflash_caches=dflash_caches,
             dflash_spec=dflash_spec,

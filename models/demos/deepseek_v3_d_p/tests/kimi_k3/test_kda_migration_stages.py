@@ -1,15 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only: Kimi-K3 exposes kvpe, KDA recurrent and KDA convolution as migration stages 0, 1, 2.
+"""Host-only: Kimi-K3 exposes kvpe, KDA recurrent and KDA convolution as migration stages 0, 1, 2;
+Kimi-K3.1 adds its DSA index cache as stage 1, moving the KDA state to 2 and 3.
 
-Every rank must return exactly three stages (the per-stage allgather is collective), numbered in
-compacted slot space, and the adapter hooks must map the three configs back to model layers.
+Every rank must return the same number of stages (the per-stage allgather is collective), numbered in
+compacted slot space, and the adapter hooks must map the configs back to model layers.
 """
 
 from types import SimpleNamespace
 
 import pytest
 
+import ttnn
+from models.demos.common.prefill.adapter import get_adapter
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
@@ -23,15 +26,16 @@ def _tensor(address, shape):
     return SimpleNamespace(buffer_address=lambda: address, shape=shape)
 
 
-def _runtime(first, count, num_users=1, dflash=False):
+def _runtime(first, count, num_users=1, dflash=False, model="kimi_k3"):
     runtime = TtKimiK3Runtime.__new__(TtKimiK3Runtime)
     runtime.config = SimpleNamespace(
         first_layer_idx=first, num_layers=count, num_users=num_users, dflash_enabled=dflash
     )
+    runtime.hf_config = get_adapter(model).load_hf_config()
     return runtime
 
 
-def _caches(first, count, num_users=1, *, kvpe=True, kda=True):
+def _caches(first, count, num_users=1, *, kvpe=True, kda=True, index=False):
     schedule = KimiK3LayerSchedule.build(KimiK3Config, first, count)
     kvpe_cache = None
     if kvpe and schedule.num_mla_layers:
@@ -45,7 +49,10 @@ def _caches(first, count, num_users=1, *, kvpe=True, kda=True):
             recurrent=_tensor(0x2000, (num_users * len(ids), 24, 128, 128)),
             convolution=_tensor(0x3000, (num_users * len(ids), 144, 192)),
         )
-    return SimpleNamespace(kvpe=kvpe_cache, index=None, kda_states=kda_states)
+    index_cache = None
+    if index and kvpe_cache is not None:
+        index_cache = _tensor(0x1800, (num_users * schedule.num_mla_layers, 1, 7040, 128))
+    return SimpleNamespace(kvpe=kvpe_cache, index=index_cache, kda_states=kda_states)
 
 
 @pytest.mark.parametrize("first,count", SPLITS, ids=[f"L{f}-{f + c}" for f, c in SPLITS])
@@ -167,3 +174,137 @@ def test_driver_groups_consecutive_equal_range_layers_into_runs():
         (23, 24, 0, real_len),
         (27, 28, 0, real_len),
     ]
+
+
+# ---- Kimi-K3.1: the DSA index cache is config 1 -------------------------------------------------------
+
+
+@pytest.mark.parametrize("first,count", SPLITS, ids=[f"L{f}-{f + c}" for f, c in SPLITS])
+def test_kimi_k3_1_index_stage_shares_the_kvpe_slabs(first, count):
+    k3 = _runtime(first, count).kv_migration_stages(_caches(first, count))
+    k31 = _runtime(first, count, model="kimi_k3_1").kv_migration_stages(_caches(first, count, index=True))
+    assert len(k31) == 4
+    kvpe, index, recurrent, convolution = k31
+    assert (index.base_addr, index.first_layer, index.count) == (0x1800, kvpe.first_layer, kvpe.count)
+    # kvpe and the KDA state are exactly K3's.
+    assert [kvpe, recurrent, convolution] == k3
+
+
+def test_kimi_k3_1_rank_without_mla_layers_still_emits_four_stages():
+    stages = _runtime(0, 1, model="kimi_k3_1").kv_migration_stages(_caches(0, 1, index=True))
+    assert [(s.base_addr, s.first_layer, s.count) for s in stages[:2]] == [(0, 0, 0), (0, 0, 0)]
+    assert [(s.first_layer, s.count) for s in stages[2:]] == [(0, 1), (0, 1)]
+
+
+def test_index_cache_must_match_the_config(expect_error):
+    with expect_error(RuntimeError, "allocate_kv_cache disagrees"):
+        _runtime(0, 24).kv_migration_stages(_caches(0, 24, index=True))
+    with expect_error(RuntimeError, "allocate_kv_cache disagrees"):
+        _runtime(0, 24, model="kimi_k3_1").kv_migration_stages(_caches(0, 24))
+
+
+def test_kimi_k3_1_adapter_hooks_name_the_four_configs():
+    adapter = get_adapter("kimi_k3_1")
+    assert [adapter.cache_kind(i) for i in range(5)] == ["kvpe", "index", "kda_recurrent", "kda_convolution", "other"]
+    mla = {layer: layer for layer in KimiK3Config.mla_layer_ids()}
+    assert adapter.cache_layer_rows(0, 93) == adapter.cache_layer_rows(1, 93) == mla
+    assert adapter.cache_layer_rows(2, 93) == adapter.cache_layer_rows(3, 93) == KimiK3Adapter().cache_layer_rows(1, 93)
+    assert [adapter.cache_head_dim(i) for i in range(4)] == [576, 128, None, None]
+
+
+# ---- adapter answers vs the table the runtime publishes ------------------------------------------------
+_MESH = (8, 4)
+# Physical kvpe rows: K3's bf8 TILE (512 + 64 wide), K3.1's scaled FP8 (656 B row on a 704 B page).
+_KVPE_STORAGE = {
+    "kimi_k3": dict(shape=(1, 1, 32, 576), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT),
+    "kimi_k3_1": dict(
+        shape=(1, 1, 32, 656), dtype=ttnn.fp8_e4m3, layout=ttnn.ROW_MAJOR_LAYOUT, buffer_aligned_page_size=lambda: 704
+    ),
+}
+_TOKEN_CHUNK_BYTES = {("kimi_k3", "kvpe"): 18 * 1088, ("kimi_k3_1", "kvpe"): 32 * 704, ("kimi_k3_1", "index"): 4 * 1088}
+
+
+def _gathered(stage):
+    """One rank's stage as `allgather_kv_stage_layout` reports it."""
+    rows, cols = _MESH
+    return [
+        {
+            "rank": 0,
+            "first_layer": stage.first_layer,
+            "count": stage.count,
+            "base_addr": stage.base_addr,
+            "num_banks": 8,
+            "host_tag": 0xABC0000,
+            "fnids": [[ttnn.FabricNodeId(ttnn.MeshId(0), r * cols + c) for c in range(cols)] for r in range(rows)],
+        }
+    ]
+
+
+def _published_table(model, tmp_path, monkeypatch) -> str:
+    """The table `build_kv_chunk_table` publishes for a single-galaxy 24-layer rank, host-only (the real
+    populate walks over gathered stage layouts)."""
+    from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_TOKENS
+
+    monkeypatch.setattr(kv_chunk_table, "is_tp_deduped_kv_cache", lambda *_: False)
+    monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
+    runtime = _runtime(0, 24, model=model)
+    runtime.mesh_device = None
+    runtime.config.__dict__.update(
+        max_seq_len=PREFILL_CHUNK_TOKENS, mesh_shape=_MESH, sp_axis=0, tp_axis=1, chunk_size=PREFILL_CHUNK_TOKENS
+    )
+    caches = _caches(0, 24, index=model == "kimi_k3_1")
+    layouts = [_gathered(stage) for stage in runtime.kv_migration_stages(caches)]
+    # Then the physical row of each token cache (the chunk sizing reads only the last dim and the encoding).
+    caches.kvpe.storage.__dict__.update(_KVPE_STORAGE[model])
+    if caches.index is not None:
+        caches.index.__dict__.update(shape=(1, 1, 32, 128), dtype=ttnn.bfloat8_b)
+    caches.kda_states = None  # the KDA configs are described by the gathered layouts alone
+    return runtime.build_kv_chunk_table(caches, str(tmp_path / f"{model}.pb"), stage_layouts=layouts)
+
+
+@pytest.mark.parametrize("model", ["kimi_k3", "kimi_k3_1"])
+def test_adapter_answers_match_the_published_table(model, tmp_path, monkeypatch):
+    """Every config of the published table holds exactly the kind, layer rows, row width and position window
+    the adapter reports for it."""
+    adapter = get_adapter(model)
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(_published_table(model, tmp_path, monkeypatch))
+
+    tensor_type = ttnn.experimental.disaggregation.KvChunkTensorType
+    kinds = [adapter.cache_kind(i) for i in range(table.num_configs())]
+    assert kinds == ["kvpe", *(["index"] if model == "kimi_k3_1" else []), "kda_recurrent", "kda_convolution"]
+    assert adapter.cache_kind(table.num_configs()) == "other"
+    for config_id, kind in enumerate(kinds):
+        cfg = table.config(config_id)
+        populated = {layer for layer in range(cfg.num_layers) if table.lookup(layer, 0, 0, config_id).size_bytes}
+        rows = adapter.cache_layer_rows(config_id, 24)
+        assert all(layer == row for layer, row in rows.items()) and populated == set(rows), kind
+        head_dim = adapter.cache_head_dim(config_id)
+        if kind in ("kvpe", "index"):
+            assert cfg.tensor_type == tensor_type.Kv
+            assert cfg.chunk_size_bytes == _TOKEN_CHUNK_BYTES[(model, kind)]
+            assert head_dim == {"kvpe": 576, "index": 128}[kind]
+            assert all(adapter.layer_position_range(layer, 100) == (0, 100) for layer in rows)
+        else:
+            assert cfg.tensor_type == tensor_type.Snapshot and head_dim is None
+            assert all(adapter.layer_position_range(layer, 100) == (0, cfg.max_sequence_length) for layer in rows)
+
+
+@pytest.mark.parametrize("model", ["kimi_k3", "kimi_k3_1"])
+def test_kda_state_readback_walks_the_model_kda_configs(model, tmp_path, monkeypatch):
+    """The read-back tool picks the KDA configs by the model's adapter: 1/2 on K3, 2/3 on K3.1 (never the
+    index cache). With no local device every published layer is reported remote, so nothing is read."""
+    import json
+
+    from models.demos.deepseek_v3_d_p.tt.runners.kda_state_readback import main
+
+    table = _published_table(model, tmp_path, monkeypatch)
+    (tmp_path / "device_map.json").write_text("{}")
+    out = tmp_path / "readback.json"
+    argv = ["--table", table, "--device-map", str(tmp_path / "device_map.json"), "--real-len", "1024"]
+    argv += ["--model", model, "--golden", str(tmp_path), "--num-layers", "24", "--json", str(out)]
+    assert main(argv) == 2  # no layer reachable from this host
+    walked = {(r["config"], r["kind"]) for r in json.loads(out.read_text())["layers"]}
+    first_kda = 2 if model == "kimi_k3_1" else 1
+    assert walked == {(first_kda, "kda_recurrent"), (first_kda + 1, "kda_convolution")}
+    assert {r["status"] for r in json.loads(out.read_text())["layers"]} == {"remote"}
