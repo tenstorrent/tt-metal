@@ -48,8 +48,7 @@ constexpr uint32_t Q = get_compile_time_arg_val(FB + 13);
 constexpr uint32_t COMBINE_FANIN = get_compile_time_arg_val(FB + 14);
 constexpr uint32_t COMBINE_DEPTH = get_compile_time_arg_val(FB + 15);
 constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(FB + 16);
-constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(FB + 17);
-constexpr uint32_t SEM_ROOT_GATHER = get_compile_time_arg_val(FB + 18);
+constexpr uint32_t cb_comb_flags = get_compile_time_arg_val(FB + 11);  // per-slot arrival counters
 constexpr uint32_t SEM_LEAD_CREDIT = get_compile_time_arg_val(FB + 19);
 constexpr uint32_t SEM_ROOT_CREDIT = get_compile_time_arg_val(FB + 20);
 constexpr bool collapse = get_compile_time_arg_val(FB + 25) != 0;
@@ -145,12 +144,14 @@ void kernel_main() {
         }
     }
 
-    auto send_tile = [&](uint32_t src_l1, uint32_t g, uint32_t dst_l1, uint32_t sem_id) {
+    // The arrival counter of my slot at the consumer (cb_comb_flags: same L1 address on every core).
+    const uint32_t flags_base = fused ? get_write_ptr(cb_comb_flags) : 0;
+    auto send_tile = [&](uint32_t src_l1, uint32_t g, uint32_t dst_l1, uint32_t counter_l1) {
         const uint32_t px = get_arg_val<uint32_t>(RT_LEADERS + 2 * g);
         const uint32_t py = get_arg_val<uint32_t>(RT_LEADERS + 2 * g + 1);
         noc_async_write(src_l1, get_noc_addr(px, py, dst_l1), STAT_TILE);
         noc_async_write_barrier();
-        noc_semaphore_inc(get_noc_addr(px, py, get_semaphore(sem_id)), 1);
+        noc_semaphore_inc(get_noc_addr(px, py, counter_l1), 1);
     };
     // collapse: y / hc tensors and the hc landing tile (columns NG..31 of the hc page stay 0).
     const uint32_t y_tile_bytes = collapse ? get_tile_size(cb_y_tiles) : 0;
@@ -181,12 +182,21 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("writer_hc_wait");
             cb_wait_front(cb_hc_out, LANE_TILES);
-            noc_async_write_barrier();  // the previous hc page has left cb_hc_row
+            if constexpr (!NATURAL) {
+                noc_async_write_barrier();  // the previous hc page has left cb_hc_row
+            }
         }
         MaybeDeviceZoneScope("writer_hc_out");
-        lanes_to_hc(get_read_ptr(cb_hc_out), get_write_ptr(cb_hc_row));
-        cb_pop_front(cb_hc_out, LANE_TILES);
-        noc_async_write_page(row, hc_acc, get_write_ptr(cb_hc_row));
+        if constexpr (NATURAL) {
+            // compute packed the hc page itself (mhc_post_hc_sfpu.hpp NATURAL)
+            noc_async_write_page(row, hc_acc, get_read_ptr(cb_hc_out));
+            noc_async_writes_flushed();
+            cb_pop_front(cb_hc_out, LANE_TILES);
+        } else {
+            lanes_to_hc(get_read_ptr(cb_hc_out), get_write_ptr(cb_hc_row));
+            cb_pop_front(cb_hc_out, LANE_TILES);
+            noc_async_write_page(row, hc_acc, get_write_ptr(cb_hc_row));
+        }
     };
     auto push_lanes = [&](uint32_t stats_l1, uint32_t row) {
         using namespace mhc_post_hc;
@@ -194,7 +204,13 @@ void kernel_main() {
             drain_hc(true);  // compute ran the oldest one already (its combines precede it)
         }
         cb_reserve_back(cb_hc_lanes, LANE_TILES);
-        stats_to_lanes(stats_l1, get_write_ptr(cb_hc_lanes));
+        if constexpr (NATURAL) {
+            // hand compute the stats tile verbatim (local 4 KB copy; compute transposes in DEST)
+            noc_async_read(get_noc_addr(stats_l1), get_write_ptr(cb_hc_lanes), STAT_TILE);
+            noc_async_read_barrier();
+        } else {
+            stats_to_lanes(stats_l1, get_write_ptr(cb_hc_lanes));
+        }
         cb_push_back(cb_hc_lanes, LANE_TILES);
         hc_rows[(hc_head + hc_count) % LANE_SETS] = row;
         ++hc_count;
@@ -204,7 +220,6 @@ void kernel_main() {
             MaybeDeviceZoneScope("writer_stats_wait");
             cb_wait_front(cb, 1);
         }
-        MaybeDeviceZoneScope("writer_stats");
         noc_async_write_page(row, stats_acc, get_read_ptr(cb));
         if constexpr (collapse) {
             push_lanes(get_read_ptr(cb), row);
@@ -229,7 +244,6 @@ void kernel_main() {
                 part[tile_word(t, SS_COL)] = ss[tile_word(t, 0)];
             }
             {
-                MaybeDeviceZoneScope("writer_credit_wait");
                 noc_semaphore_wait_min(sem_ptr(SEM_LEAD_CREDIT), r + 1);
             }
             const uint32_t set = r % COMBINE_DEPTH;
@@ -237,7 +251,7 @@ void kernel_main() {
                 get_read_ptr(cb_partial),
                 geo.group,
                 gather_base + (set * geo.slots + geo.member) * STAT_TILE,
-                SEM_GATHER + set);
+                flags_base + geo.gather_flag(set, geo.member));
             cb_pop_front(cb_partial, 1);
             cb_pop_front(cb_ss_row, 1);
         }
@@ -252,12 +266,11 @@ void kernel_main() {
                     cb_wait_front(cb_lead_out, 1);
                     noc_semaphore_wait_min(sem_ptr(SEM_ROOT_CREDIT + gr), k + 1);
                 }
-                MaybeDeviceZoneScope("writer_lead_send");
                 send_tile(
                     get_read_ptr(cb_lead_out),
                     gr,
                     root_gather_base + (set * geo.groups + geo.group) * STAT_TILE,
-                    SEM_ROOT_GATHER + set);
+                    flags_base + geo.root_flag(COMBINE_DEPTH, set, geo.group));
                 cb_pop_front(cb_lead_out, 1);
             } else {
                 write_stats(cb_stats_row, row_start + rl);
@@ -316,7 +329,6 @@ void kernel_main() {
             post_row(r);
         }
         if constexpr (collapse) {
-            MaybeDeviceZoneScope("writer_hc_tail");
             while (hc_count > 0) {
                 drain_hc(true);  // the trailing stats rows' hc
             }

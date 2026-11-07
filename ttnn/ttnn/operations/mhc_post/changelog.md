@@ -391,3 +391,165 @@
 - Tests added: `test_mhc_post_perf.py`: plain fp32 T640 C3584 and T320 C7168, and
   `test_perf_bf16_packed_large` (T4096 C1792 / T640 C7168, plain / collapse). They are perf probes for the
   DRAM-saturated regime.
+
+## Perf 1
+- Date: 2026-11-06. Perf tournament round 1 (coordinator + 6 parallel `perf-part-optimizer` bake-offs).
+- Focus (perf-flagged LOOSE_CASES entry, optimized exactly): collapse, bf16 X / F, packed mixes
+  (post_col 4, comb_col 8), HiFi2, fp32_dest_acc_en, approx off, T160 C5120, Blackhole 11×10 → R=5,
+  Q=21 (105 cores), block_c=2, 1 row/core, two-level combine (fan-in 8, 3 groups). All in SUPPORTED;
+  SUPPORTED unchanged.
+- **Whole op, focus: 107.5 µs → 70.6 µs** (median of 5; range 66.6–71.2). Before this round the
+  number was deterministic (±0.2 µs); it is now noisy, see "What is hot now".
+
+### Instrumentation (permanent)
+- New `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`: `MaybeDeviceZoneScope(name)`, an alias of
+  `DeviceZoneScopedN` that costs nothing when the profiler is off.
+- Zones in every kernel, with waits split from work:
+  - reader: `reader_coef_issue/_share/_expand`, `reader_in_reserve`, `reader_issue`,
+    `reader_barrier`, `reader_w_mcast`, `reader_collect`;
+  - compute: `compute_in_wait`, `compute_mix`, `compute_collapse`, `compute_project`,
+    `compute_lead_combine`, `compute_root_combine`, `compute_hc(_wait)`;
+  - writer: `writer_out`, `writer_y`, `writer_barrier`, `writer_partial_wait`, `writer_ship_partial`,
+    `writer_lead_wait`, `writer_stats_wait`, `writer_hc_wait/_out`.
+- Profiled builds sit at the 70,688 B kernel-config text limit. Seven compute zones and six dataflow
+  zones were dropped (each measured at a fixed 20–400 ns, or redundant with a sibling zone) so that
+  every probe, including HiFi4 collapse, still loads with the profiler on.
+- `perf_experiments/zones.py` summarizes `profile_log_device.csv`. At most 26 zone executions per RISC
+  at the focus shape, so the marker budget is not exhausted.
+
+### Measured breakdown (before; focus, zones + cumulative ablation)
+- Typical core timeline:
+  - **0–24 µs, startup.** Block 0 + coefficient read and barrier take 3–6 µs; the coefficient
+    multicast takes 1–1.6 µs. Then the reader's volatile `expand_coefficients` runs for **13.1 µs**,
+    and compute cannot start until it finishes.
+  - **24–80 µs, body.** 4 blocks, each `compute_mix` 11.4 µs + collapse 1.65 µs + project 0.75 µs.
+    `compute_in_wait` ≈ 0, so the body is compute-bound.
+  - **76–108 µs, root tail.** Leader and root combine, then the writer's `stats_to_lanes` (6.7 µs),
+    the hc SFPU program (≈5.5 µs), and `lanes_to_hc` + hc write (5.9 µs).
+- Cumulative peel (ns), each step removed on top of the previous ones:
+
+  | step removed | ns |
+  |---|---|
+  | none (full op) | 107,473 |
+  | coefficient expansion | 95,456 |
+  | mix SFPU passes | 82,871 |
+  | writer hc permutes | 78,167 |
+  | hc SFPU program | 73,498 |
+  | every remaining eltwise_chain (`CKL_ELTWISE_CHAIN_SKIP_COMPUTE`) | 54,878 |
+  | F/X reads + X'/y writes (sync floor) | 19,575 |
+
+- Solo removals:
+  - mix SFPU 104,187 ns. Hidden by overlap: a 3.3 µs drop alone, 12.6 µs after the expansion is peeled.
+  - permutes 94,861 ns; hc 101,890 ns.
+  - all chain compute 82,777 ns; F/X reads + writes 101,750 ns.
+- Data movement alone is ≈35 µs for 16.3 MB (≈466 GB/s, near the DRAM roofline). The op was bound by
+  per-core latency and compute, not DRAM.
+- Ranked headroom:
+  1. coefficient expansion, 12 µs;
+  2. hc permutes, 12.6 µs;
+  3. mix: SFPU 12.6 µs, plus ≈18.6 µs of chain unpack / pack / init;
+  4. hc SFPU, ≈5 µs;
+  5. combine tail, ≈5 µs.
+
+### Portfolio and verdicts
+Fork end-to-end numbers on the focus shape. All six ideas are WIN.
+
+| idea (dir) | verdict | best option | focus ns before → after | precision | domain |
+|---|---|---|---|---|---|
+| `coef_expand` | WIN | v4: batched non-volatile copy (8 loads ahead of their stores) + coefficient-first ordering | 107,562 → 96,555 | bit-identical | everywhere: plain / stats / collapse, packed / separate, bf16 / fp32, 1 to many rows/core (T640 −16 µs, T4096 −31 µs) |
+| `hc_permute` | WIN | v1: stats tile copied verbatim to compute; in DEST, 32-bit face `transpose_dest` + SFPTRANSP regroup; compute packs the hc page | 107,641 → 96,933 | bit-identical | collapse on Blackhole; T4096 flat |
+| `mix_overhead` | WIN | v7: raw mix loop that re-inits only when the operand class switches, comb_3j as packed tiles, out of line with `-Os` | ≈107.5k → 97.9k | bit-identical | fused mix (bf16 streams); duplicate-pack drop = NULL (ablation 97.9k); ss round-trip ≤ 4 µs, with no bit-exact form |
+| `mix_sfpu` | WIN | v2: SFPLOADMACRO pass streams, config once per kernel | 96,446 → 87,850 (on the coef_expand base) | bit-identical | fused mix; plain T4096 C1792 +4.6 % measured alone, but −19.7 % once combined (below) |
+| `hc_sfpu` | WIN | V11: Sinkhorn in reciprocal-scale form | 5.48 → 3.49 µs per hc row (isolated bench) | comb rel-L2 9.3e-8 → 7.9e-8, pre / post unchanged | collapse; ROBUST layout needs re-indexing |
+| `combine_tail` | WIN (small) | `stream`: DEST-resident sum + per-slot arrival counters | 107,529 → 105,686 | bit-identical | stats / collapse, every Q tested (4–33), 1–5 rows/core; T640 flat |
+
+Options measured and not taken:
+
+| idea | option | result |
+|---|---|---|
+| `coef_expand` | v2 | 0.6 µs faster than v4, but 16 B over the profiler text budget |
+| `coef_expand` | v1 / v3 | 98.7k / 105.6k |
+| `hc_sfpu` | V12 (quadratic reciprocal correction) | −3 %, but comb error on the single-tile case slightly worse than the baseline: precision cost, not taken |
+| `hc_sfpu` | V7 (no scratch tile) | −30 % |
+| `combine_tail` | `fuse` | no better than `stream` |
+| `combine_tail` | fan-in 16 / 32 | summation order changes (stats rel 1.5e-7), no faster |
+
+### Graduated (each as the single unqualified path; replaced code deleted)
+
+| commit | change | focus, whole op | golden |
+|---|---|---|---|
+| bd38ab7 | zones + `coef_expand` v4 | 107.5 → 92.2 µs | 482 / 483 |
+| b4708b1 | `hc_permute` v1 | 92.2 → 80.5 µs | collapse slice 67 / 67 |
+| f22afe9 | `hc_sfpu` V11, Sinkhorn part only (rsqrt / sigmoid / softmax front unchanged) | 80.5 → 78.6 µs | 482 / 483 |
+| fd78f6f | `mix_overhead` v7 + `mix_sfpu` v2 together | 79.0 → 71.6 µs (median of 3) | 482 / 483 |
+| 8ab7a7e | `combine_tail` stream | 74.4 → 66.6 µs (median of 3; inside the new noise band) | 482 / 483 |
+
+The one golden failure in every run is the pre-existing `test_hc_scalars_are_runtime` gate defect
+from Refinement 2. Its value is 1.12e-5 before this round and 1.11e-5 after, against a 1e-5 gate.
+
+- **`coef_expand`:** the volatile copy is deleted.
+- **`hc_permute`.** Carve-out, inexpressible: the regroup addresses assume the Blackhole SFPU lane
+  mapping (DENSE). Non-Blackhole keeps the ROBUST lanes and the writer permutes.
+- **`hc_sfpu`.** Carve-out, inexpressible: in the ROBUST layout the 2 lane tiles occupy D0 and D1, so
+  the P / Q scratch (`dst_reg[32..39]`) is not free there.
+- **mix (`mix_overhead` + `mix_sfpu`):**
+  - The chain form of `mix_block_fused` and its chain aliases and MixPass elements are deleted.
+  - comb_3j is now packed per row as 4 full-broadcast fp32 tiles (+16 KiB in `cb_coef_packed`,
+    counted in the L1 budget).
+  - Bug found during integration: when F's dtype differs from X's (fp32 F, bf16 X), the raw loop must
+    re-init the unpacker for X. A new CT arg `f_differs_x` covers it; `test_plain_mixed_dtypes` caught it.
+  - Carve-out, inexpressible: non-Blackhole builds keep the sfpi passes so the translation unit still
+    compiles (the fused mix is host-gated to Blackhole, and the macro / replay API differs on
+    Wormhole).
+- **`combine_tail`:**
+  - The chain `sum_slots` is deleted, and `cb_comb_acc` is replaced by `cb_comb_flags` (16 B counters).
+  - The 2·COMBINE_DEPTH gather semaphore ids are now unused but stay counted in `_n_semaphores`, so
+    `combine_fanin` and the stats summation order are unchanged.
+
+### Guard set (`test_mhc_post_perf.py`, 23 probes)
+- Mix graduation vs the previous commit, one run per probe; medians of 3 where noted:
+
+  | probe | change |
+  |---|---|
+  | bf16 T4096 C1792 plain | −19.7 % |
+  | bf16 T4096 C1792 collapse | −17.7 % |
+  | bf16 T160 plain | −7.8 % |
+  | bf16 T160 stats HiFi4 | −10.8 % |
+  | bf16 T640 C5120 (all modes) | within ±3 % |
+  | every fp32 probe (per-term path, untouched) | within ±1.2 % |
+  | **bf16 plain T640 C7168** | **+8.2 % (median of 3: 216.9 → 234.6 µs)** |
+  | bf16 collapse T640 C7168 | +2.3 % (median of 3) |
+
+- **The T640 C7168 plain regression, and why it was not carved out:**
+  - Zones show the median core gets faster (TRISC_0 `compute_mix` 170 → 131 µs). The wall is set by
+    the worst core's `writer_barrier`, which grows from 26 to 61 µs: DRAM/NoC stragglers exposed by
+    the faster compute. This is the same hotspot Refinement 5 recorded for fp32 streams.
+  - The raw loop alone, with the old sfpi passes, shows it too, so it is not caused by either piece
+    of mix code.
+  - It is not carved out: no shape predicate captures the mechanism, and the same change takes the
+    other DRAM-heavy shape, T4096 C1792, 18–20 % faster. Recorded here as the next round's target.
+- The combine graduation is bit-identical. The fused probes sit inside the noise band. Plain probes,
+  which don't run the combine code at all, swung by up to ±15 % between runs, which measures the new
+  noise floor of DM-bound bf16 shapes.
+- After this round: HiFi4 collapse T160 = 160.8 µs (Refinement 5: 206.8 µs); T640 = 539.8 µs (630.1 µs).
+
+### What is hot now (round 2)
+- At the focus shape the median core finishes around 52 µs and the slowest around 71 µs.
+- On the late cores, the stall is `reader_barrier` (max 31 µs) and `reader_w_mcast` (max 26 µs), and
+  compute waits up to 11 µs (`compute_in_wait`).
+- The op is now limited by the DRAM / NoC hotspot and its run-to-run variance, not by compute. The
+  levers are in the catalog: `noc_placement`, `bank_stagger`, a rotated per-core block walk, and W
+  multicast placement.
+- The root tail is now ≈5 µs (combine) + 3.5 µs (hc) + the stats → hc hand-off.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| eltwise_chain (`HcProgram` element: CopyTile → SFPU program → PackTile) | capability | No chain element can run a DEST transform around an SFPU body: the 32-bit `transpose_dest` and the SFPTRANSP lane regroup must happen inside the same DEST acquire as the program. Without that the layout change falls to the RISC (two 800-word permutes on the writer). | 107,641 | 96,933 | mhc_post_compute.cpp:426 (`hc_row`), mhc_post_hc_sfpu.hpp:392 |
+| eltwise_chain (non-uniform chain: fp32 unpack-to-dest copies + bf16 srcA copies + 3 SFPU programs + 3 packs) | capability | Element `init()`s cannot be declared loop-invariant or "re-init only on operand-class switch". A non-uniform chain re-emits 8 copy/bcast inits, 3 SFPU inits and 4 srcA reconfigs on every output tile. Hoisting needs to know that the datacopy init touches only ADDR_MOD_0..3 and the SFPU programs only ADDR_MOD_6/7, and the chain has no way to express that. | ≈107,500 | ≈97,900 | mhc_post_compute.cpp:320 (`mix_block_fused`) |
+| no helper (SFPU multi-term MAD programs; would sit with the kernel_lib SFPU binary/ternary elements such as Addcmul) | capability | No kernel_lib or sfpi path issues SFPLOADMACRO schedules. sfpi serializes every SFPLOAD / SFPMAD / SFPSTORE through the single SFPU issue slot, while load macros run the MAD and store sub-units in parallel with the loads. | 96,446 | 87,850 | mhc_mix_lm.hpp:63 (`configure`), :221 (passes) |
+| eltwise_chain (runtime-count reduction over a gather CB) | capability | A chain acquires DEST per iteration and needs its element list at compile time. A sum over a runtime number of slots therefore has to pack and unpack its running tile through an L1 CB on every slot, and cannot wait slot by slot as tiles arrive. | 107,529 | 105,686 | mhc_post_compute.cpp:567 (`dest_sum`) |
+| `sfpu_reciprocal_iter<2>` (LLK) | capability | No unguarded residual-form variant for operands known to be positive and finite. The library form spends a NaN-guard `v_if` and two `-0.0f` SFPLOADIs per call, which dominate the Sinkhorn's 8 reciprocals per iteration. | 5.48 µs per hc row (whole Sinkhorn, isolated) | 3.49 µs per hc row | mhc_post_hc_sfpu.hpp:193 (`recip_n`), :261 (`sinkhorn_scaled`) |
+
+- The coefficient expansion and the stats-tile hand-off are RISC / NoC code and bypass no helper.
+- Each raw site above carries a kernel-head justification comment with its measured numbers.

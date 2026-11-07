@@ -100,7 +100,8 @@ CB_PARTIAL = 11
 CB_GATHER = 12
 CB_ROOT_GATHER = 13
 CB_LEAD_OUT = 14
-CB_COMB_ACC = 15
+CB_COMB_FLAGS = 15  # fused: per-slot combine arrival counters (16 B each), leader + root gather sets
+COMB_FLAG_BYTES = 16
 CB_STATS_ROW = 16
 CB_PROJ_MASKS = 17  # exact projection: PROJ_EXACT_PASSES bf16 0/1 column masks (reader-built)
 CB_XPRIME_MASKED = 18  # exact projection: one masked X' block
@@ -115,6 +116,21 @@ HC_LANE_TILES = 2  # cb_hc_lanes / cb_hc_out capacity (mhc_post_hc_sfpu.hpp LANE
 # 1 decouples the compute from the writer's lane permute (which sits behind the writer's cross-core
 # sends); 0 runs it right after the combine. Measured equal at T160 / T640 (C5120, HiFi2).
 HC_LAG = 1
+
+
+def _mix_pair_window(mode, proj_passes):
+    """Perf 2: the fused mix's c-pair window (mhc_post_compute.cpp mix_block_fused) — on everywhere
+    except the one carve-out below, earned by a measured regression.
+
+    Carve-out: collapse with the single-pass (HiFi1/2) projection. There the body is already DRAM-bound
+    (~475 GB/s: F/X reads + X'/y writes + the W stream under one block period), so a faster mix only
+    moves the DRAM contention onto the straggling cores and the combine/hc tail follows them. Measured
+    (Blackhole, pairs on vs off, 3 alternating runs each, medians): collapse T160 C5120 HiFi2 +5.0 %
+    (73.2 vs 69.7 us), collapse T4096 C1792 +2.5 % (+8.8..17.5 us in every pair), collapse T640 C5120
+    +4 % (noisy), collapse T640 C7168 flat. Outside it the pair window wins or is flat: collapse T160 HiFi4
+    (exact 16-pass projection, compute-bound) -4.7 %, plain T4096 C1792 -6.3 %, plain T640 C7168 -5.7 %,
+    stats T160 and plain T160 flat."""
+    return not (mode == "collapse" and proj_passes == 1)
 
 
 def _tile_bytes(dtype):
@@ -133,8 +149,9 @@ def _n_coef_cols(mode, n=N_STREAMS):
 
 
 def _n_coef_packed(mode, n=N_STREAMS):
-    """mix_fused packed tiles per row: A_j = {post_j, comb_0j, comb_1j, comb_2j}, + P in collapse."""
-    return n + (1 if mode == "collapse" else 0)
+    """mix_fused packed tiles per row: A_j = {post_j, comb_0j, comb_1j, comb_2j}, + P in collapse,
+    + B_j = comb_3j as a full broadcast tile (Perf 1: copied, not broadcast-unpacked, per output tile)."""
+    return n + (1 if mode == "collapse" else 0) + n
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +257,7 @@ def fused_fixed_bytes(core_c_max, Q, n=N_STREAMS):
         + slots * COMBINE_DEPTH  # cb_gather
         + (ng * COMBINE_DEPTH if ng > 1 else 0)  # cb_root_gather
         + 1  # cb_lead_out
-        + 2  # cb_comb_acc
+        + 1  # cb_comb_flags (16 B counters, < 1 tile)
         + 1  # cb_stats_row
         + 3
         + 2
@@ -440,8 +457,11 @@ def create_program_descriptor(
     n_sems = _n_semaphores(Q, fanin)
     if fused and n_sems > MAX_SEMAPHORES:
         raise RuntimeError(f"mhc_post: Q={Q} needs {n_sems} semaphores (> {MAX_SEMAPHORES})")
-    SEM_GATHER = 0  # [COMBINE_DEPTH] leader gather arrivals, per slot set
-    SEM_ROOT_GATHER = COMBINE_DEPTH  # [COMBINE_DEPTH] root gather arrivals, per slot set
+    # Perf 1: gather arrivals moved to per-slot counters in cb_comb_flags; these two ids are no longer
+    # used by the kernels but stay counted in _n_semaphores so combine_fanin (and so the stats
+    # summation order) is unchanged. Reclaiming them is a separate (order-changing) decision.
+    SEM_GATHER = 0  # [COMBINE_DEPTH] (unused, see above)
+    SEM_ROOT_GATHER = COMBINE_DEPTH  # [COMBINE_DEPTH] (unused, see above)
     SEM_LEAD_CREDIT = 2 * COMBINE_DEPTH  # grants from my group's leader
     SEM_ROOT_CREDIT = 2 * COMBINE_DEPTH + 1  # [num_groups] grants from each root
 
@@ -471,7 +491,7 @@ def create_program_descriptor(
             f32(CB_PARTIAL, 2),
             f32(CB_GATHER, slots * COMBINE_DEPTH),
             f32(CB_LEAD_OUT, 1),
-            f32(CB_COMB_ACC, 2),
+            _cb(CB_COMB_FLAGS, ttnn.float32, COMB_FLAG_BYTES * COMBINE_DEPTH * (slots + num_groups), 1, core_ranges),
             f32(CB_STATS_ROW, 1),
         ]
         if num_groups > 1:
@@ -480,7 +500,7 @@ def create_program_descriptor(
             bf16_tile = ttnn.tile_size(ttnn.bfloat16)
             cbs.append(_cb(CB_PROJ_MASKS, ttnn.bfloat16, bf16_tile, proj_passes, core_ranges))
             cbs.append(_cb(CB_XPRIME_MASKED, ttnn.bfloat16, bf16_tile, n * block_c, core_ranges))
-        fp32_copy_cbs += [CB_PROJ_BLOCK, CB_PROJ_RUN, CB_SS_RUN, CB_GATHER, CB_ROOT_GATHER, CB_COMB_ACC]
+        fp32_copy_cbs += [CB_PROJ_BLOCK, CB_PROJ_RUN, CB_SS_RUN, CB_GATHER, CB_ROOT_GATHER]
         if collapse:
             cbs += [
                 _cb(CB_Y_TILES, y_output.dtype, ttnn.tile_size(y_output.dtype), block_c, core_ranges),
@@ -502,7 +522,7 @@ def create_program_descriptor(
         CB_GATHER,
         CB_ROOT_GATHER,
         CB_LEAD_OUT,
-        CB_COMB_ACC,
+        CB_COMB_FLAGS,
         CB_STATS_ROW,
         Q,
         fanin,
@@ -547,7 +567,8 @@ def create_program_descriptor(
     compute_ct = (
         [CB_COEF_COLS, CB_F_TILES, CB_X_TILES, CB_OUT_TILES, n, block_c, n_coef_cols]
         + fused_ct
-        + [HC_LAG, int(mix_fused), CB_COEF_PACKED]
+        + [HC_LAG, int(mix_fused), CB_COEF_PACKED, int(input_tensor.dtype != residual.dtype)]
+        + [int(_mix_pair_window(mode, proj_passes))]
     )
 
     # --- physical coordinates of every core of the program (combine transport) ---

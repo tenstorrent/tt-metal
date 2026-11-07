@@ -42,6 +42,7 @@ namespace mhc_post_mix {
 
 constexpr uint32_t COEFS_PER_PACKED = 4;  // coefficients per packed tile
 constexpr uint32_t VECS = 32;             // SFPU vectors per DEST tile
+constexpr uint32_t Q1_ = 1, Q2_ = 8, Q3_ = 9;  // packed-coefficient quadrants (mix pair window, Perf 2)
 
 }  // namespace mhc_post_mix
 
@@ -91,6 +92,13 @@ inline void mhc_coef_compact() {
     });
 }
 
+#ifdef ARCH_BLACKHOLE
+// Blackhole: the passes as SFPLOADMACRO streams (load / MAD / store sub-units in parallel).
+#include "ttnn/ttnn/operations/mhc_post/kernels/mhc_mix_lm.hpp"
+#else
+// Carve-out (other arches): the fused mix is host-gated to Blackhole (probed SFPU lane mapping) and
+// the load-macro schedules use the Blackhole replay / macro API; these sfpi passes only keep the
+// translation unit compiling there.
 // The passes process two quadrants at a time, their dependent MUL -> MAD -> MAD chains interleaved
 // (as the stock addcmul does) so the SFPU pipeline does not stall on each result.
 
@@ -200,6 +208,8 @@ inline void mhc_y_pass2() {
 }
 #undef MHC_Y_P2
 
+#endif  // ARCH_BLACKHOLE
+
 }  // namespace ckernel::sfpu
 #endif
 
@@ -224,10 +234,6 @@ struct SlotProgram : compute_kernel_lib::UnaryOp<Derived, compute_kernel_lib::Ds
     };
 
 MHC_POST_SLOT_PROGRAM(CoefCompact, mhc_coef_compact)
-MHC_POST_SLOT_PROGRAM(MixPass1, mhc_mix_pass1)
-MHC_POST_SLOT_PROGRAM(MixPass2, mhc_mix_pass2)
-MHC_POST_SLOT_PROGRAM(MixPass3, mhc_mix_pass3<false>)
-MHC_POST_SLOT_PROGRAM(MixPass3Ss, mhc_mix_pass3<true>)
 MHC_POST_SLOT_PROGRAM(YPass1, mhc_y_pass1)
 MHC_POST_SLOT_PROGRAM(YPass2, mhc_y_pass2)
 #undef MHC_POST_SLOT_PROGRAM

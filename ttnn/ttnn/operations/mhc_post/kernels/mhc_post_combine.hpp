@@ -51,6 +51,13 @@ struct Geometry {
     constexpr bool roots(uint32_t r) const { return two_level() && leader && root_group(r) == group; }
     // Ordinal of row r among the rows rooted by root_group(r).
     constexpr uint32_t root_ordinal(uint32_t r) const { return r / groups; }
+    // Per-slot arrival counters (Perf 1), 16 B apart in cb_comb_flags (same L1 address on every
+    // core): leader gather [COMBINE_DEPTH][slots], then root gather [COMBINE_DEPTH][groups]. A sender
+    // increments its own slot's counter, so the consumer hands slots to compute one at a time.
+    constexpr uint32_t gather_flag(uint32_t set, uint32_t slot) const { return (set * slots + slot) * 16; }
+    constexpr uint32_t root_flag(uint32_t depth, uint32_t set, uint32_t g) const {
+        return (depth * slots + set * groups + g) * 16;
+    }
 };
 
 }  // namespace mhc_post_combine

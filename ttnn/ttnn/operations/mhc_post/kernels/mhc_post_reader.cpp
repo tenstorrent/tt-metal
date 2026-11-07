@@ -58,8 +58,7 @@ constexpr uint32_t Q = get_compile_time_arg_val(FB + 13);
 constexpr uint32_t COMBINE_FANIN = get_compile_time_arg_val(FB + 14);
 constexpr uint32_t COMBINE_DEPTH = get_compile_time_arg_val(FB + 15);
 constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(FB + 16);
-constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(FB + 17);
-constexpr uint32_t SEM_ROOT_GATHER = get_compile_time_arg_val(FB + 18);
+constexpr uint32_t cb_comb_flags = get_compile_time_arg_val(FB + 11);  // per-slot arrival counters
 constexpr uint32_t SEM_LEAD_CREDIT = get_compile_time_arg_val(FB + 19);
 constexpr uint32_t SEM_ROOT_CREDIT = get_compile_time_arg_val(FB + 20);
 static_assert(!fused || COMBINE_LAG + 1 <= COMBINE_DEPTH, "grants run LAG rows ahead of collects");
@@ -227,6 +226,15 @@ void kernel_main() {
             cb_push_back(cb_proj_masks, proj_passes);
         }
     }
+    // Zero my arrival counters before my first grant (no sender touches them before it).
+    uint32_t flags_base = 0;
+    if constexpr (fused) {
+        flags_base = get_write_ptr(cb_comb_flags);
+        volatile tt_l1_ptr uint32_t* fw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flags_base);
+        for (uint32_t i = 0; i < 4 * COMBINE_DEPTH * (geo.slots + geo.groups); ++i) {
+            fw[i] = 0;
+        }
+    }
     constexpr uint32_t RT_MEMBERS = 14;  // (x, y) of my group's members, then of every group leader
     const uint32_t rt_leaders = RT_MEMBERS + 2 * geo.size;
 
@@ -254,21 +262,29 @@ void kernel_main() {
             }
         }
     };
-    // COLLECT: wait for every sender of the row's slot set, then hand the set to compute.
+    // COLLECT: hand the row's slots to compute one at a time, in slot order, as each sender's
+    // per-slot arrival counter (cb_comb_flags) ticks, so compute's adds overlap the arrivals.
+    auto flag_ptr = [&](uint32_t off) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flags_base + off); };
     auto collect_post_row = [&](uint32_t r) {
         if (geo.leader && r >= COMBINE_LAG && r - COMBINE_LAG < num_rows) {
             const uint32_t rl = r - COMBINE_LAG;
-            auto* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER + rl % COMBINE_DEPTH));
-            noc_semaphore_wait_min(sem, (rl / COMBINE_DEPTH + 1) * geo.size);
-            cb_push_back(cb_gather, geo.slots);
+            const uint32_t set = rl % COMBINE_DEPTH;
+            for (uint32_t s = 0; s < geo.size; ++s) {
+                noc_semaphore_wait_min(flag_ptr(geo.gather_flag(set, s)), rl / COMBINE_DEPTH + 1);
+                cb_push_back(cb_gather, 1);
+            }
+            if (geo.slots > geo.size) {
+                cb_push_back(cb_gather, geo.slots - geo.size);  // padding slots of a short group
+            }
             ++lead_pushed;
         }
         if (r >= 2 * COMBINE_LAG && r - 2 * COMBINE_LAG < num_rows && geo.roots(r - 2 * COMBINE_LAG)) {
             const uint32_t k = geo.root_ordinal(r - 2 * COMBINE_LAG);
-            auto* sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_ROOT_GATHER + k % COMBINE_DEPTH));
-            noc_semaphore_wait_min(sem, (k / COMBINE_DEPTH + 1) * geo.groups);
-            cb_push_back(cb_root_gather, geo.groups);
+            const uint32_t set = k % COMBINE_DEPTH;
+            for (uint32_t g = 0; g < geo.groups; ++g) {
+                noc_semaphore_wait_min(flag_ptr(geo.root_flag(COMBINE_DEPTH, set, g)), k / COMBINE_DEPTH + 1);
+                cb_push_back(cb_root_gather, 1);
+            }
             ++root_pushed;
         }
     };
@@ -361,11 +377,9 @@ void kernel_main() {
         }
         issue_block(row, 0, r == 0);
         if constexpr (fused) {
-            MaybeDeviceZoneScope("reader_grant");
             grant(r);
         }
         {
-            MaybeDeviceZoneScope("reader_coef_reserve");
             cb_reserve_back(cb_coef_cols, n_coef_cols);
         }
         {

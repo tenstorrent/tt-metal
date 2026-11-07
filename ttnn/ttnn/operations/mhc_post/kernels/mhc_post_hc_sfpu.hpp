@@ -80,6 +80,27 @@ constexpr uint32_t lane_word(uint32_t k, uint32_t t) {
 }
 constexpr uint32_t LANE_DUP = 32;
 
+// NATURAL layout (Perf 1, Blackhole): the writer hands compute the stats tile verbatim (one local
+// 4 KB NoC copy); compute copies it to DEST and transposes every 16x16 face in place (32-bit
+// transpose_dest, faces stay put: face (tokens a, quantities b) becomes (quantities b, tokens a)),
+// regroups each 4-quantity row group with SFPLOAD x4 + SFPTRANSP + SFPSTORE x4 so every quantity is
+// ONE SFPU vector (all 32 tokens) at nat_addr(k), runs the hc program on those vectors, undoes the
+// regroup, zeroes quantities 24..31 and face-transposes back, so the packed tile IS the hc page (row
+// token, col quantity). Replaces the writer's two 800-word RISC permutes (stats -> lanes, lanes ->
+// hc page: 6.7 + 5.9 us on the root core's critical tail at the focus shape; focus collapse
+// 107.6 -> 96.9 us in the bake-off, bit-identical). Raw LLK (SFPLOAD / SFPTRANSP / SFPSTORE,
+// transpose_dest) bypasses the eltwise_chain HcProgram element: no helper exposes an in-DEST
+// row -> lane regroup around an SFPU body. Carve-out: the regroup addresses are written for the
+// Blackhole SFPU lane mapping (DENSE); other arches keep the writer permutes (ROBUST layout).
+constexpr bool NATURAL = DENSE;
+// SFPLOAD address (dest rows, +2 = odd columns) of quantity k's vector after the regroup. After the
+// per-face transpose, quantity rows 0..15 live in faces 0 (tokens 0..15) and 2 (tokens 16..31),
+// rows 16..31 in faces 1 and 3. Row group m = k/4: face rows 4(m%4)..+3 of face (m/4) and face
+// (m/4) + 2; lane block k%4 of {f even, f odd, f+2 even, f+2 odd}.
+constexpr uint32_t nat_base(uint32_t m) { return (m / 4) * 16 + (m % 4) * 4; }
+constexpr uint32_t nat_off(uint32_t i) { return i == 0 ? 0 : i == 1 ? 2 : i == 2 ? 32 : 34; }
+constexpr uint32_t nat_addr(uint32_t k) { return nat_base(k / 4) + nat_off(k % 4); }
+
 }  // namespace mhc_post_hc
 
 #ifdef TRISC_MATH
@@ -88,7 +109,9 @@ namespace ckernel::sfpu {
 namespace mhc_hc_detail {
 
 // SFPU vector index of quantity k (this half)
-constexpr uint32_t q(uint32_t k) { return mhc_post_hc::VEC_STRIDE * k; }
+constexpr uint32_t q(uint32_t k) {
+    return mhc_post_hc::NATURAL ? mhc_post_hc::nat_addr(k) / 2 : mhc_post_hc::VEC_STRIDE * k;
+}
 
 sfpi_inline sfpi::vFloat bits(uint32_t v) { return Converter::as_float(v); }
 
@@ -147,6 +170,134 @@ sfpi_inline void col_normalize(uint32_t hc_eps_bits) {
         }
     }
 }
+
+// ---- Sinkhorn in reciprocal-scale form (Perf 1, NATURAL / Blackhole) ----
+// M = diag(u) K diag(v) with K = softmax + eps read-only in the M slots. Track P_j = 1/u_j and
+// Q_k = 1/v_k:  row step P_j <- (K v)_j + eps * P_j, u_j = 1/P_j  (== u/(u s + eps));
+//               col step Q_k <- (K^T u)_k + eps * Q_k, v_k = 1/Q_k.
+// One MAD + one reciprocal per target instead of 4 multiply-stores per row / column; all four
+// targets of a half-step accumulate in one pass (each scale loaded once) and their reciprocals run
+// as two interleaved Newton pairs. Same math (exact reciprocal: arecip seed + 2 Newton steps),
+// different rounding sequence: hc comb rel-L2 vs fp64 7.9e-8 (was 9.3e-8), pre / post unchanged;
+// 5.48 -> 3.49 us per hc row (perf_experiments/hc_sfpu, V11). Slots: u_j / v_k at the scratch
+// quantities 24..31 (ss is dead after the logits; 25..31 are unused lanes), P / Q in the 8 vectors
+// after the lane tile (dst_reg[32..39], DEST tile D1 — free in the NATURAL hc_row).
+constexpr uint32_t u_q(uint32_t j) { return q(mhc_post_hc::SS_Q + j); }
+constexpr uint32_t v_q(uint32_t k) { return q(mhc_post_hc::SS_Q + mhc_post_hc::N + k); }
+constexpr uint32_t P_SLOT = 32;  // P_j
+constexpr uint32_t Q_SLOT = 36;  // Q_k
+#define MHC_HC_EPS sfpi::vConstFloatPrgm1
+
+// 1 / x for finite x > 0 (sums >= eps): arecip seed + 2 Newton steps in residual form (no NaN guard,
+// no -0.0f addends; same seed / steps as sfpu_reciprocal_iter<2>).
+sfpi_inline sfpi::vFloat recip_n(sfpi::vFloat x) {
+    sfpi::vFloat y = sfpi::approx_recip(x);
+    sfpi::vFloat e = 1.0f - x * y;
+    y = y * e + y;
+    e = 1.0f - x * y;
+    y = y * e + y;
+    return y;
+}
+
+sfpi_inline void recip_pair(sfpi::vFloat d0, sfpi::vFloat d1, uint32_t o0, uint32_t o1) {
+    sfpi::vFloat y0 = sfpi::approx_recip(d0);
+    sfpi::vFloat y1 = sfpi::approx_recip(d1);
+    sfpi::vFloat e0 = 1.0f - d0 * y0;
+    sfpi::vFloat e1 = 1.0f - d1 * y1;
+    y0 = y0 * e0 + y0;
+    y1 = y1 * e1 + y1;
+    e0 = 1.0f - d0 * y0;
+    e1 = 1.0f - d1 * y1;
+    y0 = y0 * e0 + y0;
+    y1 = y1 * e1 + y1;
+    sfpi::dst_reg[o0] = y0;
+    sfpi::dst_reg[o1] = y1;
+}
+
+template <bool COL>
+constexpr uint32_t kidx(uint32_t t, uint32_t k) {
+    return COL ? m(k, t) : m(t, k);
+}
+template <bool COL>
+constexpr uint32_t src_q(uint32_t k) {
+    return COL ? u_q(k) : v_q(k);
+}
+template <bool COL>
+constexpr uint32_t tgt_q(uint32_t t) {
+    return COL ? v_q(t) : u_q(t);
+}
+
+// One half-step: COL = column step (targets v from u), else row step (targets u from v).
+template <bool COL>
+sfpi_inline void scale_quad() {
+    constexpr uint32_t n = mhc_post_hc::N;
+    constexpr uint32_t REC = COL ? Q_SLOT : P_SLOT;
+    sfpi::vFloat w = ld(src_q<COL>(0));
+    sfpi::vFloat a0 = ld(kidx<COL>(0, 0)) * w;
+    sfpi::vFloat a1 = ld(kidx<COL>(1, 0)) * w;
+    sfpi::vFloat a2 = ld(kidx<COL>(2, 0)) * w;
+    sfpi::vFloat a3 = ld(kidx<COL>(3, 0)) * w;
+#pragma GCC unroll 3
+    for (uint32_t k = 1; k < n; ++k) {
+        w = ld(src_q<COL>(k));
+        a0 = ld(kidx<COL>(0, k)) * w + a0;
+        a1 = ld(kidx<COL>(1, k)) * w + a1;
+        a2 = ld(kidx<COL>(2, k)) * w + a2;
+        a3 = ld(kidx<COL>(3, k)) * w + a3;
+    }
+    a0 = ld(REC + 0) * MHC_HC_EPS + a0;
+    a1 = ld(REC + 1) * MHC_HC_EPS + a1;
+    a2 = ld(REC + 2) * MHC_HC_EPS + a2;
+    a3 = ld(REC + 3) * MHC_HC_EPS + a3;
+    sfpi::dst_reg[REC + 0] = a0;
+    sfpi::dst_reg[REC + 1] = a1;
+    sfpi::dst_reg[REC + 2] = a2;
+    sfpi::dst_reg[REC + 3] = a3;
+    recip_pair(a0, a1, tgt_q<COL>(0), tgt_q<COL>(1));
+    recip_pair(a2, a3, tgt_q<COL>(2), tgt_q<COL>(3));
+}
+
+// The whole Sinkhorn (column step, then iters - 1 row / column pairs) on K in the M slots.
+sfpi_inline void sinkhorn_scaled(uint32_t iters, uint32_t hc_eps_bits) {
+    constexpr uint32_t n = mhc_post_hc::N;
+    MHC_HC_EPS = Converter::as_float(hc_eps_bits);
+#pragma GCC unroll 4
+    for (uint32_t k = 0; k < n; ++k) {
+        sfpi::vFloat s0 = ld(m(0, k)) + ld(m(1, k));
+        sfpi::vFloat s1 = ld(m(2, k)) + ld(m(3, k));
+        sfpi::vFloat s = (s0 + s1) + MHC_HC_EPS;
+        sfpi::dst_reg[Q_SLOT + k] = s;
+        sfpi::dst_reg[v_q(k)] = recip_n(s);
+    }
+    if (iters > 1) {
+#pragma GCC unroll 4
+        for (uint32_t j = 0; j < n; ++j) {
+            sfpi::dst_reg[P_SLOT + j] = 1.0f;
+        }
+#pragma GCC unroll 0
+        for (uint32_t it = 1; it < iters; ++it) {
+            scale_quad<false>();
+            scale_quad<true>();
+        }
+#pragma GCC unroll 4
+        for (uint32_t j = 0; j < n; ++j) {
+            sfpi::vFloat u = ld(u_q(j));
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < n; ++k) {
+                sfpi::dst_reg[m(j, k)] = (sfpi::dst_reg[m(j, k)] * u) * sfpi::dst_reg[v_q(k)];
+            }
+        }
+    } else {
+#pragma GCC unroll 4
+        for (uint32_t j = 0; j < n; ++j) {
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < n; ++k) {
+                sfpi::dst_reg[m(j, k)] = sfpi::dst_reg[m(j, k)] * sfpi::dst_reg[v_q(k)];
+            }
+        }
+    }
+}
+#undef MHC_HC_EPS
 
 }  // namespace mhc_hc_detail
 
@@ -216,14 +367,64 @@ inline void calculate_mhc_hc(const uint32_t* p) {
             }
         }
         // Sinkhorn: column step, then iters - 1 (row, column) pairs
-        col_normalize(hc_eps);
-#pragma GCC unroll 0
-        for (uint32_t it = 1; it < iters; ++it) {
-            row_normalize(hc_eps);
+        if constexpr (mhc_post_hc::NATURAL) {
+            sinkhorn_scaled(iters, hc_eps);
+        } else {
+            // ROBUST (non-Blackhole) carve-out: its two lane tiles occupy D0 and D1, so the scaled
+            // form's P / Q scratch (dst_reg[32..39]) is not free there.
             col_normalize(hc_eps);
+#pragma GCC unroll 0
+            for (uint32_t it = 1; it < iters; ++it) {
+                row_normalize(hc_eps);
+                col_normalize(hc_eps);
+            }
         }
-        sfpi::dst_reg++;  // ROBUST: the second half (vectors 2k + 1)
+        if constexpr (!mhc_post_hc::NATURAL) {
+            sfpi::dst_reg++;  // ROBUST: the second half (vectors 2k + 1)
+        }
     }
+}
+
+// NATURAL: row group m (tile rows 4m..4m+3 of the transposed stats tile) <-> one quantity per
+// vector. SFPTRANSP is an involution, so the same sequence regroups and restores. One out-of-line
+// loop (runtime-encoded TT_ instructions) shared by gather and scatter: the profiler build's
+// kernel-text budget has no room for 13 unrolled copies.
+__attribute__((noinline)) void mhc_hc_regroup(uint32_t groups) {
+#pragma GCC unroll 0
+    for (uint32_t m = 0; m < groups; ++m) {
+        const uint32_t base = mhc_post_hc::nat_base(m);
+        TT_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, base + 0);
+        TT_SFPLOAD(p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, base + 2);
+        TT_SFPLOAD(p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, base + 32);
+        TT_SFPLOAD(p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, base + 34);
+        TTI_SFPTRANSP(0, 0, 0, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_7, base + 0);
+        TT_SFPSTORE(p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_7, base + 2);
+        TT_SFPSTORE(p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_7, base + 32);
+        TT_SFPSTORE(p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_7, base + 34);
+    }
+}
+
+inline void mhc_hc_gather() { mhc_hc_regroup(7); }  // quantities 0 .. 27 (24 = ss)
+
+inline void mhc_hc_scatter() {
+    using namespace mhc_post_hc;
+    mhc_hc_regroup(6);  // quantities 0 .. 23
+    // hc page columns 24..31 are zero: quantity rows 24..31 (groups 6, 7)
+    sfpi::vFloat z = 0.0f;
+#pragma GCC unroll 8
+    for (uint32_t m = 6; m < 8; ++m) {
+#pragma GCC unroll 4
+        for (uint32_t i = 0; i < 4; ++i) {
+            sfpi::dst_reg[(nat_base(m) + nat_off(i)) / 2] = z;
+        }
+    }
+}
+
+inline void calculate_mhc_hc_natural(const uint32_t* p) {
+    mhc_hc_gather();
+    calculate_mhc_hc(p);
+    mhc_hc_scatter();
 }
 
 }  // namespace ckernel::sfpu
