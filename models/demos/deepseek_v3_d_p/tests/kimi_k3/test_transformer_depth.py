@@ -394,7 +394,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 # layers -- run to finite, non-constant outputs at every layer, and each full-attention layer writes its
 # own rank-local slot of every cache (kvpe; for K3.1 also the indexer keys). A slot collision leaves one
 # slot empty and another overwritten; a stride error leaves rows past the chunk written. Per-layer
-# accuracy at depth is the golden ladder's job (K3) and the chunked/split self-consistency tests' (K3.1).
+# accuracy at depth is the golden ladder's job (K3); K3.1 has no depth oracle until its golden exists.
 SYNTHETIC_DEPTH = 24
 
 

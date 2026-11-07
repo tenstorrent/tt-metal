@@ -4,10 +4,10 @@
 """Kimi-K3 and Kimi-K3.1 stacks on synthetic weights, with the caches the runner allocates for them.
 
 For the tests that have no golden: K3.1 has neither a CPU reference nor a vLLM trace, so its variants
-of K3's depth, chunked-prefill and pipeline-split tests hold the stack against itself (chunked
-against one-shot, split against undivided) and check what it wrote to its caches. The same tests run
-K3 through the identical path -- K3.1 is K3 with Gated DSA on its 24 full-attention layers -- so
-K3's number on the same oracle is the baseline a K3.1 shortfall is measured against.
+of K3's depth, chunked-prefill and pipeline-split tests check what the stack wrote (every cache slot
+its own, carries stored, rows past a prompt's end untouched), that a repeated request is bit-identical,
+and that a split stack matches the undivided one. The same tests run K3 through the identical path --
+K3.1 is K3 with Gated DSA on its 24 full-attention layers -- as the baseline.
 
 One deliberate substitution: every layer's FFN is K3's dense FFN (`dense_ffn_config`). A synthetic
 LatentMoE layer is 896 routed experts at 33 M parameters each, ~59 GB per layer; the MoE is the same
@@ -46,8 +46,9 @@ MODEL_CONFIGS = {"kimi_k3": KimiK3Config, "kimi_k3_1": KimiK31Config}
 HF_CONFIGS = {"kimi_k3": kimi_k3_hf_config, "kimi_k3_1": kimi_k3_1_hf_config}
 
 
-def placements(models=tuple(MODEL_CONFIGS)) -> list:
-    """`(model, mesh_device, device_params)` on 8x4 Fabric2D, each model at its own L1_SMALL."""
+def placements(models=tuple(MODEL_CONFIGS), **device_params) -> list:
+    """`(model, mesh_device, device_params)` on 8x4 Fabric2D, each model at its own L1_SMALL; extra
+    `device_params` (e.g. a trace test's `trace_region_size`) are added to every placement."""
     return [
         pytest.param(
             model,
@@ -55,6 +56,7 @@ def placements(models=tuple(MODEL_CONFIGS)) -> list:
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "l1_small_size": MODEL_CONFIGS[model].L1_SMALL_SIZE,
+                **device_params,
             },
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id=f"{model}-fabric2d-8x4",
@@ -116,10 +118,9 @@ def _query(name, hidden, generator):
     return torch.randn(1, hidden, generator=generator) * STD
 
 
-def window(state_dict: dict, first_layer_idx: int, num_layers: int, *, offset: int = 0) -> dict:
-    """Layers [first_layer_idx, +num_layers) of a state dict that starts at global layer `offset`."""
-    local = first_layer_idx - offset
-    return {**state_dict, "layers": state_dict["layers"][local : local + num_layers]}
+def window(state_dict: dict, first_layer_idx: int, num_layers: int) -> dict:
+    """Layers [first_layer_idx, +num_layers) of a state dict that starts at global layer 0."""
+    return {**state_dict, "layers": state_dict["layers"][first_layer_idx : first_layer_idx + num_layers]}
 
 
 def build_stack(
@@ -139,7 +140,7 @@ def build_stack(
 
     Dense bf8 kvpe for K3; TP-deduped scaled-FP8 kvpe plus the bf8 indexer key cache for K3.1; the KDA
     slabs for both, attached to the model as the runner's compile() does. `num_users` is the slot count of
-    every cache and slab.
+    every cache and slab and the model's user slots.
     """
     adapter = get_adapter(model)
     config = HF_CONFIGS[model](CACHE_LEN)
@@ -177,6 +178,7 @@ def build_stack(
         tp_axis=TP_AXIS,
         max_seq_len=CACHE_LEN,
         is_chunked=True,
+        slot_num=num_users,
         sparse_kv_cache_format=adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
         tp_shard_kv=True,
     )

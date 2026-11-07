@@ -391,9 +391,11 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
 # K3.1 has no golden, so this is K3's chunked test with the oracle-free half of its checks: after every
 # chunk each KDA layer's carry is stored on every chip as finite, nonzero values, and device DRAM does not
 # grow after the first chunk; at the end the kvpe and (K3.1) index cache hold every real token's row in
-# token order and nothing past the last chunk; and the whole sequence prefilled again is bit-identical in
-# outputs, caches and carries. The last chunk ends off the chunk grid and off the 32-token tile grid, as a
-# prompt's real length does.
+# token order and nothing past the last chunk; and the same prompt prefilled again with DIFFERENT padding
+# ids past its end is bit-identical in outputs, carries and every real token's cache rows. The last chunk
+# ends off the chunk grid and off the 32-token tile grid, as a prompt's real length does, so a layer that
+# ignores `actual_end` (a KDA recurrence running into the padding, an attention reading padded keys) fails
+# the rerun.
 #
 # Whether the values crossing a boundary are RIGHT is owned where a reference exists: the KDA carry by
 # K3's golden test above (K3.1's KDA layers are K3's), and DSA reading the previous chunks' kvpe and index
@@ -449,12 +451,15 @@ def _prefill(mesh_device, stack, caches, ids):
 def test_synthetic_chunked_prefill_carries_state(model, mesh_device, device_params):
     state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), 0, SYNTHETIC_LAYERS)
     stack, caches = build_stack(mesh_device, model, state_dict, 0, SYNTHETIC_LAYERS)
-    ids = token_ids(SYNTHETIC_CHUNKS * CHUNK)  # ids past SYNTHETIC_END are padding the forward must ignore
+    ids = token_ids(SYNTHETIC_CHUNKS * CHUNK)
+    # Same prompt, other padding: everything past SYNTHETIC_END is what the forward must ignore.
+    repadded = ids[:SYNTHETIC_END] + token_ids(SYNTHETIC_CHUNKS * CHUNK - SYNTHETIC_END, seed=8)
+    assert repadded[SYNTHETIC_END:] != ids[SYNTHETIC_END:]
     try:
         logger.info(f"{model}: {SYNTHETIC_CHUNKS} chunks of {CHUNK}, ending at {SYNTHETIC_END}")
         outputs, carries, footprints, kv = _prefill(mesh_device, stack, caches, ids)
-        logger.info(f"{model}: the same request again")
-        outputs_again, carries_again, _, kv_again = _prefill(mesh_device, stack, caches, ids)
+        logger.info(f"{model}: the same prompt again, with different padding past {SYNTHETIC_END}")
+        outputs_again, carries_again, _, kv_again = _prefill(mesh_device, stack, caches, repadded)
     finally:
         release(stack, caches)
 
@@ -477,9 +482,12 @@ def test_synthetic_chunked_prefill_carries_state(model, mesh_device, device_para
         logger.info(f"  {model} {name}: rows [0, {SYNTHETIC_END}) written in every slot, nothing past the last chunk")
 
     for chunk, (out, again) in enumerate(zip(outputs, outputs_again)):
-        assert torch.equal(out, again), f"chunk {chunk}: output differs between identical requests"
+        assert torch.equal(out, again), f"chunk {chunk}: output depends on the padding"
     for chunk, (chunk_carries, again) in enumerate(zip(carries, carries_again)):
         for key, shards in chunk_carries.items():
-            assert all(map(torch.equal, shards, again[key])), f"chunk {chunk}: KDA {key} carry differs between requests"
+            assert all(map(torch.equal, shards, again[key])), f"chunk {chunk}: KDA {key} carry depends on the padding"
     for name in kv:
-        assert torch.equal(kv[name], kv_again[name]), f"{name} cache differs between identical requests"
+        real = slice(0, SYNTHETIC_END)
+        assert torch.equal(
+            kv[name][:, real], kv_again[name][:, real]
+        ), f"{name} cache of real tokens depends on the padding"

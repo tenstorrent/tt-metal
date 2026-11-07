@@ -261,12 +261,22 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
 # must be bit-identical. Rank 1 is not: on K3 and K3.1 alike its layers come out at PCC ~0.9996 against
 # the undivided stack (K3 0.99957-0.99967 over layers 12-15, flat; cause not understood, the handoff is a
 # plain bf16 concat/slice -- tracked as bug tt_metal_tracker-ao3i.9). So rank 1 is held, in the per-layer
-# PCC form of the golden test above, to SPLIT_PCC.
+# PCC form of the golden test above, to SPLIT_PCC on every SP shard's rows.
 #
 # Layers 0-15: the boundary at 12 gives rank 1 one inherited sealed block, and layer 15 is its one
 # full-attention layer (slot 0 of rank 1's kvpe and index caches, slot 3 of the undivided ones).
 # K3 runs the identical path.
+SP_SHARDS = 8  # the 8x4 mesh's SP ranks; tokens are contiguous per rank
 SPLIT_PCC = 0.999  # relaxed from bit-identical for rank 1 until tt_metal_tracker-ao3i.9 is understood
+
+
+def _worst_shard_pcc(want, got) -> float:
+    """The lowest PCC over the SP shards' token rows (8 x 640 on 8x4), so a fault confined to one rank's
+    tokens cannot hide under the aggregate."""
+    shards = zip(want.float().chunk(SP_SHARDS), got.float().chunk(SP_SHARDS))
+    return min(float(str(comp_pcc(w, g, SPLIT_PCC)[1]).split()[-1]) for w, g in shards)
+
+
 SYNTHETIC_LAYERS = 16
 
 
@@ -334,17 +344,17 @@ def test_synthetic_split_matches_undivided(model, mesh_device, device_params):
     for idx in range(SYNTHETIC_LAYERS):
         want, got = whole_layers[idx], split_layers[idx]
         assert torch.isfinite(got).all(), f"layer {idx}: non-finite split output"
-        pcc = float(str(comp_pcc(want, got, SPLIT_PCC)[1]).split()[-1])
+        pcc = _worst_shard_pcc(want, got)
         logger.info(
-            f"  {model} split layer {idx}: pcc {pcc:.6f}, identical {torch.equal(want, got)}"
+            f"  {model} split layer {idx}: worst SP-shard pcc {pcc:.6f}, identical {torch.equal(want, got)}"
             + ("  <- RANK BOUNDARY" if idx == BOUNDARY else "")
         )
         if idx < BOUNDARY and not torch.equal(want, got):
             failures.append(f"rank-0 layer {idx} not bit-identical")
         elif pcc < SPLIT_PCC:
             failures.append(f"layer {idx} pcc {pcc:.6f}")
-    pcc = float(str(comp_pcc(whole_out, split_out, SPLIT_PCC)[1]).split()[-1])
-    logger.info(f"  {model} split final output: pcc {pcc:.6f}")
+    pcc = _worst_shard_pcc(whole_out, split_out)
+    logger.info(f"  {model} split final output: worst SP-shard pcc {pcc:.6f}")
     if pcc < SPLIT_PCC:
         failures.append(f"final output pcc {pcc:.6f}")
 
@@ -356,8 +366,8 @@ def test_synthetic_split_matches_undivided(model, mesh_device, device_params):
             if not torch.equal(want, got):
                 failures.append(f"rank-0 {name} cache of layer {layer} not bit-identical")
             continue
-        pcc = float(str(comp_pcc(want, got, SPLIT_PCC)[1]).split()[-1])
-        logger.info(f"  {model} split {name} cache of layer {layer}: pcc {pcc:.6f}")
+        pcc = _worst_shard_pcc(want[:SEQ_LEN], got[:SEQ_LEN])
+        logger.info(f"  {model} split {name} cache of layer {layer}: worst SP-shard pcc {pcc:.6f}")
         if pcc < SPLIT_PCC:
             failures.append(f"{name} cache of layer {layer} pcc {pcc:.6f}")
     assert not failures, "split diverged from undivided: " + "; ".join(failures)
