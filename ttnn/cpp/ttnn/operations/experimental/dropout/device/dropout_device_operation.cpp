@@ -51,13 +51,12 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.memory_config().memory_layout()),
         static_cast<int>(out_memory_config.memory_layout()));
 
-    if (!input_tensor.is_sharded()) {
-        TT_FATAL(
-            input_tensor.layout() == Layout::TILE,
-            "Dropout operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
-            "tensor layout: {}",
-            static_cast<int>(input_tensor.layout()));
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE,
+        "Dropout operation requires tensor to be in Tile layout. Input tensor layout: {}",
+        static_cast<int>(input_tensor.layout()));
 
+    if (!input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Dropout operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
@@ -75,11 +74,10 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
             input_tensor.logical_shape(),
             preallocated_output_shape);
 
-        if (!input_tensor.is_sharded()) {
-            TT_FATAL(
-                (preallocated_output_tensor.value().layout() == Layout::TILE),
-                "Dropout operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
-        }
+        TT_FATAL(
+            (preallocated_output_tensor.value().layout() == Layout::TILE),
+            "Dropout operation requires output tensor to be in Tile layout. Output tensor layout: {}",
+            static_cast<int>(preallocated_output_tensor.value().layout()));
     }
 }
 
@@ -90,9 +88,6 @@ tt::tt_metal::TensorSpec DropoutDeviceOperation::compute_output_specs(
     }
 
     auto output_layout = Layout::TILE;
-    if (args.output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input.layout();
-    }
 
     const auto output_shape = tensor_args.input.logical_shape();
     return tt::tt_metal::TensorSpec(
