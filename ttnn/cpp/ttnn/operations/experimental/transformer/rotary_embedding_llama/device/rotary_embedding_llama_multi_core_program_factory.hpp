@@ -13,7 +13,7 @@ namespace ttnn::experimental::prim {
 struct RotaryEmbeddingLlamaMultiCore {
     // Metal 2.0 factory (MetalV2FactoryConcept) for the interleaved (non-sharded) prefill case.
     // Placed on all cores; idle cores get zero-filled runtime args so they don't wait on cos/sin
-    // data that never arrives.
+    // data that never arrives. active_cores_only omits these nodes without repartitioning work.
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,

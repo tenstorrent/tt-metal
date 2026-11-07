@@ -28,6 +28,11 @@ from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
 from .quant_config import LtxQuantProfile
 
+# The V->A cross attention runs the ring SDPA when SP > 1, and that SDPA already drops video K/V rows
+# at or past kv_logical_n (= the real video length), so multiplying them by the pad mask first is a
+# no-op. LTX_V2A_SKIP_PAD_MUL=0 restores the multiply.
+LTX_V2A_SKIP_PAD_MUL = os.environ.get("LTX_V2A_SKIP_PAD_MUL", "1") != "0"
+
 
 def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
     """Split ``x`` into ``n`` size-1 slices along dim 0 WITHOUT leaving TILE layout.
@@ -510,7 +515,8 @@ class LTXTransformerBlock(Module):
             audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
             video_kv_v2a = ttnn.addcmul(a_ca_shift_v, video_normed_xattn, a_ca_scale_v_p1)
             # Zero padded video tokens (on the SP-local shard) after the affine, before to_kv.
-            if video_padding_mask is not None:
+            skip_pad_mul = LTX_V2A_SKIP_PAD_MUL and self.parallel_config.sequence_parallel.factor > 1
+            if video_padding_mask is not None and not skip_pad_mul:
                 video_kv_v2a = ttnn.multiply(video_kv_v2a, video_padding_mask)
             v2a_output = self.video_to_audio_attn(
                 spatial_1BND=audio_q_v2a,

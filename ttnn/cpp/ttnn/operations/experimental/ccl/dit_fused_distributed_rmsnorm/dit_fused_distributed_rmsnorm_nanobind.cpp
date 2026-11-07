@@ -55,7 +55,8 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("affine_tile_row_map") = nb::none(),
-        nb::arg("row_capacity") = nb::none());
+        nb::arg("row_capacity") = nb::none(),
+        nb::arg("preserve_rope_rounding") = false);
 
     ttnn::bind_function<"dit_fused_distributed_layernorm", "ttnn.experimental.">(
         mod,
