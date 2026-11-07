@@ -637,15 +637,44 @@ inline void set_ttsync_enables()
     TTI_SETC16(TENSIX_TRISC_SYNC_TrackGlobalCfg_ADDR32, bitmask);
 }
 
+// Gathering bracket: branch prediction off + 20 nops before gathering goes off, 16 nops before it goes back on,
+// so fetch (up to 16 ahead) is never on a gathered path when gathering turns off. One shared copy per ELF.
+#if defined(COMPILE_FOR_TRISC)
+asm(".pushsection .text.ckernel_gathering_off,\"axG\",@progbits,ckernel_gathering_off,comdat\n"
+    ".globl ckernel_gathering_off\n"
+    ".type ckernel_gathering_off, @function\n"
+    "ckernel_gathering_off:\n"
+    " li t0, 1 << 1\n"
+    " csrrs zero, 0x7c0, t0\n" // branch prediction off
+    " .rept 20\n nop\n .endr\n"
+    " fence\n"
+    " lui t0, 1 << (18 - 12)\n"
+    " csrrs zero, 0x7c0, t0\n" // gathering off
+    " li t0, 1 << 1\n"
+    " csrrc zero, 0x7c0, t0\n" // branch prediction back on
+    " fence\n"
+    " ret\n"
+    // Never executed: with branch prediction off, fetch runs past the ret in a straight line until the
+    // ret resolves, and must not reach other code (possibly gathered) before gathering is off.
+    " .rept 20\n nop\n .endr\n"
+    ".size ckernel_gathering_off, . - ckernel_gathering_off\n"
+    ".popsection\n"
+    ".pushsection .text.ckernel_gathering_on,\"axG\",@progbits,ckernel_gathering_on,comdat\n"
+    ".globl ckernel_gathering_on\n"
+    ".type ckernel_gathering_on, @function\n"
+    "ckernel_gathering_on:\n"
+    " .rept 16\n nop\n .endr\n"
+    " lui t0, 1 << (18 - 12)\n"
+    " csrrc zero, 0x7c0, t0\n" // gathering on
+    " ret\n"
+    ".size ckernel_gathering_on, . - ckernel_gathering_on\n"
+    ".popsection\n");
+#endif
+
 template <bool add_nops = true>
 inline void disable_gathering()
 {
-    asm("csrrs zero, 0x7c0, %0" : : "r"(1 << 1));
-    asm("fence");
-    // Disable gathering: set bit 18
-    asm("csrrs zero, 0x7c0, %0" : : "r"(1 << 18));
-    asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 1));
-    asm("fence");
+    asm volatile("jal ra, ckernel_gathering_off\n" : : : "ra", "t0", "memory");
 
     // Gathering is done early in the pipeline, so we need to make sure
     // the above csrrw gets processed before the load-replay instructions
@@ -659,8 +688,7 @@ inline void disable_gathering()
 
 inline void enable_gathering()
 {
-    // Enable gathering: clear bit 18
-    asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 18));
+    asm volatile("jal ra, ckernel_gathering_on\n" : : : "ra", "t0", "memory");
 }
 
 #if defined(COMPILE_FOR_TRISC)
@@ -681,8 +709,8 @@ enum ExecBool : bool
 template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 [[gnu::always_inline, gnu::flatten]] inline void load_replay_buf(std::uint32_t start, std::uint32_t len, Callable &&callable, Args &&...args)
 {
-    // ENABLE_GATHERING is controlled by JIT build.
-    // Not enabled by default due to tt-metal#16439.
+    // ENABLE_GATHERING is controlled by JIT build (TT_METAL_ENABLE_GATHERING=1; off by default). Gathering must be off while
+    // a replay record is loaded, so the record is bracketed by disable/enable.
 #if defined(ENABLE_GATHERING)
     disable_gathering();
 #endif

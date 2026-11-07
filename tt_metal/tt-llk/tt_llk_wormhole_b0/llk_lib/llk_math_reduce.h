@@ -163,15 +163,20 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
             constexpr std::uint32_t inner_loops    = high_fidelity ? to_underlying(math_fidelity) : 1;
             const std::uint32_t replay_start       = ckernel::math::replay_buf_offset;
 
-            lltt::record(replay_start, replay_buf_len);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(last_clr, 0, ADDR_MOD_3, 0);
+            load_replay_buf(
+                replay_start,
+                replay_buf_len,
+                []
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                    TTI_MVMUL(last_clr, 0, ADDR_MOD_3, 0);
+                });
 
             ckernel_template tmp(1, inner_loops, lltt::replay_insn(replay_start, replay_buf_len));
             if constexpr (high_fidelity)
@@ -186,28 +191,33 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
             const std::uint32_t replay_buf_len = tensor_shape.num_faces_c_dim * 2 * fid_count;
             const std::uint32_t replay_start   = ckernel::math::replay_buf_offset;
 
-            lltt::record<lltt::NoExec>(replay_start, replay_buf_len);
-            for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
-            {
-                for (std::uint32_t p = 0; p < fid_count - 1; p++)
+            load_replay_buf(
+                replay_start,
+                replay_buf_len,
+                [&tensor_shape]
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-                }
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                    for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
+                    {
+                        for (std::uint32_t p = 0; p < fid_count - 1; p++)
+                        {
+                            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                        }
+                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
 
-                for (std::uint32_t p = 0; p < fid_count - 1; p++)
-                {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 8);
-                }
-                if (faces_remaining == 1)
-                {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 8);
-                }
-                else
-                {
-                    TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 8);
-                }
-            }
+                        for (std::uint32_t p = 0; p < fid_count - 1; p++)
+                        {
+                            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 8);
+                        }
+                        if (faces_remaining == 1)
+                        {
+                            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 8);
+                        }
+                        else
+                        {
+                            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 8);
+                        }
+                    }
+                });
 
             const std::uint32_t replay_op = lltt::replay_insn(replay_start, replay_buf_len);
             ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);

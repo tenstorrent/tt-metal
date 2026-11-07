@@ -162,13 +162,20 @@ inline bool segments(const std::uint32_t once, const std::uint32_t burst, const 
     }
     // the replay buffer, slots 0 ..: the whole period (split: HALF handshakes, the run's first period - HALF dropped), or the burst
     const std::uint32_t buffered = whole ? (split ? HALF : period) : burst;
-    TT_REPLAY(0, 2 * buffered, 0, 1);
-    for (std::uint32_t i = 0; i < buffered; i++)
-    {
-        const std::uint32_t kind  = !whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < (split ? HALF - burst : run) ? each : once));
-        ckernel::instrn_buffer[0] = wait_op<PRODUCE>(kind);
-        ckernel::instrn_buffer[0] = flip_op<PRODUCE>(kind);
-    }
+#if defined(COMPILE_FOR_TRISC) // load_replay_buf is TRISC-only; the BRISC firmware includes this header but never runs the mocks
+    ckernel::load_replay_buf(
+        0,
+        2 * buffered,
+        [&]
+        {
+            for (std::uint32_t i = 0; i < buffered; i++)
+            {
+                const std::uint32_t kind  = !whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < (split ? HALF - burst : run) ? each : once));
+                ckernel::instrn_buffer[0] = wait_op<PRODUCE>(kind);
+                ckernel::instrn_buffer[0] = flip_op<PRODUCE>(kind);
+            }
+        });
+#endif
     const std::uint32_t replay = TT_OP_REPLAY(0, 2 * buffered, 0, 0);
     if (whole) // inner loop: the period, replayed (split: the run's first period - HALF, then the buffer); no start or end instructions
     {
