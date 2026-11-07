@@ -146,3 +146,126 @@ def test_sub_device_program(device):
 @skip_for_slow_dispatch()
 def test_sub_device_program_mesh(mesh_device):
     run_sub_devices_program(mesh_device)
+
+
+def run_sub_device_manager_switch_in_trace(mesh_device):
+    # A trace that loads a two sub-device manager, runs work on both sub-devices at once, and clears it again, twice,
+    # with full-grid ops before, between and after. Every output must match the same ops run without a trace.
+    grid = mesh_device.compute_with_storage_grid_size()
+    left_cols = grid.x // 2
+    left = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(left_cols - 1, grid.y - 1))})
+    right = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(left_cols, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([left]), ttnn.SubDevice([right])], 0)
+
+    def sharded(cores):
+        return ttnn.create_sharded_memory_config(
+            (32, 64), core_grid=cores, strategy=ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True
+        )
+
+    def to_device(shape, memory_config):
+        return ttnn.from_torch(
+            torch.randn(shape, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    full_a, full_b = (to_device((1, 1, 256, 256), ttnn.DRAM_MEMORY_CONFIG) for _ in range(2))
+    left_a, left_b = (to_device((1, 1, left.num_cores() * 32, 64), sharded(left)) for _ in range(2))
+    right_a, right_b = (to_device((1, 1, right.num_cores() * 32, 64), sharded(right)) for _ in range(2))
+    outputs = []
+
+    def run():
+        outputs.append(ttnn.add(full_a, full_b))
+        for window in range(2):
+            mesh_device.load_sub_device_manager(manager)
+            outputs.append(ttnn.multiply(left_a, left_b, memory_config=sharded(left)))
+            outputs.append(ttnn.add(right_a, right_b, memory_config=sharded(right)))
+            outputs.append(ttnn.subtract(left_a, left_b, memory_config=sharded(left)))
+            mesh_device.clear_loaded_sub_device_manager()
+            outputs.append(ttnn.multiply(full_a, full_b) if window == 0 else ttnn.subtract(full_a, full_b))
+
+    def to_torch(tensors):
+        return [ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)) for t in tensors]
+
+    run()
+    expected = to_torch(outputs)
+    outputs.clear()
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    run()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    captured = list(outputs)
+    for _ in range(3):
+        for t in captured:
+            ttnn.copy(ttnn.zeros_like(t), t)
+        for _ in range(4):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        for got, want in zip(to_torch(captured), expected):
+            assert torch.equal(got, want)
+
+    # The host's dispatch state matches the device's after the replays: eager work in both managers still runs.
+    assert torch.equal(to_torch([ttnn.add(full_a, full_b)])[0], expected[0])
+    mesh_device.load_sub_device_manager(manager)
+    assert torch.equal(to_torch([ttnn.add(right_a, right_b, memory_config=sharded(right))])[0], expected[2])
+    mesh_device.clear_loaded_sub_device_manager()
+
+    ttnn.release_trace(mesh_device, trace_id)
+    mesh_device.remove_sub_device_manager(manager)
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+def test_sub_device_manager_switch_in_trace(device):
+    run_sub_device_manager_switch_in_trace(device)
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+def test_sub_device_manager_switch_in_trace_mesh(mesh_device):
+    run_sub_device_manager_switch_in_trace(mesh_device)
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+def test_sub_device_manager_switch_in_trace_left_loaded_mesh(mesh_device, expect_error):
+    # A capture that ends with a sub-device manager still loaded switches back to the one it began in, inside the trace.
+    # While the trace lives, the manager it switches through cannot be removed.
+    grid = mesh_device.compute_with_storage_grid_size()
+    left = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x // 2 - 1, grid.y - 1))})
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([left])], 0)
+    sharded = ttnn.create_sharded_memory_config(
+        (32, 64), core_grid=left, strategy=ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True
+    )
+    a, b = (
+        ttnn.from_torch(
+            torch.randn((1, 1, left.num_cores() * 32, 64), dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=sharded,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(2)
+    )
+    expected = ttnn.to_torch(ttnn.add(a, b), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    # Compile the op under the manager before capture.
+    mesh_device.load_sub_device_manager(manager)
+    ttnn.add(a, b, memory_config=sharded)
+    mesh_device.clear_loaded_sub_device_manager()
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    mesh_device.load_sub_device_manager(manager)
+    output = ttnn.add(a, b, memory_config=sharded)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    with expect_error(RuntimeError, "switches through it"):
+        mesh_device.remove_sub_device_manager(manager)
+    for _ in range(3):
+        ttnn.copy(ttnn.zeros_like(output), output)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        got = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        assert torch.equal(got, expected)
+
+    ttnn.release_trace(mesh_device, trace_id)
+    mesh_device.remove_sub_device_manager(manager)
