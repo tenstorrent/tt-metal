@@ -163,3 +163,15 @@ def test_typecast_rejects_mismatched_preallocated_output(device, expect_error):
         ttnn.unary_chain(input_tensor, typecast_to_bf16, output_tensor=output_tensor)
     with expect_error(RuntimeError, "dtype should match"):
         ttnn.typecast(input_tensor, ttnn.bfloat16, output_tensor=output_tensor)
+
+
+@pytest.mark.parametrize("op", [ttnn.add, ttnn.multiply, ttnn.maximum, ttnn.gt])
+@pytest.mark.parametrize("layouts", [("T", "T"), ("T", "R"), ("R", "T")])
+def test_binary_row_major_preallocated_output_rejected_for_tile_inputs(device, op, layouts, expect_error):
+    layout = {"T": ttnn.TILE_LAYOUT, "R": ttnn.ROW_MAJOR_LAYOUT}
+    shape = (1, 1, 64, 128)
+    a = ttnn.from_torch(torch.randn(shape, dtype=torch.bfloat16), layout=layout[layouts[0]], device=device)
+    b = ttnn.from_torch(torch.randn(shape, dtype=torch.bfloat16), layout=layout[layouts[1]], device=device)
+    out = ttnn.from_torch(torch.zeros(shape, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "A ROW_MAJOR preallocated output requires ROW_MAJOR inputs"):
+        op(a, b, output_tensor=out)

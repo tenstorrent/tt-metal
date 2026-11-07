@@ -227,6 +227,16 @@ def test_optional_output_shape_must_match(device, a_shape, b_shape, out_shape, r
     assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.999)
 
 
+def test_optional_output_row_major_rejected(device, expect_error):
+    a = ttnn.from_torch(torch.randn((1, 1, 64, 128), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn((1, 1, 128, 96), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(
+        torch.zeros((1, 1, 64, 96), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Optional output tensor must be in TILE layout"):
+        ttnn.matmul(a, b, optional_output_tensor=out)
+
+
 def test_linear_broadcast_bias_into_optional_output(device):
     torch.manual_seed(0)
     torch_a = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)
