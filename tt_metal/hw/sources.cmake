@@ -2,6 +2,9 @@ set(HW_JIT_API_HEADERS
     inc/experimental/drisc_mode.h
     inc/experimental/gddr_dma.h
     inc/experimental/gddr_mc.h
+    inc/experimental/gguf_level_tables.h
+    inc/experimental/gguf_lookup_rvv.h
+    inc/experimental/gguf_page.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/buffer_types.hpp
@@ -154,12 +157,14 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/custom_pack_untilize.h
     inc/api/compute/experimental/deepseek_compute_kernel_hw_startup.h
+    inc/api/compute/experimental/dest_srca_mm.h
     inc/api/compute/experimental/eltwise_add_scalar.h
     inc/api/compute/experimental/eltwise_mul_scalar.h
     inc/api/compute/experimental/face_compressed_mm.h
     inc/api/compute/experimental/fast_untilize.h
     inc/api/compute/experimental/generalized_moe_gate.h
     inc/api/compute/experimental/generic_moe_gate.h
+    inc/api/compute/experimental/gguf_decode.h
     inc/api/compute/experimental/hadamard.h
     inc/api/compute/experimental/indexer_mul_custom.h
     inc/api/compute/experimental/layernorm.h
