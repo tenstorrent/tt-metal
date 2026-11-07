@@ -29,10 +29,13 @@ bool are_middle_kernels_uniform(const std::vector<uint32_t>& kernels) {
 }
 
 // PyTorch adaptive pooling window for one output index.
+// The products reach output_size * input_size, which can exceed 32 bits once a dimension is 65536 or longer.
 std::pair<uint32_t, uint32_t> pytorch_adaptive_window(uint32_t idx, uint32_t input_size, uint32_t output_size) {
-    uint32_t start = (idx * input_size) / output_size;
-    uint32_t end = ((idx + 1) * input_size + output_size - 1) / output_size;
-    return {start, end};
+    const uint64_t in = input_size;
+    const uint64_t out = output_size;
+    const uint64_t start = (idx * in) / out;
+    const uint64_t end = ((idx + 1ULL) * in + out - 1) / out;
+    return {static_cast<uint32_t>(start), static_cast<uint32_t>(end)};
 }
 
 // Helper function designed to generate the kernel sizes for each output elements the same way it is
