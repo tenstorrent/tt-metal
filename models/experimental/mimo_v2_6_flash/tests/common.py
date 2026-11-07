@@ -131,6 +131,18 @@ def dp_submeshes(mesh_device):
     return subs
 
 
+# Single-replica tests open one 1x8 row when the process sees only a row's 8 chips (TT_VISIBLE_DEVICES, as a row
+# lock exports), else the whole 4x8 Galaxy and use its row 0.
+ROW_MESH = (1, TP) if len([c for c in os.environ.get("TT_VISIBLE_DEVICES", "").split(",") if c]) == TP else (DP, TP)
+
+
+def first_row(mesh_device):
+    """The 1x8 replica a single-replica test runs on: the mesh itself (ROW_MESH 1x8) or row 0 of the Galaxy."""
+    if tuple(mesh_device.shape) == (1, TP):
+        return create_dp_submeshes(mesh_device, 1)[0]
+    return dp_submeshes(mesh_device)[0]
+
+
 def block_page_table(max_batch, blocks_per_user, seed=0):
     """A shuffled slot -> block mapping, so the paged path is exercised with non-contiguous blocks."""
     g = torch.Generator().manual_seed(seed)
