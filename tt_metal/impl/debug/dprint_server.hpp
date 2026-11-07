@@ -9,7 +9,7 @@
 #pragma once
 
 #include <tt-umd/types/cluster_descriptor_types.hpp>
-#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/soc_arch_descriptor.hpp>
 #include <memory>
 #include <vector>
 
