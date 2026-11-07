@@ -618,12 +618,31 @@ Tensor reduce(
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
     auto input_tensor = input_tensor_arg;
-    if (is_tiled &&
-        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
-         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+    // MX (Quasar) inputs run the tiled H / W reduce kernels like bf16 (the unpacker expands MX to Float16_b).
+    // What is not wired for MX tiles is rejected here: fill_implicit_tile_padding (the fill kernel does not know
+    // the MX layout) and the N / C axes (they go through transpose / permute, which have not been run on MX).
+    if (tt::tt_metal::is_mx(input_tensor_arg.dtype())) {
+        TT_FATAL(is_tiled, "MX reductions need TILE layout input, got {}", input_tensor_arg.layout());
+        TT_FATAL(
+            input_tensor_arg.logical_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
+                input_tensor_arg.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+            "MX reductions need tile-aligned H and W (no implicit tile padding), got shape {}",
+            input_tensor_arg.logical_shape());
+        const int rank = static_cast<int>(input_tensor_arg.logical_shape().rank());
+        for (const int d : dim) {
+            const int axis = d < 0 ? d + rank : d;
+            TT_FATAL(
+                axis == (rank - 1) || axis == (rank - 2), "MX reductions support the H and W axes only, got dim {}", d);
+        }
+        TT_FATAL(keepdim, "MX reductions need keepdim=True (the squeezing reshape is not wired for MX tiles)");
+    }
+    if (is_tiled && (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                     input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
         // fill_pad writes in place. A reduction must not rewrite its caller's tensor.
-        input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
-        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value);
+        // Both ops stay on sub_core_grids: on the full grid they can land in another sub-device,
+        // where nothing orders them against the producer of the input or the reduce.
+        input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt, sub_core_grids);
+        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value, std::nullopt, sub_core_grids);
     }
 
     // bf16 multi-axis Sum/Mean precision chain: carry FP32 between stages and pack bf16

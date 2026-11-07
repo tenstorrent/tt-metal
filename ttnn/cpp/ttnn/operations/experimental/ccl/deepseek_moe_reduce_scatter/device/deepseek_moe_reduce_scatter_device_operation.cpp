@@ -51,7 +51,7 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const uint32_t input_tensor_rank = first_input_tensor.padded_shape().rank();
     const auto& input_tensor_shape = first_input_tensor.padded_shape();
     TT_FATAL(
-        first_input_tensor.buffer()->page_size() % first_input_tensor.buffer()->alignment() == 0,
+        first_input_tensor.mesh_buffer().page_size() % first_input_tensor.mesh_buffer().alignment() == 0,
         "deepseek_moe_reduce_scatter requires aligned pages");
     TT_FATAL(
         first_input_tensor.buffer()->is_l1(), "deepseek_moe_reduce_scatter requires input tensors allocated in L1");
@@ -111,13 +111,13 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
             first_input_tensor.memory_config() == input_tensor.memory_config(),
             "deepseek_moe_reduce_scatter requires all input tensors have the same memory config");
         TT_FATAL(
-            first_input_tensor.buffer()->alignment() == input_tensor.buffer()->alignment(),
+            first_input_tensor.mesh_buffer().alignment() == input_tensor.mesh_buffer().alignment(),
             "deepseek_moe_reduce_scatter requires all input tensors have the same page alignment");
         TT_FATAL(
-            first_input_tensor.buffer()->page_size() == input_tensor.buffer()->page_size(),
+            first_input_tensor.mesh_buffer().page_size() == input_tensor.mesh_buffer().page_size(),
             "deepseek_moe_reduce_scatter requires all input tensors have the same page size");
         TT_FATAL(
-            first_input_tensor.buffer()->num_pages() == input_tensor.buffer()->num_pages(),
+            first_input_tensor.mesh_buffer().num_pages() == input_tensor.mesh_buffer().num_pages(),
             "deepseek_moe_reduce_scatter requires all input tensors have the same number of pages");
         TT_FATAL(
             input_tensor.nd_shard_spec().has_value() &&
